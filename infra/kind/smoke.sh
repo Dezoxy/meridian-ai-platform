@@ -64,7 +64,7 @@
 #                 was given), with a run ID that does not exist: each server must
 #                 refuse it as `unknown-run`. Skipped, not failed, while the
 #                 Meridian services are not deployed (`make deploy`).
-#   4. telemetry: seven lines (S063, S064). The first two are about TLS and do not need
+#   4. telemetry: nine lines (S063, S064, G1). The first two are about TLS and do not need
 #                 the Meridian services: the ConfigMap `telemetry-ca` in
 #                 `meridian`, which the six services mount to trust the
 #                 collector, holds the certificate its authority has now (the
@@ -117,16 +117,30 @@
 #                 trace ID, the log line, the series count) goes through
 #                 clean_lines and is cut to 120 characters: anyone who can push
 #                 a log line to the collector chooses its text.
-#                 The seventh line (S064) is about the log agent, the DaemonSet
-#                 in `logging` that reads the pods' output on the node and sends
-#                 it to the collector, and it runs after the three read-backs,
-#                 through the same Grafana forward. Smoke asks the Claims API,
+#                 The last three lines are about the log agent, the DaemonSet in
+#                 `logging` that reads the pods' output on the node and sends it
+#                 to the collector; they run after the three read-backs. The
+#                 seventh line (G1) reads the live DaemonSet, with one
+#                 `kubectl get -o json` and no Grafana, and checks the facts of
+#                 its pod that a bump of the collector's chart could change
+#                 without any test noticing, because no test renders that chart:
+#                 the one hostPath volume is /var/log/pods and its mount is
+#                 read-only; no host network, host PID or host port; runAsNonRoot;
+#                 and no service-account token. PASS says the four facts, each FAIL
+#                 names the first that does not hold, and a SKIP says the
+#                 DaemonSet is not there. It does not prove the pod runs (that is
+#                 the eighth line) or that its security context is complete (the
+#                 capabilities, the seccomp profile and the user are the
+#                 values file's, tested without a cluster).
+#                 The eighth line (S064) is the Claims API's access line, through
+#                 the same Grafana forward as the three read-backs. Smoke asks the Claims API,
 #                 through the edge the adjuster pages use, for a path that does
 #                 not exist and carries this run's marker in the path
 #                 (/smoke-<epoch>: a path and not a query, because the access
 #                 line keeps no query), expects a 404, and then looks in Loki
 #                 for a record of the service claims-api whose path is that
-#                 marker, within the wait the log line above uses. PASS says what
+#                 marker and whose status is 404 (the edge's answer), within the
+#                 wait the log line above uses. PASS says what
 #                 was found (the record's body, cleaned and cut like the other
 #                 answers). Three FAILs tell what is wrong apart: the edge did
 #                 not answer 404 (what came back, or that it did not answer at
@@ -138,9 +152,20 @@
 #                 up` alone) and while the agent's DaemonSet is not there. What
 #                 it does not prove: that every service's output arrives (one
 #                 service, one line), that a line that is not JSON arrives (a
-#                 crash, output before a service set up its logging), that the
-#                 agent's checkpoint survives a restart, and that nothing but
-#                 `meridian`'s output is read: the query looks at one path.
+#                 crash, output before a service set up its logging), and that
+#                 the agent's checkpoint survives a restart. The ninth line (G1)
+#                 is what the eighth cannot say, that nothing but the services'
+#                 output is read: over the last hour Loki holds no stream of a
+#                 container named postgres and none whose namespace is not
+#                 meridian (two queries; a FAIL says which kind and how many,
+#                 never a label). It runs only after the eighth passed, because
+#                 while nothing is shipped an empty answer proves nothing: when
+#                 the eighth did not pass, it is a SKIP, and it is one after
+#                 `make up` alone. It does not look for a Job's or a smoke pod's
+#                 output, which would be in streams of the namespace meridian:
+#                 the include list, which a test holds equal to the chart's
+#                 services and the sweep, is what keeps them out, and a query
+#                 for them is by hand (infra/kind/README.md).
 #   5. cost panel: four lines. Grafana serves the provisioned dashboard
 #                 "Meridian: Model Gateway tokens and cost", its queries equal
 #                 the file's and every one of them runs in Prometheus (a
@@ -850,6 +875,27 @@ readonly LOG_AGENT_NAMESPACE=logging
 readonly LOG_AGENT_DAEMONSET=log-agent-agent
 readonly LOG_AGENT_SERVICE=claims-api
 readonly CLAIMS_EDGE_ORIGIN=http://claims.meridian.localhost:8088
+# The log agent's pod shape (G1, the seventh line of check 4): a jq program that
+# reads the live DaemonSet and prints one word, the first fact that does not hold
+# (hostpath, readonly, hostnetwork, hostpid, hostport, nonroot, token) or nothing
+# when all hold. It prints a word of its own and never a value from the object.
+# The facts are the header of values/log-agent.yaml's: the one hostPath volume is
+# /var/log/pods and every mount of it is read-only; no host network, no host PID,
+# no hostPort; every container has runAsNonRoot (its own, or the pod's); and the
+# pod mounts no service-account token.
+# shellcheck disable=SC2016  # the $variables are jq's, not the shell's
+readonly LOG_AGENT_SHAPE_FILTER='
+  .spec.template.spec as $pod
+  | [($pod.containers // [])[], ($pod.initContainers // [])[]] as $containers
+  | [($pod.volumes // [])[] | select(has("hostPath"))] as $host
+  | if ($host | map(.hostPath.path)) != ["/var/log/pods"] then "hostpath"
+    elif ([$containers[] | (.volumeMounts // [])[] | select(.name == $host[0].name) | .readOnly == true] | (length == 0 or any(not))) then "readonly"
+    elif ($pod.hostNetwork // false) then "hostnetwork"
+    elif ($pod.hostPID // false) then "hostpid"
+    elif ([$containers[] | (.ports // [])[] | .hostPort // empty | select(. != 0)] | length > 0) then "hostport"
+    elif ([$containers[] | (if .securityContext.runAsNonRoot != null then .securityContext.runAsNonRoot else $pod.securityContext.runAsNonRoot end) == true] | (length == 0 or any(not))) then "nonroot"
+    elif $pod.automountServiceAccountToken != false then "token"
+    else "" end'
 readonly GRAFANA_SERVICE=svc/kube-prometheus-stack-grafana
 readonly POLL_TIMEOUT=120
 readonly POLL_INTERVAL=3
@@ -891,6 +937,7 @@ network_answer=""  # set by network_probe
 network_pod=""     # the probe Pod of check 8 while it may exist
 network_outsider="" # the probe Pod of check 8's collector line, in NETWORK_OUTSIDER_NAMESPACE
 telemetry_pushed="" # set to yes by check 4 when telemetrygen's push from meridian passed: check 8's control
+log_agent_shipped="" # set to yes by check 4 when the Claims API's line was found in Loki: the streams line's control
 refused_request="" # the CertificateRequest of check 10 while it may exist
 refused_err_file="" # the messages of check 10's commands, while it runs
 refused_state=""   # set by refused_read: "<verdict>|<issued>|<reason>|<message>"
@@ -1512,7 +1559,44 @@ check_telemetry_clear_text() {
   fi
 }
 
-# check_telemetry_log_agent: the seventh line of check 4 (S064). The log agent
+# check_telemetry_log_agent_pod: the seventh line of check 4 (G1). The log agent's
+# DaemonSet as the cluster holds it, read with one `kubectl get -o json`, has the
+# shape values/log-agent.yaml says (the facts are LOG_AGENT_SHAPE_FILTER's), so a
+# chart bump that changes a default (a hostPort, a second mount, a preset, a
+# user) is seen by `make smoke`, which the Renovate group's note says to run.
+# No test renders the collector's chart, so nothing else would see it. PASS says
+# the four facts; each FAIL names the first that does not hold (the filter's own
+# word, never a value of the object); SKIP while the DaemonSet is not there; a
+# read that fails, or an answer that is not JSON, is a FAIL.
+check_telemetry_log_agent_pod() {
+  local json broken
+  if ! json="$(kctl -n "${LOG_AGENT_NAMESPACE}" get daemonset "${LOG_AGENT_DAEMONSET}" -o json --ignore-not-found)"; then
+    fail "telemetry: could not read daemonset/${LOG_AGENT_DAEMONSET} in ${LOG_AGENT_NAMESPACE} (kubectl's error is above), so its pod's shape was not checked"
+    return
+  fi
+  if [[ -z "${json}" ]]; then
+    skip "telemetry: the log agent is not there (no daemonset/${LOG_AGENT_DAEMONSET} in ${LOG_AGENT_NAMESPACE}: run make up), so its pod's shape was not read"
+    return
+  fi
+  if ! broken="$(jq -r "${LOG_AGENT_SHAPE_FILTER}" <<<"${json}" 2>/dev/null)"; then
+    fail "telemetry: what kubectl printed for daemonset/${LOG_AGENT_DAEMONSET} is not a DaemonSet this check can read, so its pod's shape was not checked"
+    return
+  fi
+  case "${broken}" in
+    "") pass "telemetry: the log agent's pod is the shape its values say: one hostPath, /var/log/pods, mounted read-only; no host network, PID or port; runAsNonRoot; no service-account token" ;;
+    hostpath) fail "telemetry: the log agent's pod is not what its values say: its hostPath volumes are not exactly /var/log/pods (a chart bump added, changed or dropped a volume)" ;;
+    readonly) fail "telemetry: the log agent's pod is not what its values say: a mount of the hostPath /var/log/pods is missing or is not read-only" ;;
+    hostnetwork) fail "telemetry: the log agent's pod is not what its values say: it uses the host network" ;;
+    hostpid) fail "telemetry: the log agent's pod is not what its values say: it uses the host PID namespace" ;;
+    hostport) fail "telemetry: the log agent's pod is not what its values say: a container has a host port" ;;
+    nonroot) fail "telemetry: the log agent's pod is not what its values say: a container does not have runAsNonRoot" ;;
+    token) fail "telemetry: the log agent's pod is not what its values say: it mounts a service-account token" ;;
+    *) fail "telemetry: the shape check of daemonset/${LOG_AGENT_DAEMONSET} answered a word it does not know, so the pod's shape was not checked" ;;
+  esac
+}
+
+# check_telemetry_log_agent: the eighth line of check 4 (S064, the seventh until
+# G1 put the pod's shape before it). The log agent
 # sent a record of a service's own output to Loki. The Claims API is asked,
 # through the edge, for /smoke-${epoch}, a path that does not exist (404), and
 # Loki is then asked for a record of the service ${LOG_AGENT_SERVICE} whose
@@ -1555,14 +1639,57 @@ check_telemetry_log_agent() {
   fi
   if poll '.data.result[0].values[0][1] // empty' -G \
     "${grafana_url}/api/datasources/proxy/uid/loki/loki/api/v1/query_range" \
-    --data-urlencode "query={service_name=\"${LOG_AGENT_SERVICE}\"} | path=\"${marker}\"" \
+    --data-urlencode "query={service_name=\"${LOG_AGENT_SERVICE}\"} | path=\"${marker}\" | status=\"404\"" \
     --data-urlencode "limit=5"; then
-    pass "telemetry: the log agent shipped the Claims API's access line for ${marker}: Loki has a record of ${LOG_AGENT_SERVICE} with that path: $(telemetry_answer "${poll_result}")"
+    log_agent_shipped=yes
+    pass "telemetry: the log agent shipped the Claims API's access line for ${marker}: Loki has a record of ${LOG_AGENT_SERVICE} with that path and status 404: $(telemetry_answer "${poll_result}")"
   elif [[ "${poll_error}" == *'"status":"success"'* ]]; then
     fail "telemetry: Loki has no line of ${LOG_AGENT_SERVICE} whose path is ${marker} after ${POLL_TIMEOUT}s, though the edge answered 404: the log agent is not sending (kubectl -n ${LOG_AGENT_NAMESPACE} logs daemonset/${LOG_AGENT_DAEMONSET}), or the Claims API does not write its access line as JSON with a path field"
   else
     fail "telemetry: Loki did not answer the question for ${marker} after ${POLL_TIMEOUT}s: $(telemetry_answer "${poll_error}")"
   fi
+}
+
+# check_telemetry_log_agent_streams: the ninth line of check 4 (G1). Over the last
+# hour Loki holds no stream of a container named postgres (the database's output
+# is PostgreSQL's, not the services', and is not redacted) and none whose
+# namespace is not meridian (the agent's mount reaches every namespace's output
+# and its include list names the services and the sweep): two queries, and the
+# first stream found ends the line as a FAIL that says what kind it was and how
+# many, never a label from the answer (the labels come from paths and from
+# whatever pushes to the collector). The second query leads with a matcher that
+# cannot match an empty value, because Loki refuses a selector made only of
+# matchers that can (`!=` is one). It runs only after the eighth line passed (
+# ${log_agent_shipped}): while nothing is shipped an empty answer proves nothing,
+# so it is a SKIP, which is also what it is after `make up` alone. Needs the
+# Grafana forward of check_telemetry (${grafana_url}) and its poll. A Loki that
+# does not answer, or answers with anything but a success, is a FAIL of its own.
+check_telemetry_log_agent_streams() {
+  local url="${grafana_url}/api/datasources/proxy/uid/loki/loki/api/v1/query_range"
+  local what query kind
+  if [[ "${log_agent_shipped}" != yes ]]; then
+    skip "telemetry: the Claims API's line above did not pass, so no stream that must not be in Loki was looked for: an empty answer proves nothing while nothing is shipped"
+    return
+  fi
+  for what in database outside; do
+    if [[ "${what}" == database ]]; then
+      query='{k8s_container_name="postgres"}'
+      kind="a container named postgres"
+    else
+      query='{k8s_namespace_name=~".+", k8s_namespace_name!="meridian"}'
+      kind="any namespace but meridian"
+    fi
+    if ! poll 'select(.status == "success") | .data.result | length | tostring' -G "${url}" \
+      --data-urlencode "query=${query}" --data-urlencode "since=1h" --data-urlencode "limit=5"; then
+      fail "telemetry: Loki did not answer the question for streams of ${kind} after ${POLL_TIMEOUT}s: $(telemetry_answer "${poll_error}")"
+      return
+    fi
+    if [[ "${poll_result}" != 0 ]]; then
+      fail "telemetry: Loki holds $(telemetry_answer "${poll_result}") stream(s) of ${kind} from the last hour, which the log agent must not ship: its include list (values/log-agent.yaml) names the services and the sweep only"
+      return
+    fi
+  done
+  pass "telemetry: Loki holds no stream of a container named postgres and none outside the namespace meridian from the last hour: the log agent ships only what its include list names"
 }
 
 check_telemetry() {
@@ -1616,7 +1743,9 @@ check_telemetry() {
     fail "metric: no series for ${service} in Prometheus after ${POLL_TIMEOUT}s"
   fi
 
+  check_telemetry_log_agent_pod
   check_telemetry_log_agent
+  check_telemetry_log_agent_streams
 }
 
 # ── 5. cost panel ────────────────────────────────────────────────────────────

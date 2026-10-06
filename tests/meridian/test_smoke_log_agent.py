@@ -33,7 +33,9 @@ pytestmark = requires_jq
 EPOCH = "1700000000"
 MARKER = f"/smoke-{EPOCH}"
 EDGE_ORIGIN = "http://claims.meridian.localhost:8088"
-QUERY = f'{{service_name="claims-api"}} | path="{MARKER}"'
+# The status is part of the question since G1: the edge answered 404, so the line
+# Loki holds is the access line of that answer and not of another request.
+QUERY = f'{{service_name="claims-api"}} | path="{MARKER}" | status="404"'
 LOG_LINE = "request served"
 DEPLOYED = "deployment.apps/claims-api"
 AGENT = "daemonset.apps/log-agent-agent"
@@ -295,12 +297,18 @@ def test_the_names_the_line_looks_for_are_the_ones_up_sh_and_the_chart_make() ->
     assert adjuster.startswith(constant("CLAIMS_EDGE_ORIGIN") + "/")
 
 
-def test_check_four_runs_the_line_last_once_grafana_is_open() -> None:
+def test_check_four_runs_the_line_between_the_pod_shape_and_the_streams() -> None:
     body = function_body(SMOKE_SH, "check_telemetry")
     lines = [line.strip() for line in body.splitlines()]
 
     assert lines.count("check_telemetry_log_agent") == 1
-    assert lines[-1] == "check_telemetry_log_agent"
+    # The pod's shape (G1) before it, the streams that must not be there after it
+    # (they run only once this line has passed).
+    assert lines[-3:] == [
+        "check_telemetry_log_agent_pod",
+        "check_telemetry_log_agent",
+        "check_telemetry_log_agent_streams",
+    ]
     # After Grafana's forward is open (the line reads Loki through it) and after
     # the three read-backs, the last of which is the metric's.
     opened = lines.index("open_grafana || return 0 # it printed the FAIL line")
@@ -312,11 +320,18 @@ def test_the_header_says_what_the_line_proves_and_what_it_does_not() -> None:
     header = SMOKE_SH.split("set -euo pipefail")[0]
     flat = " ".join(line.removeprefix("#").strip() for line in header.splitlines())
 
-    assert "telemetry: seven lines" in flat
+    assert "telemetry: nine lines" in flat
     assert "log agent" in flat
     assert "that every service's output arrives" in flat
     assert "that a line that is not JSON arrives" in flat
     assert "not a query" in flat
+    # The seventh line (G1) is the pod's shape, which the Claims API's line now
+    # follows as the eighth; the ninth is the streams that must not be there.
+    assert "The seventh line" in flat and "The eighth line" in flat
+    assert "The ninth line" in flat
+    assert "the live DaemonSet" in flat
+    assert "a container named postgres" in flat
+    assert "runs only after the eighth passed" in flat
 
 
 def test_the_function_stays_under_fifty_lines() -> None:

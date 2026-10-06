@@ -4,7 +4,9 @@ Silence reads as health: a service whose metrics stop arriving looks like one
 with nothing to report. Since S064 each hop counts what the next must also have
 counted, so a missing series can be told from an idle one. Three alerts read
 that, in the group ``meridian.telemetry``, and two recorded series (what a
-counter gained in 15 minutes, as the gateway's is) feed the first two.
+counter gained in 15 minutes, as the gateway's is) feed the first two. A fourth
+alert (G1) is about the log agent, which ships the services' output: it reads
+kube-state-metrics' numbers of the agent's DaemonSet.
 
 No cluster is needed. Every series name, label key and word a rule names is
 read here from the code that produces it, so a rename fails a test and does not
@@ -16,17 +18,20 @@ import re
 import uuid
 from typing import get_args
 
+import yaml
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+from servicesupport import REPO_ROOT
 from test_alert_rules import (
     RULES_FILE,
     RUNBOOK_PREFIX,
     SLO_FILE,
+    UP_SH,
     alerts,
     expressions,
     groups,
     series_named,
 )
-from test_kind_manifests import prometheus_name
+from test_kind_manifests import SMOKE_SH, prometheus_name
 
 from meridian.platform.common.metrics import METRIC_ATTRIBUTE_KEYS, make_meter_provider
 from meridian.platform.gateway.app import SERVICE_NAME as GATEWAY_SERVICE
@@ -46,6 +51,12 @@ GATEWAY_ALERT = "MeridianGatewayMetricsMissing"
 RUNTIME_ALERT = "MeridianRuntimeMetricsMissing"
 SWEEP_ALERT = "MeridianSweepNotReporting"
 ALERTS = (GATEWAY_ALERT, RUNTIME_ALERT, SWEEP_ALERT)
+# The fourth alert of the group (S064, G1) is not one of a hop: it reads
+# kube-state-metrics' numbers of the log agent's DaemonSet, so it has its own
+# tests below and its own `for`.
+LOG_AGENT_ALERT = "MeridianLogAgentNotReady"
+DAEMONSET_READY = "kube_daemonset_status_number_ready"
+DAEMONSET_DESIRED = "kube_daemonset_status_desired_number_scheduled"
 RECORDED_CALLS = "meridian:runtime_model_calls:delta15m"
 RECORDED_TRIAGES = "meridian:claims_triages:delta15m"
 RUNBOOK = "telemetry-missing.md"
@@ -131,12 +142,18 @@ def attribute_labels(metrics: list, name: str) -> set[str]:
 
 
 # ── The group and its five rules ─────────────────────────────────────────────
-def test_the_group_holds_the_two_recorded_series_then_the_three_alerts() -> None:
-    assert tuple(rules()) == (RECORDED_CALLS, RECORDED_TRIAGES, *ALERTS)
+def test_the_group_holds_the_two_recorded_series_then_the_four_alerts() -> None:
+    assert tuple(rules()) == (
+        RECORDED_CALLS,
+        RECORDED_TRIAGES,
+        *ALERTS,
+        LOG_AGENT_ALERT,
+    )
     # The recorded series come first: rules of a group run in order.
     assert [("record" in r) for r in groups()[GROUP]] == [
         True,
         True,
+        False,
         False,
         False,
         False,
@@ -348,7 +365,12 @@ def test_every_series_the_group_names_is_meridians_own_or_a_pinned_one() -> None
         "meridian_claims_triages_total",
         "meridian_sweep_last_pass",
     }
-    assert named - own == {GATEWAY_CALLS, "kube_cronjob_status_last_successful_time"}
+    assert named - own == {
+        GATEWAY_CALLS,
+        "kube_cronjob_status_last_successful_time",
+        DAEMONSET_READY,
+        DAEMONSET_DESIRED,
+    }
 
 
 def test_the_file_holds_no_other_rule_that_reads_a_series_of_these_modules() -> None:
@@ -369,3 +391,62 @@ def test_the_manifest_header_says_why_the_sweeps_series_is_one_set() -> None:
 
     assert "service.instance.id=claims-sweep" in text
     assert "the later sample wins" in text
+
+
+# ── The log agent's alert (S064, G1) ─────────────────────────────────────────
+def test_the_log_agent_alert_compares_ready_pods_with_the_nodes_it_runs_on() -> None:
+    alert = rules()[LOG_AGENT_ALERT]
+
+    assert " ".join(alert["expr"].split()) == (
+        f'{DAEMONSET_READY}{{namespace="logging"}}'
+        f' < {DAEMONSET_DESIRED}{{namespace="logging"}}'
+    )
+    assert series_named(alert["expr"]) == {DAEMONSET_READY, DAEMONSET_DESIRED}
+    # Ten minutes, not the hops' five: a rollout or a first image pull takes a
+    # few of them, and a replaced pod loses nothing it had not exported.
+    assert alert["for"] == "10m"
+    assert alert["labels"] == {"severity": "warning", "platform": "meridian"}
+    assert alert["annotations"]["runbook_url"] == RUNBOOK_PREFIX + RUNBOOK
+
+
+def test_the_log_agent_alert_looks_in_the_namespace_the_agent_is_installed_in() -> None:
+    # Both selectors of the comparison name it.
+    (namespace,) = set(
+        re.findall(r'namespace="([^"]+)"', rules()[LOG_AGENT_ALERT]["expr"])
+    )
+
+    assert (
+        namespace
+        == re.findall(r"^readonly LOG_AGENT_NAMESPACE=(\S+)$", SMOKE_SH, re.M)[0]
+    )
+    assert f"install_release log-agent {namespace} " in UP_SH.read_text("utf-8")
+
+
+def test_the_stack_serves_the_daemonset_series_the_alert_reads() -> None:
+    stack = yaml.safe_load(
+        (
+            REPO_ROOT / "infra" / "kind" / "values" / "kube-prometheus-stack.yaml"
+        ).read_text("utf-8")
+    )
+
+    # kube-state-metrics serves a DaemonSet's numbers from its `daemonsets`
+    # collector, which the chart has on; only `secrets` is excluded. A second
+    # exclusion that took `daemonsets` would leave the alert with nothing to read
+    # (and silence reads as health).
+    assert stack["kube-state-metrics"]["collectorsExclude"] == ["secrets"]
+
+
+def test_the_runbook_says_what_the_log_agents_alert_means_and_what_it_cannot_see() -> (
+    None
+):
+    runbook = " ".join(
+        (OPERATIONS_DIR / "runbooks" / RUNBOOK).read_text("utf-8").split()
+    )
+
+    assert LOG_AGENT_ALERT in runbook
+    assert "daemonset/log-agent-agent" in runbook
+    # What a restart loses, and what the agent drops that nothing scrapes.
+    assert "starts each file it finds at its end" in runbook
+    assert "port 8888" in runbook and "nothing scrapes" in runbook
+    # A DaemonSet that is not there leaves no series, so no alert.
+    assert "no series" in runbook and "smoke" in runbook

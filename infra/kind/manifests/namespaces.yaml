@@ -49,13 +49,18 @@
 #                  it, and a label that says `privileged` says nothing.
 #   logging:       privileged. The one pod, the log agent (values/log-agent.yaml,
 #                  read as `helm template` renders it on 2026-10-06), mounts
-#                  /var/log/pods from the node and runs as root. `baseline`
-#                  forbids a hostPath volume, and the pod has one; `restricted`
-#                  allows no hostPath volume either (its list of volume types
-#                  has none) and asks for runAsNonRoot, which the pod cannot
-#                  meet: it reads files that containerd writes as root:root,
-#                  mode 0640, so it runs as root, with every capability dropped
-#                  (the header of the values file says what bounds it). Unlike
+#                  /var/log/pods from the node. `baseline` forbids a hostPath
+#                  volume, and the pod has one; `restricted` allows no hostPath
+#                  volume either (its list of volume types has none). That is
+#                  the only thing that stops `restricted`: the pod runs as the
+#                  image's own user, 10001, with the group root as a
+#                  supplementary group (containerd writes the files as
+#                  root:root, mode 0640, which the group reads), every
+#                  capability dropped and runAsNonRoot set, so the hostPath
+#                  volume ALONE keeps it out of `restricted` (the header of the
+#                  values file says what bounds it). Before G1 the pod ran as
+#                  uid 0 and could not meet runAsNonRoot; the node's files were
+#                  looked at on 2026-10-06 and the group was enough. Unlike
 #                  node-exporter above, which a label would have misdescribed
 #                  for nothing in return, this pod is the owner's decision
 #                  (2026-10-06) and stays, so the label says what it is. The

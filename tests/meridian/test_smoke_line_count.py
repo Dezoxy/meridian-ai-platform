@@ -36,6 +36,10 @@ from test_kind_manifests import (
 )
 from test_smoke_alert_rules import SMOKE_LINES_AFTER_DEPLOY, run_alert_rules
 from test_smoke_log_agent import healthy_log_agent_lines
+from test_smoke_log_agent_shape import (
+    healthy_log_agent_pod_lines,
+    healthy_log_agent_streams_lines,
+)
 from test_smoke_network_collector import run_collector_check
 from test_smoke_network_policy import run_network_policy_check
 from test_smoke_stores import run_stores_check
@@ -92,12 +96,16 @@ def printed(tmp_path_factory: pytest.TempPathFactory) -> dict[str, int]:
         + all_pass(lines_of(run_database_policy_check)),
         "check_tools": pass_sites("check_tools"),
         # Four lines, since S063 the two TLS lines that open the check and, since
-        # S064, the line that finds the Claims API's own record in Loki: their
-        # harnesses are apart.
+        # S064, the line that finds the Claims API's own record in Loki and, since
+        # G1, the one that reads the agent's pod before it and the one that asks
+        # Loki for the streams that must not be there after it: their harnesses
+        # are apart.
         "check_telemetry": all_pass(run_telemetry_check(fresh()))
         + all_pass(healthy_ca_lines(fresh()))
         + all_pass(healthy_clear_text_lines(fresh()))
-        + all_pass(healthy_log_agent_lines(fresh())),
+        + all_pass(healthy_log_agent_pod_lines(fresh()))
+        + all_pass(healthy_log_agent_lines(fresh()))
+        + all_pass(healthy_log_agent_streams_lines(fresh())),
         "check_cost_panel": all_pass(lines_of(run_cost_panel)),
         "check_adjuster_pages": pass_sites("check_adjuster_pages"),
         # Two lines since S064 (C3): the Job's and, apart harness, the findings'.

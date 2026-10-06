@@ -136,9 +136,11 @@ not. PostgreSQL's own log holds the failing statement and, for a broken
 constraint, the row's values. Read logs on a private terminal and do not
 paste them into a pull request, an issue or a chat with a session.
 
-**What a line looks like (S064, implemented and tested, not yet run on a
-cluster).** The six services and the sweep write one JSON object per line to
-standard output, uvicorn's own records included (each service's factory
+**What a line looks like (S064, implemented and tested; seen on kind on
+2026-10-06 for the six services: every line of each was a JSON object, and the
+canaries were in none; not seen: a line with an `exception` field, and the
+sweep's lines).** The six services and the sweep write one JSON object per
+line to standard output, uvicorn's own records included (each service's factory
 sets this up after the redaction of personal data and before it reads its
 settings). The fields are `time` (UTC, ISO 8601), `level`, `logger`,
 `service` (the name its spans carry: `model-gateway`, `agent-runtime`,
@@ -171,25 +173,47 @@ with nothing on standard output) and a crash of the interpreter. The edge's
 own log is not ours to format. The two HTTP client libraries are held at
 WARNING because they log each request's URL at INFO.
 
-On kind the output of `meridian`'s pods is also in Loki (S064; **implemented,
-tested without a cluster, and not yet seen on one**): the log agent, a
-DaemonSet in `logging`, reads each pod's files on the node and sends the lines
-to the collector (`infra/kind/README.md`, "The log agent and the namespace
-`logging`", says what that pod can read and what a restart re-sends). It sends
-`meridian`'s pods and nothing else: not the database's (`platform-db-*`), not
-`observability`'s, not its own. In Grafana, Explore, the Loki datasource:
+On kind the output of the six services and the sweep is also in Loki (S064;
+**seen on the cluster on 2026-10-06 with the agent as root, which has since
+changed to user 10001: implemented and tested without a cluster until the next
+`make up`**): the log agent, a DaemonSet in `logging`, reads each pod's files
+on the node and sends the lines to the collector (`infra/kind/README.md`, "The
+log agent and the namespace `logging`", says what that pod can read and what a
+restart re-sends). It sends the pods of a list and nothing else: the six
+services and the sweep. **The three Jobs' output (`migrate`, `seed`, `ingest`)
+is not in Loki, nor is smoke's own pods', the database's or any other
+namespace's**: the Jobs run the CLI, which prints and does not log, so their
+tracebacks and database messages never went through the redaction. A Job's
+output stays in `kubectl -n meridian logs job/<name>`, and `make deploy` prints
+it as the Job ends (through its filter for connection strings). The list is
+positive, so a workload added to the chart is not shipped until someone adds
+it. In Grafana, Explore, the Loki datasource:
 
 - a service's lines: `{service_name="claims-api"}`. The service name is the
   container's name: `claims-api`, `agent-runtime`, `model-gateway`,
-  `policy-mcp`, `claims-mcp`, `knowledge-mcp`, the CronJob's `sweep` and the
-  Jobs' `migrate`, `seed` and `ingest`. Loki also labels each stream with the
-  namespace, pod and container (`k8s_pod_name`, `k8s_container_name`).
+  `policy-mcp`, `claims-mcp`, `knowledge-mcp` and the CronJob's `sweep`. Loki
+  also labels each stream with the namespace, pod and container
+  (`k8s_pod_name`, `k8s_container_name`). **Which labels to trust:**
+  `service_name` and the `k8s_*` labels come from the file's path, which the
+  node made, and a line cannot set them (the agent removes any `service.*`,
+  `k8s.*` or `log.*` attribute a line's own JSON carries). `service`, `level`
+  and `logger` are the line's own word: a service's code writes them, but so
+  does any text that is a whole JSON object on a line of its own, and then it
+  can claim `service: "policy-mcp"` or `level: "CRITICAL"` inside its own pod's
+  stream. Filter on the label to say where a line came from, and read the
+  field as what the line says.
 - a service's errors: `{service_name="agent-runtime"} | level="ERROR"`. A line
   that is a JSON object keeps its fields as structured metadata (`level`,
   `logger`, `service`, and for an access line `method`, `path` and `status`),
   which are filtered after the stream selector with no parser, for example
   `{service_name="claims-api"} | path="/adjuster/claims" | status="200"`. An
   access line's path never has a query string: it is built without one.
+- errors and worse: Python's `CRITICAL` is the most severe level of the logging
+  module, and it is its own word, so `level="ERROR"` does not find it:
+  `{service_name="agent-runtime"} | level=~"ERROR|CRITICAL"`. The agent gives
+  the record the severity fatal, so anything that reads the severity number
+  and not the word finds it too (seen in the receiver's output over fixtures,
+  not in Grafana: what Loki's UI does with it is not known).
 - a line that is not JSON (a crash's traceback, output from before a service
   set up its logging): `{service_name="claims-api"} | logger=""`. Such a line
   has no severity and no fields; its body is the line as the service printed
@@ -263,7 +287,7 @@ applied to one. The session that owns the cluster checks, on `main`:
    alert table, nothing. `make smoke` reads that Grafana serves it under
    that uid with the file's queries and that every query runs in
    Prometheus; whether a panel shows data stays by hand.
-7. `make smoke` passes, 42 of 42 lines (S055 added three, for service
+7. `make smoke` passes, 44 of 44 lines (S055 added three, for service
    identity; S056 two more for it and three for the certificate policy; S062
    three for the stores of the `meridian` database, four for the rules and
    the health dashboard, three for the network policy and one for a request
@@ -276,11 +300,13 @@ applied to one. The session that owns the cluster checks, on `main`:
    without a cluster until they have run on one; S064 one for the log agent,
    the Claims API's own access line found in Loki, and one for the sweep's
    findings, the six values of `meridian_sweep_last_pass` found in
-   Prometheus: the 35 below are S062's count); 30 after `make up` alone, with
+   Prometheus; and the infra review's two for the log agent, its live pod's
+   shape read on every run and the streams Loki must not hold: the 35 below are
+   S062's count); 32 after `make up` alone, with
    SKIP lines for
    what `make deploy` brings (counted from the script's own skip lines, and
    seen on 2026-10-06 before S063: 24 lines, 17 PASS and 7 SKIP, no FAIL). The
-   30 is edge 1, database 4, tools 1, telemetry 7, cost panel 4, adjuster
+   32 is edge 1, database 4, tools 1, telemetry 9, cost panel 4, adjuster
    pages 1, sweep 2, network policy 1, service identity 1, certificate policy 4
    and alert rules 4. Items 3, 5 and 6 above are what the eleventh check reads,
    so they need no hand check now that the session that owns the cluster

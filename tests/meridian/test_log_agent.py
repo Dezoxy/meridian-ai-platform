@@ -3,7 +3,9 @@
 ``infra/kind/values/log-agent.yaml`` is a second release of the OpenTelemetry
 Collector chart that ``pins.env`` already pins, the contrib build, as a DaemonSet
 in the namespace ``logging``. It reads the files of `meridian`'s pods under
-``/var/log/pods`` and sends each line over OTLP with TLS to the collector.
+``/var/log/pods`` and sends each line over OTLP with TLS to the collector (since
+G1 only the services' and the sweep's, as user 10001 with the group root; what
+the pipeline keeps of a file and a line is in ``test_log_agent_selection.py``).
 
 The chart is not vendored, so no test renders it (the neighbours,
 ``test_kind_observability_security_context.py`` and
@@ -15,14 +17,19 @@ Helm repository): the values are read as committed, and the render was read with
 What the receiver makes of a line was read by running the pinned contrib image
 over a fixture; that is a manual check and has no test here.
 
-Not shown without a cluster: that the node's log files are readable by root with
-no capability, that the exporter's TLS verifies against the authority, and that
-a line arrives in Loki (``make smoke`` has a line for the last).
+Not shown without a cluster: that user 10001 with the group root reads the node's
+log files with no capability (shown on the pinned image over a fixture tree with
+the node's modes, not on the node), that the exporter's TLS verifies against the
+authority, and that a line arrives in Loki (``make smoke`` has a line for the
+last, and one for the pod's shape). The first form of the agent, as root, ran on
+the kind cluster twice on 2026-10-06.
 """
 
 import re
+from fnmatch import fnmatchcase
 
 import yaml
+from chartsupport import rendered_chart
 from test_certificate_policy_up import (
     line_containing,
     line_index,
@@ -65,6 +72,64 @@ def keys_of(node: object) -> set[str]:
 
 def receiver() -> dict:
     return values()["config"]["receivers"]["file_log"]
+
+
+POD_UID = "8f5b1c2e-0000-4000-8000-000000000001"
+LISTED_FILES = "listed-files-only"
+
+
+def chart_pod_families() -> list[str]:
+    """The names the chart's long-lived pods start with: its Deployments (the six
+    services) and its CronJobs (the sweep). The Jobs are not here: they run the
+    CLI, which prints, and does not log."""
+    return sorted(
+        found["metadata"]["name"]
+        for found in rendered_chart()
+        if found["kind"] in ("Deployment", "CronJob")
+    )
+
+
+def chart_job_names() -> list[str]:
+    return sorted(
+        found["metadata"]["name"]
+        for found in rendered_chart()
+        if found["kind"] == "Job"
+    )
+
+
+def pod_directory(family: str) -> str:
+    """A pod directory under /var/log/pods, as kubelet names it."""
+    return f"meridian_{family}-7d9f8-abcde_{POD_UID}"
+
+
+def included(directory: str) -> bool:
+    """Whether one of the receiver's include patterns opens this pod directory
+    (the fourth component of the path: a `*` of a glob does not cross a `/`)."""
+    return any(
+        fnmatchcase(directory, pattern.split("/")[4])
+        for pattern in receiver()["include"]
+    )
+
+
+def operators() -> list[dict]:
+    return receiver()["operators"]
+
+
+def operator(identifier: str) -> dict:
+    (found,) = [each for each in operators() if each["id"] == identifier]
+    return found
+
+
+def listed_files_expression() -> str:
+    """The filter's expression as one line, with the YAML's folding undone."""
+    return " ".join(operator(LISTED_FILES)["expr"].split())
+
+
+def listed_files_regex() -> re.Pattern[str]:
+    """The regular expression inside the filter's expression, as Python reads it:
+    the expression language reads `\\\\.` in its string as `\\.`."""
+    (literal,) = re.findall(r'"(\^[^"]*)"', listed_files_expression())
+    return re.compile(literal.replace("\\\\", "\\"))
 
 
 def volume(name: str) -> dict:
@@ -191,10 +256,14 @@ def test_the_one_host_path_is_the_pod_log_directory_read_only() -> None:
     assert host_paths == [
         {"name": "varlogpods", "hostPath": {"path": POD_LOGS, "type": "Directory"}}
     ]
+    # `recursiveReadOnly` makes a mount made under /var/log/pods read-only too (a
+    # plain read-only bind leaves a submount writable); Enabled, not IfPossible,
+    # so a node that cannot do it refuses the pod loudly.
     assert mount("varlogpods") == {
         "name": "varlogpods",
         "mountPath": POD_LOGS,
         "readOnly": True,
+        "recursiveReadOnly": "Enabled",
     }
     # Not Docker's directory (containerd keeps its files in /var/log/pods) and not
     # a writable host directory for the checkpoint.
@@ -221,20 +290,27 @@ def test_every_other_volume_is_an_empty_dir_or_the_authoritys_config_map() -> No
     assert "readOnly" not in mount("checkpoints")
 
 
-def test_the_container_runs_as_root_with_nothing_else() -> None:
+def test_the_container_runs_as_the_images_user_and_reads_the_nodes_files_by_group() -> (
+    None
+):
     found = values()
 
+    # The files are root:root 0640 in a root:root 0750 directory (measured on the
+    # node, 2026-10-06): the group reads them, so no uid 0 and no capability.
     assert found["securityContext"] == {
-        "runAsUser": 0,
-        "runAsGroup": 0,
+        "runAsNonRoot": True,
+        "runAsUser": 10001,
+        "runAsGroup": 10001,
         "allowPrivilegeEscalation": False,
         "capabilities": {"drop": ["ALL"]},
         "seccompProfile": {"type": "RuntimeDefault"},
         "readOnlyRootFilesystem": True,
     }
-    # runAsNonRoot is left out: it would stop a pod that has to read root's files.
-    assert "runAsNonRoot" not in found["securityContext"]
-    assert found["podSecurityContext"] == {}
+    # gid 0 is held as a supplementary group, to read and nothing else (fsGroup
+    # does not apply to a hostPath); the primary group is the image's own, set
+    # explicitly because runAsUser alone leaves gid 0 where the image has no
+    # passwd entry, which would make the checkpoint group-root.
+    assert found["podSecurityContext"] == {"supplementalGroups": [0]}
 
 
 def test_the_pod_has_no_host_namespace_no_host_port_and_no_token() -> None:
@@ -281,6 +357,7 @@ def test_nothing_in_the_configuration_calls_the_api_server() -> None:
     assert named == {
         "file_storage",
         "file_log",
+        "transform",
         "resource",
         "otlp_http",
         "memory_limiter",
@@ -315,16 +392,55 @@ def test_the_checkpoint_is_an_empty_dir_with_a_size_limit_the_extension_writes_t
 # ── what it reads and what it sends ──────────────────────────────────────────
 
 
-def test_the_receiver_includes_the_files_of_meridians_pods_and_not_the_databases() -> (
-    None
-):
+def test_the_receiver_includes_one_pattern_for_each_pod_family_of_the_chart() -> None:
     found = receiver()
 
-    assert found["include"] == [f"{POD_LOGS}/meridian_*/*/*.log"]
-    # PostgreSQL's own output is not the services' (no redaction, no JSON) and a
-    # statement that failed can be in it.
-    assert found["exclude"] == [f"{POD_LOGS}/meridian_platform-db-*/*/*.log"]
+    # The services' own output went through the JSON format and the redaction
+    # (src/meridian/platform/common/logformat.py, logredaction.py); the Jobs' (the
+    # CLI prints) and the database's did not. So the list is positive: a workload
+    # the chart gains later is not shipped until someone adds it here, and this
+    # test fails first (a seventh service, a second CronJob).
+    assert sorted(found["include"]) == sorted(
+        f"{POD_LOGS}/meridian_{family}-*/*/*.log" for family in chart_pod_families()
+    )
+    assert "exclude" not in found
     assert found["include_file_path"] is True
+
+
+def test_the_families_are_the_six_services_and_the_sweep() -> None:
+    # So the test above cannot pass on an empty list because the render found
+    # nothing: it names what the render must hold.
+    assert len(chart_pod_families()) == 7
+    assert "meridian-sweep" in chart_pod_families()
+    assert "claims-api" in chart_pod_families()
+
+
+def test_a_pod_of_the_chart_is_opened_by_exactly_one_pattern() -> None:
+    for family in chart_pod_families():
+        matching = [
+            pattern
+            for pattern in receiver()["include"]
+            if fnmatchcase(pod_directory(family), pattern.split("/")[4])
+        ]
+
+        assert len(matching) == 1, (family, matching)
+
+
+def test_the_jobs_the_database_and_smokes_pods_are_not_opened() -> None:
+    jobs = chart_job_names()
+
+    assert {"meridian-migrate", "meridian-seed", "meridian-ingest"} <= {
+        job.rsplit("-", 1)[0] for job in jobs
+    }
+    for family in (
+        *jobs,
+        "platform-db-1",
+        "probe-x7k2",
+        "smoke-logs-1700000000",
+        "claims-apiary",
+        "meridian",
+    ):
+        assert not included(pod_directory(family)), family
 
 
 def test_files_found_at_start_are_read_from_the_end_and_a_failed_send_retried() -> None:
@@ -335,11 +451,12 @@ def test_files_found_at_start_are_read_from_the_end_and_a_failed_send_retried() 
 
 
 def test_a_line_is_parsed_when_it_is_json_and_sent_as_it_is_when_it_is_not() -> None:
-    operators = receiver()["operators"]
-    by_id = {operator["id"]: operator for operator in operators}
+    by_id = {each["id"]: each for each in operators()}
 
-    assert [operator["type"] for operator in operators] == [
+    assert [each["type"] for each in operators()] == [
+        "filter",
         "container",
+        "move",
         "json_parser",
         "move",
     ]
@@ -347,7 +464,7 @@ def test_a_line_is_parsed_when_it_is_json_and_sent_as_it_is_when_it_is_not() -> 
     # A line that does not parse is sent on untouched and quietly.
     assert json["on_error"] == "send_quiet"
     assert json["parse_from"] == "body"
-    assert json["severity"] == {"parse_from": "attributes.level"}
+    assert json["severity"]["parse_from"] == "attributes.level"
     assert json["if"].startswith('body matches "^')
     move = by_id["message-to-body"]
     assert (move["from"], move["to"]) == ("attributes.message", "body")
@@ -355,14 +472,16 @@ def test_a_line_is_parsed_when_it_is_json_and_sent_as_it_is_when_it_is_not() -> 
     assert move["if"] == "attributes.message != nil"
 
 
-def test_nothing_in_the_pipeline_drops_or_filters_a_record() -> None:
+def test_the_one_thing_the_pipeline_drops_is_a_record_from_an_unlisted_file() -> None:
     config = values()["config"]
-    operator_types = {operator["type"] for operator in receiver()["operators"]}
+    types = [each["type"] for each in operators()]
 
-    assert operator_types.isdisjoint({"filter", "router", "remove", "retain"})
-    assert set(config["processors"]) == {"resource/service"}
+    assert types.count("filter") == 1 and operators()[0]["id"] == LISTED_FILES
+    assert {"router", "remove", "retain"}.isdisjoint(types)
+    assert set(config["processors"]) == {"transform/line", "resource/service"}
     assert config["service"]["pipelines"]["logs"]["processors"] == [
         "memory_limiter",
+        "transform/line",
         "resource/service",
         "batch",
     ]
@@ -440,12 +559,52 @@ def test_the_header_says_what_the_mount_reaches_and_what_remains() -> None:
 
     assert "EVERY pod on the node" in text
     assert "a compromised agent reads the output of every pod on its node" in text
-    assert "root" in text and "mode 0640" in text
     assert "every capability dropped" in text
     assert "`baseline` forbids a hostPath volume" in text
-    assert "runAsNonRoot" in text
     assert "not in `observability`" in text
-    assert "has not run on one" in text
+    # The include list is patterns, not a pod's identity (the review's L2).
+    assert "path patterns, not the identity of a pod" in text
+
+
+def test_the_header_says_the_user_is_not_root_and_how_it_reads_the_files() -> None:
+    text = header()
+
+    assert "10001" in text and "supplementary group" in text
+    assert (
+        "drwxr-x--- root:root (0750)" in text and "-rw-r----- root:root (0640)" in text
+    )
+    assert "The GROUP reads them" in text
+    assert "supplementalGroups" in text and "fsGroup does not apply" in text
+    # What the first form said, which was false once the node was looked at.
+    assert "runs as root" not in text and "cannot meet" not in text
+    # A wrong group is silent, so the header says what notices it.
+    assert "fails silently" in text and "smoke's line" in text
+    # `restricted` is stopped by the hostPath alone now.
+    assert "the hostPath is the only thing that stops it" in text
+
+
+def test_the_header_says_what_ran_on_a_cluster_and_what_did_not() -> None:
+    text = header()
+
+    assert "has not run on one" not in text
+    assert "ran on the kind cluster twice on 2026-10-06" in text
+    assert "11:10 UTC" in text and "11:34 UTC" in text
+    assert "no permission or TLS error" in text and "41 of 41" in text
+    assert "Not seen: a restart of the agent, a renewal of the authority" in text
+    assert "a flood of lines" in text
+    assert "tested without a cluster" in text
+
+
+def test_the_header_says_what_is_shipped_and_where_the_rest_stays() -> None:
+    text = header()
+
+    assert "six services of the Meridian chart and the sweep" in text
+    assert "(migrate, seed, ingest)" in text and "kubectl logs" in text
+    assert "a positive one" in text
+    # The sentence the review found false: the health check and the metrics bind.
+    assert "nothing listens" not in text
+    assert "13133" in text and "8888" in text
+    assert "Only `service_name` and `k8s_*` are the file's" in text
 
 
 def test_the_header_says_what_a_restart_resends() -> None:

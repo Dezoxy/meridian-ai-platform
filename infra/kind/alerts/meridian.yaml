@@ -424,3 +424,34 @@ spec:
               failing, or the CronJob was given no collector address (proposed
               threshold: 15 minutes, for 5).
             runbook_url: https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/telemetry-missing.md
+
+        # The log agent (S064, G1) ships the services' output to Loki, and
+        # nothing reads a log line, so an agent that is not running is a silence
+        # that reads as health. kube-state-metrics serves a DaemonSet's two
+        # numbers: the nodes it is scheduled on and the pods ready; fewer ready
+        # than scheduled for 10 minutes (longer than the 5 of the rules above:
+        # a rollout or a first image pull takes a few minutes, and a replaced
+        # pod loses nothing it had not exported) means a node ships nothing. The
+        # two series carry the same labels, so the comparison matches them
+        # one to one. A DaemonSet that does not exist leaves no series and so no
+        # alert: smoke's line is what says "the agent is not there". What the
+        # agent drops while it is ready (its exporter's failures, the memory
+        # limiter's refusals) is in its own metrics, which nothing scrapes.
+        - alert: MeridianLogAgentNotReady
+          expr: |
+            kube_daemonset_status_number_ready{namespace="logging"}
+            < kube_daemonset_status_desired_number_scheduled{namespace="logging"}
+          for: 10m
+          labels:
+            severity: warning
+            platform: meridian
+          annotations:
+            summary: The log agent has fewer ready pods than nodes to run on.
+            description: >-
+              DaemonSet {{ $labels.daemonset }} in {{ $labels.namespace }} has
+              had {{ $value }} ready pod(s), fewer than the nodes it is
+              scheduled on, for 10 minutes (proposed threshold). The agent ships
+              the services' output to Loki: lines written on a node with no
+              ready agent are not sent, and a pod that is replaced starts each
+              file at its end.
+            runbook_url: https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/telemetry-missing.md

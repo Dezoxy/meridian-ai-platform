@@ -48,9 +48,10 @@ GROUPS = [
     "meridian.certificates",
     "meridian.telemetry",
 ]
-# The file holds 15 alert rules and 3 recording rules (S064: two of them are in
-# the group `meridian.telemetry`, with three alerts).
-RULE_COUNT = 18
+# The file holds 16 alert rules and 3 recording rules (S064: two of them are in
+# the group `meridian.telemetry`, with four alerts, the fourth (G1) about the log
+# agent's DaemonSet).
+RULE_COUNT = 19
 # Tied to the script in test_smoke_line_count.py: the sum of the lines each
 # check prints when all is well, so a ``pass`` beyond this count fails that test. S063
 # added the fifth line of the network policy check (the collector), the two
@@ -60,8 +61,10 @@ RULE_COUNT = 18
 # server's address): 35 before. S064 added the telemetry check's seventh line
 # (the Claims API's own access line found in Loki, shipped by the log agent) and
 # the sweep check's second (the six findings of the sweep's last pass found in
-# Prometheus).
-SMOKE_LINES_AFTER_DEPLOY = 42
+# Prometheus). G1 added two to the telemetry check: the log agent's live pod (its
+# shape, before the Claims API's line) and the streams Loki must not hold (after
+# it).
+SMOKE_LINES_AFTER_DEPLOY = 44
 # Counted from the checks' own skip lines, not measured: edge 1, database 3 and
 # one SKIP for its stores, tools 1 SKIP, telemetry 7, cost panel 3 and one SKIP
 # for the series, adjuster pages 1 SKIP, sweep 2 SKIP (the Job's line and the
@@ -76,8 +79,11 @@ SMOKE_LINES_AFTER_DEPLOY = 42
 # the policy and the endpoint, which `make up` makes. S064's telemetry line makes
 # it 29: after `make up` alone it is one SKIP (the services are not deployed).
 # The sweep's findings line makes it 30: after `make up` alone it is a second
-# SKIP (no pass of the sweep has finished).
-SMOKE_LINES_AFTER_UP = 30
+# SKIP (no pass of the sweep has finished). G1's two make it 32: the agent's
+# DaemonSet exists after `make up`, so its shape is read and passes, and the
+# streams line is a SKIP (the Claims API's line above it did not pass, so an
+# empty answer would prove nothing).
+SMOKE_LINES_AFTER_UP = 32
 
 
 def tree_groups() -> list[dict]:
@@ -783,8 +789,8 @@ def test_the_readmes_say_what_the_files_hold_and_that_smoke_reads_them() -> None
 
     assert "five alerts on it and three on the workloads" not in kind
     assert "five on the gateway, three on the workloads and four on the" in kind
-    assert "three on missing telemetry" in kind
-    assert "15 alert rules and three recording rules" in kind
+    assert "four on missing telemetry" in kind
+    assert "16 alert rules and three recording rules" in kind
     assert "Neither the rules nor the health dashboard has been applied" not in kind
     assert "`make smoke` checks neither" not in kind
     assert "It does not check the rules or the new dashboard" not in operations

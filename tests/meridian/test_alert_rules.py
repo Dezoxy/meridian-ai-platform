@@ -44,6 +44,10 @@ OTHER_SERIES = {
     "kube_deployment_status_replicas_available",
     "kube_pod_status_ready",
     "kube_cronjob_status_last_successful_time",
+    # kube-state-metrics' two numbers of a DaemonSet (S064, G1: the log agent's
+    # alert); both carry the labels namespace and daemonset.
+    "kube_daemonset_status_number_ready",
+    "kube_daemonset_status_desired_number_scheduled",
     # kube-state-metrics v2.20.0 documents it with the labels cronjob and
     # namespace; its value is the creation time.
     "kube_cronjob_created",
@@ -192,7 +196,7 @@ def test_the_manifest_is_one_prometheus_rule_the_stack_selects() -> None:
 def test_every_alert_has_its_labels_annotations_and_a_runbook_that_exists() -> None:
     found = alerts()
 
-    assert len(found) == 15
+    assert len(found) == 16
     for alert in found:
         name = alert["alert"]
         assert alert["labels"]["severity"] in {"critical", "warning"}, name

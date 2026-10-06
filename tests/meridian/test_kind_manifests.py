@@ -1220,8 +1220,8 @@ def test_meridian_cert_manager_observability_and_logging_never_enforce() -> None
     # The level each namespace's pods meet as rendered (S063): all three meet
     # restricted since the values of tempo and the collector set the fields
     # that `restricted` asks for (test_kind_observability_security_context.py).
-    # The log agent's pod (S064) mounts a host directory and runs as root, so
-    # `logging` is privileged (test_log_agent_network.py says why).
+    # The log agent's pod (S064) mounts a host directory, which `restricted`
+    # forbids, so `logging` is privileged (test_log_agent_network.py says why).
     levels = {
         "meridian": "restricted",
         "cert-manager": "restricted",

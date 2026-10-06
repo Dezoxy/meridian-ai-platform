@@ -1,22 +1,35 @@
 # The log agent (S064): a second release of the OpenTelemetry Collector chart,
 # the contrib build, as a DaemonSet in the namespace `logging`. It reads the
-# output of the pods of `meridian` from the node's pod-log directory and sends
-# each line as an OTLP log record, over HTTP with TLS, to the collector in
-# `observability`, which writes it to Loki (values/otel-collector.yaml). The
-# image (contrib, pinned by digest, the same release as the collector's) is set
-# by up.sh from pins.env. The owner chose this way, a node agent, over each
-# service pushing its own records (2026-10-06): it also ships what no service
-# could push, uvicorn's access line, output before a service's logging was set up
-# and a crash. Implemented and tested without a cluster; it has not run on one.
+# output of the Meridian services' pods and the sweep's from the node's pod-log
+# directory and sends each line as an OTLP log record, over HTTP with TLS, to
+# the collector in `observability`, which writes it to Loki
+# (values/otel-collector.yaml). The image (contrib, pinned by digest, the same
+# release as the collector's) is set by up.sh from pins.env. The owner chose
+# this way, a node agent, over each service pushing its own records
+# (2026-10-06): it also ships what no service could push, uvicorn's access line,
+# output before a service's logging was set up and a crash.
+#
+# Status. The first form of this file ran on the kind cluster twice on
+# 2026-10-06, as root, at 11:10 UTC and (with the reviews' fixes in the
+# services) at 11:34 UTC: the pod was Running with no permission or TLS error in
+# its output, smoke's line found the Claims API's access line in Loki (41 of 41)
+# and the canaries (a query string, an address in a path) were in no line. Not
+# seen: a restart of the agent, a renewal of the authority, a flood of lines.
+# The form below (a user that is not root, a list of the workloads, a filter on
+# the resolved path, the line's own names removed, a severity for CRITICAL) is
+# tested without a cluster: the pinned image ran over fixture files that have
+# the node's modes. It has not run on a cluster until the next `make up`.
 #
 # What this pod can read, and what it cannot (the price of the owner's decision):
-#   - One hostPath, /var/log/pods, read-only: the output of EVERY pod on the node,
-#     in every namespace. The receiver is configured to open the files of
-#     `meridian`'s pods and nothing else, but the mount reaches all of them, so a
+#   - One hostPath, /var/log/pods, read-only and recursively read-only: the
+#     output of EVERY pod on the node, in every namespace. The receiver opens
+#     the files of the pods its include list names and drops a record whose
+#     resolved path is not one of them, but the mount reaches all of them, so a
 #     compromised agent reads the output of every pod on its node (the other
 #     namespaces', the database's and cert-manager's included). That is what
 #     remains, and the only thing that bounds it is what the mount and the
-#     container below take away.
+#     container below take away. The include list is a set of path patterns, not
+#     the identity of a pod: writing under the directory needs the node.
 #   - No other host path. The checkpoint is an emptyDir (see below), not a
 #     writable host directory; the chart's `logsCollection` preset, which was not
 #     used, also mounts /var/lib/docker/containers (Docker's own log directory,
@@ -25,27 +38,51 @@
 #     this agent receives nothing), no service-account token, no ClusterRole.
 #     Pod, namespace and container come from the FILE'S PATH, read by the
 #     receiver's `container` operator, and not from the API server, so there is no
-#     k8sattributes processor and nothing here calls the API server.
+#     k8sattributes processor and nothing here calls the API server. The pod
+#     binds its health check (13133) and its own metrics (8888) on the pod's
+#     address: the policy denies ingress (manifests/logging-networkpolicy.yaml)
+#     and no host port exists, so only the node's own traffic reaches them.
 #
-# The user is root (uid 0), with every capability dropped. containerd writes each
-# log file as root:root, mode 0640 (the CRI plugin opens it with that mode), and
-# its directories root-owned, so no other user can read them: the image's own
-# user, 10001, could not. As the file's owner, root reads it with no capability
-# at all (CAP_DAC_READ_SEARCH and CAP_DAC_OVERRIDE are dropped with the rest).
-# What bounds root here: the mount is read-only, the root filesystem is read-only,
-# `allowPrivilegeEscalation` is false (nothing can gain a capability later), the
-# default seccomp profile applies, and the pod has no host namespace, no token and
-# a NetworkPolicy that lets it reach DNS and the collector's port 4318 and
-# nothing else (manifests/logging-networkpolicy.yaml). The file mode is what
-# containerd does as far as is known; it is an expectation until `make up` has
-# run, and a pod log full of "permission denied" is how the cluster would say not.
+# What it ships. Only the output of the pods the include list names: the six
+# services of the Meridian chart and the sweep. They are the pods whose output
+# went through the JSON format and the redaction of personal data
+# (src/meridian/platform/common/logformat.py, logredaction.py). The three Jobs
+# (migrate, seed, ingest) run the CLI, which prints and does not log, and smoke's
+# own pods print what they like; the database's output is PostgreSQL's. None of
+# that is shipped: it stays in `kubectl logs`, and deploy.sh prints each Job's
+# output as it ends. So the list is a positive one, and a workload the chart
+# gains later is not shipped until someone lists it (a test holds the list equal
+# to the chart's services and CronJobs).
+#
+# The user is the image's own, 10001, with the group root (gid 0) as a
+# supplementary group and nothing else: runAsNonRoot, every capability dropped.
+# Measured on the kind node (containerd v2.3.4, 2026-10-06): /var/log/pods is
+# drwxr-x--- root:root (0750), a pod's directory is 0755 root:root and a
+# container's log file is -rw-r----- root:root (0640). The GROUP reads them: gid
+# 0 with any uid, with no capability (CAP_DAC_READ_SEARCH and CAP_DAC_OVERRIDE
+# are dropped with the rest). supplementalGroups holds gid 0 to read and for
+# nothing else (fsGroup does not apply to a hostPath); the primary group is the
+# image's own 10001, set explicitly because runAsUser alone leaves gid 0 where
+# the image has no passwd entry, which would make the checkpoint group-root. The
+# emptyDir is 0777, so the user writes its checkpoint there. A pod WITHOUT the
+# group fails silently: the pinned image, run as 10001 without gid 0 over a tree
+# with these modes, started, logged no error and read nothing, so "no permission
+# denied in its output" proves nothing; smoke's line, which looks for a
+# record in Loki, is what notices. What else bounds the pod: the mount is
+# read-only, the root filesystem is read-only, `allowPrivilegeEscalation` is
+# false (nothing can gain a capability later), the default seccomp profile
+# applies, and the pod has no host namespace, no token and a NetworkPolicy that
+# lets it reach DNS and the collector's port 4318 and nothing else
+# (manifests/logging-networkpolicy.yaml). smoke checks the live DaemonSet for
+# the facts a chart bump could change (check 4).
 #
 # Pod Security: the namespace `logging` is labelled `privileged` (warn and audit,
 # as the others; manifests/namespaces.yaml says why). `baseline` forbids a
-# hostPath volume, which this pod has; `restricted` forbids it too, and asks for
-# runAsNonRoot, which this pod cannot meet. So this pod is not in `observability`
-# (which S063 brought to `restricted`): putting it there would turn that
-# namespace's label into a statement that is not true of it.
+# hostPath volume, which this pod has; `restricted` forbids it too, and the
+# hostPath is the only thing that stops it now that the user is not root. So
+# this pod is not in `observability` (which S063 brought to `restricted`):
+# putting it there would turn that namespace's label into a statement that is
+# not true of it.
 #
 # Where logs are on kind. kind's node runs containerd. Its CRI plugin writes
 # /var/log/pods/<namespace>_<pod>_<uid>/<container>/<restart>.log, which are the
@@ -55,20 +92,37 @@
 # Docker runtime, where the files in /var/log/pods are the symlinks).
 #
 # The pipeline, as text:
-#   file_log   reads /var/log/pods/meridian_*/*/*.log (not the database's:
-#              meridian_platform-db-*), from the end of each file it finds at
-#              start and the beginning of each file that appears later
+#   file_log   reads /var/log/pods/meridian_<family>-*/*/*.log for each family
+#              of the include list, from the end of each file it finds at start
+#              and the beginning of each file that appears later; it records the
+#              path of each file with its symlinks resolved
+#     filter     drops a record whose resolved path is not one of the listed
+#                families' files: a symlink under a listed directory that leads
+#                to another pod's file ships nothing. A record with no resolved
+#                path is dropped too
 #     container  parses the CRI format (time and stream), joins partial lines, and
 #                reads namespace, pod, container and the pod's UID from the path
+#     move       the stream (stdout or stderr) is parked on the resource, where
+#                no line can write
 #     json_parser  a line that is a JSON object becomes attributes; any other line
-#                is sent as it is (on_error: send_quiet), none is dropped
-#     severity   the attribute `level` becomes the record's severity
+#                is sent as it is (on_error: send_quiet), none is dropped for
+#                that. The attribute `level` becomes the record's severity;
+#                Python's CRITICAL is fatal (the receiver's default has no
+#                severity for it)
 #     move       the attribute `message` becomes the body
-#   memory_limiter, resource (service.name from the container's name), batch
+#   memory_limiter
+#   transform  removes from the record's attributes every name that is the
+#              resource's (service.*, k8s.*, log.*): the file's path and name,
+#              the stream and whatever a line's own JSON named like them; then
+#              puts the stream back from the resource. The resource stays what
+#              the path made it
+#   resource (service.name from the container's name), batch
 #   otlp_http  https://otel-collector.observability.svc.cluster.local:4318
 # A line that is not a JSON object keeps the whole line as its body and has no
 # severity. A JSON line keeps its other fields (logger, service, method, path,
-# status, time) as attributes, which Loki stores as structured metadata.
+# status, time) as attributes, which Loki stores as structured metadata. Only
+# `service_name` and `k8s_*` are the file's: `service`, `level` and `logger` are
+# the line's own word.
 #
 # The checkpoint is the offset of each file read so far (the file_storage
 # extension) on an emptyDir. An emptyDir survives a restart of the container
@@ -111,13 +165,16 @@ resources:
   limits:
     memory: 192Mi
 
-podSecurityContext: {}
+# Group root reads the node's files (see the header); fsGroup would not apply to
+# a hostPath.
+podSecurityContext:
+  supplementalGroups: [0]
 
-# Root, with nothing: see the header. runAsNonRoot is left unset (it would stop
-# the pod); everything else is what `restricted` asks of a container.
+# The image's own user and group, and everything `restricted` asks of a container.
 securityContext:
-  runAsUser: 0
-  runAsGroup: 0
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
   allowPrivilegeEscalation: false
   capabilities:
     drop: [ALL]
@@ -145,9 +202,13 @@ extraVolumes:
         - key: ca.crt
           path: ca.crt
 extraVolumeMounts:
+  # recursiveReadOnly: a plain read-only bind leaves a mount made under the
+  # directory writable. Enabled, not IfPossible: a node that cannot do it
+  # refuses the pod with a clear error instead of running it without.
   - name: varlogpods
     mountPath: /var/log/pods
     readOnly: true
+    recursiveReadOnly: Enabled
   - name: checkpoints
     mountPath: /var/lib/otelcol
   - name: telemetry-ca
@@ -164,21 +225,38 @@ config:
     prometheus: null
     otlp: null
     file_log:
+      # One pattern for each pod family of the Meridian chart: its six services
+      # (a Deployment's pod is <service>-<hash>-<id>) and the sweep (the CronJob
+      # meridian-sweep makes Jobs meridian-sweep-<number>, whose pods end in an
+      # id). The filter below holds the same list; a test holds both equal to
+      # the chart's.
       include:
-        - /var/log/pods/meridian_*/*/*.log
-      # The database's pods are in `meridian` too. Their output is PostgreSQL's,
-      # not the services' (the redaction of personal data and the JSON format are
-      # the services' own), and a statement that failed can be in it.
-      exclude:
-        - /var/log/pods/meridian_platform-db-*/*/*.log
+        - /var/log/pods/meridian_claims-api-*/*/*.log
+        - /var/log/pods/meridian_agent-runtime-*/*/*.log
+        - /var/log/pods/meridian_model-gateway-*/*/*.log
+        - /var/log/pods/meridian_policy-mcp-*/*/*.log
+        - /var/log/pods/meridian_claims-mcp-*/*/*.log
+        - /var/log/pods/meridian_knowledge-mcp-*/*/*.log
+        - /var/log/pods/meridian_meridian-sweep-*/*/*.log
       include_file_path: true
+      include_file_path_resolved: true
       start_at: end
       storage: file_storage
       retry_on_failure:
         enabled: true
       operators:
+        - id: listed-files-only
+          type: filter
+          expr: >-
+            attributes["log.file.path_resolved"] not matches
+            "^/var/log/pods/meridian_(claims-api|agent-runtime|model-gateway|policy-mcp|claims-mcp|knowledge-mcp|meridian-sweep)-[^/]+/[^/]+/[^/]+\\.log$"
         - id: container
           type: container
+        - id: stream-aside
+          type: move
+          if: attributes["log.iostream"] != nil
+          from: attributes["log.iostream"]
+          to: resource["meridian.stream"]
         - id: json
           type: json_parser
           if: body matches "^\\s*\\{.*\\}\\s*$"
@@ -186,12 +264,28 @@ config:
           on_error: send_quiet
           severity:
             parse_from: attributes.level
+            mapping:
+              fatal: [critical]
         - id: message-to-body
           type: move
           if: attributes.message != nil
           from: attributes.message
           to: body
   processors:
+    # Every name that is the resource's leaves the record's attributes, then the
+    # stream comes back from the resource. The second group is apart: the
+    # resource is shared by the records of one stream, so deleting the parked
+    # stream in the first group would take it from every record after the first.
+    transform/line:
+      error_mode: ignore
+      log_statements:
+        - context: log
+          statements:
+            - delete_matching_keys(log.attributes, "^(service|k8s|log)\\.")
+            - set(log.attributes["log.iostream"], resource.attributes["meridian.stream"]) where resource.attributes["meridian.stream"] != nil
+        - context: resource
+          statements:
+            - delete_key(resource.attributes, "meridian.stream")
     resource/service:
       attributes:
         - key: service.name
@@ -211,5 +305,5 @@ config:
       metrics: null
       logs:
         receivers: [file_log]
-        processors: [memory_limiter, resource/service, batch]
+        processors: [memory_limiter, transform/line, resource/service, batch]
         exporters: [otlp_http/collector]

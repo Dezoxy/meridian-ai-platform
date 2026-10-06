@@ -5,11 +5,13 @@ the work they count. Nothing the user sees has to be wrong: the claims still
 flow. What is wrong is that every alert and panel that reads that service's
 series has gone blind, and a blind alert looks like a healthy one (T-86).
 
-Status (S064): written from the code, not exercised. The three rules and their
+Status (S064): written from the code, not exercised. The four rules and their
 unit tests are checked offline by `make alerts`; none of the alerts has fired
 on a cluster, and the log lines described below were read from the code and
 from what an export that failed printed in tests, not from a cluster that lost
-its collector. The game day (S028) exercises it.
+its collector. The game day (S028) exercises it. The first three alerts are
+about metrics; the fourth, `MeridianLogAgentNotReady`, is about the logs and
+has its own section at the end of "Which hop lost it".
 
 ## What you see
 
@@ -26,16 +28,21 @@ its collector. The game day (S028) exercises it.
   `meridian_sweep_last_pass`. A sweep that does not run at all is
   `MeridianSweepStale`'s, and leads to the
   [database runbook](database-failure.md#the-sweep-stopped-succeeding).
+- The alert `MeridianLogAgentNotReady`: the DaemonSet in `logging`, the agent
+  that ships the services' output to Loki, has fewer ready pods than nodes it is
+  scheduled on, for 10 minutes. It reads kube-state-metrics' two numbers of the
+  DaemonSet, not a service's series, so it is about the logs and not about a
+  hop (see its own section below).
 
-Each waits 5 minutes after its condition first holds: the two ends of a hop
-export once a minute on clocks of their own, and a counter that nothing has
-added to exports no series, so right after the first call the upstream sample
-can arrive a minute before the downstream one. An alert that fires has
-therefore held for about 20 minutes after the last sample of the missing
-series.
+The first three wait 5 minutes after their condition first holds: the two ends
+of a hop export once a minute on clocks of their own, and a counter that
+nothing has added to exports no series, so right after the first call the
+upstream sample can arrive a minute before the downstream one. An alert that
+fires has therefore held for about 20 minutes after the last sample of the
+missing series.
 
-An idle service does not fire any of them: a counter is exported once a
-minute for as long as the process lives, after its first add, so an idle
+An idle service does not fire any of the first three: a counter is exported
+once a minute for as long as the process lives, after its first add, so an idle
 service still has its series.
 
 ## Which hop lost it
@@ -132,6 +139,45 @@ k() { kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meri
    chart gives it. The sweep's own warning, "the sweep's metrics were not
    sent", names only a class. The six series carry the fixed instance
    `claims-sweep`, so a pass that arrives is the same six series as the last.
+
+### The log agent is not ready (`MeridianLogAgentNotReady`)
+
+The agent is a DaemonSet in `logging`, one pod a node, that reads the services'
+and the sweep's output on the node and ships it to Loki. Fewer ready pods than
+nodes for 10 minutes means a node ships nothing. Read, on a private terminal
+(the output is the services'):
+
+```sh
+kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n logging get daemonset,pods
+kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n logging describe pod -l app.kubernetes.io/instance=log-agent
+kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n logging logs daemonset/log-agent-agent --tail=80
+```
+
+Likely causes: the image was not pulled; a node that cannot do the mount
+(`recursiveReadOnly: Enabled` is refused by a runtime that does not support
+it, and the pod's events say so); the ConfigMap `telemetry-ca` is missing in
+`logging` (`make up` publishes it); the health check fails. **A pod that is
+Running and ready can still ship nothing**: the agent reads the node's files by
+the group root, and a pod without that group started, logged no error and read
+no file when it was tried on fixture files, so the pod's output proves nothing
+about it. Smoke's line (a record of the Claims API in Loki) and `Started
+watching file` lines in the agent's output are the evidence that it reads.
+
+What a restart loses: a replaced pod (a new release, a deleted pod, a node
+reboot) starts each file it finds at its end, so the lines written to a node's
+files while no agent was ready are not sent, and the lines read and not yet
+exported are lost when it stops. Nothing is re-sent. A container that restarts
+keeps its checkpoint and re-sends nothing. The restart is
+`kubectl -n logging rollout restart daemonset/log-agent-agent`, safe to repeat,
+and after a renewal of the telemetry authority it is the step that makes the
+agent trust the new certificate.
+
+What the alert does not see. A DaemonSet that does not exist leaves no series,
+so no alert: smoke's line says "the log agent is not there". What a ready agent
+drops (its exporter's failed sends, the memory limiter's refusals) is in its own
+metrics on port 8888 of its pod, and nothing scrapes them: an open item, so
+a ready agent that loses lines is seen only in its own output and by lines
+missing in Loki.
 
 ## What to do
 

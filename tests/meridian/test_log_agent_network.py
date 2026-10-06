@@ -63,7 +63,12 @@ def test_the_namespaces_header_says_why_logging_is_privileged_and_not_restricted
     # What stops each level, as `helm template` renders the pod.
     assert "`baseline` forbids a hostPath volume" in header
     assert "`restricted` allows no hostPath volume either" in header
-    assert "runAsNonRoot" in header
+    # The user is not root since G1: the hostPath alone stops `restricted`, and
+    # the file no longer says the pod runs as root or cannot meet runAsNonRoot.
+    assert "the hostPath volume ALONE" in header
+    assert "10001" in header and "supplementary group" in header
+    assert "runs as root" not in header
+    assert "cannot meet" not in header
     # Why the pod is not in `observability`, which is `restricted`.
     assert "not in `observability`" in header
     # A label that warns of nothing is still a statement, and the file says so.
@@ -153,13 +158,19 @@ def test_the_policy_selects_the_labels_the_release_gives_the_pods() -> None:
     assert AGENT_LABELS["app.kubernetes.io/instance"] == install.split()[1]
 
 
-def test_the_header_says_what_the_policy_allows_and_that_it_has_not_run() -> None:
+def test_the_header_says_what_the_policy_allows_and_what_ran_on_a_cluster() -> None:
     header = header_of(POLICY_FILE)
 
     assert "DNS" in header and "4318" in header
     assert "no ingress" in header
-    assert "tested without a cluster" in header
     assert "kubelet" in header and "probes" in header
+    # What the two cluster runs showed, and the denial nobody probed (the review).
+    assert "ran on the kind cluster on 2026-10-06" in header
+    assert "was not probed" in header
+    assert "tested without a cluster until" not in header
+    # The review's L3: the pod does bind two ports, on its own address.
+    assert "no receiver listens in it" not in header
+    assert "13133" in header and "8888" in header
 
 
 # ── the collector's ingress ──────────────────────────────────────────────────

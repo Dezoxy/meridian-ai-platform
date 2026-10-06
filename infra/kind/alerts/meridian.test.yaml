@@ -1602,3 +1602,118 @@ tests:
       - eval_time: 30m
         alertname: MeridianSweepNotReporting
         exp_alerts: []
+
+  # ── MeridianLogAgentNotReady (S064, G1) ─────────────────────────────────────
+  # kube-state-metrics' two series of a DaemonSet: the pods scheduled (one a
+  # node) and the pods ready. The labels of the left side stay on the alert.
+  # Condition from 0, `for: 10m`: it fires at 10m and not before.
+  - name: a log agent with no ready pod on its one node fires after 10 minutes
+    interval: 1m
+    input_series:
+      - series: 'kube_daemonset_status_desired_number_scheduled{namespace="logging", daemonset="log-agent-agent"}'
+        values: "1x30"
+      - series: 'kube_daemonset_status_number_ready{namespace="logging", daemonset="log-agent-agent"}'
+        values: "0x30"
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: MeridianLogAgentNotReady
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: MeridianLogAgentNotReady
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              platform: meridian
+              namespace: logging
+              daemonset: log-agent-agent
+            exp_annotations:
+              summary: "The log agent has fewer ready pods than nodes to run on."
+              description: "DaemonSet log-agent-agent in logging has had 0 ready pod(s), fewer than the nodes it is scheduled on, for 10 minutes (proposed threshold). The agent ships the services' output to Loki: lines written on a node with no ready agent are not sent, and a pod that is replaced starts each file at its end."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/telemetry-missing.md"
+
+  - name: two ready pods of three scheduled fire, and say how many are ready
+    interval: 1m
+    input_series:
+      - series: 'kube_daemonset_status_desired_number_scheduled{namespace="logging", daemonset="log-agent-agent"}'
+        values: "3x30"
+      - series: 'kube_daemonset_status_number_ready{namespace="logging", daemonset="log-agent-agent"}'
+        values: "2x30"
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: MeridianLogAgentNotReady
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              platform: meridian
+              namespace: logging
+              daemonset: log-agent-agent
+            exp_annotations:
+              summary: "The log agent has fewer ready pods than nodes to run on."
+              description: "DaemonSet log-agent-agent in logging has had 2 ready pod(s), fewer than the nodes it is scheduled on, for 10 minutes (proposed threshold). The agent ships the services' output to Loki: lines written on a node with no ready agent are not sent, and a pod that is replaced starts each file at its end."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/telemetry-missing.md"
+
+  - name: a log agent that is ready on every node stays quiet
+    interval: 1m
+    input_series:
+      - series: 'kube_daemonset_status_desired_number_scheduled{namespace="logging", daemonset="log-agent-agent"}'
+        values: "1x40"
+      - series: 'kube_daemonset_status_number_ready{namespace="logging", daemonset="log-agent-agent"}'
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MeridianLogAgentNotReady
+        exp_alerts: []
+
+  # Not ready for 8 minutes (a rollout, a node that took a while to pull the
+  # image), ready again at 8m: the `for` of 10 minutes never ends.
+  - name: a log agent that is back within 10 minutes stays quiet
+    interval: 1m
+    input_series:
+      - series: 'kube_daemonset_status_desired_number_scheduled{namespace="logging", daemonset="log-agent-agent"}'
+        values: "1x40"
+      - series: 'kube_daemonset_status_number_ready{namespace="logging", daemonset="log-agent-agent"}'
+        values: "0x7 1x33"
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: MeridianLogAgentNotReady
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: MeridianLogAgentNotReady
+        exp_alerts: []
+
+  # A DaemonSet scheduled on no node has nothing to run: 0 of 0.
+  - name: a log agent scheduled on no node is not this alert's
+    interval: 1m
+    input_series:
+      - series: 'kube_daemonset_status_desired_number_scheduled{namespace="logging", daemonset="log-agent-agent"}'
+        values: "0x40"
+      - series: 'kube_daemonset_status_number_ready{namespace="logging", daemonset="log-agent-agent"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MeridianLogAgentNotReady
+        exp_alerts: []
+
+  # Silence reads as health (T-86): a DaemonSet that does not exist, or whose
+  # series kube-state-metrics stopped serving, leaves nothing to compare.
+  - name: no daemonset series at all does not fire
+    interval: 1m
+    input_series:
+      - series: 'kube_cronjob_status_last_successful_time{namespace="meridian", cronjob="meridian-sweep"}'
+        values: "0+60x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MeridianLogAgentNotReady
+        exp_alerts: []
+
+  - name: another namespace's daemonset that is not ready is not this alert's
+    interval: 1m
+    input_series:
+      - series: 'kube_daemonset_status_desired_number_scheduled{namespace="kube-system", daemonset="kindnet"}'
+        values: "1x40"
+      - series: 'kube_daemonset_status_number_ready{namespace="kube-system", daemonset="kindnet"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MeridianLogAgentNotReady
+        exp_alerts: []

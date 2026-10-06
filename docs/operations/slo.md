@@ -155,8 +155,10 @@ proposal, like the targets.
 | `MeridianGatewayMetricsMissing` | In the last 15 minutes the Agent Runtime counted a model call that completed, and Prometheus has no sample of the Model Gateway's call counter in those 15 minutes (S064: for 5 minutes) | none: it says the gateway's alerts are blind | [Telemetry missing](runbooks/telemetry-missing.md) |
 | `MeridianRuntimeMetricsMissing` | In the last 15 minutes the Claims API stored a triage, and Prometheus has no sample of the Agent Runtime's run counter in those 15 minutes (S064: for 5 minutes) | none | [Telemetry missing](runbooks/telemetry-missing.md) |
 | `MeridianSweepNotReporting` | The sweep's CronJob succeeded in the last 15 minutes, and Prometheus has no sample of what a pass found, `meridian_sweep_last_pass`, in those 15 minutes (S064: for 5 minutes) | none | [Telemetry missing](runbooks/telemetry-missing.md) |
+| `MeridianLogAgentNotReady` | The log agent's DaemonSet in `logging` has had fewer ready pods than nodes it is scheduled on for 10 minutes: a node ships no output to Loki (S064; a DaemonSet that does not exist leaves no series, and the agent's own drop counters are not scraped) | none | [Telemetry missing](runbooks/telemetry-missing.md) |
 
-The three last rules (S064, implemented and unit-tested, not run on a cluster)
+The three rules before the last (S064, implemented and unit-tested, not run on
+a cluster)
 look for a series that is not there: each holds a count of something the
 upstream end says happened, and no sample at all of the series the downstream
 end must have written for it, so an idle service, which still has its series,
