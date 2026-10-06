@@ -37,13 +37,14 @@ from meridian.platform.common.telemetry import (
     make_tracer_provider,
 )
 from meridian.platform.common.wire import WireModel
-from meridian.platform.registry.models import EntityId
+from meridian.platform.registry.models import ENTITY_ID_MAX_LENGTH, EntityId
 
 logger = logging.getLogger(__name__)
 
-MAX_ID_LENGTH = 64
-# The registry's ID pattern, bounded: the registry itself sets no maximum, but
-# an ID that arrives over HTTP ends up in a database column.
+# The registry's own maximum, so what an ID may be is set in one place.
+MAX_ID_LENGTH = ENTITY_ID_MAX_LENGTH
+# The registry's ID, as an HTTP input: an ID that arrives over HTTP ends up in a
+# database column.
 BoundedEntityId = Annotated[EntityId, StringConstraints(max_length=MAX_ID_LENGTH)]
 
 REFUSED = "request refused"

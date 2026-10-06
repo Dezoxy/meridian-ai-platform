@@ -80,6 +80,7 @@ def call_once(
         # The probe picks the tool from the agent's own allowlist, so the
         # allowlist never refuses and there is nothing to audit here.
         on_refusal=lambda _tool: None,
+        on_worker_refusal=lambda _tool, _reason, _worker: None,
         max_calls=1,  # the client makes one call
         verify=verify,
     )

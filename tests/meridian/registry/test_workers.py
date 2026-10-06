@@ -7,13 +7,11 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from pydantic import TypeAdapter, ValidationError
 
-from meridian.platform.registry import load_registry
-from meridian.platform.registry.models import (
-    UnknownAgentError,
-    UnknownWorkerError,
-    Worker,
-)
+from meridian.platform.registry import load_registry, models
+from meridian.platform.registry.models import ENTITY_ID_MAX_LENGTH, EntityId, Worker
+from meridian.platform.toolserver.wire import WORKER_PATTERN
 
 Plant = Callable[..., Path]
 LoadErrors = Callable[[Path], tuple[str, ...]]
@@ -165,48 +163,107 @@ def test_an_agent_without_workers_dumps_without_the_key(real_registry: Path) -> 
 def test_a_worker_without_tools_may_declare_an_empty_list(real_registry: Path) -> None:
     registry = load_registry(real_registry)
 
-    worker = registry.worker(TRIAGE, "assessor")
+    agent = registry.agent(TRIAGE)
 
+    assert agent is not None
+    worker = agent.worker("assessor")
+    assert worker is not None
     assert worker.tools == ()
 
 
 def test_worker_returns_the_declared_worker(real_registry: Path) -> None:
     registry = load_registry(real_registry)
+    agent = registry.agent(TRIAGE)
 
-    worker = registry.worker(TRIAGE, "intake")
+    assert agent is not None
+    worker = agent.worker("intake")
 
     assert isinstance(worker, Worker)
     assert worker.id == "intake"
     assert worker.tools == ("policy_lookup", "claim_history")
 
 
-def test_worker_refuses_a_worker_the_agent_does_not_declare(
+def test_worker_finds_nothing_the_agent_does_not_declare(
     real_registry: Path,
 ) -> None:
     registry = load_registry(real_registry)
+    triage = registry.agent(TRIAGE)
+    judge = registry.agent("evaluation-judge")
 
-    with pytest.raises(UnknownWorkerError):
-        registry.worker(TRIAGE, "ghost")
+    assert triage is not None
+    assert judge is not None
+    assert triage.worker("ghost") is None
+    assert judge.worker("intake") is None
 
 
-def test_worker_refuses_a_worker_of_an_agent_that_declares_none(
-    real_registry: Path,
-) -> None:
+def test_the_registry_has_one_way_to_find_a_worker(real_registry: Path) -> None:
     registry = load_registry(real_registry)
 
-    with pytest.raises(UnknownWorkerError):
-        registry.worker("evaluation-judge", "intake")
+    assert not hasattr(registry, "worker")
+    assert not hasattr(models, "UnknownAgentError")
+    assert not hasattr(models, "UnknownWorkerError")
 
 
-def test_worker_tells_an_unknown_agent_from_an_unknown_worker(
-    real_registry: Path,
+# ── one length for an ID, here and on the wire ──────────────────────────────
+def test_a_worker_id_of_the_longest_length_loads(plant: Plant) -> None:
+    longest = "w" * ENTITY_ID_MAX_LENGTH
+    directory = plant(
+        ("agents.yaml", "      - id: terms\n", f"      - id: {longest}\n")
+    )
+
+    registry = load_registry(directory)
+
+    triage = registry.agent(TRIAGE)
+    assert triage is not None
+    assert triage.worker(longest) is not None
+
+
+def test_a_worker_id_one_longer_is_a_load_error(
+    plant: Plant, load_errors: LoadErrors
 ) -> None:
-    registry = load_registry(real_registry)
+    too_long = "w" * (ENTITY_ID_MAX_LENGTH + 1)
+    directory = plant(
+        ("agents.yaml", "      - id: terms\n", f"      - id: {too_long}\n")
+    )
 
-    with pytest.raises(UnknownAgentError):
-        registry.worker("ghost", "intake")
-    assert not issubclass(UnknownAgentError, UnknownWorkerError)
-    assert not issubclass(UnknownWorkerError, UnknownAgentError)
+    errors = load_errors(directory)
+
+    assert errors == (
+        f"agents.yaml: agents[0].workers[1].id: String should have at most "
+        f"{ENTITY_ID_MAX_LENGTH} characters",
+    )
+
+
+def test_any_other_id_one_over_the_length_is_a_load_error_too(
+    plant: Plant, load_errors: LoadErrors
+) -> None:
+    too_long = "a" * (ENTITY_ID_MAX_LENGTH + 1)
+    directory = plant(
+        ("tenants.yaml", "  - id: claims-triage\n", f"  - id: {too_long}\n")
+    )
+
+    errors = load_errors(directory)
+
+    assert any("String should have at most 64 characters" in e for e in errors)
+
+
+def test_the_wire_accepts_exactly_the_ids_the_registry_accepts() -> None:
+    entity = TypeAdapter(EntityId)
+    for length in (1, ENTITY_ID_MAX_LENGTH, ENTITY_ID_MAX_LENGTH + 1):
+        candidate = "a" * length
+
+        in_registry = _accepts(entity, candidate)
+        on_the_wire = WORKER_PATTERN.fullmatch(candidate) is not None
+
+        assert in_registry == on_the_wire
+
+
+def _accepts(adapter: TypeAdapter[str], candidate: str) -> bool:
+    try:
+        adapter.validate_python(candidate)
+    except ValidationError:
+        return False
+    return True
 
 
 # ── the shape of a worker, at load ──────────────────────────────────────────

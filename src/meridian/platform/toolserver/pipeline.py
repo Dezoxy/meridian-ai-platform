@@ -270,7 +270,12 @@ class Pipeline:
         tool = entry.tool
         if not self.registry.tenant_may_run(binding.tenant, binding.agent):
             return "tenant-not-allowed"
-        if (reason := self._allowlist(call, tool, binding.agent, meta)) is not None:
+        reason, worker = self._allowlist(tool, binding.agent, meta)
+        if worker is not None:
+            # Once the name is one of the agent's worker, and so on the row and
+            # span of a refusal that follows too.
+            call.worker = worker
+        if reason is not None:
             return reason
         if tool.approval_required:  # approvals arrive in S015
             return "approval-required"
@@ -280,40 +285,43 @@ class Pipeline:
         return None
 
     def _allowlist(
-        self, call: Call, tool: Tool, agent_id: str, meta: Mapping[str, Any]
-    ) -> RefusalReason | None:
-        """Whether the run's agent, and for an agent that declares workers the
-        worker the call names, may call the tool (S031).
+        self, tool: Tool, agent_id: str, meta: Mapping[str, Any]
+    ) -> tuple[RefusalReason | None, str | None]:
+        """The refusal, or None, and the worker the call named once it is one of
+        the agent's, as ``(reason, worker)``: whether the run's agent, and for an
+        agent that declares workers the worker the call names, may call the tool
+        (S031).
 
         The agent is the run row's: the caller names a worker and nothing else.
         The name only narrows. It is accepted when it is a worker of that agent,
         and then allows that worker's tools; so what any name can reach is the
         agent's own list. In order: the key's form, the agent's workers (a call
         names none for an agent without workers, one for an agent with them),
-        the worker's name, the agent's list, the worker's list. The worker goes
-        on the call (and so its span) once it is one of the agent's, never as
-        the caller wrote it.
+        the worker's name, the agent's list, the worker's list. The worker is
+        returned (to go on the call, and so its span) once it is one of the
+        agent's, with a refusal that follows too, and never as the caller wrote
+        it: it is the registry's own ID.
         """
         try:
             named = worker_of(meta)
         except InvalidWorker:
-            return "invalid-worker"
+            return "invalid-worker", None
         agent = self.registry.agent(agent_id)
         if agent is None:
-            return "tool-not-allowed"
+            return "tool-not-allowed", None
         if not agent.workers:
             if named is not None:
-                return "worker-unknown"
-            return None if tool.id in agent.tools else "tool-not-allowed"
+                return "worker-unknown", None
+            return (None if tool.id in agent.tools else "tool-not-allowed"), None
         if named is None:
-            return "worker-missing"
+            return "worker-missing", None
         worker = agent.worker(named)
         if worker is None:
-            return "worker-unknown"
-        call.worker = worker.id
+            return "worker-unknown", None
         if tool.id not in agent.tools:
-            return "tool-not-allowed"
-        return None if tool.id in worker.tools else "worker-tool-not-allowed"
+            return "tool-not-allowed", worker.id
+        reason = None if tool.id in worker.tools else "worker-tool-not-allowed"
+        return reason, worker.id
 
     def _refusal(
         self,
@@ -378,8 +386,9 @@ class Pipeline:
             call_id=call.call_id,
             suppressed=suppressed,
             tool=call.tool,
-            # Only once the name is a worker of the run's agent (``_allowlist``
-            # sets it): what the caller sent is never written as it came.
+            # Only once the name is a worker of the run's agent (``_screen`` sets
+            # it from ``_allowlist``): what the caller sent is never written as
+            # it came.
             worker=call.worker,
         )
 

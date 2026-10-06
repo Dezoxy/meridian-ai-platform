@@ -15,6 +15,10 @@ failure codes and idempotency step labels unchanged. Every node is labelled with
 its worker (``meridian.worker`` in the node's metadata), which the runtime puts
 on the node's span. The state is one ``ClaimState`` for the supervisor and every
 worker: plain data only, as the runtime runs LangGraph in strict msgpack mode.
+
+The workers run one after another. A worker's subgraph answers with the whole
+state, so two workers in parallel would both write every key and LangGraph would
+refuse the step; parallel workers would need an output schema each.
 """
 
 from typing import Any, TypedDict
@@ -126,7 +130,9 @@ def assessed_to_state(assessed: Assessed) -> dict[str, Any]:
     }
 
 
-def _label(worker: str) -> dict[str, Any]:
+def label(worker: str) -> dict[str, Any]:
+    """The metadata of a node of ``worker``: the runtime puts it on the node's
+    span. The supervisor labels the worker nodes it adds with the same form."""
     return {WORKER_KEY: worker}
 
 
@@ -172,8 +178,8 @@ def build_intake(intake: ToolClient) -> CompiledStateGraph:
         }
 
     graph = StateGraph(ClaimState)
-    graph.add_node("lookup_policy", lookup_policy, metadata=_label(INTAKE))
-    graph.add_node("load_history", load_history, metadata=_label(INTAKE))
+    graph.add_node("lookup_policy", lookup_policy, metadata=label(INTAKE))
+    graph.add_node("load_history", load_history, metadata=label(INTAKE))
     graph.add_edge(START, "lookup_policy")
     graph.add_conditional_edges(
         "lookup_policy", _policy_found, {END: END, "load_history": "load_history"}
@@ -206,7 +212,7 @@ def build_terms(terms: ToolClient) -> CompiledStateGraph:
         return {"chunks": chunks}
 
     graph = StateGraph(ClaimState)
-    graph.add_node("retrieve_terms", retrieve_terms, metadata=_label(TERMS))
+    graph.add_node("retrieve_terms", retrieve_terms, metadata=label(TERMS))
     graph.add_edge(START, "retrieve_terms")
     graph.add_edge("retrieve_terms", END)
     return graph.compile()
@@ -228,7 +234,7 @@ def build_assessor(model: ModelClient) -> CompiledStateGraph:
         return {"assessed": assessed_to_state(assessed)}
 
     graph = StateGraph(ClaimState)
-    graph.add_node("assess", assess_exclusions, metadata=_label(ASSESSOR))
+    graph.add_node("assess", assess_exclusions, metadata=label(ASSESSOR))
     graph.add_edge(START, "assess")
     graph.add_edge("assess", END)
     return graph.compile()
@@ -251,7 +257,7 @@ def build_request_approval(approvals: ToolClient) -> CompiledStateGraph:
         return {"request_id": str(requested.request_id)}
 
     graph = StateGraph(ClaimState)
-    graph.add_node("request_approval", request_approval, metadata=_label(APPROVALS))
+    graph.add_node("request_approval", request_approval, metadata=label(APPROVALS))
     graph.add_edge(START, "request_approval")
     graph.add_edge("request_approval", END)
     return graph.compile()
@@ -289,8 +295,8 @@ def build_outcome(approvals: ToolClient) -> CompiledStateGraph:
         return {}
 
     graph = StateGraph(ClaimState)
-    graph.add_node("read_outcome", read_outcome, metadata=_label(APPROVALS))
-    graph.add_node("write_note", write_note, metadata=_label(APPROVALS))
+    graph.add_node("read_outcome", read_outcome, metadata=label(APPROVALS))
+    graph.add_node("write_note", write_note, metadata=label(APPROVALS))
     graph.add_edge(START, "read_outcome")
     graph.add_edge("read_outcome", "write_note")
     graph.add_edge("write_note", END)

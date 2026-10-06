@@ -145,9 +145,15 @@ Negative / accepted trade-offs:
   worker of the run's agent, not which node of the graph made the call.
 - The registry now carries structure that mirrors the graph. A worker
   added to one and not the other is refused at run time, not at build
-  time, except where the registry check sees it.
+  time, except where the registry check sees it: a worker ID longer than
+  the wire allows, which is the longest any registry ID may be, and lists
+  that do not add up to the agent's tools.
 - The supervisor's pause node runs a worker, so "the supervisor only
   routes" has one exception, and its span names no worker.
+- The workers run one after another. A worker's subgraph answers with the
+  whole state, so two workers in parallel would both write every key and
+  LangGraph would refuse the step; parallel workers would need an output
+  schema each.
 - The limits stay per run: four model calls and sixteen tool calls for
   all workers together. A worker has no budget of its own.
 - One workload uses workers. The scaffold for a new agent still writes

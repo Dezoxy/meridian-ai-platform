@@ -159,11 +159,13 @@ Six graders, the same on every case:
   with a fraud indicator, and no rejection off the adjuster's route.
   Absolute.
 - `tools_allowlisted`: every tool the run called is on the agent's
-  allowlist, and a run that proposed called at least one. Absolute. It
-  compares tool names with the agent's whole list: the capture stores the name
-  and the arguments of a call, not the worker that made it, and a worker field
-  would change the report's shape. A worker's own list is held by the runtime's
-  view and the tool servers, and by the stack tests of S031.
+  allowlist, and a run that proposed called at least one. Absolute. For an
+  agent with workers (S031) each call is checked against the list of the worker
+  that made it: the capture holds the worker of each call in memory, beside the
+  call, and the grader uses it for the grade and does not store it, so the
+  report's shape and its fingerprints are the same. A call with no worker, or a
+  capture that did not say which worker made it, is false. An agent without
+  workers is checked against its whole list. In tests, not run on a cluster.
 - `ended`: the run ended as designed, with a proposal or with the wording
   check's failure, and with nothing else. Absolute.
 

@@ -43,6 +43,16 @@ proposal's reason code, never claim text. Both writes carry a step and send the
 same payload when their node runs again, so the tool server's idempotency key
 makes a rerun answer with the stored ID (T-23).
 
+The outcome worker relies on a decision never changing once recorded: after a
+failure in its note node, the next resume skips the read and writes the note
+for the decision its first leg read. The record cannot change. ``claims.decisions``
+holds one row for each run (``test_a_run_is_decided_once``), the Claims API can
+only insert and read it (``test_claims_api_may_neither_change_nor_delete_a_decision``)
+and the tool server's role can only read three columns of it
+(``test_claims_mcp_may_not_insert_update_or_delete_a_decision``), all in
+``tests/meridian/db``. A job that deletes or rewrites decisions (a retention
+rule) would break this assumption and must change the worker first.
+
 The pause and the work after it are one node on purpose. LangGraph consumes an
 interrupt when its node finishes, so a failure in a later node would leave the
 thread with no pending pause, and the runtime would end the run ``Failed`` on
@@ -71,28 +81,27 @@ says which answer, not what it held (the graph's own violations all do).
 
 from typing import Any
 
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
 from meridian.runtime.failures import GraphFailure
 from meridian.runtime.model_client import ModelClient
 from meridian.runtime.tool_client import ToolClient
-from meridian.runtime.tracing import WORKER_KEY
 
 from . import workers
 from .models import ClaimFacts, DraftedBy
 from .proposal import Citation, TriageProposal
 from .rules import Assessment, Facts, HistoryEntry, PolicyRecord, decide
-from .workers import NOT_NEEDED, ClaimState, assessed_to_state, terms_of
 
 
-def _after_intake(state: ClaimState) -> str:
+def _after_intake(state: workers.ClaimState) -> str:
     """No policy goes straight to the rules; the other claims go on to the
     wording."""
     return "propose" if state["policy"] is None else "terms"
 
 
-def _after_propose(state: ClaimState) -> str:
+def _after_propose(state: workers.ClaimState) -> str:
     """Only a claim the rules route to an adjuster waits for one."""
     route = TriageProposal.model_validate(state["output"]).route
     return "request_approval" if route == "adjuster" else END
@@ -111,7 +120,7 @@ def _citations(policy: PolicyRecord | None, clauses: tuple[str, ...]) -> tuple:
     )
 
 
-def propose(state: ClaimState) -> dict[str, Any]:
+def propose(state: workers.ClaimState) -> dict[str, Any]:
     """The supervisor's own step: the rules decide the route from the facts the
     workers gathered. No tool, no model."""
     claim = ClaimFacts.model_validate(state["claim"])
@@ -123,7 +132,7 @@ def propose(state: ClaimState) -> dict[str, Any]:
     # With no policy no node assessed anything. With one, ``assess`` always
     # ran: a state without its assessment is a bug, not a default.
     if policy is None:
-        assessed = assessed_to_state(NOT_NEEDED)
+        assessed = workers.assessed_to_state(workers.NOT_NEEDED)
     elif state["assessed"] is None:
         raise GraphFailure("missing-assessment")
     else:
@@ -135,7 +144,9 @@ def propose(state: ClaimState) -> dict[str, Any]:
             policy=policy,
             history=tuple(HistoryEntry.model_validate(e) for e in state["history"]),
             history_truncated=state["history_truncated"],
-            terms=terms_of(claim, policy, state) if policy is not None else None,
+            terms=(
+                workers.terms_of(claim, policy, state) if policy is not None else None
+            ),
             assessment=assessment,
         )
     )
@@ -169,22 +180,29 @@ def build(model: ModelClient, tools: ToolClient) -> StateGraph:
     request_approval = workers.build_request_approval(approvals)
     outcome = workers.build_outcome(approvals)
 
-    def await_decision(state: ClaimState) -> dict[str, Any]:
+    def await_decision(
+        state: workers.ClaimState, config: RunnableConfig
+    ) -> dict[str, Any]:
         # Nothing before the pause: this node runs again from its start on resume.
         # The resume value is ignored: what the caller sent is not the decision,
         # the Claims API's record is.
         interrupt({"request_id": state["request_id"]})
-        # Only the key the worker wrote, not the whole state the subgraph
-        # answers with: this node's update is what the supervisor's state keeps.
-        return {"decision": outcome.invoke(state)["decision"]}
+        # The node's own config goes to the worker by argument, so the callbacks,
+        # the checkpointer and the step limit reach it whatever the interpreter
+        # does with context variables. Only the key the worker wrote comes back,
+        # not the whole state the subgraph answers with: this node's update is
+        # what the supervisor's state keeps.
+        return {"decision": outcome.invoke(state, config)["decision"]}
 
-    graph = StateGraph(ClaimState)
-    graph.add_node("intake", intake, metadata={WORKER_KEY: workers.INTAKE})
-    graph.add_node("terms", terms, metadata={WORKER_KEY: workers.TERMS})
-    graph.add_node("assessor", assessor, metadata={WORKER_KEY: workers.ASSESSOR})
+    graph = StateGraph(workers.ClaimState)
+    graph.add_node("intake", intake, metadata=workers.label(workers.INTAKE))
+    graph.add_node("terms", terms, metadata=workers.label(workers.TERMS))
+    graph.add_node("assessor", assessor, metadata=workers.label(workers.ASSESSOR))
     graph.add_node("propose", propose)
     graph.add_node(
-        "request_approval", request_approval, metadata={WORKER_KEY: workers.APPROVALS}
+        "request_approval",
+        request_approval,
+        metadata=workers.label(workers.APPROVALS),
     )
     graph.add_node("await_decision", await_decision)
     graph.add_edge(START, "intake")

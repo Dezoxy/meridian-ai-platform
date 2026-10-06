@@ -71,6 +71,7 @@ from meridian.runtime.models import (
 from meridian.runtime.runs import RunIdentity, RunOutcome
 from meridian.runtime.settings import RuntimeSettings
 from meridian.runtime.tool_client import (
+    ClientRefusal,
     ToolClient,
     ToolError,
     ToolRefused,
@@ -82,7 +83,7 @@ from meridian.runtime.tool_transport import ToolTransport
 GATEWAY_TIMEOUT_SECONDS = 30.0
 FINISH_ATTEMPTS = 2
 # The audit reason of a call the runtime's own allowlist refuses.
-REFUSAL_REASON = "tool-not-allowed"
+REFUSAL_REASON: ClientRefusal = "tool-not-allowed"
 # The audit reason of a run request for a job agent, which has no graph.
 JOB_REFUSAL_REASON = "not-a-graph-agent"
 # The detail of a 404 for a run: the same text whether the run does not exist
@@ -376,7 +377,9 @@ def tool_client_for(
     registry, so the throttle's map is bounded."""
 
     def audit_refusal(
-        tool: str | None, reason: str = REFUSAL_REASON, worker: str | None = None
+        tool: str | None,
+        reason: ClientRefusal = REFUSAL_REASON,
+        worker: str | None = None,
     ) -> None:
         # A window per tool and reason: a worker's refusal of a tool does not
         # use up the window of the agent's refusal of it (S031). The worker is

@@ -38,7 +38,7 @@ from meridian.platform.knowledge_mcp.app import create_app as create_knowledge_a
 from meridian.platform.knowledge_mcp.settings import KnowledgeServerSettings
 from meridian.platform.policy_mcp.app import create_app as create_policy_app
 from meridian.platform.policy_mcp.seed import seed_policies
-from meridian.platform.registry import load_registry
+from meridian.platform.registry import Registry, load_registry
 from meridian.platform.toolserver.settings import ToolServerSettings
 from meridian.platform.toolserver.wire import (
     META_IDEMPOTENCY_KEY,
@@ -235,13 +235,17 @@ class Routed:
     goes through the view of the worker that holds the tool. A tool no worker
     holds (a made-up name, one a test took off the lists) goes through the first
     worker's view, which refuses it as the agent's. An agent without workers is
-    called as it always was. Everything else is the client's own."""
+    called as it always was. Everything else is the client's own. The registry
+    and the agent's ID are the ones the client was built with; the client keeps
+    them to itself."""
 
-    def __init__(self, client: Any) -> None:
+    def __init__(self, client: Any, registry: Registry, agent_id: str) -> None:
         self.client = client
+        self.registry = registry
+        self.agent_id = agent_id
 
     def call(self, tool: str, arguments: Mapping[str, Any], **kwargs: Any) -> Any:
-        agent = self.client._registry.agent(self.client._agent)
+        agent = self.registry.agent(self.agent_id)
         if agent is None or not agent.workers:
             return self.client.call(tool, arguments, **kwargs)
         holder = next((w.id for w in agent.workers if tool in w.tools), None)

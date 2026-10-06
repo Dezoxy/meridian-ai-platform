@@ -207,6 +207,7 @@ def tool_client(url: str, pki: Pki, caller: str) -> ToolClient:
         run_id=uuid.uuid4(),
         tracer=NoOpTracer(),
         on_refusal=lambda _tool: None,
+        on_worker_refusal=lambda _tool, _reason, _worker: None,
         max_calls=1,
         verify=verify_of(pki.tls_of(caller)),
     ).for_worker("intake")
@@ -267,6 +268,7 @@ def test_a_tool_client_that_trusts_another_ca_cannot_connect(
             run_id=uuid.uuid4(),
             tracer=NoOpTracer(),
             on_refusal=lambda _tool: None,
+            on_worker_refusal=lambda _tool, _reason, _worker: None,
             max_calls=1,
             verify=stranger,
         ).for_worker("intake")

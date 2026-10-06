@@ -1978,6 +1978,7 @@ def test_a_call_the_server_shed_reaches_the_runtimes_tool_client_as_unavailable(
             run_id=world.run_id,
             tracer=tracer_of(InMemorySpanExporter()),
             on_refusal=lambda tool: None,
+            on_worker_refusal=lambda tool, reason, worker: None,
             max_calls=2,
         ).for_worker("intake")
 

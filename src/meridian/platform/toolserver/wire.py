@@ -11,6 +11,8 @@ import uuid
 from collections.abc import Mapping
 from typing import Any, Literal
 
+from meridian.platform.registry.models import ENTITY_ID_MAX_LENGTH
+
 # The run the call belongs to. The caller sends only this; the server reads
 # tenant, agent and claim from the run's own record (T-22).
 META_RUN = "meridian/run"
@@ -70,8 +72,10 @@ def run_id_of(meta: Mapping[str, Any]) -> uuid.UUID | None:
 
 
 # What a worker's ID looks like on the wire: a registry entity ID (lower-case
-# words joined by hyphens), bounded as the idempotency step is.
-WORKER_PATTERN = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
+# words joined by hyphens), as long as the registry lets one be. The bound is
+# the registry's own constant, so the two cannot drift. Also the form a node's
+# span takes a worker in (``runtime/tracing.py``).
+WORKER_PATTERN = re.compile(rf"[a-z0-9][a-z0-9-]{{0,{ENTITY_ID_MAX_LENGTH - 1}}}")
 
 
 class InvalidWorker(ValueError):

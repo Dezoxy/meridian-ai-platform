@@ -34,7 +34,14 @@ NonEmptyStr = Annotated[str, StringConstraints(min_length=1)]
 # Also what a caller's service ID must match when it is read from a certificate
 # (``common/identity.py``).
 ENTITY_ID_PATTERN = r"^[a-z0-9][a-z0-9-]*$"
-EntityId = Annotated[str, StringConstraints(pattern=ENTITY_ID_PATTERN)]
+# The longest an ID may be. The tool-server kit builds its worker pattern from
+# it (``toolserver/wire.py``), so an ID the registry accepts is one the wire
+# accepts.
+ENTITY_ID_MAX_LENGTH = 64
+EntityId = Annotated[
+    str,
+    StringConstraints(pattern=ENTITY_ID_PATTERN, max_length=ENTITY_ID_MAX_LENGTH),
+]
 # MCP tool names: lower-case words joined by underscores.
 ToolId = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]*$")]
 Money = Annotated[Decimal, Field(ge=0)]
@@ -54,14 +61,6 @@ MAX_EMBEDDING_DIMENSIONS = 2000
 
 class RegistryModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-
-
-class UnknownAgentError(LookupError):
-    """``Registry.worker`` was asked about an agent the registry does not hold."""
-
-
-class UnknownWorkerError(LookupError):
-    """The agent exists but declares no such worker (or declares none)."""
 
 
 class Provider(RegistryModel):
@@ -328,18 +327,6 @@ class Registry(RegistryModel):
 
     def agent(self, agent_id: str) -> Agent | None:
         return next((a for a in self.agents if a.id == agent_id), None)
-
-    def worker(self, agent_id: str, worker_id: str) -> Worker:
-        """The agent's worker, or ``UnknownAgentError`` when the registry has no
-        such agent, or ``UnknownWorkerError`` when the agent declares no such
-        worker (an agent without workers declares none)."""
-        agent = self.agent(agent_id)
-        if agent is None:
-            raise UnknownAgentError(agent_id)
-        worker = agent.worker(worker_id)
-        if worker is None:
-            raise UnknownWorkerError(f"{agent_id}/{worker_id}")
-        return worker
 
     def data_class(self, class_id: str) -> DataClassPolicy | None:
         return next((c for c in self.data_classes if c.id == class_id), None)

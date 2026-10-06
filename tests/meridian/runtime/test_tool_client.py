@@ -93,6 +93,11 @@ class Refusals:
     def __call__(self, tool: str | None) -> None:
         self.tools.append(tool)
 
+    def worker(self, tool: str | None, reason: str, worker: str | None) -> None:
+        """The callback for a refusal made through a worker's view; the tools
+        list holds those too, as the allowlist's own."""
+        self.tools.append(tool)
+
 
 def direct(
     servers: dict[str, Any],
@@ -106,17 +111,18 @@ def direct(
 ) -> Routed:
     """A client with no database behind its refusal callback, called as the
     graph calls it: through the view of the worker that holds the tool (S031)."""
-    return Routed(
-        ToolClient(
-            servers,
-            registry=registry,
-            agent=agent,
-            run_id=run_id or uuid.uuid4(),
-            tracer=tracer_of(exporter),
-            on_refusal=refusals or Refusals(),
-            max_calls=max_calls,
-        )
+    audited = refusals or Refusals()
+    client = ToolClient(
+        servers,
+        registry=registry,
+        agent=agent,
+        run_id=run_id or uuid.uuid4(),
+        tracer=tracer_of(exporter),
+        on_refusal=audited,
+        on_worker_refusal=audited.worker,
+        max_calls=max_calls,
     )
+    return Routed(client, registry, agent)
 
 
 def identity_of(world: World, run_id: uuid.UUID | None = None) -> RunIdentity:
@@ -139,16 +145,17 @@ def with_database(
 ) -> Routed:
     """A client built the way the runtime builds it, over the world's database,
     called through the view of the worker that holds the tool (S031)."""
-    return Routed(
-        tool_client_for(
-            servers,
-            registry=registry or load_registry(REGISTRY_DIR),
-            dsn=world.db.dsn("agent_runtime"),
-            tracer=tracer_of(exporter),
-            identity=identity_of(world, run_id),
-            throttle=RefusalAuditThrottle(),
-        )
+    used = registry or load_registry(REGISTRY_DIR)
+    identity = identity_of(world, run_id)
+    client = tool_client_for(
+        servers,
+        registry=used,
+        dsn=world.db.dsn("agent_runtime"),
+        tracer=tracer_of(exporter),
+        identity=identity,
+        throttle=RefusalAuditThrottle(),
     )
+    return Routed(client, used, identity.agent)
 
 
 def real_servers(world: World, exporter: InMemorySpanExporter) -> dict[str, Any]:
@@ -390,6 +397,7 @@ def test_a_failed_refusal_audit_propagates(
         run_id=uuid.uuid4(),
         tracer=tracer_of(exporter),
         on_refusal=failing,
+        on_worker_refusal=lambda tool, reason, worker: failing(tool),
         max_calls=4,
     )
 
@@ -1034,6 +1042,7 @@ def work():
             run_id=uuid.uuid4(),
             tracer=tracer,
             on_refusal=lambda tool: None,
+            on_worker_refusal=lambda tool, reason, worker: None,
             max_calls=4,
         ).for_worker("intake")
         outcomes.append(

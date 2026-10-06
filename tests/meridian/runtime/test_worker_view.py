@@ -11,8 +11,9 @@ runtime's own audit rows, run against PostgreSQL (``make pytest-db``).
 """
 
 import hashlib
+import threading
 import uuid
-from typing import Any
+from typing import Any, get_args
 
 import pytest
 from dbsupport import DatabaseHandle
@@ -34,11 +35,12 @@ from toolsupport import (
 
 from meridian.platform.common.throttle import RefusalAuditThrottle
 from meridian.platform.registry import Registry, load_registry
-from meridian.platform.toolserver.wire import META_WORKER
-from meridian.runtime.app import tool_client_for
+from meridian.platform.toolserver.wire import META_WORKER, RefusalReason
+from meridian.runtime.app import REFUSAL_REASON, tool_client_for
 from meridian.runtime.failures import failure_reason
 from meridian.runtime.runs import RunIdentity
 from meridian.runtime.tool_client import (
+    ClientRefusal,
     ToolCallLimit,
     ToolClient,
     ToolNotAllowed,
@@ -357,25 +359,37 @@ def test_an_agent_the_registry_does_not_know_may_call_nothing_through_any_door(
     assert view.value.reason == "worker-unknown"
 
 
-def test_a_client_without_a_worker_callback_reports_a_worker_refusal_as_the_allowlists(
+def test_a_client_cannot_be_built_without_a_worker_callback(
     registry: Registry, exporter: InMemorySpanExporter
 ) -> None:
     audited = Audited()
-    tools = ToolClient(
-        {},
-        registry=registry,
-        agent=AGENT,
-        run_id=uuid.uuid4(),
-        tracer=tracer_of(exporter),
-        on_refusal=audited.allowlist,
-        max_calls=4,
-    )
 
-    with pytest.raises(ToolNotAllowed) as raised:
-        tools.for_worker("assessor").call("policy_lookup", LOOKUP)
+    with pytest.raises(TypeError, match="on_worker_refusal"):
+        ToolClient(  # type: ignore[call-arg]
+            {},
+            registry=registry,
+            agent=AGENT,
+            run_id=uuid.uuid4(),
+            tracer=tracer_of(exporter),
+            on_refusal=audited.allowlist,
+            max_calls=4,
+        )
 
-    assert raised.value.reason == "worker-tool-not-allowed"
-    assert audited.rows == [("policy_lookup", "tool-not-allowed")]
+
+def test_every_reason_the_client_can_raise_is_a_reason_a_server_can_give() -> None:
+    reasons = set(get_args(ClientRefusal))
+
+    assert reasons == {
+        "tool-not-allowed",
+        "worker-tool-not-allowed",
+        "worker-missing",
+        "worker-unknown",
+    }
+    assert reasons <= set(get_args(RefusalReason))
+
+
+def test_the_runtimes_default_audit_reason_is_one_the_client_can_raise() -> None:
+    assert REFUSAL_REASON in get_args(ClientRefusal)
 
 
 # ── one count for the run ───────────────────────────────────────────────────
@@ -403,6 +417,43 @@ def test_the_views_and_the_bare_client_share_one_count(
 
     assert sent == 2
     assert len(stand_in.calls) == 2
+
+
+def test_threads_calling_through_different_views_share_the_one_limit(
+    registry: Registry, exporter: InMemorySpanExporter
+) -> None:
+    threads, limit = 16, 5
+    stand_in = StandIn()
+    tools = client_of(
+        registry,
+        exporter,
+        Audited(),
+        servers=all_servers(stand_in),
+        max_calls=limit,
+    )
+    views = [tools.for_worker("intake"), tools.for_worker("terms")]
+    calls = [("policy_lookup", LOOKUP), ("wording_search", SEARCH)]
+    start_together = threading.Barrier(threads)
+    outcomes: list[str] = []
+
+    def work(index: int) -> None:
+        tool, arguments = calls[index % 2]
+        start_together.wait()
+        try:
+            views[index % 2].call(tool, arguments)
+        except ToolCallLimit:
+            outcomes.append("limit")
+        else:
+            outcomes.append("passed")
+
+    racers = [threading.Thread(target=work, args=(i,)) for i in range(threads)]
+    for racer in racers:
+        racer.start()
+    for racer in racers:
+        racer.join()
+
+    assert sorted(outcomes) == ["limit"] * (threads - limit) + ["passed"] * limit
+    assert len(stand_in.calls) == limit
 
 
 def test_a_call_a_view_refuses_counts_toward_the_limit(

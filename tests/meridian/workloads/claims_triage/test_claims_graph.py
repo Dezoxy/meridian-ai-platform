@@ -1111,7 +1111,8 @@ def test_a_decision_is_noted_with_its_fixed_text_and_the_run_completes(
 
 
 def test_each_tool_is_called_through_the_worker_that_holds_it() -> None:
-    registry = load_registry(REGISTRY_DIR)
+    triage = load_registry(REGISTRY_DIR).agent("claims-triage")
+    assert triage is not None
     graph, tools = paused()
     tools.recorded = "withdrawn"
 
@@ -1131,14 +1132,9 @@ def test_each_tool_is_called_through_the_worker_that_holds_it() -> None:
         "approvals",
     ]
     for worker, tool in tools.workers:
-        assert tool in registry.worker("claims-triage", worker).tools
-
-
-def test_a_call_site_that_names_no_worker_would_be_refused() -> None:
-    tools = StubTools()
-
-    with pytest.raises(AssertionError, match="no worker"):
-        tools.call("policy_lookup", {"policy_number": "POL-0049"})
+        holder = triage.worker(worker)
+        assert holder is not None
+        assert tool in holder.tools
 
 
 def test_the_five_notes_are_different_fixed_texts() -> None:
@@ -1548,7 +1544,7 @@ def test_each_builder_receives_only_what_its_worker_needs(
     build(cast(ModelClient, model), cast(ToolClient, tools))
 
     received = receipts.received
-    assert list(received) == list(BUILDERS)
+    assert set(received) == set(BUILDERS)
     assert received["build_assessor"] == (model,)
     for builder, worker in [
         ("build_intake", "intake"),

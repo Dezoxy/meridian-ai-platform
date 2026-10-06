@@ -45,7 +45,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, NoReturn, get_args
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, get_args
 
 import anyio
 import httpx2
@@ -97,6 +97,14 @@ SPAN_NAME = "runtime.tool"
 # The graph's own name for a call site: it takes part in the idempotency key.
 STEP_PATTERN = re.compile(r"[a-z0-9][a-z0-9_.-]{0,63}")
 REFUSAL_REASONS: frozenset[str] = frozenset(get_args(RefusalReason))
+# The words the client's own allowlist can raise before anything is sent: a
+# subset of the words a server can give (a test holds that).
+ClientRefusal = Literal[
+    "tool-not-allowed",
+    "worker-tool-not-allowed",
+    "worker-missing",
+    "worker-unknown",
+]
 UNKNOWN_REASON = "unknown"
 # No probe and no fallback to the older handshake: the tool servers speak the
 # newest per-request protocol (a probe showed the older one working too, and
@@ -158,7 +166,9 @@ class ToolNotAllowed(ToolError):
     and ``worker-unknown`` (a worker the agent does not declare; ``tool`` is
     None then)."""
 
-    def __init__(self, tool: str | None, reason: str = "tool-not-allowed") -> None:
+    def __init__(
+        self, tool: str | None, reason: ClientRefusal = "tool-not-allowed"
+    ) -> None:
         super().__init__(tool, "tool not allowed")
         self.reason = reason
 
@@ -295,13 +305,14 @@ class ToolClient:
     """Built per run. ``servers`` maps a registry server ID to what the SDK's
     ``Client`` accepts: a base URL (``/mcp`` is appended) or, in tests, a
     connected in-process server. ``on_refusal`` is called with the tool's
-    registry ID, or ``None``, before a call the allowlist refuses; it writes the
-    runtime's audit row, and an exception from it propagates. A refusal that
-    comes of a worker (S031: ``worker-tool-not-allowed``, ``worker-missing``,
-    ``worker-unknown``), and any refusal made through a worker's view, goes to
-    ``on_worker_refusal`` with the tool or ``None``, the reason word and the
-    view's worker or ``None``, the same way; a client built without it reports
-    such a refusal to ``on_refusal``, as the allowlist's. ``max_calls``
+    registry ID, or ``None``, before a call the agent's own allowlist refuses
+    (the client with no worker); it writes the runtime's audit row, and an
+    exception from it propagates. A refusal that comes of a worker (S031:
+    ``worker-tool-not-allowed``, ``worker-missing``, ``worker-unknown``), and
+    any refusal made through a worker's view, goes to ``on_worker_refusal`` with
+    the tool or ``None``, the reason word and the view's worker or ``None``, the
+    same way. Both are required, so a refusal is never audited under a word it
+    was not raised with. ``max_calls``
     bounds the calls of this client, so of one run: every call counts, a refused
     one too, and the one past it raises ``ToolCallLimit`` before the allowlist.
     The calls of a worker's view (``for_worker``) count here too.
@@ -320,10 +331,10 @@ class ToolClient:
         run_id: uuid.UUID,
         tracer: Tracer,
         on_refusal: Callable[[str | None], None],
+        on_worker_refusal: Callable[[str | None, ClientRefusal, str | None], None],
         max_calls: int,
         verify: ssl.SSLContext | bool = True,
         transport: "ToolTransport | None" = None,
-        on_worker_refusal: Callable[[str | None, str, str | None], None] | None = None,
     ) -> None:
         prepare_sdk()
         self._verify = verify
@@ -448,7 +459,7 @@ class ToolClient:
                 self._refuse(known, "worker-tool-not-allowed")
         return spec
 
-    def _refuse(self, tool: str | None, reason: str) -> NoReturn:
+    def _refuse(self, tool: str | None, reason: ClientRefusal) -> NoReturn:
         """Audit a refusal the runtime's own allowlist makes, then raise it.
 
         The agent's own refusal of a tool, from the client with no worker, goes to
@@ -456,9 +467,7 @@ class ToolClient:
         the row names: this view's, as the tool server's row names the worker it
         accepted, and none for ``worker-unknown`` (the name the graph asked for
         is no worker of the agent) and for the client that has none."""
-        if self._on_worker_refusal is None or (
-            reason == "tool-not-allowed" and self._worker is None
-        ):
+        if reason == "tool-not-allowed" and self._worker is None:
             self._on_refusal(tool)
         else:
             named = None if reason == "worker-unknown" else self._worker
