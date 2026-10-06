@@ -36,10 +36,25 @@ The pod reads two Secrets: its Certificate's (rate-store-tls) and, for the one k
 users.acl, the credentials' (rateStore.secret). The gateway reads the other key of
 the latter, uri, as an environment variable (services.yaml).
 
-The probes. Readiness is a TLS handshake and PING (meridian.rateStoreProbe).
-Liveness is the same, and then fails when the certificate on the volume was
-written after the server process started (meridian.rateStoreLiveness, which
-says how). Redis reads its certificate once, at start; cert-manager renews it at
+The probes. Both run PING as the ACL user `probe` over TLS, with the store's own
+certificate, and pass only when the OUTPUT is PONG (meridian.rateStorePing). The
+user is in the credentials' users.acl (`make up` writes it): no password, no key,
+no channel and exactly +ping, so all it can do is ask, and only a client that
+holds a certificate of the services' CA and has a network path reaches it. The
+output is read and not the exit status, because redis-cli exits 0 for NOAUTH and
+for BUSY alike. This is what notices a frozen store. A script that never ends
+makes the store answer BUSY to every client but the one that could stop it (the
+gateway's user may not SCRIPT KILL); a probe that only proved the handshake
+(an unauthenticated PING answers NOAUTH, even then) left the pod Ready for ever
+and every model call a 503 (no fallback: the owner's decision) until a person
+deleted the pod. Now the probe's PING is answered BUSY, readiness fails at once
+and liveness fails six times in a row (ten seconds apart), so the kubelet
+restarts the container within about a minute, which hands every tenant its
+windows again (the ledger is not a window). No credential is in the pod's spec:
+a user with `nopass` accepts any password, so redis-cli sends an empty one.
+Liveness then also fails when the certificate on the volume was written after
+the server process started (meridian.rateStoreLiveness, which says how). Redis
+reads its certificate once, at start; cert-manager renews it at
 60 of its 90 days and the kubelet rewrites the files, but the server would go on
 serving the old one, and when that ended every gateway call would be a 503 (no
 fallback: the owner's decision) until someone restarted the store. So a renewal
@@ -51,6 +66,18 @@ renews, with 30 days of the old certificate left. A restart hands every tenant
 its windows again, once per renewal: accepted and stated (the budgets are in the
 ledger, in PostgreSQL, and are not windows). Implemented and tested; it has not
 run on a cluster, where a real renewal is the one thing left to prove.
+
+Two limits of the probes, accepted. A probe's own connection counts against
+maxclients before any handshake, so enough idle connections from a pod the policy
+lets reach the port fail the probes and restart the store for as long as they
+last (the policy is the control; a smaller maxclients would not help), and so
+does a certificate that expired unrenewed (redis-cli then fails to verify it).
+And the server's start is the boot time plus the process's start, read when the
+probe runs: a wall clock that stepped back by more than the gap between the
+files' write and the process's start (a virtual machine resumed, then set by NTP)
+makes a certificate look newer than the server and restarts it until the clock
+catches up, at most every five minutes (the kubelet's back-off); a step forward
+hides a renewal. No small fix exists without writable state.
 
 The directives of redis.conf, each from the documentation of Redis 8.10 (the
 redis.conf of the 8.10.2 source, which the pinned image is built from):
@@ -72,9 +99,12 @@ redis.conf of the 8.10.2 source, which the pinned image is built from):
                           default, said so). The certificate alone does not say
                           "the gateway": all six services hold one. The ACL
                           user and its password do
-  tls-protocols           TLS 1.2 and 1.3 only (the default, said so)
-  "TLSv1.2 TLSv1.3"
-  aclfile                 The users come from the Secret's users.acl, mounted
+  tls-protocols           TLS 1.3 alone. Both ends negotiate it (OpenSSL picks
+  "TLSv1.3"               1.3 for the gateway's client, whose floor is 1.2), and
+                          1.2 would admit CBC and SHA-1 suites at OpenSSL's
+                          defaults, which nothing here needs. A 1.2 client is
+                          refused
+  aclfile               The users come from the Secret's users.acl, mounted
                           read-only. `user` lines in this file cannot be mixed
                           with it (the server would not start), so the
                           `default` user is turned off in that file, not here
@@ -104,10 +134,32 @@ redis.conf of the 8.10.2 source, which the pinned image is built from):
   busy-reply-threshold    A script that runs 100 ms is far past what the
   100                     gateway's (microseconds) needs; past it Redis answers
                           other clients with BUSY instead of leaving them to time
-                          out. The gateway's user cannot SCRIPT KILL, and no
-                          other user exists: a looping script is ended by
-                          deleting the pod (the runbook). `lua-time-limit` is
-                          this directive's old name
+                          out, which is what the probe user's PING reads. The
+                          gateway's user cannot SCRIPT KILL: a looping script is
+                          ended by the probe's restart of the store (see the
+                          probes above), or by deleting the pod (the runbook).
+                          `lua-time-limit` is this directive's old name
+  proto-max-bulk-len 1mb  The largest bulk, one argument of a command (the
+                          script of a SCRIPT LOAD is one), a client may send. The
+                          default is 512 MB, and one authenticated SCRIPT LOAD of
+                          100 MB filled the pod's memory in a review. The
+                          gateway's script is a little over 1 KB (a 2 MB one is refused,
+                          measured). A bulk from a client that has not
+                          authenticated is refused already
+  client-query-buffer-limit  The largest request buffer of one client, the
+  1mb                     default is 1 GB; the same bound for what arrives
+                          in pieces, so a client cannot hold a gigabyte of
+                          half a command
+  No directive bounds     a script that writes without end. The gateway's user
+                          may load and run any script on the keys it may touch (the
+                          ACL is checked per command and per key inside a script,
+                          and maxmemory is not checked for a script's writes once
+                          one has run), so such a script fills memory until the
+                          pod's memory limit ends it: the kubelet restarts the
+                          store, which hands every tenant its windows again (the
+                          ledger is not a window). The credential is the one
+                          boundary of that path (the runbook says what its holder
+                          can do), and the memory limit is where it ends
   enable-protected-       The default for the three, said so: CONFIG SET of the
   configs no,             directives that name files, DEBUG and MODULE are
   enable-debug-command    blocked for every connection
@@ -127,7 +179,7 @@ tls-cert-file {{ $tls }}/tls.crt
 tls-key-file {{ $tls }}/tls.key
 tls-ca-cert-file {{ $tls }}/ca.crt
 tls-auth-clients yes
-tls-protocols "TLSv1.2 TLSv1.3"
+tls-protocols "TLSv1.3"
 aclfile /etc/redis-acl/users.acl
 save ""
 appendonly no
@@ -137,6 +189,8 @@ maxclients 256
 timeout 300
 tcp-keepalive 60
 busy-reply-threshold 100
+proto-max-bulk-len 1mb
+client-query-buffer-limit 1mb
 enable-protected-configs no
 enable-debug-command no
 enable-module-command no
@@ -145,38 +199,52 @@ logfile ""
 {{- end -}}
 
 {{- /*
-probe: the readiness probe. A TLS handshake with the store's own certificate as
-the client's, then PING. The default user is off, so the answer is NOAUTH, which
-redis-cli prints and exits 0 on: a zero exit says the server's certificate chain
-loaded, a client certificate was accepted and the server answered, with no
-credential in the pod's spec. A refused connection or a failed handshake exits 1.
-(A TCP check would pass the same and make the server log a warning for every
-probe: a connection that closes before its handshake.) The liveness probe
-(meridian.rateStoreLiveness) runs this same command first. Takes the root.
+rateStorePing: the first lines of both probes' scripts: PING over TLS, with the
+store's own certificate as the client's, as the ACL user `probe` (users.acl, made
+by `make up`: `on nopass resetkeys resetchannels -@all +ping`), and a refusal
+unless the OUTPUT is exactly PONG. The directory of the certificate files and the
+port are the script's arguments ($1 and $2), always in double quotes. The exit
+status of redis-cli is not read: it is 0 for an answer of NOAUTH (the user is
+missing or the ACL file is not the one `make up` writes) and of BUSY (a script
+that never ends) alike, and neither is a healthy store. A refused connection or a
+failed handshake prints nothing, which is not PONG either. `--pass ''` is there
+because redis-cli sends no AUTH without one, and `nopass` accepts any password,
+so the pod's spec holds no credential; `--no-auth-warning` keeps the warning about
+a password on the command line out of the answer. The message names the answer,
+which the kubelet records in the pod's events. Takes the root (it names no value
+of the chart: the script has no template expression).
+*/ -}}
+{{- define "meridian.rateStorePing" -}}
+answer=$(redis-cli --tls --cacert "$1/ca.crt" --cert "$1/tls.crt" --key "$1/tls.key" -h 127.0.0.1 -p "$2" --user probe --pass '' --no-auth-warning ping)
+[ "$answer" = PONG ] || { echo "rate-store: the probe user's PING was answered '$answer', not PONG" >&2; exit 1; }
+{{- end -}}
+
+{{- /*
+probe: the readiness probe: rateStorePing alone, as a shell with the script fixed
+and the certificate directory and the port as its arguments (the name after the
+script stands for $0). The liveness probe (meridian.rateStoreLiveness) runs the
+same lines first. A TCP check would pass the same for a frozen store, and make the
+server log a warning for every probe: a connection that closes before its
+handshake. Takes the root.
 */ -}}
 {{- define "meridian.rateStoreProbe" -}}
-{{- $tls := include "meridian.tlsDirectory" . -}}
 exec:
   command:
-    - redis-cli
-    - --tls
-    - --cacert
-    - {{ $tls }}/ca.crt
-    - --cert
-    - {{ $tls }}/tls.crt
-    - --key
-    - {{ $tls }}/tls.key
-    - -h
-    - 127.0.0.1
-    - -p
+    - sh
+    - -c
+    - |
+      {{- include "meridian.rateStorePing" . | nindent 6 }}
+    - rate-store-readiness
+    - {{ include "meridian.tlsDirectory" . }}
     - {{ include "meridian.rateStorePort" . | quote }}
-    - ping
 timeoutSeconds: 3
 {{- end -}}
 
 {{- /*
-rateStoreLiveness: the liveness probe: the readiness probe's handshake and PING,
-and then a check that the certificate on the volume is not newer than the server.
+rateStoreLiveness: the liveness probe: the readiness probe's lines
+(meridian.rateStorePing: the probe user's PING, which must be answered PONG, so a
+frozen store fails it), and then a check that the certificate on the volume is not
+newer than the server.
 The script is one literal. The directory and the port are its two arguments
 ($1 and $2, after the name `rate-store-liveness` that stands for $0), always
 inside double quotes, so no value of the chart is ever text of a shell string.
@@ -230,7 +298,7 @@ exec:
     - sh
     - -c
     - |
-      redis-cli --tls --cacert "$1/ca.crt" --cert "$1/tls.crt" --key "$1/tls.key" -h 127.0.0.1 -p "$2" ping || exit 1
+      {{- include "meridian.rateStorePing" . | nindent 6 }}
       boot=$(sed -n 's/^btime //p' /proc/stat)
       ticks=$(sed 's/^.*) //' /proc/1/stat | cut -d ' ' -f 20)
       written=$(stat -L -c %Y "$1/tls.crt")

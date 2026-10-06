@@ -116,6 +116,20 @@ printable_ascii() {
     sed -E 's#postgres(ql)?://[^[:space:]]+#postgresql://[redacted]#g'
 }
 
+# The rate store's Secret carries, as this annotation, the SHA-256 of the rules of
+# its ACL file (S066): up.sh writes it when it makes the Secret, deploy.sh
+# computes the same from what `make up` would write now and stops on a difference.
+# The password's hash is masked in what is hashed, so the annotation holds the
+# users, their command lists and their key patterns, and no secret.
+# shellcheck disable=SC2034  # read by the scripts that source this file
+readonly RATE_STORE_ACL_ANNOTATION=meridian.kind/rate-store-acl-rules
+
+# rate_store_acl_rules_hash: the SHA-256 (hex) of an ACL file from standard input,
+# each password hash (#<64 hex digits>) replaced by #<hash> first.
+rate_store_acl_rules_hash() {
+  sed -E 's/#[0-9a-f]{64}/#<hash>/g' | openssl dgst -sha256 -r | awk '{print $1}'
+}
+
 # The Meridian database's roles (S041). Each role's Secret is named after it with
 # "_" as "-" and "-db" appended (meridian_owner -> meridian-owner-db).
 readonly DATABASE_ROLES=(meridian_owner claims_api agent_runtime model_gateway policy_mcp claims_mcp knowledge_mcp claims_sweep gateway_upkeep policy_seed knowledge_ingest)

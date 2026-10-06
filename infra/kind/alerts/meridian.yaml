@@ -131,6 +131,28 @@ spec:
               route without a deployment, would look like this.
             runbook_url: https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/rollback.md
 
+        - alert: MeridianRateStoreRefusing
+          # The word is the gateway's own for a refusal it cannot count
+          # (RateStoreRefusalReason). The recorded delta holds a count for the
+          # 15 minutes after it, so this fires 5 minutes after the first refusal
+          # and ends 15 minutes after the last: a store that restarted once
+          # (a renewed certificate does that) also raises it, late and briefly.
+          expr: |
+            sum(meridian:gateway_calls:delta15m{meridian_outcome="refused", meridian_reason="rate-store-unavailable"}) > 0
+          for: 5m
+          labels:
+            severity: critical
+            platform: meridian
+          annotations:
+            summary: The Model Gateway refuses calls because the rate store gives no answer.
+            description: >-
+              {{ $value }} call(s) in the last 15 minutes were refused with
+              rate-store-unavailable: the gateway could not count them in the
+              rate store (unreachable, frozen, restarting, or refusing its
+              credential) and refuses a call it cannot count, with a 503 and no
+              fallback.
+            runbook_url: https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/rate-store.md
+
     # From kube-state-metrics.
     - name: meridian.workloads
       rules:

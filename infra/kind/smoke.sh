@@ -262,32 +262,49 @@
 #                   stands for all the others). It adds about 10 s: one timeout of 4 s and
 #                   the second Pod's start, and at most 60 s more for its start
 #                   when something is wrong.
-#                 - the rate store (S066), last, from the Claims API's pod
-#                   again, with no Pod of its own: the connection to
+#                 - the rate store (S066), last, from a probe Pod of its own,
+#                   which proves the store's INGRESS rule and not the
+#                   sender's egress rule: the connection to
 #                   rate-store.meridian.svc:6379, the store that holds the Model
-#                   Gateway's rate windows, must time out. Only the gateway's
-#                   pods are admitted to the store (its ingress) and only the
-#                   gateway's policy has an egress rule to it, so a pod that
-#                   could connect would read or reset every tenant's window; a
-#                   refusal and a name that does not resolve (a store that is
-#                   not deployed) are FAIL lines, never "blocked". The control
-#                   is the one above, and the line is not printed when it
-#                   failed. What the sixth line does not prove: the store's
-#                   ingress alone. The Claims API's policy has no rule to the
-#                   store either, so its egress drops the packets as much as the
-#                   store's ingress does, and no pod of the chart but the
-#                   gateway's has an egress rule that would let a probe get as
-#                   far as the store's ingress; the chart's tests pin that
-#                   ingress (it admits the gateway's pods on 6379 alone). Nor
-#                   that the store is up and serving: a timeout is also what a
-#                   store that hangs gives. That is read elsewhere: `make
-#                   deploy` waits for the store's Deployment and its
+#                   Gateway's rate windows, must time out. The Pod has the
+#                   sweep's name label and the label of smoke's own, and
+#                   kind's policy manifests/smoke-rate-store-networkpolicy.yaml
+#                   (which `make up` applies) gives the pods with that label an
+#                   egress rule to the store's pods on its port, so nothing but
+#                   the store's ingress rule, which admits the Model Gateway's
+#                   pods alone, can make it time out (from the Claims API's
+#                   pod, which has no egress rule to the store, the packets
+#                   were dropped at the sender and the line passed with the
+#                   store's policy deleted). A pod that could connect would
+#                   read or reset every tenant's window; a refusal and a name
+#                   that does not resolve (a store that is not deployed) are
+#                   FAIL lines, never "blocked", and so is a missing kind policy
+#                   (without it the timeout would be the sender's). The
+#                   control, as the database's line does it: the same Pod given
+#                   the label app.kubernetes.io/name=model-gateway, which the
+#                   gateway's own egress rule and the store's ingress rule
+#                   admit, must reach the port (a connection that is then reset
+#                   or answered is "reached": the Pod holds no certificate and
+#                   no password, so it can do nothing there), in up to four
+#                   tries; when it does not, the control did not reach and the
+#                   line proves nothing, which is a FAIL. While it carries
+#                   that name the Pod, which has no readiness probe, is an
+#                   endpoint of the model-gateway Service, so it is labelled
+#                   back to the sweep's name straight after the control, and
+#                   deleted at the end. The line is one PASS when both hold
+#                   (the count of lines does not move), and is not printed when
+#                   the check's own control failed. What the sixth line does not
+#                   prove: that the store is up and serving, since a timeout is
+#                   also what a store that hangs gives. That is read elsewhere:
+#                   `make deploy` waits for the store's Deployment and its
 #                   Certificate, and a completed model call (check 5's series)
 #                   shows the gateway reached the store and was answered. It
-#                   adds one timeout of 4 s.
+#                   adds a Pod's start and one timeout of 4 s.
 #                 The Pod carries one label of smoke's own as well,
-#                 meridian-smoke=network-probe, which no policy, Service or
-#                 Deployment selects, so it changes nothing they see. A Pod
+#                 meridian-smoke=network-probe, which no policy of the chart,
+#                 Service or Deployment selects (kind's policy for the rate
+#                 store line does, and gives egress to the store alone), so it
+#                 changes nothing they see. A Pod
 #                 that a lost trap left (a run killed with SIGKILL, or a power
 #                 cut) stays as a Failed object once its five minutes have
 #                 passed, with the labels the policies select on; so the check
@@ -554,6 +571,11 @@ readonly NETWORK_DATABASE=platform-db-rw.meridian.svc:5432
 # The rate store's Service (S066): the host is the DNS name of its Certificate
 # and the port its Service's; only the Model Gateway's pods are admitted to it.
 readonly NETWORK_RATE_STORE=rate-store.meridian.svc:6379
+# Kind's own policy that gives the probe Pod its egress to the store
+# (manifests/smoke-rate-store-networkpolicy.yaml, applied by `make up`): the line
+# looks for it, because without it a timeout would be the sender's and the line
+# would pass with the store wide open.
+readonly NETWORK_RATE_STORE_POLICY=meridian-smoke-rate-store
 # The probe Pod: the sweep's name label (its policy reaches DNS and the database
 # and no Service or Deployment selects it), a sleep that ends on its own, and how
 # long to wait for it and for the network plugin to see the label added to it.
@@ -2288,17 +2310,64 @@ check_network_collector() {
   network_outsider_delete || true # the Pod stays named: the EXIT trap tries again
 }
 
-# check_network_rate_store: the sixth line of check 8 (S066). The Claims API's pod
-# cannot reach the rate store, which only the Model Gateway's pods may: the
-# connection must time out. The probe is check 8's own and its control, the
-# caller's, has passed before this runs. A refusal and a name that does not
-# resolve (a store that is not deployed) are FAIL lines, as for every denied
-# path. The header says what the line does not prove.
+# network_rate_store_lines: the rate store's line, from the probe Pod. With the
+# sweep's name label and kind's egress rule to the store (the policy the caller
+# looked for) it must time out, which only the store's ingress rule can cause;
+# given the Model Gateway's name label, which the gateway's egress rule and the
+# store's ingress rule admit, the same Pod must reach the port, for up to
+# NETWORK_LABEL_ATTEMPTS tries. The Pod has no readiness probe, so with the
+# gateway's name it is an endpoint of the model-gateway Service: it is labelled
+# back to the sweep's name as soon as the control has run. One PASS or FAIL line.
+network_rate_store_lines() {
+  local gateway_label=app.kubernetes.io/name=model-gateway attempt
+  network_probe "${network_pod}" "${NETWORK_RATE_STORE}"
+  if [[ "${network_answer}" == reached ]]; then
+    fail "network policy: a pod that is not the Model Gateway's reached the rate store (${NETWORK_RATE_STORE}): its ingress admits more than the Model Gateway's pods, or is missing (the chart's rate-store policy), or the cluster does not enforce it, and a pod that can connect can read or reset every tenant's window"
+    return
+  elif [[ "${network_answer}" != blocked ]]; then
+    fail "network policy: the probe in ${network_pod} to ${NETWORK_RATE_STORE} gave no answer of reached or blocked: ${network_answer}"
+    return
+  fi
+  if ! kctl -n meridian label pod "${network_pod}" "${gateway_label}" --overwrite >/dev/null 2>&1; then
+    fail "network policy: could not give the probe pod ${network_pod} the label ${gateway_label}"
+    return
+  fi
+  for ((attempt = 1; attempt <= NETWORK_LABEL_ATTEMPTS; attempt++)); do
+    network_probe "${network_pod}" "${NETWORK_RATE_STORE}"
+    [[ "${network_answer}" == blocked ]] || break
+    ((attempt == NETWORK_LABEL_ATTEMPTS)) || sleep "${NETWORK_LABEL_INTERVAL}"
+  done
+  kctl -n meridian label pod "${network_pod}" "app.kubernetes.io/name=${NETWORK_POD_NAME_LABEL}" --overwrite >/dev/null 2>&1 || true
+  if [[ "${network_answer}" == reached ]]; then
+    pass "network policy: a pod that is not the Model Gateway's cannot reach the rate store (${NETWORK_RATE_STORE}) though its egress is open to it, which only the store's ingress rule can cause, and with the Model Gateway's name label the same pod can"
+  elif [[ "${network_answer}" == blocked ]]; then
+    fail "network policy: the same pod still cannot reach the rate store (${NETWORK_RATE_STORE}) after the label ${gateway_label} was added, in ${NETWORK_LABEL_ATTEMPTS} tries: the Model Gateway's egress rule or the store's ingress rule is too narrow, and the control did not reach, so the line proves nothing"
+  else
+    fail "network policy: the probe in ${network_pod} to ${NETWORK_RATE_STORE} gave no answer of reached or blocked: ${network_answer}"
+  fi
+}
+
+# check_network_rate_store: the sixth line of check 8 (S066), which proves the
+# store's INGRESS rule: a probe Pod that kind's policy lets send to the store must
+# time out, and with the gateway's name label reach it. Without that policy a
+# timeout would be the sender's egress and the line would pass with the store open,
+# so a missing policy is a FAIL before any Pod starts. The probe is check 8's own
+# and its control, the caller's, has passed before this runs. The header says what
+# the line does not prove.
 check_network_rate_store() {
-  network_expect blocked deploy/claims-api "${NETWORK_RATE_STORE}" \
-    "the Claims API cannot reach the rate store (${NETWORK_RATE_STORE}), which only the Model Gateway's pods may" \
-    "the Claims API reached the rate store (${NETWORK_RATE_STORE}): its ingress admits more than the Model Gateway's pods, or is missing (the chart's rate-store policy), or the cluster does not enforce it, and a pod that can connect can read or reset every tenant's window" ||
-    true
+  local found
+  if ! found="$(kctl -n meridian get networkpolicy "${NETWORK_RATE_STORE_POLICY}" -o name --ignore-not-found)"; then
+    fail "network policy: could not look for networkpolicy/${NETWORK_RATE_STORE_POLICY} in meridian (kubectl's error is above)"
+    return
+  fi
+  if [[ -z "${found}" ]]; then
+    fail "network policy: networkpolicy/${NETWORK_RATE_STORE_POLICY} does not exist in meridian: it gives the probe pod its egress to the rate store, so without it the pod has no egress to the rate store, a timeout would be the sender's and the line would pass with the store open (make up applies infra/kind/manifests/smoke-rate-store-networkpolicy.yaml)"
+    return
+  fi
+  if network_start_pod; then
+    network_rate_store_lines
+  fi
+  network_delete_pod || true # the Pod stays named: the EXIT trap tries again
 }
 
 check_network_policy() {

@@ -352,7 +352,14 @@ def test_the_chart_refuses_the_job_without_the_roles_secret_named() -> None:
 
 
 def test_with_the_policy_off_the_job_renders_with_no_policy() -> None:
-    arguments = [*upkeep_arguments(ARGS), "--set", "networkPolicy.enabled=false"]
+    # The rate store is off here: the chart refuses it without its policy.
+    arguments = [
+        *upkeep_arguments(ARGS),
+        "--set",
+        "networkPolicy.enabled=false",
+        "--set",
+        "rateStore.enabled=false",
+    ]
 
     documents = render(arguments)
 

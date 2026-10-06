@@ -307,6 +307,73 @@ tests:
               description: "5 call(s) in the last 15 minutes were refused with no-route (proposed threshold: 5). A caller the registry does not know, or a registry change that left a route without a deployment, would look like this."
               runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/rollback.md"
 
+  # ── MeridianRateStoreRefusing ───────────────────────────────────────────────
+  # The recorded delta holds a count for 15 minutes after the gateway's export
+  # that carried it, so the alert is pending from the first export (5m) and fires
+  # once it has been so for 5 minutes (10m), and ends when the window has passed
+  # (20m). The first export already holds what a process counted (the `_x5`).
+  - name: calls refused because the rate store gave no answer fire after 5 minutes, other refusals and completed calls do not
+    interval: 1m
+    input_series:
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="refused", meridian_reason="rate-store-unavailable", meridian_tenant="t", meridian_agent="a"}'
+        values: "_x5 3x40"
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="refused", meridian_reason="tenant-request-rate", meridian_tenant="t", meridian_agent="a"}'
+        values: "_x5 9x40"
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="completed", meridian_tenant="t", meridian_agent="a"}'
+        values: "_x5 9x40"
+    alert_rule_test:
+      # Pending, not yet firing: the refusals were counted 3 minutes ago.
+      - eval_time: 8m
+        alertname: MeridianRateStoreRefusing
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: MeridianRateStoreRefusing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              platform: meridian
+            exp_annotations:
+              summary: "The Model Gateway refuses calls because the rate store gives no answer."
+              description: "3 call(s) in the last 15 minutes were refused with rate-store-unavailable: the gateway could not count them in the rate store (unreachable, frozen, restarting, or refusing its credential) and refuses a call it cannot count, with a 503 and no fallback."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/rate-store.md"
+      # The window has passed and the series did not move: nothing was refused since.
+      - eval_time: 25m
+        alertname: MeridianRateStoreRefusing
+        exp_alerts: []
+
+  - name: refusals that go on keep the rate store alert firing, and none of the other reasons raise it
+    interval: 1m
+    input_series:
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="refused", meridian_reason="rate-store-unavailable", meridian_tenant="t", meridian_agent="a"}'
+        values: "_x5 0+2x40"
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="refused", meridian_reason="tenant-token-rate", meridian_tenant="u", meridian_agent="a"}'
+        values: "_x5 0+9x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MeridianRateStoreRefusing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              platform: meridian
+            exp_annotations:
+              summary: "The Model Gateway refuses calls because the rate store gives no answer."
+              description: "30 call(s) in the last 15 minutes were refused with rate-store-unavailable: the gateway could not count them in the rate store (unreachable, frozen, restarting, or refusing its credential) and refuses a call it cannot count, with a 503 and no fallback."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/rate-store.md"
+
+  - name: only the other refusals and completed calls leave the rate store alert quiet
+    interval: 1m
+    input_series:
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="refused", meridian_reason="tenant-request-rate", meridian_tenant="t", meridian_agent="a"}'
+        values: "_x5 0+9x40"
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="failed", meridian_reason="unavailable", meridian_tenant="t", meridian_agent="a"}'
+        values: "_x5 0+5x40"
+      - series: 'meridian_gateway_calls_total{job="model-gateway", meridian_outcome="completed", meridian_tenant="t", meridian_agent="a"}'
+        values: "_x5 0+9x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MeridianRateStoreRefusing
+        exp_alerts: []
+
   # ── MeridianServiceUnavailable ──────────────────────────────────────────────
   - name: a deployment at 0 replicas fires after 5 minutes, at 1 it does not
     interval: 1m

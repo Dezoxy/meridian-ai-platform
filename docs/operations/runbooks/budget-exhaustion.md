@@ -46,7 +46,11 @@ is down or unreachable, so look at the store, not at the tenant: the
 [rate store runbook](rate-store.md) says how to tell a store that is down from
 one that refuses the gateway, and what a restart of it does (every window
 starts again, and the budgets above are not touched). On kind the store is
-the Meridian chart's, `make deploy` runs it, and the gateway uses it there.
+the Meridian chart's, `make deploy` runs it, and the gateway uses it there:
+run on kind on 2026-10-06 for the store's first run (`make up`, `make deploy`,
+`make smoke` and `make demo` passed), before the probe user and the other
+changes of the rate store runbook; the upkeep Job (`make gateway-upkeep`) has
+not run on a cluster yet.
 
 ## Confirm
 

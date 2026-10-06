@@ -36,7 +36,8 @@ full limits each (threat model T-45), so the chart fails for more than one. With
 address (MERIDIAN_GATEWAY_RATE_STORE_URL, from the key `uri` of the Secret
 rateStore.secret, through a required reference: no `optional`, and the variable
 is never rendered with a value of its own or an empty one, which would stop the
-gateway's start) and more replicas are allowed. Without the store the guard does
+gateway's start; a values `env` item of that name is refused for every service,
+the store on or off) and more replicas are allowed. Without the store the guard does
 not cover a rolling update, during which Kubernetes runs a second pod for some
 seconds and each allows the full windows. That is left as it is on purpose: the
 alternative, `maxSurge: 0`, takes the gateway down for those seconds. With the
@@ -97,6 +98,9 @@ spec:
           env:
             {{- include "meridian.secretEnv" (dict "name" "MERIDIAN_DATABASE_URL" "secret" $service.dbSecret) | nindent 12 }}
             {{- range $service.env }}
+            {{- if eq .name "MERIDIAN_GATEWAY_RATE_STORE_URL" }}
+            {{- fail (printf "services.%s.env sets MERIDIAN_GATEWAY_RATE_STORE_URL: the rate store's address holds the gateway's password and comes from the key `uri` of the Secret rateStore.secret and from nowhere else, so no values file may carry it (with the store off the variable does not exist, and with it on the chart adds it from the Secret)" $name) }}
+            {{- end }}
             {{- include "meridian.envItem" (dict "root" $ "item" .) | nindent 12 }}
             {{- end }}
             {{- if include "meridian.usesRateStore" (dict "root" $ "name" $name) }}

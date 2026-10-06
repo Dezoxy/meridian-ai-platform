@@ -139,6 +139,7 @@ proposal, like the targets.
 | `MeridianGatewayInternalErrors` | A call failed inside the gateway itself | `model-calls` | [Rollback](runbooks/rollback.md) |
 | `MeridianTenantBudgetUsedUp` | A tenant was refused for its daily token budget or its monthly cost quota | none: a refusal is the control working (QA-12) | [Budget exhaustion](runbooks/budget-exhaustion.md) |
 | `MeridianGatewayRefusingByPolicy` | Five or more calls in 15 minutes were refused because the registry knows no such tenant, agent or route | none | [Rollback](runbooks/rollback.md) |
+| `MeridianRateStoreRefusing` | The gateway counted a call refused with `rate-store-unavailable` (the rate store gave no answer) in the last 15 minutes, and has for 5 minutes | none: not a provider failure, so it is not in `model-calls` | [Rate store](runbooks/rate-store.md) |
 | `MeridianServiceUnavailable` | A service has had no available replica for 5 minutes | `service-availability` | [Rollback](runbooks/rollback.md) |
 | `MeridianDatabaseNotReady` | The database's pod has not been ready for 2 minutes | `database-availability` | [Database failure](runbooks/database-failure.md) |
 | `MeridianSweepStale` | The sweep has not succeeded for 15 minutes, three runs, counted from its last success or, if it never succeeded, from when its CronJob was created | `sweep-freshness` | [Database failure](runbooks/database-failure.md) |

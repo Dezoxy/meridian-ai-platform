@@ -10,6 +10,7 @@ code that reads it (the gateway's own parser of the address, and the commands it
 script and its client send), so the two cannot drift.
 """
 
+import base64
 import hashlib
 import json
 import re
@@ -32,11 +33,23 @@ UP_SH = (KIND_DIR / "up.sh").read_text(encoding="utf-8")
 DEPLOY_SH = (KIND_DIR / "deploy.sh").read_text(encoding="utf-8")
 SECRET_NAME = "rate-store-credentials"  # noqa: S105 (a Secret name, not a password)
 GATEWAY_USER = "gateway"
+PROBE_USER = "probe"
 STORE_PORT = 6379
 # The password: 32 random bytes as 64 lower-case hex digits, an alphabet that
 # needs no percent-encoding in an address.
 PASSWORD_LENGTH = 64
 PASSWORD_ALPHABET = re.compile(r"[0-9a-f]{64}")
+
+
+# The annotation `make up` puts on the Secret and `make deploy` compares (common.sh):
+# the SHA-256 of the ACL file with every password hash (#<64 hex>) masked, so it
+# holds the users, their command lists and their key patterns and no secret.
+ANNOTATION = "meridian.kind/rate-store-acl-rules"
+PASSWORD_HASH = re.compile(r"#[0-9a-f]{64}")
+
+
+def rules_hash(acl: str) -> str:
+    return hashlib.sha256(PASSWORD_HASH.sub("#<hash>", acl).encode()).hexdigest()
 
 
 def function_text(script: str, name: str) -> str:
@@ -65,20 +78,35 @@ def bash(script: str, tmp_path: Path) -> subprocess.CompletedProcess[str]:
 
 
 def run_ensure(
-    tmp_path: Path, *, exists: bool = False
+    tmp_path: Path,
+    *,
+    exists: bool = False,
+    commands: str | None = None,
+    trace: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], str, str]:
     """``ensure_rate_store_secret`` of up.sh in bash against a stub ``kctl`` that
-    knows the Secret only when ``exists``. Returns the process, what ``create``
-    read from standard input and every ``kctl`` call's arguments."""
+    knows the Secret only when ``exists``. ``commands`` replaces the gateway's
+    command list in the constants, as a changed ``up.sh`` would; ``trace`` runs
+    the function under ``set -x``, as ``bash -x`` would. Returns the
+    process, what ``create`` read from standard input and every ``kctl`` call's
+    arguments."""
     created = tmp_path / "created.yaml"
     calls = tmp_path / "calls"
     calls.touch()
     answer = "return 0" if exists else "return 1"
+    constants = constants_of(UP_SH)
+    if commands is not None:
+        constants = [
+            f"readonly RATE_STORE_COMMANDS='{commands}'"
+            if line.startswith("readonly RATE_STORE_COMMANDS=")
+            else line
+            for line in constants
+        ]
     script = "\n".join(
         [
             "set -euo pipefail",
             f'. "{COMMON_SH}"',
-            *constants_of(UP_SH),
+            *constants,
             "kctl() {",
             f'  printf "%s\\n" "$*" >>"{calls}"',
             '  case "$*" in',
@@ -88,7 +116,10 @@ def run_ensure(
             "  esac",
             "}",
             function_text(UP_SH, "ensure_rate_store_secret"),
+            *(["set -x"] if trace else []),
             "ensure_rate_store_secret",
+            # What the caller finds after the function: is tracing on again?
+            'case "$-" in *x*) echo "tracing: on" ;; *) echo "tracing: off" ;; esac',
         ]
     )
     done = bash(script, tmp_path)
@@ -113,7 +144,11 @@ def test_make_up_creates_the_secret_from_standard_input_with_the_two_keys(
     secret = yaml.safe_load(created)
     assert secret["apiVersion"] == "v1"
     assert secret["kind"] == "Secret"
-    assert secret["metadata"] == {"name": SECRET_NAME, "namespace": "meridian"}
+    assert secret["metadata"] == {
+        "name": SECRET_NAME,
+        "namespace": "meridian",
+        "annotations": {ANNOTATION: rules_hash(secret["stringData"]["users.acl"])},
+    }
     assert secret["type"] == "Opaque"
     assert set(secret["stringData"]) == {"uri", "users.acl"}
     assert "data" not in secret
@@ -151,6 +186,41 @@ def test_neither_the_terminal_nor_a_command_line_ever_holds_the_password(
 
     assert password.password not in done.stdout + done.stderr
     assert password.password not in calls
+
+
+@pytest.mark.parametrize("exists", [False, True], ids=["created", "kept"])
+def test_tracing_is_off_inside_the_function_and_on_again_when_it_returns(
+    tmp_path: Path, exists: bool
+) -> None:
+    done, created, _ = run_ensure(tmp_path, exists=exists, trace=True)
+
+    assert done.returncode == 0, done.stderr
+    assert "tracing: on" in done.stdout
+    # Off inside: the trace of the function shows no assignment of the password
+    # or of its hash, and the manifest that holds the address never reaches it.
+    assert "password=" not in done.stderr
+    assert "digest=" not in done.stderr
+    assert "rediss://" not in done.stderr
+    if created:
+        password = parse_rate_store_url(yaml.safe_load(created)["stringData"]["uri"])
+        assert password.password not in done.stderr
+
+
+def test_a_run_without_tracing_is_not_traced_by_the_function(tmp_path: Path) -> None:
+    done, _, _ = run_ensure(tmp_path)
+
+    assert done.returncode == 0, done.stderr
+    assert "tracing: off" in done.stdout
+    assert done.stderr == ""
+
+
+def test_the_function_says_why_tracing_is_off_inside_it() -> None:
+    body = function_text(UP_SH, "ensure_rate_store_secret")
+
+    assert "set +x" in body
+    assert "set -x" in body
+    # The comment on the switch names the password it keeps out of a trace.
+    assert re.search(r"set \+x[^\n]*#[^\n]*password", body)
 
 
 def test_the_password_is_32_random_bytes_in_an_alphabet_that_needs_no_encoding(
@@ -227,16 +297,67 @@ def commands_the_gateway_needs() -> set[str]:
     return cold | {"script|load"} | script
 
 
-def test_the_acl_file_turns_the_default_user_off_and_names_one_user(
+def test_the_acl_file_turns_the_default_user_off_and_names_the_gateways_and_the_probes(
     tmp_path: Path,
 ) -> None:
     _, _, acl = made(tmp_path)
 
     users = acl_rules(acl)
-    assert list(users) == ["default", GATEWAY_USER]
+    assert list(users) == ["default", GATEWAY_USER, PROBE_USER]
     assert users["default"] == ["off"]
     assert users[GATEWAY_USER][0] == "on"
+    assert users[PROBE_USER][0] == "on"
     assert acl.endswith("\n")
+
+
+def test_the_probe_user_has_no_password_no_key_no_channel_and_exactly_ping(
+    tmp_path: Path,
+) -> None:
+    _, _, acl = made(tmp_path)
+
+    rules = acl_rules(acl)[PROBE_USER]
+    # `nopass`: reachable only by a client that holds a certificate of the
+    # services' CA and has a network path, and what it can do is ask.
+    assert rules == [
+        "on",
+        "nopass",
+        "resetkeys",
+        "resetchannels",
+        "-@all",
+        "+ping",
+    ]
+    assert not [rule for rule in rules if rule.startswith(("#", ">", "<", "!", "~"))]
+
+
+def test_the_probe_user_cannot_run_what_the_gateways_user_runs(tmp_path: Path) -> None:
+    _, _, acl = made(tmp_path)
+
+    users = acl_rules(acl)
+    gateway = {rule for rule in users[GATEWAY_USER] if rule.startswith("+")}
+    probe = {rule for rule in users[PROBE_USER] if rule.startswith("+")}
+
+    assert probe == {"+ping"}
+    assert not probe & gateway
+    # And the gateway's user still cannot ping: it is the probe's command alone.
+    assert "+ping" not in gateway
+
+
+def test_the_acl_file_names_the_user_the_charts_probes_ping_as(tmp_path: Path) -> None:
+    _, _, acl = made(tmp_path)
+    (deployment,) = [
+        d
+        for d in rendered_chart()
+        if d["kind"] == "Deployment" and d["metadata"]["name"] == RATE_STORE
+    ]
+    (container,) = deployment["spec"]["template"]["spec"]["containers"]
+
+    for probe in ("readinessProbe", "livenessProbe"):
+        script = container[probe]["exec"]["command"][2]
+        assert f"--user {PROBE_USER} --pass ''" in script
+    assert PROBE_USER in acl_rules(acl)
+    assert re.findall(r"^readonly RATE_STORE_PROBE_USER=(\S+)$", UP_SH, re.M) == [
+        PROBE_USER
+    ]
 
 
 def test_the_acl_file_holds_the_hash_of_the_password_and_not_the_password(
@@ -347,6 +468,7 @@ def run_require(
     script = "\n".join(
         [
             "set -euo pipefail",
+            f'. "{COMMON_SH}"',
             "die() { printf 'error: %s\\n' \"$*\" >&2; exit 1; }",
             "NAMESPACE=meridian",
             *constants_of(DEPLOY_SH),
@@ -356,6 +478,7 @@ def run_require(
             '    *) echo "unexpected kctl $*" >&2; return 1 ;;',
             "  esac",
             "}",
+            function_text(DEPLOY_SH, "rate_store_expected_acl_hash"),
             function_text(DEPLOY_SH, "require_rate_store_secret"),
             "require_rate_store_secret",
         ]
@@ -363,17 +486,224 @@ def run_require(
     return bash(script, tmp_path)
 
 
-def secret_with(**data: str) -> dict:
-    return {"data": data}
+def secret_with(annotation: str | None = None, **data: str) -> dict:
+    metadata = {} if annotation is None else {"annotations": {ANNOTATION: annotation}}
+    return {"metadata": metadata, "data": data}
 
 
-def test_deploy_goes_on_when_the_secret_has_both_keys(tmp_path: Path) -> None:
-    done = run_require(
-        tmp_path, answer=secret_with(uri=URI_VALUE, **{"users.acl": ACL_VALUE})
-    )
+def secret_as_made(tmp_path: Path, *, commands: str | None = None) -> dict:
+    """The Secret ``make up`` makes, as the API server returns it: the values
+    base64-encoded under ``data`` and the annotations as they were written."""
+    done, created, _ = run_ensure(tmp_path, commands=commands)
+    assert done.returncode == 0, done.stderr
+    secret = yaml.safe_load(created)
+    return {
+        "metadata": {"annotations": secret["metadata"]["annotations"]},
+        "data": {
+            key: base64.b64encode(value.encode()).decode()
+            for key, value in secret["stringData"].items()
+        },
+    }
+
+
+def test_deploy_goes_on_when_the_secret_is_what_make_up_makes_now(
+    tmp_path: Path,
+) -> None:
+    done = run_require(tmp_path, answer=secret_as_made(tmp_path))
 
     assert done.returncode == 0, done.stderr
     assert done.stdout + done.stderr == ""
+
+
+def test_deploy_goes_on_for_a_secret_made_with_another_password(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "first").mkdir()
+    (tmp_path / "second").mkdir()
+    first = secret_as_made(tmp_path / "first")
+    second = secret_as_made(tmp_path / "second")
+
+    # Two runs, two passwords, two hashes in the file: one annotation.
+    assert first["data"]["users.acl"] != second["data"]["users.acl"]
+    assert (
+        first["metadata"]["annotations"][ANNOTATION]
+        == second["metadata"]["annotations"][ANNOTATION]
+    )
+    assert run_require(tmp_path, answer=second).returncode == 0
+
+
+def test_the_annotation_masks_every_password_hash_and_holds_no_secret(
+    tmp_path: Path,
+) -> None:
+    secret, uri, acl = made(tmp_path)
+
+    annotation = secret["metadata"]["annotations"][ANNOTATION]
+    password = parse_rate_store_url(uri).password
+    assert annotation == rules_hash(acl)
+    assert re.fullmatch(r"[0-9a-f]{64}", annotation)
+    # Not the password, and not the hash that the ACL file holds of it.
+    assert annotation != hashlib.sha256(password.encode()).hexdigest()
+    assert password not in annotation
+    # The hash of the masked text is the one the other password gives too.
+    assert PASSWORD_HASH.search(acl)
+    assert not PASSWORD_HASH.search(PASSWORD_HASH.sub("#<hash>", acl))
+
+
+def test_the_annotation_changes_with_a_command_list_a_key_pattern_or_a_user(
+    tmp_path: Path,
+) -> None:
+    names = ("same", "more-commands", "fewer-commands")
+    for name in names:
+        (tmp_path / name).mkdir()
+    same = secret_as_made(tmp_path / "same")["metadata"]["annotations"][ANNOTATION]
+    more = secret_as_made(
+        tmp_path / "more-commands",
+        commands="+evalsha +script|load +time +zremrangebyscore +zrange +zadd "
+        "+pexpire +hello +keys",
+    )["metadata"]["annotations"][ANNOTATION]
+    fewer = secret_as_made(
+        tmp_path / "fewer-commands",
+        commands="+evalsha +script|load +time +zremrangebyscore +zrange +zadd +pexpire",
+    )["metadata"]["annotations"][ANNOTATION]
+
+    assert len({same, more, fewer}) == 3
+
+
+def test_deploy_refuses_a_secret_made_with_another_command_list_and_says_what_to_do(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "old").mkdir()
+    old = secret_as_made(
+        tmp_path / "old",
+        commands="+evalsha +script|load +time +zremrangebyscore +zrange +zadd "
+        "+pexpire +hello +client|setinfo",
+    )
+
+    done = run_require(tmp_path, answer=old)
+
+    assert done.returncode == 1
+    assert f"Secret {SECRET_NAME}" in done.stderr
+    assert "ACL file" in done.stderr
+    assert "than 'make up' writes now" in done.stderr
+    # What to do, in the runbook's order.
+    for step in (
+        f"kubectl -n meridian delete secret {SECRET_NAME}",
+        "run 'make up'",
+        "restart the rate store",
+        "then the Model Gateway",
+        "docs/operations/runbooks/rate-store.md",
+    ):
+        assert step in done.stderr, step
+    flat = done.stderr
+    assert flat.index("delete secret") < flat.index("run 'make up'")
+    assert flat.index("run 'make up'") < flat.index("restart the rate store")
+    assert flat.index("restart the rate store") < flat.index("then the Model Gateway")
+
+
+def test_deploy_refuses_a_secret_from_before_the_probe_user_it_has_no_annotation(
+    tmp_path: Path,
+) -> None:
+    older = secret_as_made(tmp_path)
+    del older["metadata"]["annotations"]
+
+    done = run_require(tmp_path, answer=older)
+
+    assert done.returncode == 1
+    assert f"Secret {SECRET_NAME}" in done.stderr
+    assert ANNOTATION in done.stderr
+    assert "probe" in done.stderr
+    assert f"kubectl -n meridian delete secret {SECRET_NAME}" in done.stderr
+    assert "docs/operations/runbooks/rate-store.md" in done.stderr
+
+
+def test_deploy_refuses_an_annotation_that_is_not_a_hash_of_the_current_rules(
+    tmp_path: Path,
+) -> None:
+    secret = secret_as_made(tmp_path)
+    secret["metadata"]["annotations"][ANNOTATION] = "0" * 64
+
+    done = run_require(tmp_path, answer=secret)
+
+    assert done.returncode == 1
+    assert "than 'make up' writes now" in done.stderr
+
+
+def test_the_refusal_prints_neither_the_annotation_nor_what_the_secret_holds(
+    tmp_path: Path,
+) -> None:
+    secret = secret_as_made(tmp_path)
+    annotation = secret["metadata"]["annotations"][ANNOTATION]
+    secret["metadata"]["annotations"][ANNOTATION] = "1" * 64
+
+    done = run_require(tmp_path, answer=secret)
+
+    assert done.returncode == 1
+    shown = done.stdout + done.stderr
+    assert annotation not in shown
+    assert "1" * 64 not in shown
+    assert "rediss://" not in shown
+
+
+def test_up_and_deploy_hold_the_same_rules_the_acl_is_made_from() -> None:
+    names = (
+        "RATE_STORE_USER",
+        "RATE_STORE_KEY_PATTERN",
+        "RATE_STORE_COMMANDS",
+        "RATE_STORE_PROBE_USER",
+        "RATE_STORE_PROBE_COMMANDS",
+    )
+
+    def lines(script: str) -> list[str]:
+        return [
+            line
+            for line in constants_of(script)
+            if line.split("=", 1)[0].removeprefix("readonly ") in names
+        ]
+
+    # deploy.sh cannot read up.sh's constants (they stay where the tests of the
+    # gateway's rules read them), so it holds a copy: a test, not a hope.
+    assert len(lines(UP_SH)) == len(names)
+    assert lines(DEPLOY_SH) == lines(UP_SH)
+
+
+def test_deploys_expected_hash_is_the_one_up_writes_for_the_same_rules(
+    tmp_path: Path,
+) -> None:
+    # deploy.sh builds the ACL text with a placeholder where the password's hash
+    # goes and hashes it masked: one function of up.sh's text, in the other script.
+    script = "\n".join(
+        [
+            "set -euo pipefail",
+            f'. "{COMMON_SH}"',
+            *constants_of(DEPLOY_SH),
+            function_text(DEPLOY_SH, "rate_store_expected_acl_hash"),
+            "rate_store_expected_acl_hash",
+        ]
+    )
+    done = bash(script, tmp_path)
+    (tmp_path / "up").mkdir()
+
+    assert done.returncode == 0, done.stderr
+    assert (
+        done.stdout.strip()
+        == made(tmp_path / "up")[0]["metadata"]["annotations"][ANNOTATION]
+    )
+
+
+def test_up_annotates_the_secret_it_creates_and_deploy_reads_the_same_name() -> None:
+    (name,) = re.findall(
+        r"^readonly RATE_STORE_ACL_ANNOTATION=(\S+)$",
+        COMMON_SH.read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+
+    assert name == ANNOTATION
+    assert "RATE_STORE_ACL_ANNOTATION" in function_text(
+        UP_SH, "ensure_rate_store_secret"
+    )
+    assert "RATE_STORE_ACL_ANNOTATION" in function_text(
+        DEPLOY_SH, "require_rate_store_secret"
+    )
 
 
 def test_deploy_refuses_a_secret_that_is_missing_and_says_to_run_make_up(

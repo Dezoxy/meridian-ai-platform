@@ -395,16 +395,28 @@ def test_a_jobs_policy_has_the_name_of_its_pods_label_whatever_the_tag() -> None
 
 
 def test_with_the_policy_off_no_network_policy_renders_not_even_a_jobs() -> None:
-    documents = render([*helm_arguments(), "--set", "networkPolicy.enabled=false"])
+    # With the rate store off: the chart refuses the store without its policy
+    # (the store's only control before authentication), and kind turns it on.
+    documents = render(
+        [
+            *helm_arguments(),
+            "--set",
+            "networkPolicy.enabled=false",
+            "--set",
+            "rateStore.enabled=false",
+        ]
+    )
 
     assert "NetworkPolicy" not in {d["kind"] for d in documents}
-    assert len(pod_workloads(documents)) == len(SERVICES) + len(JOBS) + 1 + 1
+    assert len(pod_workloads(documents)) == len(SERVICES) + len(JOBS) + 1
     for name in JOBS:
         shown = render(
             [
                 *helm_arguments(jobs=(name,)),
                 "--set",
                 "networkPolicy.enabled=false",
+                "--set",
+                "rateStore.enabled=false",
                 "--show-only",
                 f"templates/job-{name}.yaml",
             ]

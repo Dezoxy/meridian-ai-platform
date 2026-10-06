@@ -194,6 +194,9 @@
       "matchPackageNames": [
         "redis"
       ],
+      "matchDatasources": [
+        "docker"
+      ],
       "groupName": "redis image",
       "prBodyNotes": [
         "This image is the rate store of the kind platform (`RATE_STORE_IMAGE` in `infra/kind/pins.env`) and the Redis the tests and CI run against (`PYTEST_REDIS_IMAGE` in the Makefile): keep them equal, which a test checks. CI starts the Redis of the tests, not the platform: run `make up`, `make deploy` and `make smoke` on this branch and put what they printed in a comment, and read that the store's pod starts without errors in its output (the chart's configuration names directives of Redis 8.10)."

@@ -52,8 +52,16 @@ name in the message:
   kb, mb or gb, or is not
   below the memory limit          the limit is the store's real bound, and a
                                   maxmemory above it would be dead text
+  networkPolicy.enabled false     the store's only control before authentication
+                                  is its NetworkPolicy: the TLS handshake and the
+                                  password come after a connection is accepted,
+                                  and the store does not turn away a pod the
+                                  policy would
 */ -}}
 {{- define "meridian.rateStore" -}}
+{{- if not .Values.networkPolicy.enabled -}}
+{{- fail "rateStore.enabled is true while networkPolicy.enabled is false: the rate store's only control before authentication is its NetworkPolicy, which admits the Model Gateway's pods on its port and nobody else; without it any pod that can reach the port can hold its connections open (the store has 256) and try the password, and no check of the chart or of smoke would see it. Set networkPolicy.enabled=true, or rateStore.enabled=false" -}}
+{{- end -}}
 {{- $store := .Values.rateStore | default dict -}}
 {{- $image := toString (required "rateStore.image is required while rateStore.enabled is true: the official Redis image as <name>:<tag>@sha256:<64 hex digits> (kind's is in infra/kind/values/meridian.yaml)" $store.image) -}}
 {{- if not (regexMatch "^[a-z0-9][A-Za-z0-9._/:-]*@sha256:[0-9a-f]{64}$" $image) -}}

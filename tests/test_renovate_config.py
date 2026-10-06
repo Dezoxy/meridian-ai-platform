@@ -266,6 +266,25 @@ class Readers(unittest.TestCase):
         for words in ("RATE_STORE_IMAGE", "PYTEST_REDIS_IMAGE", "`make smoke`"):
             self.assertIn(words, note)
 
+    def test_the_redis_group_takes_the_image_only_and_not_the_python_client(
+        self,
+    ) -> None:
+        # pyproject.toml pins the client `redis` (pypi), and the pep621 manager
+        # reads it under the same package name as the image's. A later rule wins,
+        # so a name-only rule would carry a client bump into the image's pull
+        # request, with notes about the image. The datasource tells them apart.
+        rules = self.config["packageRules"]
+        (group,) = [r for r in rules if "redis" in r.get("matchPackageNames", [])]
+        (python,) = [r for r in rules if r.get("groupName") == "python"]
+        pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+
+        self.assertEqual(group["matchDatasources"], ["docker"])
+        self.assertRegex(pyproject, r'"redis==\d+\.\d+\.\d+"')
+        # The client stays in the Python group: that rule is the manager's.
+        self.assertEqual(python["matchManagers"], ["pep621"])
+        self.assertNotIn("matchPackageNames", python)
+        self.assertGreater(rules.index(group), rules.index(python))
+
     def image_reader(self, path: str) -> re.Pattern[str]:
         """The reader of ``path`` for an image pinned as name:tag@digest."""
         (reader,) = [

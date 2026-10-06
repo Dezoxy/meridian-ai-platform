@@ -1,0 +1,46 @@
+# The NetworkPolicy of smoke's probe pod for the rate store line (S066, T-45).
+# `make smoke` (check 8, the sixth line) must show that the rate store's INGRESS
+# rule admits the Model Gateway's pods alone. A probe has to get as far as the
+# store for that: a pod whose egress has no rule to the store drops its packets at
+# the sender, whatever the store's ingress says, and the line would pass with the
+# store's policy deleted (the first version of the line did exactly that, from the
+# Claims API's pod). So the probe pod that check 8 starts for the database (it
+# carries the sweep's name label and the label meridian-smoke=network-probe, which
+# no policy, Service or Deployment of the chart selects) gets one egress rule here,
+# to the store's pods on the store's port, and nothing else. With it the only rule
+# left between that pod and the store is the store's ingress, so a connection that
+# times out is that rule at work; the same pod, given the Model Gateway's name
+# label, is then let in by the gateway's own egress rule and the store's ingress
+# rule, which is the line's control.
+#
+# Why a policy of kind's own: the Meridian chart's `default-deny` selects every pod
+# of `meridian`, and its other policies select the services, the Jobs and the sweep
+# by name; no rule of the chart's may carry an exception that exists only while
+# smoke runs (the same reason as smoke-networkpolicy.yaml, which does it for the
+# telemetrygen Jobs). `make up` applies this with that one, before the releases.
+#   egress  the pods named app.kubernetes.io/name=rate-store in this namespace, on
+#           TCP 6379 (the port of the store's Service and of its own policy:
+#           meridian.rateStorePort); DNS is the sweep's policy's, which also
+#           selects the pod
+#   ingress none is granted, and `policyTypes` leaves ingress alone: the pod takes
+#           no call, and every ingress rule stays the chart's
+# Applied on a cluster where the chart is not installed it changes nothing for
+# any pod without the label.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: meridian-smoke-rate-store
+  namespace: meridian
+spec:
+  podSelector:
+    matchLabels:
+      meridian-smoke: network-probe
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: rate-store
+      ports:
+        - port: 6379
+          protocol: TCP

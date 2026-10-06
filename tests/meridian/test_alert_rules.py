@@ -196,7 +196,7 @@ def test_the_manifest_is_one_prometheus_rule_the_stack_selects() -> None:
 def test_every_alert_has_its_labels_annotations_and_a_runbook_that_exists() -> None:
     found = alerts()
 
-    assert len(found) == 12
+    assert len(found) == 13
     for alert in found:
         name = alert["alert"]
         assert alert["labels"]["severity"] in {"critical", "warning"}, name
@@ -298,6 +298,28 @@ def test_every_reason_word_is_one_the_gateway_can_emit() -> None:
 
     assert words, "no reason matcher found: the extraction is broken"
     assert words <= REASONS, words - REASONS
+
+
+def test_the_rate_store_alert_counts_the_word_of_a_refusal_it_cannot_count() -> None:
+    (alert,) = [a for a in alerts() if a["alert"] == "MeridianRateStoreRefusing"]
+    (word,) = get_args(RateStoreRefusalReason)
+    refusals = reason_words(alert["expr"])
+    (failing,) = [a for a in alerts() if a["alert"] == "MeridianModelCallsFailing"]
+
+    # The word is the code's own constant (the type the gateway's refusal uses),
+    # on the recorded series, among the calls it refused.
+    assert refusals == {word} == {"rate-store-unavailable"}
+    assert series_named(alert["expr"]) == {RECORDED}
+    assert 'meridian_outcome="refused"' in alert["expr"]
+    assert alert["expr"].strip().endswith("> 0")
+    # In the gateway's group, with the severity of the failing-calls alert, for
+    # five minutes, and the store's runbook.
+    assert alert in groups()["meridian.gateway"]
+    assert alert["labels"]["severity"] == failing["labels"]["severity"]
+    assert alert["for"] == "5m"
+    assert alert["annotations"]["runbook_url"] == RUNBOOK_PREFIX + "rate-store.md"
+    # No new group: the count of groups is the file's own.
+    assert len(groups()) == 4
 
 
 def test_a_reason_word_that_is_not_emitted_would_be_caught() -> None:

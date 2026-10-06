@@ -27,7 +27,6 @@ from chartsupport import (
     NAMESPACE,
     SERVICES,
     helm_arguments,
-    kinds_of,
     network_policies,
     pod_labels,
     pod_spec,
@@ -377,40 +376,30 @@ def test_the_probes_need_no_credential_and_open_no_plain_port() -> None:
     (port,) = container["ports"]
 
     assert port == {"name": "tls", "containerPort": PORT}
-    # The liveness probe is a script (test_helm_rate_store_restart.py).
-    for probe in ("readinessProbe",):
-        (command,) = [container[probe]["exec"]["command"]]
-        assert command[0] == "redis-cli"
-        assert "--tls" in command
-        assert command[-1] == "ping"
-        assert not {"-a", "--pass", "--user", "--askpass"} & set(command)
-        assert "--insecure" not in command
+    # Both probes are scripts that ping as the ACL user `probe`, which has no
+    # password (test_helm_rate_store_hardening.py).
+    for probe in ("readinessProbe", "livenessProbe"):
+        command = container[probe]["exec"]["command"]
+        assert command[:2] == ["sh", "-c"]
+        assert "redis-cli --tls" in command[2]
+        assert not {"-a", "--askpass"} & set(command[2].split())
+        assert "--insecure" not in command[2]
         assert "httpGet" not in container[probe]
+        assert "tcpSocket" not in container[probe]
 
 
 def test_the_probe_presents_the_stores_own_certificate_to_its_own_server() -> None:
     container = store_container()
 
-    # The liveness probe runs the same command first, as a script
-    # (test_helm_rate_store_restart.py).
-    for probe in ("readinessProbe",):
+    for probe in ("readinessProbe", "livenessProbe"):
         command = container[probe]["exec"]["command"]
 
-        assert command == [
-            "redis-cli",
-            "--tls",
-            "--cacert",
-            f"{TLS_DIRECTORY}/ca.crt",
-            "--cert",
-            f"{TLS_DIRECTORY}/tls.crt",
-            "--key",
-            f"{TLS_DIRECTORY}/tls.key",
-            "-h",
-            "127.0.0.1",
-            "-p",
-            str(PORT),
-            "ping",
-        ]
+        # The files are the script's first argument, a directory, and never text
+        # of the script: the Certificate's Secret is mounted there.
+        assert (
+            '--cacert "$1/ca.crt" --cert "$1/tls.crt" --key "$1/tls.key"' in command[2]
+        )
+        assert command[4] == TLS_DIRECTORY
         assert container[probe]["timeoutSeconds"] == 3
 
 
@@ -432,7 +421,7 @@ EXPECTED_DIRECTIVES = {
     "tls-key-file": f"{TLS_DIRECTORY}/tls.key",
     "tls-ca-cert-file": f"{TLS_DIRECTORY}/ca.crt",
     "tls-auth-clients": "yes",
-    "tls-protocols": '"TLSv1.2 TLSv1.3"',
+    "tls-protocols": '"TLSv1.3"',
     "aclfile": ACL_PATH,
     "save": '""',
     "appendonly": "no",
@@ -442,6 +431,8 @@ EXPECTED_DIRECTIVES = {
     "timeout": "300",
     "tcp-keepalive": "60",
     "busy-reply-threshold": "100",
+    "proto-max-bulk-len": "1mb",
+    "client-query-buffer-limit": "1mb",
     "enable-protected-configs": "no",
     "enable-debug-command": "no",
     "enable-module-command": "no",
@@ -637,11 +628,12 @@ def test_only_the_pod_that_is_given_the_address_may_reach_the_store() -> None:
     assert reaching == given
 
 
-def test_with_the_policies_off_the_store_has_none_either() -> None:
-    documents = render(enabled_arguments("--set", "networkPolicy.enabled=false"))
+def test_with_the_policies_off_the_store_is_refused_not_left_open() -> None:
+    # It was once rendered without its policy; now the chart will not (the
+    # message is pinned in test_helm_rate_store_hardening.py).
+    stderr = failure_of(*enabled_arguments("--set", "networkPolicy.enabled=false"))
 
-    assert "NetworkPolicy" not in kinds_of(documents)
-    assert named(documents, "Deployment")
+    assert "networkPolicy.enabled" in stderr
 
 
 # ── the gateway's address ────────────────────────────────────────────────────

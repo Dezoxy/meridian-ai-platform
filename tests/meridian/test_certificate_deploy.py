@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -20,12 +21,29 @@ import yaml
 from certscriptsupport import KIND_DIR, POLICIES, POLICY_STATES, SECONDS
 from servicesupport import REPO_ROOT
 from test_helm_identity import DEPLOY_SH, script_function
+from test_kind_rate_store_secret import run_ensure
 
 VALUES_FILE = KIND_DIR / "values" / "meridian.yaml"
 
-# What the stub answers `kubectl get secret rate-store-credentials -o json` with:
-# both keys, non-empty, holding no real value (deploy.sh reads only the names).
-RATE_STORE_SECRET_JSON = json.dumps({"data": {"uri": "eA==", "users.acl": "eA=="}})
+
+def rate_store_secret_json() -> str:
+    """What the stub answers `kubectl get secret rate-store-credentials -o json`
+    with: both keys, non-empty, holding no real value (deploy.sh reads only the
+    names), and the annotation that `make up` puts on the Secret it makes (the
+    hash of the ACL file's rules, which deploy.sh compares)."""
+    with tempfile.TemporaryDirectory() as directory:
+        done, created, _ = run_ensure(Path(directory))
+    assert done.returncode == 0, done.stderr
+    annotations = yaml.safe_load(created)["metadata"]["annotations"]
+    return json.dumps(
+        {
+            "metadata": {"annotations": annotations},
+            "data": {"uri": "eA==", "users.acl": "eA=="},
+        }
+    )
+
+
+RATE_STORE_SECRET_JSON = rate_store_secret_json()
 
 ISSUER_STATES = {
     "missing": 'echo "Error from server (NotFound): clusterissuers.cert-manager.io '

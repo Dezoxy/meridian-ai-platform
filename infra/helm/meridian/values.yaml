@@ -549,7 +549,17 @@ sweep:
 #               on ~meridian:rate:* and nothing else (no CLIENT command: the
 #               gateway's client no longer sends one), that the hash in it is the
 #               password in `uri`, or that the password is percent-encoded there.
-#               Whoever makes the Secret owns those checks.
+#               Whoever makes the Secret owns those checks. The file must also
+#               hold the user `probe` (on, nopass, no key, no channel, exactly
+#               PING): both of the store's probes ping as it and pass only on
+#               PONG, which is how a store frozen by a script that never ends
+#               is restarted; without it the store's pod is never Ready. On kind
+#               `make deploy` compares the Secret's annotation
+#               meridian.kind/rate-store-acl-rules with what `make up` writes.
+#               The store's NetworkPolicy is its only control before
+#               authentication, so the chart fails with `enabled` and
+#               `networkPolicy.enabled` false; and a values `env` item of any
+#               service named MERIDIAN_GATEWAY_RATE_STORE_URL is refused.
 #   resources   a CPU request and a memory request and limit, no CPU limit, as
 #               for the services. The memory limit is the store's real bound:
 #               `maxmemory` below does not stop this workload writing (the

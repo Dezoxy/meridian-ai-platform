@@ -73,24 +73,15 @@ def liveness_script(*extra: str) -> str:
 # ── the two probes ───────────────────────────────────────────────────────────
 
 
-def test_the_readiness_probe_is_the_handshake_and_ping_alone() -> None:
+def test_the_readiness_probe_is_the_handshake_and_the_probe_users_ping_alone() -> None:
     probe = store_container()["readinessProbe"]
 
-    assert probe["exec"]["command"] == [
-        "redis-cli",
-        "--tls",
-        "--cacert",
-        f"{TLS_DIRECTORY}/ca.crt",
-        "--cert",
-        f"{TLS_DIRECTORY}/tls.crt",
-        "--key",
-        f"{TLS_DIRECTORY}/tls.key",
-        "-h",
-        "127.0.0.1",
-        "-p",
-        str(PORT),
-        "ping",
-    ]
+    # A shell with a fixed script, as the liveness probe: the script is the
+    # liveness script's first lines (test_helm_rate_store_hardening.py runs it).
+    command = probe["exec"]["command"]
+    assert command[:2] == ["sh", "-c"]
+    assert command[3:] == ["rate-store-readiness", TLS_DIRECTORY, str(PORT)]
+    assert liveness_script().startswith(command[2].rstrip("\n"))
     assert probe["timeoutSeconds"] == 3
     assert probe["periodSeconds"] == 5
 
@@ -107,11 +98,13 @@ def test_the_liveness_script_still_does_what_the_readiness_probe_does() -> None:
     script = liveness_script()
 
     assert (
-        "redis-cli --tls"
+        "answer=$(redis-cli --tls"
         ' --cacert "$1/ca.crt" --cert "$1/tls.crt" --key "$1/tls.key"'
-        ' -h 127.0.0.1 -p "$2" ping || exit 1'
+        " -h 127.0.0.1 -p \"$2\" --user probe --pass '' --no-auth-warning ping)"
     ) in script
-    for refused in ("--insecure", "--pass", "--user", " -a "):
+    # The answer is read, not the exit status: it is 0 for NOAUTH and for BUSY.
+    assert '[ "$answer" = PONG ]' in script
+    for refused in ("--insecure", " -a ", "--askpass"):
         assert refused not in script
 
 
@@ -144,6 +137,7 @@ def test_the_script_expands_only_its_two_arguments_and_the_numbers_it_reads() ->
         "2",
         "(",
         "((",
+        "answer",
         "n",
         "boot",
         "ticks",
@@ -168,7 +162,10 @@ def test_the_liveness_probe_is_read_only_and_writes_nothing() -> None:
     assert {v["name"] for v in pod["volumes"]} == {"tls", "acl", "config"}
     assert all("emptyDir" not in v for v in pod["volumes"])
     # The only redirection is the message to standard error.
-    assert set(re.findall(r">\S*", liveness_script())) <= {">&2"}
+    redirections = {
+        found.rstrip(";") for found in re.findall(r">\S*", liveness_script())
+    }
+    assert redirections <= {">&2"}
 
 
 # ── how long after a renewal ─────────────────────────────────────────────────
@@ -257,12 +254,15 @@ def probe(tmp_path: Path):
     record = tmp_path / "redis-cli-arguments"
     stand_in = bin_dir / "redis-cli"
     stand_in.write_text(
-        '#!/bin/sh\nprintf "%s\\n" "$@" > "$RECORD"\nexit "${REDIS_CLI_STATUS:-0}"\n'
+        '#!/bin/sh\nprintf "%s\\n" "$@" > "$RECORD"\n'
+        'printf "%s\\n" "${REDIS_CLI_ANSWER-PONG}"\nexit "${REDIS_CLI_STATUS:-0}"\n'
     )
     stand_in.chmod(0o755)
     script = liveness_script()
 
-    def run(redis_cli_status: int = 0) -> tuple[int, list[str], str]:
+    def run(
+        redis_cli_status: int = 0, answer: str | None = None
+    ) -> tuple[int, list[str], str]:
         done = subprocess.run(
             [shell, "-c", script, "rate-store-liveness", str(tmp_path / "tls"), "6379"],
             capture_output=True,
@@ -272,6 +272,8 @@ def probe(tmp_path: Path):
                 "PATH": f"{bin_dir}:{os.environ['PATH']}",
                 "RECORD": str(record),
                 "REDIS_CLI_STATUS": str(redis_cli_status),
+                # Unset, the stand-in answers PONG, as a healthy store does.
+                **({} if answer is None else {"REDIS_CLI_ANSWER": answer}),
             },
         )
         arguments = record.read_text().splitlines() if record.exists() else []
@@ -290,7 +292,16 @@ def test_a_certificate_written_before_the_server_started_is_healthy(
     assert status == 0
     assert arguments[:2] == ["--tls", "--cacert"]
     assert arguments[2] == f"{tmp_path / 'tls'}/ca.crt"
-    assert arguments[-3:] == ["-p", "6379", "ping"]
+    assert arguments[-8:] == [
+        "-p",
+        "6379",
+        "--user",
+        "probe",
+        "--pass",
+        "",
+        "--no-auth-warning",
+        "ping",
+    ]
 
 
 def test_a_certificate_written_in_the_second_the_server_started_is_healthy(
@@ -364,9 +375,31 @@ def test_a_server_that_does_not_answer_is_unhealthy_whatever_the_files_say(
 ) -> None:
     write_secret_volume(tmp_path / "tls", "2026_a", process_start() - 60)
 
-    status, _, _ = probe(redis_cli_status=1)
+    status, _, _ = probe(redis_cli_status=1, answer="")
 
     assert status == 1
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "NOAUTH Authentication required.",
+        "BUSY Redis is busy running a script. You can only call SCRIPT KILL.",
+        "WRONGPASS invalid username-password pair or user is disabled.",
+    ],
+    ids=["noauth", "busy", "wrongpass"],
+)
+def test_a_server_that_answers_anything_but_pong_is_unhealthy_with_fresh_files(
+    tmp_path: Path, probe, answer: str
+) -> None:
+    # redis-cli exits 0 for each of these: a frozen store (BUSY) and a store
+    # that lost the probe user (WRONGPASS) must not pass for healthy.
+    write_secret_volume(tmp_path / "tls", "2026_a", process_start() - 60)
+
+    status, _, stderr = probe(answer=answer)
+
+    assert status == 1
+    assert "not PONG" in stderr
 
 
 def test_a_missing_certificate_file_is_unhealthy(tmp_path: Path, probe) -> None:

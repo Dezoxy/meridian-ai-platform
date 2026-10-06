@@ -69,8 +69,9 @@ services:
 
 # The rate store (S066, T-45): one Redis, in this namespace, that holds the Model
 # Gateway's two rate windows. `make up` makes the Secret below (the gateway's
-# address, and Redis's ACL file with one user for the gateway, named by hash:
-# never a value here, and the file is mounted by the store alone). `make deploy`
+# address, and Redis's ACL file with a user for the gateway, named by hash, and
+# the probes' user, which has no password and can only PING: never a value here,
+# and the file is mounted by the store alone). `make deploy`
 # passes the image from infra/kind/pins.env (RATE_STORE_IMAGE, with --set-string,
 # so the pin has one place and one Renovate reader), not a literal here. With the
 # store on the gateway refuses every call it cannot count (a 503), so the store

@@ -149,20 +149,47 @@ require_database() {
 # is built. Only the names of the keys are read (jq prints them), never a value,
 # and a key that is there and empty counts as missing: an empty address stops the
 # gateway's start. `make up` keeps a Secret that exists, so one made before the
-# command list changed (or with a key short) is deleted first.
+# ACL file changed (or with a key short) is deleted first. A Secret that exists
+# with both keys is still refused when its annotation (RATE_STORE_ACL_ANNOTATION,
+# common.sh: the hash of the ACL's rules with the password's hash masked) is
+# missing or is not the one `make up` would write now: a Secret from before the
+# probes' user has no such user, and the store's probes would never pass, so the
+# pod would not be Ready and nothing but its restarts would say why. The rules
+# below are up.sh's, copied (a test holds the two equal); no value of the Secret
+# is read or printed, nor the annotation.
 readonly RATE_STORE_SECRET=rate-store-credentials
 readonly RATE_STORE_SECRET_KEYS=(uri users.acl)
+readonly RATE_STORE_USER=gateway
+readonly RATE_STORE_KEY_PATTERN='~meridian:rate:*'
+readonly RATE_STORE_COMMANDS='+evalsha +script|load +time +zremrangebyscore +zrange +zadd +pexpire +hello'
+readonly RATE_STORE_PROBE_USER=probe
+readonly RATE_STORE_PROBE_COMMANDS='+ping'
 # The store's Deployment: waited for before the gateway's, whose every call needs it.
 readonly RATE_STORE_DEPLOYMENT=rate-store
+
+# The hash of the rules `make up` writes now: up.sh's ACL file with a placeholder
+# where the password's hash goes (it is masked in the hash anyway).
+rate_store_expected_acl_hash() {
+  printf 'user default off\nuser %s on #%s %s resetchannels -@all %s\nuser %s on nopass resetkeys resetchannels -@all %s\n' \
+    "${RATE_STORE_USER}" "$(printf '0%.0s' {1..64})" "${RATE_STORE_KEY_PATTERN}" "${RATE_STORE_COMMANDS}" \
+    "${RATE_STORE_PROBE_USER}" "${RATE_STORE_PROBE_COMMANDS}" | rate_store_acl_rules_hash
+}
+
 require_rate_store_secret() {
-  local present key
-  present="$(kctl -n "${NAMESPACE}" get secret "${RATE_STORE_SECRET}" -o json 2>/dev/null |
-    jq -r '.data // {} | to_entries[] | select(.value != "") | .key')" ||
+  local secret present key annotation
+  secret="$(kctl -n "${NAMESPACE}" get secret "${RATE_STORE_SECRET}" -o json 2>/dev/null)" ||
     die "Secret ${RATE_STORE_SECRET} does not exist; run 'make up' first (it holds the gateway's address in the rate store and the store's ACL file)"
+  present="$(jq -r '.data // {} | to_entries[] | select(.value != "") | .key' <<<"${secret}")"
   for key in "${RATE_STORE_SECRET_KEYS[@]}"; do
     grep -qxF -- "${key}" <<<"${present}" ||
       die "Secret ${RATE_STORE_SECRET} has no key '${key}', or it is empty; run 'make up' first, after deleting the Secret (kubectl -n ${NAMESPACE} delete secret ${RATE_STORE_SECRET}): 'make up' keeps a Secret that exists"
   done
+  annotation="$(jq -r --arg name "${RATE_STORE_ACL_ANNOTATION}" '.metadata.annotations[$name] // ""' <<<"${secret}")"
+  local remedy="delete the Secret (kubectl -n ${NAMESPACE} delete secret ${RATE_STORE_SECRET}), run 'make up' (it makes the Secret again), restart the rate store (kubectl -n ${NAMESPACE} rollout restart deployment/${RATE_STORE_DEPLOYMENT}) and then the Model Gateway (deployment/model-gateway), which read the ACL file and the address at their start and not before, then run 'make deploy' again; the order is docs/operations/runbooks/rate-store.md's"
+  [[ -n "${annotation}" ]] ||
+    die "Secret ${RATE_STORE_SECRET} has no annotation ${RATE_STORE_ACL_ANNOTATION}: it was made before the store's probes had a user of their own (probe), so its ACL file has none and the store's pod would never be Ready. ${remedy}"
+  [[ "${annotation}" == "$(rate_store_expected_acl_hash)" ]] ||
+    die "the ACL file of Secret ${RATE_STORE_SECRET} was made for other users, commands or keys than 'make up' writes now (its annotation ${RATE_STORE_ACL_ANNOTATION} differs), so the store would refuse the gateway or its probes. ${remedy}"
 }
 
 # The issuer of the services' certificates (S056): the ClusterIssuer that kind's
