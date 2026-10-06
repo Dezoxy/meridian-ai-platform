@@ -155,12 +155,18 @@ For the virtual machine both are recorded below.
   change: the hook has ten seconds, and with the machine loaded (a load
   average near 70) a command that carries a 70 KB heredoc, or one of
   4,000 segments, took it that long (1.3 s when idle), and Claude Code
-  does not block a call whose hook ran out of time. So two bounds ask
-  before any rule runs: a command over 16384 bytes, and one of more
-  than 1000 parts (split on newlines, `;`, `&&`, `||` and `|`; the cost
-  follows the parts, 3 s of CPU for 8192 of them with the machine idle,
-  0.25 s for 1000). A command of this repository's own has a handful.
-  Write a long script with the Write tool and run the file.
+  does not block a call whose hook ran out of time. So the hook arms a
+  watchdog first: after 5 of its 10 seconds it answers `ask`, saying it
+  ran out of time and did NOT read the command. The watchdog runs
+  between commands and cannot stop one regex match in flight, so three
+  bounds ask before the rules run: a command typed over 16384 bytes, a
+  command whose text is over 8192 bytes once heredoc bodies written to a
+  file are dropped (the slowest single match at 8192 bytes took 0.25 s
+  with the machine idle, 1 s at 16384), and one of more than 1000 parts
+  (split on newlines, `;`, `&&`, `||` and `|`; the cost follows the
+  parts, 3 s of CPU for 8192 of them, 0.25 s for 1000). A command of
+  this repository's own has a handful. Write a long script with the
+  Write tool and run the file.
 - **Push a step's branch at the end of a working day**, finished or not,
   with its section of the plan filled in. Work that exists on one
   machine is one disk away from lost.

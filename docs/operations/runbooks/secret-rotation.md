@@ -242,27 +242,58 @@ it does about secrets as of S075, and what it leaves.
 
 Denied, with a message that says what to do instead:
 
-- `kubectl exec … -- env` and `-- printenv`, also inside `sh -c "…"`;
+- `kubectl exec … -- env` and `-- printenv` (with options, `-u X`,
+  `-C dir`, a redirect such as `2>&1`, a comment, a quoted name, a wrapper
+  such as `timeout 5` or `sudo`, and a line break or backtick after it),
+  `set` and `export -p`, also inside `sh -c "…"`, `bash -c` and `ash -c`;
+  `kubectl debug` is read the same way as `exec`. `env VAR=x some-command`
+  passes. `kubectl run` is not read: its pod holds none of the workload's
+  environment, and the same words follow `docker run` and `uv run`;
 - `kubectl exec … -- cat` (also `head`, `tail`, `less`, `base64`, `xxd`,
   `strings`) of a path under `/var/run/secrets/`, `/run/secrets/` or
-  `/etc/secrets`, of any path that holds `secret`, `token`,
-  `credential`, `password` or `.key`, and of `/proc/…/environ`;
-- `kubectl get --raw` of an API path that holds `/secrets`;
+  `/etc/secrets`, of a path with `secret`, `credential`, `password`,
+  `.key`, or `token` or `creds` as a word (`tokenizer.json` passes), and
+  `/proc/…/environ` read by anything; in an `sh -c` body, a reader and a
+  mounted path anywhere in it, in either order;
+- `kubectl get --raw` of an API path that holds `/secrets`, the flag and
+  the path in either order, also with a percent-encoded `secrets`;
 - `kubectl config view --raw` and `--flatten`;
-- `kubectl create token`;
-- `kubectl cp` out of a pod path of the kinds above;
+- `kubectl create token`, with other flags between the two words
+  (`create secret generic token` is another command and passes);
+- `kubectl cp` in either direction when the pod path is of the kinds
+  above;
 - `az containerapp secret show` and `az containerapp secret list` with
   `--show-values`, `gcloud secrets versions access`,
-  `aws secretsmanager get-secret-value` and `aws ssm get-parameter`,
-  `get-parameters` or `get-parameters-by-path` with `--with-decryption`.
+  `aws secretsmanager get-secret-value` and `batch-get-secret-value`, and
+  `aws ssm get-parameter`, `get-parameters`, `get-parameters-by-path` or
+  `get-parameter-history` with `--with-decryption`;
+- reading a kind node's `admin.conf` or any `kubeconfig` with a reader.
 
-Asked: the database forms and `helm get manifest|values|all`, as above.
-Two bounds ask before any rule runs, because a hook that runs past its
-timeout does not block the call: a command over 16384 bytes, and one of
-more than 1000 parts (split on newlines, `;`, `&&`, `||` and `|`, the way
-the rules read it). The cost follows the parts: 8192 of them, 16384
-bytes, took 3 s of CPU with the machine idle. Write the script with the
-Write tool and run the file.
+Asked: the database forms, `helm get manifest|values|all` (options may
+stand before the verb; a verb on the next line is not part of it), and
+`kind get kubeconfig` (write it to a file with `kind export kubeconfig`
+instead).
+
+Timeouts. A hook that runs past its timeout does not block the call, so
+the guard cannot be allowed to run long. The bounds below do not prevent
+that for every shape (the first ones were measured on one-word segments
+only); the watchdog does. The hook arms it before it reads the command: at
+5 of the 10 seconds it answers `ask`, saying that the guard ran out of time
+and the command was NOT read. It cannot interrupt a command in flight, one
+regex match: the slowest single match at 8192 bytes took 0.25 s with the
+machine idle (about 1 s at 16384), and 1.5 s at the slowdown a loaded
+machine showed, inside the margin of 5 s. A test holds the two numbers
+together by reading the timeout from `.claude/settings.json`. A command
+the watchdog cannot answer in time still goes through unread: the one
+case this hook cannot close.
+
+Three bounds ask before the rules run, and each ask says that the command
+was NOT read and may hold a form the guard would deny: more than 16384
+bytes typed; more than 8192 bytes of command once heredoc bodies written
+to a file are dropped; more than 1000 parts (split on newlines, `;`, `&&`,
+`||` and `|`, the way the rules read it). Write the script with the Write
+tool and run the file. A long command that holds a denied form therefore
+asks, it does not deny.
 
 Not seen:
 
@@ -274,6 +305,13 @@ Not seen:
   endpoint.
 - A mounted file read by anything but the readers listed: `grep`, `cp`
   from inside the pod, `python`, `awk`.
+- One variable of a pod's environment (`sh -c "echo \$DATABASE_URL"`), a
+  command piped into a shell in the pod (`echo printenv | kubectl exec -i
+  pod -- sh`), `kubectl exec pod env` without `--`, `kubectl proxy` with
+  `curl` on a `/secrets` path, and a wrapper verb the rule does not list.
+- `docker exec <kind node> cat /etc/kubernetes/admin.conf` is denied as a
+  read of `admin.conf`; any other way to the kind node's credentials is
+  not seen.
 - `docker exec <container> psql` and `pg_dump`: the tests' own database
   container is reached that way, so these pass. A container that holds
   anything else is not covered.

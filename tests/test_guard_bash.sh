@@ -22,12 +22,14 @@ while IFS= read -r line; do
   fi
 done < "$here/guard-bash-cases.jsonl"
 
-# The length bound (guard_max_bytes, 16384). A hook that runs past its timeout
-# does not block the call, so a command too long to read in time must be
-# answered at once. The commands are built here, byte by byte, because a case
-# line that long cannot be read in review. `ask_for` runs the hook on a command
-# and compares the answer.
-bound=16384
+# The length bounds. A hook that runs past its timeout does not block the call,
+# so a command too long to read in time must be answered at once. Two bounds:
+# what the patterns read, after the heredoc pass (guard_max_bytes, 8192), and
+# what was typed (guard_max_typed_bytes, 16384). The commands are built here,
+# byte by byte, because a case line that long cannot be read in review.
+# `ask_for` runs the hook on a command and compares the answer.
+bound=8192
+typed_bound=16384
 ask_for() { # $1=name $2=expected decision $3=command
   local got
   got="$(jq -nc --arg c "$3" '{tool_input:{command:$c}}' | bash "$hook" \
@@ -46,9 +48,9 @@ padding() { # $1=count, $2=the character: that many of it, all in one word
 prefix='echo '
 ask_for "a command of the bound passes" none "${prefix}$(padding $((bound - ${#prefix})) a)"
 ask_for "a command one byte over the bound asks" ask "${prefix}$(padding $((bound - ${#prefix} + 1)) a)"
-# 8193 two-byte characters are 16386 bytes: the bound counts bytes, not characters.
+# 4097 two-byte characters are 8194 bytes: the bound counts bytes, not characters.
 ask_for "a command over the bound in bytes asks though it is under it in characters" ask \
-  "${prefix}$(for _ in $(seq 8193); do printf '\303\251'; done)"
+  "${prefix}$(for _ in $(seq 4097); do printf '\303\251'; done)"
 ask_for "a short command of two-byte characters passes" none "${prefix}$(for _ in $(seq 100); do printf '\303\251'; done)"
 # Before any pattern: a long command that holds a denied form is asked, not read.
 ask_for "a long command that holds a denied form asks before any pattern runs" ask \
@@ -62,6 +64,19 @@ long_heredoc="cat > x.yaml <<'EOF'
 ${heredoc}${heredoc}${heredoc}
 EOF"
 ask_for "a heredoc of 72 KB asks" ask "$long_heredoc"
+# A heredoc only written to a file is dropped before the second bound reads the
+# command, so it passes up to the typed bound, and asks one byte over it.
+heredoc_head="cat > x.yaml <<'EOF'"$'\n'
+heredoc_tail=$'\n'"EOF"
+heredoc_room=$((typed_bound - ${#heredoc_head} - ${#heredoc_tail}))
+ask_for "a heredoc written to a file, of exactly the typed bound, passes" none \
+  "${heredoc_head}$(padding "$heredoc_room" a)${heredoc_tail}"
+ask_for "a heredoc written to a file, one byte over the typed bound, asks" ask \
+  "${heredoc_head}$(padding $((heredoc_room + 1)) a)${heredoc_tail}"
+ask_for "a heredoc fed to bash, longer than the bound in what it holds, asks" ask \
+  "bash <<'EOF'"$'\n'"$(padding $((bound + 1)) a)"$'\n'"EOF"
+ask_for "a heredoc written to a file, with a denied command after it, is denied" deny \
+  "${heredoc_head}$(padding 12000 a)${heredoc_tail}"$'\n'"git push --force"
 # What the user reads when it asks.
 reason="$(jq -nc --arg c "${prefix}$(padding "$bound" a)" '{tool_input:{command:$c}}' | bash "$hook" \
   | jq -r '.hookSpecificOutput.permissionDecisionReason // ""')"
@@ -93,20 +108,26 @@ ask_for "a command of newline-separated parts over the bound asks" ask \
   "$(for _ in $(seq $((segment_bound + 1))); do printf 'a\n'; done)"
 ask_for "a command of piped parts over the bound asks" ask \
   "$(for _ in $(seq "$segment_bound"); do printf 'a|'; done)a"
-# 2500 lines of 6 bytes are 15000 bytes: written to a file the body is stripped
+# 2500 lines of 5 bytes are 12500 bytes: written to a file the body is stripped
 # and the command has one segment; fed to bash the body stays and every line is
 # a segment.
 heredoc_15k="$(for _ in $(seq 2500); do printf 'a: b\n'; done)"
-ask_for "a heredoc of 15 KB written to a file passes" none "cat > x.yaml <<'EOF'
+ask_for "a heredoc of 12 KB written to a file passes" none "cat > x.yaml <<'EOF'
 ${heredoc_15k}
 EOF"
-ask_for "a heredoc of 15 KB with more lines than the segment bound fed to bash asks" ask "bash <<'EOF'
+# 1500 lines of 5 bytes are 7500 bytes, under the byte bound and over the
+# segment bound: it is the segment bound that answers.
+heredoc_7k="$(for _ in $(seq 1500); do printf 'a: b\n'; done)"
+ask_for "a heredoc of 7 KB with more lines than the segment bound fed to bash asks" ask "bash <<'EOF'
+${heredoc_7k}
+EOF"
+ask_for "a heredoc of 12 KB fed to bash asks, over the byte bound" ask "bash <<'EOF'
 ${heredoc_15k}
 EOF"
 ask_for "a script of 200 lines fed to bash passes" none "bash <<'EOF'
 $(for _ in $(seq 200); do printf 'echo a\n'; done)
 EOF"
-ask_for "a command of 15 KB in one segment passes" none "${prefix}$(padding 15000 a)"
+ask_for "a command of 8 KB in one segment passes" none "${prefix}$(padding 8000 a)"
 reason="$(jq -nc --arg c "$(segments $((segment_bound + 1)) a)" '{tool_input:{command:$c}}' | bash "$hook" \
   | jq -r '.hookSpecificOutput.permissionDecisionReason // ""')"
 case "$reason" in

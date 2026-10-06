@@ -25,8 +25,9 @@ set -euo pipefail
 # What the watchdog cannot do: bash runs a trap between commands, and waits for
 # a foreground command (one regex match, one of the python or sed passes) to
 # end before it runs the trap. A command in flight is not interrupted, so the
-# slowest single command decides how late the answer can be, and the byte bound
-# below is chosen from it. Measured on 2026-10-06 with the machine idle (load
+# slowest single command decides how late the answer can be, and the bound on
+# what the patterns read (guard_max_bytes, 8192, counted after the heredoc pass;
+# a typed bound of 16384 comes first) is chosen from it. Measured on 2026-10-06 with the machine idle (load
 # about 4), as the gap between two xtrace stamps, on the shapes that cost most
 # (runs of `&(`, `(`, quotes and backticks after `kubectl `, and the same after
 # `kubectl exec x -- `, which reach the Azure script rules and the pod rule):
@@ -90,21 +91,20 @@ cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null |
 # run, so the kubectl rule that lets a call through reads this copy.
 raw_cmd="$cmd"
 
-# The byte bound: a command over guard_max_bytes asks, before the heredoc pass
-# and before any pattern runs, and it says that the command was not read. The
-# rules below cost time in proportion to the length (some, to its square): see
-# the figures above for the value. The check sits before the heredoc pass: a wc
-# over the raw command costs nothing however long it is. Moving it after the
-# pass would let a long heredoc that is only written to a file through (the
-# pass is linear: 0.1 s of CPU for 1 MB, 0.4 s for 4 MB, measured), and would
-# bound what the patterns read instead of what was typed; it was not moved,
-# because it changes which commands pass, and the owner has not asked. Bytes,
-# not characters: wc counts bytes and the arithmetic trims the padding some wc
-# print.
+# Two byte bounds, because two things cost time. guard_max_typed_bytes bounds
+# what was typed and is checked before anything reads it: the heredoc pass and
+# the jq calls are linear (0.1 s of CPU for 1 MB, 0.4 s for 4 MB, measured) and
+# a wc over the raw command costs nothing however long it is. guard_max_bytes
+# (below, after the heredoc pass) bounds what the patterns read, and is the
+# one the measurements above set: a heredoc written to a file of up to the
+# typed bound passes (the pass drops its body), a command whose own text is
+# longer than guard_max_bytes asks. Bytes, not characters: wc counts bytes and
+# the arithmetic trims the padding some wc print.
+guard_max_typed_bytes=16384
 guard_max_bytes=8192
-guard_bytes=$(( $(printf '%s' "$cmd" | wc -c) ))
-[ "$guard_bytes" -le "$guard_max_bytes" ] || \
-  decide ask "This command is too long for the guard to read (${guard_bytes} bytes, the limit is ${guard_max_bytes}): it was NOT read and may hold a form the guard would deny; confirm that it holds none, or write it to a script with the Write tool and run the file."
+guard_typed_bytes=$(( $(printf '%s' "$cmd" | wc -c) ))
+[ "$guard_typed_bytes" -le "$guard_max_typed_bytes" ] || \
+  decide ask "This command is too long for the guard to read (${guard_typed_bytes} bytes, the limit is ${guard_max_typed_bytes}): it was NOT read and may hold a form the guard would deny; confirm that it holds none, or write it to a script with the Write tool and run the file."
 
 if command -v python3 >/dev/null 2>&1; then
   cmd="$(printf '%s' "$cmd" | python3 -c '
@@ -149,6 +149,16 @@ for line in sys.stdin.read().split("\n"):
 print("\n".join(out))
 ' 2>/dev/null || printf '%s' "$cmd")"
 fi
+
+# The second byte bound: what the patterns will read, after the heredoc pass,
+# is at most guard_max_bytes. The rules below cost time in proportion to the
+# length (some, to its square): see the figures above for the value. A heredoc
+# that is only written to a file is gone by now, so a document of 15 KB passes;
+# one that executes is kept in the text and counts. The rules that read the
+# command as typed (raw_cmd) have bounds of their own (kind_scan_max).
+guard_bytes=$(( $(printf '%s' "$cmd" | wc -c) ))
+[ "$guard_bytes" -le "$guard_max_bytes" ] || \
+  decide ask "This command is too long for the guard to read (${guard_bytes} bytes after the heredoc bodies written to files are dropped, the limit is ${guard_max_bytes}): it was NOT read and may hold a form the guard would deny; confirm that it holds none, or write it to a script with the Write tool and run the file."
 
 # The rules below read a command one segment at a time (split on newlines, ;,
 # &&, || and |, line continuations joined), and the time they take follows the
@@ -439,7 +449,7 @@ if [[ "$joined" == *--raw* ]]; then
   raw_decoded="$joined"
   for _ in {1..20}; do
     [[ "$raw_decoded" =~ %([0-9A-Fa-f][0-9A-Fa-f]) ]] || break
-    printf -v raw_char "\\x${BASH_REMATCH[1]}"
+    printf -v raw_char '%b' "\\x${BASH_REMATCH[1]}"
     raw_decoded="${raw_decoded//"${BASH_REMATCH[0]}"/"$raw_char"}"
   done
   [[ "$raw_decoded" =~ $raw_secrets_re ]] && decide deny "$raw_secrets_msg"
@@ -513,9 +523,10 @@ nl=$'\n'
 # The longest command, in characters, that the kind rules below read segment by
 # segment: they cost time in proportion to the length, and a hook has ten
 # seconds. A longer command that holds such a call asks without being read.
-# The byte bound at the top is now this value, and characters are never more
-# than bytes, so no command reaches the checks that use this: they stay as a
-# second line, for the day the byte bound is raised.
+# The text the rules read (cmd, after the heredoc pass) is already held to this
+# many bytes, and characters are never more than bytes. The command as typed
+# (raw_cmd) may be longer, up to guard_max_typed_bytes, when a heredoc that is
+# written to a file was dropped: the check on raw_cmd below is live for that.
 kind_scan_max=8192
 kind_delete_re="(^|[^[:alnum:]_.-])kind([[:space:]]+-[^[:space:]]*([[:space:]]+[0-9]+)?)*[[:space:]]+delete([[:space:]]|\$)"
 kind_delete_local_re="^[[:space:]]*kind([[:space:]]+-[^[:space:]]*([[:space:]]+[0-9]+)?)*[[:space:]]+delete[[:space:]]+cluster[[:space:]]"
