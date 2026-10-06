@@ -117,8 +117,10 @@ For the virtual machine both are recorded below.
   with 4 workers (the default until then), 2 min 03 s with 8 and
   1 min 55 s with 10. Ten is the Makefile's default since 2026-10-06,
   the owner's decision; CI sets 4 for its four-core runner, and a step
-  that runs beside others passes 4. Beside the deployed cluster the
-  suite took 3 min 10 s with 4 workers, with 5.5 GB still available.
+  that runs beside others passes 4 (an implementer 3, and the session's own
+  suite 6, while the cluster is up: the plan's Part A). Beside the deployed
+  cluster the suite took 3 min 10 s with 4 workers, with 5.5 GB still
+  available.
 - **An unattended session runs in the Remote Control service on the
   machine, in tmux, not in a desktop session over SSH.** On the night of
   2026-10-05 a desktop session stood still for six hours while its
@@ -290,9 +292,13 @@ known.
   A contract's own files take seconds; the whole suite is the main
   session's, alone, at the end.
 - **Ten workers alone, four beside others.** The whole suite alone uses
-  the default of ten. A run beside the cluster or beside other steps
-  passes `PYTEST_WORKERS=4`: three runs of ten would be thirty processes
-  on twelve cores.
+  the default of ten. A run beside other steps passes `PYTEST_WORKERS=4`:
+  three runs of ten would be thirty processes on twelve cores. While the
+  cluster is up the session passes six and tells implementers three (a
+  suite beside four implementers' test runs and a fresh cluster pushed the
+  machine into swap twice on 2026-10-06), and before a whole suite it counts
+  the test databases that are running and waits until at most one
+  implementer is testing with a database.
 - **Reviewers at once, and early.** A step's reviewers read the same
   commits and change nothing, so they run together, and they start when
   the last contract that changes product code is in, not when the last
@@ -320,7 +326,8 @@ known.
 
 ### What to keep to
 
-- One whole suite at a time beside the cluster, with four workers.
+- One whole suite at a time beside the cluster, with six workers, and an
+  implementer's run beside it with three.
 - A test database's port outside Linux's ephemeral range (32768 to
   60999). On 2026-10-06 a run on port 55638 failed to bind because another
   process had been given that port as a source port; this session's later

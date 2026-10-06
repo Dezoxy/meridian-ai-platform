@@ -2125,8 +2125,12 @@ point to.
 ## Who holds the cluster
 
 One plan step uses the cluster at a time (the plan's Part A). Since S075 the
-rule leaves a record that the commands read. Status: **implemented**, and
-tested against stub commands; not yet run on a cluster.
+rule leaves a record that the commands read. Status: **implemented**, tested
+against stub commands, and seen on kind once (the record written
+through a deploy, a deploy refused while another ran, and `make down`
+refused with the record at `ok`). Not seen on a cluster: `TAKE_CLUSTER=1`, a
+record left `changing` by a run that failed, and `make up` on an existing
+cluster; the stub tests hold each.
 
 The record is the ConfigMap `meridian-cluster-holder` in `kube-system`, with
 four values and nothing else (no path, no user or host name, no address of a
