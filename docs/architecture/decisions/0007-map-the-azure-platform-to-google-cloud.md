@@ -1,4 +1,4 @@
-# 6. Map the Azure platform to Google Cloud
+# 7. Map the Azure platform to Google Cloud
 
 Date: 2026-10-06
 
@@ -21,7 +21,7 @@ each cloud's mapping changes on its own schedule and S036 and S078 each
 amend their own.
 
 The Azure side that this record maps from is described in
-`docs/architecture/deployment/azure-platform.md` (written by S025: the table
+[the Azure platform document](../deployment/azure-platform.md) (written by S025: the table
 of every Azure service Meridian uses or designs, what for, its status, and
 the residency rule in words that no cloud owns). This record does not
 repeat that table or that rule. Its own table starts from the Azure

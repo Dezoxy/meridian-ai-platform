@@ -632,11 +632,13 @@ def run_publish(
     """``publish_telemetry_ca`` from up.sh in bash against a stub ``kctl``. The
     stub logs each call's arguments, answers the read of ``tls.crt`` with the
     base64 of ``certificate_text`` (nothing when ``None``), builds the
-    ConfigMap's JSON for ``create configmap``, and records what ``apply`` gets on
-    its standard input. ``fail`` names a call (``get`` or ``apply``) that fails.
-    Returns the process, the logged calls and the manifests applied."""
+    ConfigMap's JSON for ``create configmap`` in the namespace ``-n`` names, and
+    records what each ``apply`` gets on its standard input. ``fail`` names a call
+    (``get`` or ``apply``) that fails. Returns the process, the logged calls and
+    the manifests applied, in order (one per namespace)."""
     calls = tmp_path / "calls"
     applied = tmp_path / "applied"
+    applied.mkdir()
     encoded = "" if certificate_text is None else b64(certificate_text)
     fail_when = '[[ -z "${FAIL}" || "$*" != *"${FAIL}"* ]] || return 1'
     literal = "--from-literal=ca.crt="
@@ -654,10 +656,11 @@ def run_publish(
             '      for a in "$@"; do',
             f'        [[ "$a" != {literal}* ]] || v="${{a#{literal}}}"',
             "      done",
-            '      jq -n --arg v "${v}" \'{apiVersion: "v1", kind: "ConfigMap",',
-            '        metadata: {name: "telemetry-ca", namespace: "meridian",',
-            '        creationTimestamp: null}, data: {"ca.crt": $v}}\' ;;',
-            f'    *"apply"*) cat >"{applied}" ;;',
+            '      jq -n --arg v "${v}" --arg ns "$2" \'{apiVersion: "v1",',
+            '        kind: "ConfigMap", metadata: {name: "telemetry-ca",',
+            "        namespace: $ns, creationTimestamp: null},",
+            '        data: {"ca.crt": $v}}\' ;;',
+            f'    *"apply"*) cat >"{applied}/$(date +%s%N)" ;;',
             '    *) echo "stub kctl: unexpected $*" >&2; return 99 ;;',
             "  esac",
             "}",
@@ -674,27 +677,43 @@ def run_publish(
         timeout=SECONDS,
     )
     asked = calls.read_text().splitlines() if calls.exists() else []
-    objects = [json.loads(applied.read_text())] if applied.exists() else []
+    objects = [json.loads(path.read_text()) for path in sorted(applied.iterdir())]
     return done, asked, objects
 
 
-def test_the_authoritys_public_certificate_is_published_as_a_configmap_in_meridian(
+def test_the_authoritys_certificate_is_published_to_meridian_and_to_logging(
     tmp_path: Path,
 ) -> None:
     done, asked, objects = run_publish(tmp_path)
 
     assert done.returncode == 0, done.stderr
-    (manifest,) = objects
-    assert manifest["kind"] == "ConfigMap"
-    assert manifest["metadata"]["name"] == AUTHORITY
-    assert manifest["metadata"]["namespace"] == "meridian"
-    assert manifest["data"] == {"ca.crt": CERTIFICATE_TEXT}
-    assert "creationTimestamp" not in manifest["metadata"]
+    # The six services and telemetrygen's Jobs mount it in `meridian`; the log
+    # agent (S064) mounts it in `logging`: one certificate, two copies.
+    assert [m["metadata"]["namespace"] for m in objects] == ["meridian", "logging"]
+    for manifest in objects:
+        assert manifest["kind"] == "ConfigMap"
+        assert manifest["metadata"]["name"] == AUTHORITY
+        assert manifest["data"] == {"ca.crt": CERTIFICATE_TEXT}
+        assert "creationTimestamp" not in manifest["metadata"]
     # Server-side and forced, as every other apply here: a rerun converges.
-    (apply,) = [c for c in asked if "apply" in c]
-    assert "--server-side" in apply
-    assert "--force-conflicts" in apply
-    assert "-n meridian" in apply
+    applies = [c for c in asked if " apply " in c]
+    assert len(applies) == 2
+    for apply, namespace in zip(applies, ["meridian", "logging"], strict=True):
+        assert "--server-side" in apply
+        assert "--force-conflicts" in apply
+        assert f"-n {namespace} " in apply
+    # The Secret is read once, whatever the number of namespaces.
+    assert len([c for c in asked if "get secret" in c]) == 1
+
+
+def test_a_failed_apply_in_meridian_stops_before_logging_gets_a_copy(
+    tmp_path: Path,
+) -> None:
+    done, asked, objects = run_publish(tmp_path, fail="-n meridian apply")
+
+    assert done.returncode == 1
+    assert objects == []
+    assert not any("-n logging apply" in c for c in asked)
 
 
 def test_the_key_of_the_authority_is_never_read_and_no_secret_is_printed(

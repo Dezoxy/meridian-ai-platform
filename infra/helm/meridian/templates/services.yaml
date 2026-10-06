@@ -26,7 +26,10 @@ ConfigMap, the collector's authority, read-only at /etc/meridian/telemetry-ca
 and gets OTEL_EXPORTER_OTLP_CERTIFICATE, the SDK's variable for the file its
 exporters trust, so the https address of telemetry.otlpEndpoint is verified.
 The directory is not the service's own certificate's: that CA signs the
-services, not the collector. A pod verifies against this file alone.
+services, not the collector. A pod verifies against this file alone. The address,
+the variable, the mount and the volume are the helpers meridian.telemetryEnv,
+meridian.telemetryCaMount and meridian.telemetryCaVolume, which the sweep's
+CronJob includes too (S064); the Jobs include none, they send nothing.
 tests/meridian/test_kind_manifests.py ties every name below to the code.
 
 The Model Gateway keeps its rate windows in one process: with a second replica
@@ -36,7 +39,6 @@ pod for some seconds and each allows the full windows. That is left as it is on
 purpose: the alternative, `maxSurge: 0`, takes the gateway down for those
 seconds. The plan's backlog holds it (T-45).
 */ -}}
-{{- $telemetryCa := include "meridian.telemetryCa" . }}
 {{- range $name, $service := .Values.services }}
 {{- if and (eq $name "model-gateway") (gt (int $service.replicas) 1) }}
 {{- fail (printf "services.model-gateway.replicas is %v, but the gateway keeps its rate windows in one process, so each replica would allow the full limits (threat model T-45): it runs one replica" $service.replicas) }}
@@ -93,13 +95,8 @@ spec:
             {{- range $service.env }}
             {{- include "meridian.envItem" (dict "root" $ "item" .) | nindent 12 }}
             {{- end }}
-            {{- with $.Values.telemetry.otlpEndpoint }}
-            - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: {{ . | quote }}
-            {{- end }}
-            {{- if $telemetryCa }}
-            - name: OTEL_EXPORTER_OTLP_CERTIFICATE
-              value: {{ include "meridian.telemetryCaDirectory" $ }}/ca.crt
+            {{- with include "meridian.telemetryEnv" $ | trim }}
+            {{- . | nindent 12 }}
             {{- end }}
             {{- with include "meridian.tlsEnv" (dict "root" $ "mounts" true "serves" $service.tls) | trim }}
             {{- . | nindent 12 }}
@@ -116,22 +113,15 @@ spec:
             {{- include "meridian.caMount" . | nindent 12 }}
             {{- include "meridian.tmpMount" . | nindent 12 }}
             {{- include "meridian.tlsMount" $ | nindent 12 }}
-            {{- if $telemetryCa }}
-            - name: telemetry-ca
-              mountPath: {{ include "meridian.telemetryCaDirectory" $ }}
-              readOnly: true
+            {{- with include "meridian.telemetryCaMount" $ | trim }}
+            {{- . | nindent 12 }}
             {{- end }}
       volumes:
         {{- include "meridian.caVolume" $ | nindent 8 }}
         {{- include "meridian.tmpVolume" $ | nindent 8 }}
         {{- include "meridian.tlsVolume" $name | nindent 8 }}
-        {{- if $telemetryCa }}
-        - name: telemetry-ca
-          configMap:
-            name: {{ $telemetryCa }}
-            items:
-              - key: ca.crt
-                path: ca.crt
+        {{- with include "meridian.telemetryCaVolume" $ | trim }}
+        {{- . | nindent 8 }}
         {{- end }}
 ---
 apiVersion: v1

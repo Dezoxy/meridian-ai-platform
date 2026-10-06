@@ -1,12 +1,12 @@
 """The smoke check of the sweep, the cases of S062's review (check 7).
 
-``check_sweep`` in ``infra/kind/smoke.sh`` reads the CronJob ``meridian-sweep``
-and its Jobs. The sweep keeps one success and the cluster removes a finished
-Job a day after it finished, so a schedule that stopped days ago leaves a
-CronJob with a last schedule time and no Job at all: that is a stopped
-schedule, not a CronJob that has finished nothing yet. These tests use the
-harness of ``test_kind_manifests.py`` (``run_sweep_check``: ``check_sweep`` in
-bash against a stub ``kctl``).
+``check_sweep_job`` (the first line of ``check_sweep``) in ``infra/kind/smoke.sh``
+reads the CronJob ``meridian-sweep`` and its Jobs. The sweep keeps one success
+and the cluster removes a finished Job a day after it finished, so a schedule
+that stopped days ago leaves a CronJob with a last schedule time and no Job at
+all: that is a stopped schedule, not a CronJob that has finished nothing yet.
+These tests use the harness of ``test_kind_manifests.py`` (``run_sweep_check``:
+``check_sweep_job`` in bash against a stub ``kctl``).
 """
 
 from pathlib import Path

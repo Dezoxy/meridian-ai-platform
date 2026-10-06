@@ -60,6 +60,8 @@ IMAGES_BY_RELEASE = {
     "tempo": {"TEMPO_IMAGE"},
     "loki": {"LOKI_IMAGE"},
     "otel-collector": {"OTEL_COLLECTOR_IMAGE"},
+    # The contrib build of the same collector, as a DaemonSet (S064).
+    "log-agent": {"LOG_AGENT_IMAGE"},
 }
 
 # Images a chart names that nothing starts here, left by tag on purpose.
