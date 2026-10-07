@@ -463,7 +463,9 @@ and Pydantic, at the cost of one dependency.
 | S019 | Hardened Helm charts | Probes, resource limits, default-deny NetworkPolicy, PodDisruptionBudgets, non-root read-only containers, pinned digests; `helm lint` and the infra reviewer pass | done | S018 |
 | S055 | Service-to-service identity | On kind, each service proves which service it is to the one it calls: the Agent Runtime, the Model Gateway and the tool servers refuse a call that carries no identity or comes from a service the registry does not map; the tenant and agent a caller may name come from that mapping, and a header that disagrees is refused; the tool servers accept the runtime alone (T-08, T-24, T-48, T-50); the mechanism is chosen with the owner when the step opens and recorded in an ADR | done | S019 |
 | S020 | Azure platform | Terraform adds the virtual network, AKS, ACR, PostgreSQL Flexible Server with pgvector and Workload Identity to Key Vault; the environment is created and removed with one command each. **First half, code only (2026-10-07): a module `infra/terraform/azure/` written, validated and scanned without an account and NEVER applied** (44 resources, two doors: `make azure-platform-validate` and `make azure-platform-scan`), its README, ADR 11, the deployment view `DeploymentAzure` (designed), the threat model's rows T-103 to T-107 and the Azure platform document brought to it. **What waits:** the wrapper and the command guard's rules for it (no door that plans, applies or removes exists); the owner's upgrade to pay-as-you-go by about 2026-10-30; the owner's decision on a firewall for the foundation's vault and account; the apply and its cost, stated at the paid stop; and the second half (the chart on the cluster, the roles, the egress rule, S022's push). The "done when" above is the whole step and is not met | doing | S007, S019, S055, S056 |
-| S021 | Identity | Entra ID sign-in for the UI and APIs; roles platform-admin, agent-developer, adjuster and auditor; a mock OIDC issuer on kind; the tenant is resolved from the token | todo | S020 |
+| S021 | Identity | **The staff half (cut on 2026-10-07: claimants are S089, the edge layer is S090).** Entra ID sign-in for staff on Azure, and on kind a mock OIDC issuer, Keycloak (the owner's choice); four roles, platform-admin, agent-developer, adjuster and auditor, as a `roles` list claim in the token; the Claims API checks a staff token on its JSON routes and runs the sign-in for the adjuster's pages itself, with a session cookie it signs (the app layer first, the owner's order); a role is required on every route but a closed list; the tenant is resolved from the validated token through the registry; who decided is stored on the decision row (the audit rows' actor waits for S085's outbox); all of it behind a switch, `MERIDIAN_SIGNIN`, off by default until `make demo`, smoke and the evaluation client carry their own tokens. **Designed: nothing of it is built** (2026-10-07; Part C has the design, its contracts and the threat rows T-108 to T-115) | doing | The kind half: nothing unbuilt. The Entra half: S020's apply |
+| S089 | Claimants sign in as themselves | The owner's decision of 2026-10-07: "Own claimant sign-in" (the session had recommended the pages behind the staff sign-in for now; the owner chose against it). A second realm beside staff, `meridian-claimants`, with members of the public and no role (on Azure Microsoft Entra External ID, designed and not asked about yet); a claimant's session of its own, shorter than a staff one; a claim is OWNED by the claimant who filed it (the claimant's subject is stored on the claim: a migration, a column added in one file and backfilled in the next); a claim's status, its documents, its withdrawal and uploads, where they exist, are refused to another claimant with the answer an unknown claim gets; a claim that exists without an owner is staff-only; each realm's token and cookie is refused on the other's routes. **Designed: nothing of it is built.** Open for the step's design: whether a claimant is also tied to a policy (T-76's planted claims), and the claimant's session length | todo | S021 |
+| S090 | Sign-in at the edge | The owner's order of 2026-10-07: "App layer first, edge second (Recommended)"; both layers are the committed end state, so this is a step and not a "later". First TLS at kind's edge, which is plain HTTP today; then Envoy Gateway's sign-in and role rules (its `SecurityPolicy`) in front of the same app checks, which stay. A step of its own because Envoy's sign-in forces `Secure` on its cookies with no switch, so it cannot be seen to work before the edge has TLS; because the proxy pod and the controller pod each need egress to the issuer, in a namespace that is default-deny today; and because the facts sheet marks six paths as ones only a run would tell (whether a browser keeps the forced `Secure` cookie on `http://*.localhost`, whether the controller takes an in-cluster issuer with a plain-HTTP token endpoint, which pods need the new egress, whether a certificate-authority route to the issuer works, whether a policy attaches to one named rule of the Claims API's route, and what the app then receives). **Designed: nothing of it is built** | todo | S021 |
 | S022 | Delivery pipeline | Build, SBOM, Trivy scan, cosign signing, push to ACR, kind smoke test, manual approval, deploy to AKS; the rollback runbook exercised; evidence attached to the release | todo | S020, S021 |
 | S023 | Mistral provider | Mistral Large 3 adapter on Azure AI Foundry, DataZoneStandard; the routing policy uses it; ADR 3's provider set updated | todo | S010, S020 |
 | S024 | Operations baseline | SLO definitions (targets, unmeasured), alert rules and dashboards as code; runbooks for provider outage, budget exhaustion, database failure, rollback and secret rotation | done | S011, S019 |
@@ -950,10 +952,10 @@ that day; the rest stand as their step recorded them.
 | Small ends S070 left, all low and in code or comments that its documents contract could not write: `claimant_name.py` writes `EMAIL_PLACEHOLDER` directly where the e-mail pass now reads the mapping; the docstrings of `test_redaction_residuals.py` and `test_redaction_differential.py` speak of the international run-on in the terms from before the cut, and a comment of the differential (`_international_run_on`) may still say it is cut only at a slash or a dot; the comment "Every pattern below is linear" now stands above the e-mail patterns only (`redaction_email.py`) and one above `redact` still gives a size for `redaction.py` that is now wrong; the `ClaimView` docstring in `adjuster.py` says the facts are the submission's fields as text and never the name, and they now hold two derived gap rows, and its module docstring says nothing of the mark; `assess`'s docstring does not say why the posted-text flag and the instruction in the description are checked before the clauses (decision 3 of S070); `adjuster.py` was 795 lines and is 777 since S070's second half moved the queue's judgment of a stored proposal into `adjuster_queue.py` (G2b), so it has 23 lines left under the soft ceiling; `moves._take_from_state` has seven parameters, `_could_take_documents` ignores two of its three, and the run input's shape is built in two places in `triaging.py` (`input_for_run` and `run_input_with_documents`), held equal by a byte test and a frozen golden file; `RESTS_ON_NOTES` and `RESTS_ON_MARKS` are plain `Final` dicts, and the header "Recommendation rests on" is typed in both templates | S070 (reports and reviews) | open; low | S074 |
 | What the adjuster's page looks like and what the demo script says of it, not seen: nobody rendered the claim page with its longer labels (the report date's is 68 characters, the first gap's 60; the list has no width rule, so nothing is cut, but no one looked); `infra/kind/demo.sh` prints "none (the rules decided; no model was called)" whenever `drafted_by` is null, which also covers an assessment `not_needed` with no recommendation and an `unavailable` assessment where no call was made, so it can disagree with the page's mark, which speaks of what a recommendation rests on; what `make smoke` reads of the queue page was not checked against the new column | S070 (A1, A4) | open; low | S073 |
 | The adjuster's page and queue, small ends of the mark and the dates (T-26, T-66): the queue read `recommendation` and `assessment` from the stored JSON without validating the proposal, so a proposal that fails validation, which the claim page shows as "could not be read", could still carry a mark in the queue (a hand-written row only), and for a claim whose last triage failed it describes the latest stored proposal, as the Reason column does; the pairs the validator admits and the graph never writes (reject with none applies, approve with applies) are marked "model"; `received_at` must be aware and was not checked at run time; a form sent just before midnight in Vienna shows "1 day" for the second gap (the form stamps the day earlier than the API's `now()`), which is harmless; the first gap reads as a fact while it is two unchecked dates | S070 (reviews, A1, A4) | closed in part by S070's second half (G2, `b8fbc23`, with G2b, `dca5b7b`; implemented and tested against PostgreSQL, not run on a cluster): the two things built are that the queue marks only a proposal that validates, by the claim page's own function (one that cannot be read shows "could not be read"; a page validates once per row, at most 100, and asks no database again), and that a received time without a zone raises `ValueError` in `day_gaps` and not a wrong number of days; the two pinned, each by a test named for what it holds, are the latest stored proposal for a claim whose last triage failed (the queue and the Reason column agree, on purpose) and the two unwritten pairs marked "model" (the safe side: the mark reads "look at this"); the two left are as the finding says, a "1 day" near midnight in Vienna, harmless, and a first gap that reads as a fact while it is two unchecked dates (the labels say "not checked"), and neither changes. The review's two smaller ends are new rows below | S070 |
-| A caller of the same tenant can tell a claim whose name has nothing to replace from one with a heavy name, by the extra time to a 409 on a claim in a refusing state (S070's pre-lock read compiles only for a request the claim can go on with, so the time still differs for a request that can); it shows the shape of a stored name the caller cannot read, not another tenant's data, and the status code already tells the caller the rest. The tenant has no per-user separation until a caller has an identity | S070 (security review, low) | open; low | S021 |
+| A caller of the same tenant can tell a claim whose name has nothing to replace from one with a heavy name, by the extra time to a 409 on a claim in a refusing state (S070's pre-lock read compiles only for a request the claim can go on with, so the time still differs for a request that can); it shows the shape of a stored name the caller cannot read, not another tenant's data, and the status code already tells the caller the rest. The tenant has no per-user separation until a caller has an identity | S070 (security review, low) | open; low | S089 |
 | What a refused request still costs on the Claims API, and no limit at the ingress (T-02): a stale page and a documents post past the cap of twenty each pay one compile of the claimant's name before their 409 (about 55 ms of CPU for the worst name, in a thread pool under the GIL, so roughly one core held at about 18 requests a second from one caller with a maximal name), a claim that changes between the advisory read and the lock is compiled under the lock, and nothing limits the rate of any request on these routes; not measured: the cost of the name replacement and the posted-text screen on a 5,000-character description made to be slow, the memory of about forty worst-case compiles at once against the Claims API's 192 Mi, and PostgreSQL's connection limit against the thread pool, since `db.connect` does not pool. A rate limit at the ingress and the firewall of the Azure design have no step in T-02 | S070 (A4 and the security review) | open; the edge is S020's, and a limit inside the Claims API is decided there | S020 |
 | Not seen on a cluster after S070: the adjuster's claim page and queue with the mark and the new labels, the Claims API's read before the lock under real traffic, and a refused request's 409 without the compile; the tests hold each against PostgreSQL (a second session's `FOR UPDATE NOWAIT` shows the row unlocked while the pattern is built and locked while the documents are read) | S070 | open; tests hold each | S073 |
-| Claims filed against a policy that is not the claimant's count towards the holder's next claim while they are open (T-76): until S021 anyone may file against any policy, so planted open claims send the holder's next claim to an adjuster; it costs a review, not a payment or a refusal | S067 (the owner's decision of 2026-10-06) | open | S021 |
+| Claims filed against a policy that is not the claimant's count towards the holder's next claim while they are open (T-76): until S021 anyone may file against any policy, so planted open claims send the holder's next claim to an adjuster; it costs a review, not a payment or a refusal | S067 (the owner's decision of 2026-10-06) | open | S089 |
 | Not seen on a cluster after S067: migrations 0025 and 0026 applied by the migrate Job, the ingestion Job's second command (`meridian knowledge verify`) and its audit row, an open claim counted through the real services, a Hungarian form redacted in a service's log line, and the posted-text boolean reaching the runtime over mutual TLS | S067 | open; tests hold each (the Job's command line was run in a shell with a stand-in for `meridian`) | S073 |
 | `meridian knowledge verify` runs in the ingestion Job, which a deploy skips when the image's ingestion has already succeeded and the store is not empty, and nothing runs it on a schedule; a Job that verifies without ingesting is not built, and the runbook says when to run it by hand (T-57) | S067 | open | S073 |
 | `meridian knowledge verify` writes its counts into `audit.events.reason`, a column documented as the reason a call was refused, because it is the one free-text column; its audit row has no tenant | S067 (C4v) | open; the owner may prefer a column of its own. S068 decided to build nothing: the data classification now says that the column holds a refusal's reason and, for this command, the counts it made. The console's audit search (S033) will read the column, so that step is where a column of its own would show | S033 |
@@ -19804,6 +19806,256 @@ items); the Ingress row of `docs/architecture/overview/01-meridian-ai-platform.m
 still names Application Gateway WAF in the Azure design, which ADR 11 and the
 model no longer do.
 
+### S021 — Identity
+**Status:** doing · **Started:** 2026-10-07 · **Finished:** — · designed in
+plan PLAN-VERSION; nothing is built
+**Goal:** staff sign in, on kind through a mock issuer and on Azure through
+Entra ID, and the Claims API checks who is calling, in which role and for
+which tenant, before any claim is read or decided. This record is the design
+and the threat rows, written before the first line of code, from the owner's
+answers of 2026-10-07. **Nothing of sign-in is built:** no issuer runs on kind,
+no route checks a token, no cookie exists, and every route of the Claims API is
+as open as it was (hard rule 7: every capability below is designed).
+
+**Two halves.** The kind half needs nothing from Azure: a Keycloak on the local
+cluster, the app's own checks, the staff roles, the tenant from the token and
+the actor on the decision row. It depends on nothing unbuilt. The Entra half
+replaces the mock issuer with Entra ID (app registrations, the roles as app
+roles, the issuer and audience pinned per environment, the mock refused outside
+kind) and waits for S020's apply. The tenant question (Part D, 5) is answered:
+stay in the trial's tenant.
+
+**The cut into three steps, and why.** The advisor's reading (below) cut the
+step before work began. S021 keeps the staff half. **S089** (claimants sign in
+as themselves) takes the second population: their realm, their session, a
+claim owned by the claimant who filed it, and its migration. **S090** (sign-in
+at the edge) takes the second layer: TLS at kind's edge and Envoy Gateway's
+rules. The reasons: the first draft was eight contracts and two migrations
+for one step; the claimants' half adds a realm, a session, a migration and a
+product rule (what a claimant may see) that the staff half does not need; and
+the edge half has facts of its own (the proxy forces `Secure` cookies, two
+namespaces need new egress, six paths only a run can show) and needs TLS at
+the edge, which nothing else does. S022 and S026 still depend on S021 alone;
+whether either also waits for S089 or S090 is open (below).
+
+**The owner's answers (2026-10-07, the answers file, about 17:28 and 17:33
+UTC), as the file holds them.** The question tool marks the option the session
+recommended with "(Recommended)"; the mark is the session's, not the owner's.
+Two of the five answers carry it, two went against it, and one was a question.
+1. Where sign-in is enforced (options: in the app (recommended), at the edge,
+   both): the owner did not choose, and asked: "how should solve this a
+   business?". The session answered that a business runs both layers (sign-in
+   at the edge; token and role checks in every service) and keeps staff and
+   customers as two populations, and asked again, as an order of building.
+2. The mock sign-in provider on kind: **"Keycloak"**. The session had
+   recommended Dex. Keycloak needs at least 750 MB on a tight machine and a
+   realm file; it is the closest to Entra's token shape. Against the
+   recommendation.
+3. The claimant: **"Own claimant sign-in"**. The session had recommended the
+   staff sign-in for now, the presenter playing the claimant. Claimants sign
+   in as themselves: a second identity population beside staff. Against the
+   recommendation.
+4. Order: **"Yes, design now, build when a lane frees (Recommended)"**: the
+   kind half of S021 starts before the Azure apply.
+5. Where, asked again as an order: **"App layer first, edge second
+   (Recommended)"**. Both layers are the committed end state; the edge layer is
+   a named follow-up step with TLS at kind's edge (S090).
+
+**The facts that decide the shape** (the session's maps and facts sheet, read
+on 2026-10-07, nothing run): the edge on kind is plain HTTP, and Envoy's
+sign-in forces `Secure` cookies; the model and the threat model already say the
+app validates tokens (TB-2, T-05); PyJWT with crypto is locked, through another
+package, and no session library is; Entra's `roles` claim is a list in both
+tokens and a person is keyed on `tid` and `oid`; no mock issuer fits without a
+trade (Dex: static users, `groups` only, no logout; mock-oauth2-server: any
+claim, no passwords; Keycloak: everything, at least 750 MB).
+
+**Decisions** (D1 to D10, as the design has them after the advisor's reading;
+the owner may overturn any that the answers above do not state):
+- **D1, one Keycloak, two realms.** `meridian-staff` (four roles, delivered as
+  a `roles` list claim in the access and the ID token) and `meridian-claimants`
+  (S089). Two realms are two issuers, as Entra ID and Entra External ID are, so
+  one instance is honest for two populations. A namespace `identity` of its
+  own, default-deny; the image pinned by digest with a Renovate reader;
+  development mode with its built-in database, so nothing persists and a
+  restart makes new keys; the realm files generated at `make up`, with the
+  test users' passwords and the clients' secrets made by `openssl rand` into a
+  Kubernetes Secret, never committed (T-06). The memory is Keycloak's own
+  floor, 750 MB, and the room is measured, not assumed (Y2's stop, below).
+- **D2, one issuer name for the browser and the pods.** The browser reaches
+  Keycloak through the edge on a second `.localhost` host name; pods reach it
+  by its Service. Keycloak's hostname options are meant to keep `iss` the front
+  name while the back channel answers on the Service name; the documentation
+  does not say what `iss` is on a back-channel call, and a run will. The app
+  pins the issuer string per environment and takes the key and token URLs as
+  settings. Y2 changes a pinned fact on purpose: the edge admits routes from
+  `meridian` only, and Keycloak's route lives in `identity`.
+- **D3, the app layer, in a platform module** (`platform/common`, no agent
+  framework, no provider SDK). A bearer check for the JSON routes: PyJWT a
+  direct dependency, RS256 only, the key set fetched with a bounded cache and
+  a timeout, one refetch at most per interval for an unknown key id, issuer,
+  audience, expiry, not-before and subject required, a role required per
+  route. For the pages, the authorization-code flow with PKCE run by the app,
+  `state` and `nonce` checked; after the ID token is validated, a session
+  cookie the app signs (HMAC, a key from a Secret) that holds the realm, the
+  subject, the roles and the expiry and no token; no server-side store and no
+  refresh, so the session ends with the token's life; `HttpOnly`,
+  `SameSite=Lax`, and `Secure` everywhere but kind, and the app refuses to
+  start without `Secure`, or with the mock issuer, outside kind (T-06); a
+  logout that clears the cookie and goes to Keycloak's end-session. **As
+  amended by the advisor:** the app enforces the cookie's own expiry on every
+  request; the cookie lives no longer than Keycloak's session; a stolen cookie
+  cannot be revoked before it ends, which is stated for both populations and
+  is a threat row (T-110); the rate store's Redis exists if a store is ever
+  wanted. **And a switch:** `MERIDIAN_SIGNIN`, off by default, the repository's
+  own pattern, so the contracts land in pieces while kind keeps working; it
+  flips when the scripts have their tokens (D7). While it is off every route
+  is as open as today (T-113).
+- **D4, two populations in the Claims API.** Staff routes (`/adjuster/*`, the
+  decision, triage and brief routes): a staff session or token with the
+  adjuster role. That is S021. The claimant routes (`/claimant/*`), ownership
+  of a claim by the subject that filed it, the refusal of another claimant's
+  status, documents, withdrawal and uploads with the answer an unknown claim
+  gets, and a claim without an owner being staff-only: that is **S089**, with
+  its migration.
+- **D5, who decided, narrowed.** The decision row carries the actor now: the
+  issuer's realm and subject (pseudonymous; no name or e-mail in a row, a log
+  or a span), by a migration; that is T-32's promise. The audit rows get their
+  actor in S085's outbox shape, because ADR 10 gives the audit model's next
+  change to S085. One migration fewer in this step. The audit table's shape is
+  read with the database reviewer first.
+- **D6, the tenant from the token.** The registry (`tenants.yaml`) gains who
+  may act for a tenant: a realm and a role or group. The Claims API resolves
+  the tenant from the validated token through it, and the setting stays as the
+  service's own bound. The registry's schema changes, so its README's "Change
+  it" rules apply: the schema first, then `meridian registry validate`.
+- **D7, scripts.** `make demo`, smoke's page checks and `meridian eval run`
+  get a token from Keycloak without a browser (a confidential client with
+  client credentials; its secret from the Secret, never printed). The switch
+  flips when they have it.
+- **D8, service to service stays as it is** (mutual TLS, ADR 4). The person's
+  identity stays inside the Claims API's rows; what the runtime and the tools
+  learn of it is the services split's question (S084, S085).
+- **D9, the edge layer is S090,** a step with a row, not a "later".
+- **D10, fingerprints and lanes.** No evaluation fingerprint may move (to be
+  shown by the replay, not assumed). The migration waits for the uploads'
+  migration to be on `main` (numbers are taken late; one migration lane).
+  Keycloak on the cluster waits for the cluster lane.
+
+**Advisor:** one consultation on the design, 2026-10-07 about 17:40 UTC, at the
+design and before the first contract. It changed: the signed cookie without a
+store stood, with two bounds written in (the app's own expiry on every request,
+the cookie no longer than the issuer's session, shorter for claimants) and the
+stolen cookie named as a residual and a row; one Keycloak with two realms was
+found honest and the decision record is to say why; the switch `MERIDIAN_SIGNIN`
+was added, because staff routes that want a token would break `make demo`,
+smoke and the evaluation client until they have one; the threat model was
+moved before Y1, because Y1 is the token check; the step was cut in two before
+work began (S089); D5 was narrowed to the decision row, one migration fewer;
+Y2's change of a pinned fact and its measured stop were written down; a restart
+of Keycloak was said to end every token, with a test that the key-set client
+refetches on an unknown key id; and D6 was marked as a schema change. A second
+consultation, by the implementer of the documents' contract at its start,
+changed how the rows were counted (after they were written, not before) and
+which backlog rows changed home (below).
+
+**Contracts** (Y0 to Y8, short and one concern each; Y1 first, alone, while
+other steps finish). **None of Y1 to Y8 has landed:** this change is Y0, the
+documents.
+- **Y0**, this change: the plan's rows and section, the threat rows, the data
+  classification's rows. Documents only.
+- **Y1**, the bearer check and the session cookie as a platform module, with
+  tests against a key set made in the test (no issuer needed). Pure code.
+- **Y2**, Keycloak on kind: the namespace, the image pin, the generated realms
+  and Secret, the route on the second host name, network policies, readiness,
+  smoke lines. The cluster lane. **Its stop is measured:** the memory available
+  after Keycloak is Ready, and a whole suite still starts (the suite's gate
+  wants 3,500 MB); if the cluster does not fit, the step stops and says so.
+- **Y3**, the authorization-code flow for the pages against Keycloak's
+  discovery document recorded as a test fixture.
+- **Y4**, the Claims API wired: staff routes and pages, roles, 401 and 403 as
+  JSON and as pages, the OpenAPI document, every test that pins anonymity
+  changed on purpose.
+- **Y5**, claimants: the second realm's session and ownership. **Moved to
+  S089.**
+- **Y6**, who decided on the decision row (a migration) and the tenant from
+  the token (the registry). The audit actor moved to S085.
+- **Y7**, the scripts' tokens (demo, smoke, the evaluation client).
+- **Y8**, the documents: a decision record (written with the contract that
+  builds the first route, when the design has met code), the model's
+  `Designed` tags, SA-13, the runbook for the keys.
+
+Reviews: `security-reviewer` on Y1, Y3 and Y4; `fastapi-reviewer` on Y4;
+`database-reviewer` on Y6 before its migration is written; `infra-reviewer` on
+Y2; `platform-boundary-reviewer` on Y1 and Y6.
+
+**Work log:** 2026-10-07. The design (the map of what is open today, the facts
+sheet, the design with the advisor's reading); the owner's four questions at
+about 17:28 UTC and the order at about 17:33 UTC; Y0 (this section, the three
+rows, the eight threat rows T-108 to T-115 and four rows amended, three data
+classification rows, the backlog homes below).
+
+**Result / verification:** Y0 is documents. `make docs`, `make check`, `make
+test` and `make lint` are run on the branch and their output is in the pull
+request. The whole suite on the final tree: FINAL-SUITE-RESULT. No gate shows
+sign-in, because none exists.
+
+**Not seen** (all of it: nothing of sign-in has run):
+- Whether Keycloak starts on this machine with the cluster up, how much memory
+  it holds at rest and under a sign-in, its image size and the user it runs as
+  (the guides do not say).
+- What `iss` a token carries when the browser reaches Keycloak by the edge's
+  host name and a pod by the Service; whether PKCE works as the app will use
+  it (the guides read do not mention it); whether a realm file with generated
+  secrets imports as intended.
+- Whether a client credentials token for a script carries the roles the routes
+  need; whether the `roles` claim reaches both tokens.
+- How the key-set client's blocking fetch behaves inside the async Claims API
+  when the issuer is down, under the suite's timeouts.
+- Whether the cookie's expiry, the issuer's session and a restart of Keycloak
+  agree (T-114).
+- Everything about Entra: the app registrations, the tokens' `roles`, `tid`
+  and `oid` in this tenant, the External ID tenant of S089.
+- The edge half (S090) and the claimants' half (S089): not designed beyond
+  their rows.
+
+**For the owner** (non-blocking; nothing here costs money):
+- **Memory.** Keycloak's own guide names 750 MB as its floor; how much the
+  development machine has to spare with the cluster up is to be measured at
+  Y2, and the step stops there if the cluster and a whole suite do not fit.
+- **A restart of the mock issuer ends every token,** and the people signed in
+  through it must sign in again: development mode keeps nothing. Acceptable on
+  kind; said here so it is not found out. Whether a cookie the app already
+  signed keeps working until its own expiry is open (T-114).
+- **Open for you or the next session:** whether S022 and S026 also depend on
+  S089 and S090 (their rows are unchanged); and, for S089, whether a claimant
+  is tied to a policy.
+
+**Rows** (Part B and the registers, changed by Y0):
+- Part B: S021 is cut to the staff half and set to `doing`; S089 and S090 are
+  new, `todo`, depending on S021.
+- Backlog rows whose home changed: "Claims filed against a policy that is not
+  the claimant's count towards the holder's next claim" (T-76) and "A caller of
+  the same tenant can tell a claim whose name has nothing to replace from one
+  with a heavy name" (no per-user separation), both S021 to S089. The others
+  that name S021 keep it (below).
+- The threat model: T-108 to T-115 new, designed; T-05, T-06, T-32 and T-69
+  amended; the header's counts. The data classification: the issuer's keys row
+  amended, and two new rows (the app's cookie-signing key, which every
+  environment has; the session cookie and the subject). The root README's
+  count.
+
+**Follow-ups:** the contracts Y1 to Y8; S089 and S090 (rows above). Rows that
+should be re-homed, not changed here because the change is not S089's or S090's:
+"Nothing alerts on a credit, an expiry or a release by the ledger's upkeep ...
+until a person is on the audit row" and the upkeep audit row that names the
+database role, not the person, both to S085, whose outbox gives the audit rows
+their actor. The ingress rate limit (T-02) is homed at S021 in the backlog and
+at S020 in the threat model; it is edge infrastructure and is left for the
+owner to home. The rows that say "until S021" about a claimant (T-01, T-04,
+T-74, T-76, T-80) are S089's to read when it opens. The uploads row (T-38) keeps
+its home, S070.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -20752,3 +21004,12 @@ model no longer do.
   and Part D question 5 answered (stay in the trial's tenant). The wrapper and
   the guard's rules, the upgrade, a firewall decision, the apply and the second
   half wait. The whole suite: 20,563 passed, 8 skipped.
+- **PLAN-VERSION, 2026-10-07:** S021 `doing`, designed and not built: the
+  step is cut to the staff half (Keycloak on kind, four roles, the app layer
+  first behind a switch that is off by default, the tenant from the token, the
+  actor on the decision row), with the owner's five answers and the design's
+  ten decisions in its Part C section; S089 (claimants sign in as themselves)
+  and S090 (sign-in at the edge) are new rows, `todo`; two backlog rows
+  moved to S089; the threat model's rows T-108 to T-115 are new and designed
+  and T-05, T-06, T-32 and T-69 are amended; the data classification has one
+  row amended and two new. The whole suite: FINAL-SUITE-RESULT.
