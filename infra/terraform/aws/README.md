@@ -290,9 +290,46 @@ session runs and no credential is readable by one (no `~/.aws` a session can
 read), with a short sign-in (an SSO session of an hour), and the sign-in is
 removed afterwards (`aws sso logout`). Until then nothing here can spend money,
 because no credentials exist on the machines where sessions run and the
-identity call fails. The command guard has no rule yet for these targets or for
-the `aws` CLI: the rules are a later contract of S036, and nothing on this page
-says the guard stops them.
+identity call fails.
+
+The command guard (`.claude/hooks/guard-bash.sh`, run by Claude Code and by
+Codex) now has rules for these targets, for Terraform by hand against this
+directory and for the `aws` CLI, and they are **not the barrier**. They stop
+a session from doing by reflex what only the owner should do:
+
+- **Denied:** `make aws-destroy` and `aws.sh destroy` in every runner form; the
+  wrapper or its targets under a pseudo-terminal tool, traced (`bash -x`,
+  `set -x`) or with `BASH_ENV`, `ENV`, `SHELLOPTS`, `BASH_XTRACEFD` or `PS4`;
+  a `TF_*` or `AWS_ENDPOINT_URL*` assignment in front of `terraform`, `tofu`,
+  `aws`, the wrapper or a target; `terraform apply`, `plan -out`, `import`,
+  `state mv|rm|push`, `force-unlock` and `workspace new|select` against this
+  directory; `aws` calls that delete or that print a new credential
+  (`iam create-access-key`, `kms decrypt`, `rds generate-db-auth-token`,
+  `sso get-role-credentials`); readers of the local file, the state, the plan
+  and its record, the AWS configuration and `.tfvars`; and writes to
+  `~/.terraformrc`, `~/.gitconfig`, `~/.aws`, `.terraform/environment` and
+  `aws.tfplan*`.
+- **Asked:** `make aws-plan` and `make aws-apply` (the apply's text says it
+  costs money and that the owner runs it from where no session holds the
+  credentials); `terraform show`, `output`, `console`, `refresh` and
+  `state list|show|pull` against this directory; any `aws` call that is not a
+  read (`describe-*`, `list-*`, `sts get-caller-identity`, and a few more);
+  `make … TRIVY_IMAGE=` and `PROMTOOL_IMAGE=`.
+- **Passes:** `make aws-validate` and `make aws-scan`, which cost nothing.
+- `.claude/settings.json` adds to this: `Read`, `Edit` and `Write` are denied
+  for the local file, the state and plan files, variable and override files,
+  `.terraform/`, the state's directory under home, `~/.aws`, `~/.terraformrc`
+  and `~/.terraform.d`; the bare `terraform plan` and the one with `-chdir`
+  into this directory ask. The Codex side runs the same hook and reads no
+  settings file.
+
+None of that is a boundary. A session that holds credentials reaches the same
+calls by a variable, a quote inside a word, a script file, `python3`, `uv` or a
+container, and the runbook (`docs/operations/runbooks/secret-rotation.md`,
+"What the command guard does not see") lists what the rules do not read. What
+holds is where the credentials are: the second half of S036 is run by the owner
+from a machine or user where no session runs and no credential is readable by
+one.
 
 What the module and the script do, each for a mistake and not for an attack:
 

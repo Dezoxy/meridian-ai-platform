@@ -421,4 +421,125 @@ else
   echo "FAIL 2000 repetitions of a tool name before its verb take ${cpu_seconds} s of CPU, not under 2"
   fail=1
 fi
+
+# The AWS rules (S036). The worst shape of them: a command that is nothing but
+# `aws ` and then a read, so that it reaches the loop over aws calls with
+# nothing denied before it (0.3 s measured on 2026-10-06 at 8 KB, load about 3),
+# and one that is `make ` and then the plan target, which reaches the rules of
+# the make targets last. Both are asked, not skipped.
+aws_shape="$(for _ in $(seq 1950); do printf 'aws '; done)ec2 describe-instances"
+jq -nc --arg c "$aws_shape" '{tool_input:{command:$c}}' > "$big_input"
+cpu="$( { time bash "$hook" < "$big_input" > /dev/null; } 2>&1 )"
+cpu_seconds="$(awk '{ print $1 + $2 }' <<<"$cpu")"
+if awk -v s="$cpu_seconds" 'BEGIN { exit !(s < 1.5) }'; then
+  echo "ok   2000 repetitions of aws before a read take ${cpu_seconds} s of CPU, under 1.5"
+else
+  echo "FAIL 2000 repetitions of aws before a read take ${cpu_seconds} s of CPU, not under 1.5"
+  fail=1
+fi
+make_shape="$(for _ in $(seq 1550); do printf 'make '; done)aws-plan"
+jq -nc --arg c "$make_shape" '{tool_input:{command:$c}}' > "$big_input"
+cpu="$( { time bash "$hook" < "$big_input" > /dev/null; } 2>&1 )"
+cpu_seconds="$(awk '{ print $1 + $2 }' <<<"$cpu")"
+if awk -v s="$cpu_seconds" 'BEGIN { exit !(s < 1.5) }'; then
+  echo "ok   1600 repetitions of make before aws-plan take ${cpu_seconds} s of CPU, under 1.5"
+else
+  echo "FAIL 1600 repetitions of make before aws-plan take ${cpu_seconds} s of CPU, not under 1.5"
+  fail=1
+fi
+ask_for "a command of 1950 aws words before a read asks and is read" ask "$aws_shape"
+ask_for "the same, with a deletion in another part, is denied and not skipped" deny \
+  "$(for _ in $(seq 1700); do printf 'aws '; done)ec2 describe-instances; aws eks delete-cluster --name stand-in"
+
+# What the user reads (S036): the apply says it costs money and that the owner
+# runs it where no session holds credentials, and the removal says it is the
+# owner's.
+reason="$(reason_of 'make aws-apply')"
+case "$reason" in
+  *"COST MONEY"*"owner"*"no session holds the credentials"*) echo "ok   the ask for make aws-apply says it costs money and who runs it" ;;
+  *)
+    echo "FAIL the ask for make aws-apply does not say it costs money, that the owner runs it and where: $reason"
+    fail=1
+    ;;
+esac
+reason="$(reason_of 'make aws-destroy')"
+case "$reason" in
+  *"owner's"*"terminal"*"no session holds the credentials"*) echo "ok   the deny for make aws-destroy says it is the owner's, in a terminal" ;;
+  *)
+    echo "FAIL the deny for make aws-destroy does not say it is the owner's, in a terminal: $reason"
+    fail=1
+    ;;
+esac
+
+# The settings (S036): a hook decision comes first, and the settings are what a
+# session meets when it uses a tool the hook does not read. The lists are held
+# here so that an edit that drops one fails: Read, Edit and Write are denied
+# for what the AWS wrapper keeps closed, git's and Terraform's configuration in
+# the caller's home is not written, plan reaches Terraform only where the
+# module is not (the settings cannot see the directory a `cd` chose, so the
+# bare `terraform plan` asks), and make aws-plan and aws-apply ask. make * stays
+# allowed for aws-validate and aws-scan, which cost nothing.
+settings_file="$here/../.claude/settings.json"
+in_list() { # $1=allow, ask or deny  $2=the entry
+  jq -e --arg e "$2" --arg l "$1" '.permissions[$l] | index($e) != null' "$settings_file" > /dev/null
+}
+for entry in 'Bash(make *)' 'Bash(terraform -chdir=* plan*)' 'Bash(terraform -chdir=* validate*)'; do
+  if in_list allow "$entry"; then
+    echo "ok   allow keeps ${entry}"
+  else
+    echo "FAIL allow lost ${entry}"
+    fail=1
+  fi
+done
+if in_list allow 'Bash(terraform plan*)'; then
+  echo "FAIL allow still holds the bare terraform plan"
+  fail=1
+else
+  echo "ok   allow no longer holds the bare terraform plan"
+fi
+for entry in 'Bash(terraform plan*)' 'Bash(terraform -chdir=*aws* plan*)' 'Bash(make aws-plan*)' 'Bash(make aws-apply*)' \
+  'Bash(terraform apply*)' 'Bash(terraform -chdir=* apply*)'; do
+  if in_list ask "$entry"; then
+    echo "ok   ask holds ${entry}"
+  else
+    echo "FAIL ask lacks ${entry}"
+    fail=1
+  fi
+done
+# shellcheck disable=SC2088  # the entries are the literal text of the settings
+closed_paths=(
+  './**/local.env*' './**/*.tfstate*' './**/*.tfplan*' './**/*.tfvars.json' './**/*.auto.tfvars*'
+  './infra/terraform/aws/.*tfvars*' './**/terraform.tfstate.d/**' './**/*override*.tf' './**/.terraform/**'
+  '~/.local/state/meridian-aws/**' '~/.aws/**' '~/.terraformrc' '~/.terraform.d/**'
+)
+for path in "${closed_paths[@]}"; do
+  for tool in Read Edit Write; do
+    if in_list deny "${tool}(${path})"; then
+      echo "ok   deny holds ${tool}(${path})"
+    else
+      echo "FAIL deny lacks ${tool}(${path})"
+      fail=1
+    fi
+  done
+done
+# shellcheck disable=SC2088  # the entries are the literal text of the settings
+for path in '~/.gitconfig' '~/.config/git/**'; do
+  for tool in Edit Write; do
+    if in_list deny "${tool}(${path})"; then
+      echo "ok   deny holds ${tool}(${path})"
+    else
+      echo "FAIL deny lacks ${tool}(${path})"
+      fail=1
+    fi
+  done
+done
+# The old denies stay.
+for entry in 'Read(./**/*.tfvars)' 'Read(./**/.env)' 'Edit(./**/.env)' 'Bash(terraform destroy*)' 'Bash(terraform -chdir=* destroy*)'; do
+  if in_list deny "$entry"; then
+    echo "ok   deny keeps ${entry}"
+  else
+    echo "FAIL deny lost ${entry}"
+    fail=1
+  fi
+done
 exit "$fail"
