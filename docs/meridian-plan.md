@@ -17449,6 +17449,7 @@ each with its home: Loki's usage report (S072), the one policy
 CloudNativePG chart's `view` and `edit` ClusterRoles (S020), the operator
 being down seen by no alert (S073) and the policy tests that never meet the
 charts' render (S074).
+
 ### S079 — Self-managed Kubernetes: applied once on AWS, a scaffold on Google Cloud
 **Status:** doing · **Started:** 2026-10-06 · **Finished:** —
 **Goal:** a cluster whose control plane the owner's account runs itself, on the
