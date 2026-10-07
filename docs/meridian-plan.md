@@ -294,10 +294,17 @@ request's body says so:
 - `terraform`: `make azure-plan`, and the plan read; for the AWS module
   `make aws-validate` and `make aws-scan`, which need no account (S036); for
   the Google Cloud module `make gcp-validate` and `make gcp-scan`, which need
-  no project and no credential (S078).
-- The Trivy image of `make aws-scan` and `make gcp-scan` (`TRIVY_IMAGE` in the
-  `Makefile`, no group of its own): both scans on the branch, since CI does not
-  run them and a newer image carries newer checks that can turn them red.
+  no project and no credential (S078); for the AWS self-managed module
+  `make aws-kubeadm-validate` and `make aws-kubeadm-scan`, which need no
+  account (S079); and for the Google Cloud twin of that module
+  `make gcp-kubeadm-validate` and `make gcp-kubeadm-scan`, which need no
+  project and no credential (S079). Since S079 the `python` workflow installs
+  the Terraform program the tests need (the `terraform` group moves that pin
+  too, by the same reader); it runs no `init`, `validate`, plan or apply.
+- The Trivy image of the scans (`TRIVY_IMAGE` in the `Makefile`, no group of
+  its own): every scan on the branch (`aws-scan`, `gcp-scan`, `aws-kubeadm-scan`
+  and `gcp-kubeadm-scan`), since CI does not run them and a newer image carries
+  newer checks that can turn them red.
 - `tooling`: the result of `Docs / Architecture PDF`, the one job that
   runs Pandoc and Mermaid. It is not a required check.
 - `agent framework`: never merged on green checks alone. Read the note on
@@ -582,7 +589,7 @@ Kubernetes" above).
 |---|---|---|---|---|
 | S036 | AWS Terraform, applied once | ~~The module passes `terraform validate` and a policy scan; it is never applied~~ Changed by the owner on 2026-10-06 ("add the aws template too and we will test it in a real aws enviroment"). Two halves. Without an account and without cost: the module for what S025 maps (network, cluster, registry, database with pgvector, workload identity to a secret store) in an EU region passes `terraform validate` and a policy scan, and one command each creates and removes it. With the owner, in the owner's AWS account, after the cost of an hour of it is stated and the owner says yes: it is applied once, what came up is recorded, it is removed, and the run's cost is logged. ADR 1 ("design AWS") gets a dated successor or note that says so. Since the owner's decision on managed and self-managed Kubernetes the same day, the apply of this managed cluster is asked at the paid stop of S079 and may be answered no; the first half is unchanged. First half built as (2026-10-07; implemented as code, checked without an account, never applied; nothing ran in AWS): `infra/terraform/aws/` is a module for a VPC of two public subnets with no NAT gateway, an EKS cluster at Kubernetes 1.36 with one managed node group of two `t3.large` and the Pod Identity and EBS CSI add-ons, one ECR repository, an RDS for PostgreSQL 17 instance on `db.t4g.small` whose password RDS keeps in Secrets Manager, one empty secret with a role that one named service account may assume, and a USD 25 monthly budget, in an EU Region (a validated variable, `eu-central-1` by default) with a local state under the owner's home and the provider pinned to one account; `infra/terraform/aws.sh` and five `make aws-*` targets validate, scan, plan, apply a saved plan and remove, and the scan is Trivy's from an image pinned by digest with three accepted findings, each with its reason; the command guard and the settings know the commands (T-100), and ADR 1 has a dated note. Not built in the first half: the `vector` extension (it needs a connection to the database), the Meridian chart and its controllers on the cluster, and the module in CI (S022) | doing: the first half is done (2026-10-07); the second half, one apply in the owner's account, waits for the owner's yes at S079's paid stop and may be answered no | S025 |
 | S078 | GCP Terraform, ~~applied once~~ a scaffold only | As S036, for Google Cloud (the owner, 2026-10-06: "like aws too"). ~~Two halves.~~ Without a project and without cost: the module for what S077 maps (network, cluster, registry, database with pgvector, workload identity to a secret store) in an EU region passes `terraform validate` and a policy scan, and one command each creates and removes it. ~~With the owner, in the owner's Google Cloud project, after the cost of an hour of it is stated and the owner says yes: it is applied once, what came up is recorded, it is removed, and the run's cost is logged.~~ Changed by the owner on 2026-10-06 ("gcp just scafold"): the module is never applied; whether a scaffold carries commands that create and remove it at all, or a README that says how the owner would, is its design's to say. The successor or note to ADR 1 ~~that S036 writes~~ that S078 writes (corrected 2026-10-07: S036's first half wrote no second note and left it to its second half) names this cloud too. Built as (2026-10-07; implemented as code, checked by `terraform validate` and an offline Trivy scan, never planned and never applied; nothing ran in Google Cloud and no project exists): `infra/terraform/gcp/` is a module for a VPC with one regional subnet and Cloud NAT, a GKE Standard zonal cluster with Dataplane V2, workload identity and private nodes, one Artifact Registry repository, a Cloud SQL for PostgreSQL 17 instance in the Enterprise edition reached by Private Service Connect, one empty regional secret with one workload-identity binding and a budget in the billing account's own currency, in an EU Region (a validated variable of eleven, `europe-west3` by default) with the project pinned by a precondition that no run has seen refuse; `make gcp-validate` and `make gcp-scan` check it, the scan being the AWS scan's image with the same flags and accepting nothing. By design no command plans, applies or removes it, and the command guard and the settings are unchanged (the owner's "gcp just scafold"); the module's README says how the owner would apply it by hand, nobody having done so, and what would have to be built first; ADR 7 and ADR 1 each have a dated note | done (a scaffold: the owner's change of 2026-10-06 dropped the applied half, and no step applies it) | S077 |
-| S079 | Self-managed Kubernetes: applied once on AWS, a scaffold on Google Cloud | The owner, 2026-10-06 ("we will build it on aws, gcp just scafold"). A cluster whose control plane the owner's account runs itself, on the cloud's virtual machines, beside the managed cluster of S036 and S078. Two halves. Without an account and without cost: a Terraform module for AWS beside S036's, with a small network of its own, that reuses S036's wrapper script, scan and the lessons of its reviews, and brings up the control plane and the workers with an installer the step's design chooses and says why (its threat note first: the cluster's certificates, its join token and its etcd are then the owner's to keep); its twin for Google Cloud; both pass `terraform validate` and a policy scan, and for AWS one command each creates and removes it. ADR 6, ADR 7 and the Azure platform document each gain the comparison of a managed and a self-managed cluster on that cloud: who runs and upgrades the control plane, where etcd and its backup live, how a pod gets a cloud identity, how a load balancer and a volume are made, what an hour costs, and why the platform's default stays managed. With the owner, in the owner's AWS account, after the cost of an hour of it is stated and the owner says yes: the owner applies it once from where no agent session holds credentials, what came up is recorded, it is removed, and the run's cost is logged; whether S036's managed cluster is applied as well is asked then. The Google Cloud twin is never applied | todo | S036, S078 |
+| S079 | Self-managed Kubernetes: applied once on AWS, a scaffold on Google Cloud | The owner, 2026-10-06 ("we will build it on aws, gcp just scafold"). A cluster whose control plane the owner's account runs itself, on the cloud's virtual machines, beside the managed cluster of S036 and S078. Two halves. Without an account and without cost: a Terraform module for AWS beside S036's, with a small network of its own, that reuses S036's wrapper script, scan and the lessons of its reviews, and brings up the control plane and the workers with an installer the step's design chooses and says why (its threat note first: the cluster's certificates, its join token and its etcd are then the owner's to keep); its twin for Google Cloud; both pass `terraform validate` and a policy scan, and for AWS one command each creates and removes it. ADR 6, ADR 7 and the Azure platform document each gain the comparison of a managed and a self-managed cluster on that cloud: who runs and upgrades the control plane, where etcd and its backup live, how a pod gets a cloud identity, how a load balancer and a volume are made, what an hour costs, and why the platform's default stays managed. With the owner, in the owner's AWS account, after the cost of an hour of it is stated and the owner says yes: the owner applies it once from where no agent session holds credentials, what came up is recorded, it is removed, and the run's cost is logged; whether S036's managed cluster is applied as well is asked then. The Google Cloud twin is never applied. First half built as (2026-10-07; implemented as code, checked without an account, tested with stand-ins and never planned or applied; nothing ran in AWS or Google Cloud and no instance booted): `infra/terraform/aws-kubeadm/` is a module for a VPC with one public subnet and no NAT gateway, one control-plane instance and two workers (`t3.medium`, Ubuntu 24.04 from the publisher's public parameter) brought up by kubeadm from two boot scripts, Calico from a manifest pinned by version and SHA-256, and the join command passed through one write-only Parameter Store parameter, with no key pair, no port 22 and no secret in user data or in the state; `infra/terraform/aws.sh` plans, applies and removes it by the word `aws-kubeadm`, with a state, a saved plan and a record of its own and a redaction that knows instance identifiers, and `make aws-kubeadm-validate` and `make aws-kubeadm-scan` check it (the scan accepts three findings, each with its reason), while no `make` target plans, applies or removes it yet; the `python` workflow installs a pinned Terraform so that the 225 Terraform-marked tests run on the runner (not yet seen there); `infra/terraform/gcp-kubeadm/` is its twin on Compute Engine, checked by `make gcp-kubeadm-validate` and `make gcp-kubeadm-scan` (one finding accepted with its reason) and by a test that holds the boot scripts' common parts equal to the AWS module's, with no command that creates it; ADR 6, ADR 7 and the Azure platform document hold the comparison of a managed and a self-managed cluster, written from what was built; T-102 is new. Three reviews of the module found one critical and two high findings (the critical one would have failed the first apply after resources existed), all closed; a fourth, of the wrapper's second module, found no critical or high finding and two medium, which two contracts answer | doing: the first half is done (2026-10-07); the second half, one apply in the owner's account, waits for the owner's yes at the paid stop; the `make` targets that create, and the guard's rules beyond a tightening to the second module's names, wait for the owner to start the guard's task | S036, S078 |
 | S037 | Second-framework workload | A small workload in Microsoft Agent Framework on the same platform contract. Built as: a second host behind the Agent Runtime's `Host` protocol, picked for each agent by the registry's `host` field, with a PostgreSQL checkpoint store of its own, and a second workload, `claim-brief`, that calls tools, pauses for an adjuster and is started by the Claims API; implemented, tested, and seen on kind once under replay (ADR 9, the second applied service acceptance) | done | S005, S018 |
 | S038 | GraphRAG spike | A small knowledge graph of customer, policy, asset and claim; retrieval compared with hybrid search | done (the rule set before the comparison gives no: no step for retrieval over a graph) | S012 |
 | S039 | Workload scaffold | `meridian workload new` generates a workload that passes registry validation, the import contract and an empty evaluation on its first run | done | S018 |
@@ -881,7 +888,7 @@ that day; the rest stand as their step recorded them.
 | The injection import test's walker cannot see what its docstring lists (a non-literal argument of `import_module`, `__import__` or `getattr`, `builtins.__import__`, `sys.modules[...]`, an alias made by unpacking or stored on an object, a name reached by a string through `vars()`, `__dict__` or `setattr`, `global`, `nonlocal`, `eval`, `exec`), and it reports a few names that are not private uses (an alias rebound at module level, a `match` capture, a walrus inside a comprehension); it is a tripwire, not a proof | S076 (report of F2; second review) | open; low | S074 |
 | A merge of `main` into a step's branch was pushed after the cheap gates only and left `test_workload_new_note.py` red (S076, 842b977: S037's `claim-brief` changed a list the test pinned); Part A says the later session runs the gates again and not which, so a contract's gate does not yet say that the directories its change reaches are run after a merge | S076 (C10) | closed by S075: Part A now says that after a merge of `main` the whole suite runs on the merged tree before the branch is pushed, and that a contract's gates name every directory its change reaches | S075 |
 | On 2026-10-06 `make deploy` failed twice, a minute apart, at the ingest Job on a cluster that had been up for hours (the Model Gateway answered 503 to the embedding call: "the model gateway refused the embedding call (model gateway answered 503)"); the session's script then deleted the cluster before anyone had read the audit row's reason or the gateway's log, and a fresh cluster deployed the same commit (`make up` 299 s, `make deploy` 97 s, the Job passed). Two failures a minute apart and a pass on a fresh cluster point at the cluster's state, not at load. Candidates, none shown: the rate store not answering inside its 0.25 s read timeout or 1 s connect timeout, with no retry (`gateway/rate_store.py`; the gateway refuses, by design); the ledger's close failing (`gateway/walk.py`: a failed close answers 503; the database's pod had restarted that evening); and the ingestion not retrying a 503 (`knowledge_mcp/ingest.py` waits out a 429 and ends on any other status). The three logs of the commands are the only evidence left | S075 (the incident) | open; not explained | S073 |
-| The guard's local reader list and what its last review left: a mounted Secret or an `.env` read by `grep`, `awk`, `jq`, `cp`, `docker cp` or a glob is read by no rule (`reader_pre` and the pod's reader list name the plain readers); the pod rule for `env`, `printenv` and `set` tests only the last ` -- `; a fourth level of nested `sh -c`; secret-shaped variable names the `printenv` list does not match (`REDIS_PW`); a heredoc read by quote parity and a list of interpreters, not parsed; a hook file overwritten by a redirect; `-v=8` and `crictl inspect` read from documentation, run against no cluster. The hook's header and the runbook's section list each; S036's cloud rules edited the guard (2026-10-07) and closed none of these (they read the AWS module's names and add no reader for a mounted Secret), and S079, which reuses the wrapper and brings a second AWS module, edits it next, so it is the nearest step | S075 (third security review; F3b's and F4g's reports) | open; listed, not built; re-homed from S036, whose rules did not touch them | S079 |
+| The guard's local reader list and what its last review left: a mounted Secret or an `.env` read by `grep`, `awk`, `jq`, `cp`, `docker cp` or a glob is read by no rule (`reader_pre` and the pod's reader list name the plain readers); the pod rule for `env`, `printenv` and `set` tests only the last ` -- `; a fourth level of nested `sh -c`; secret-shaped variable names the `printenv` list does not match (`REDIS_PW`); a heredoc read by quote parity and a list of interpreters, not parsed; a hook file overwritten by a redirect; `-v=8` and `crictl inspect` read from documentation, run against no cluster. The hook's header and the runbook's section list each; S036's cloud rules edited the guard (2026-10-07) and closed none of these (they read the AWS module's names and add no reader for a mounted Secret), and S079, which reuses the wrapper and brings a second AWS module, edits it next, so it is the nearest step | S075 (third security review; F3b's and F4g's reports) | open; listed, not built; re-homed from S036, whose rules did not touch them. S079's first half edited no guard file either: the guard's rules for the second module wait for the owner to start the guard's task, the base first, so the row stays open at S079 | S079 |
 | The next rule to the command guard goes into the development base first: the base's copy is level with Meridian's since its pull request 51 (merged 2026-10-06, the guard's rounds two and three), and S036's guard rules for the AWS wrapper are the next ones, so they are now owed to the base (built here first, 2026-10-07; not yet sent). The neutral ones: the `aws` CLI's deny and ask rules with their read list, the ask for `boto3`, `botocore` and `awscli` and for `-auto-approve`, the deny of `TF_*` and `AWS_ENDPOINT_URL*` assignments before a tool, the readers of a state, a plan, `.tfvars.json`, `~/.aws`, `~/.terraformrc` and `~/.terraform.d`, the writers of `~/.terraformrc`, `~/.gitconfig`, `~/.config/git` and `~/.aws`, and the deny of tracing and start-up variables, with the fixes of the two later rounds (`-cm`, a quoted token, the backtick, the cut-out of `workspace select default`). Meridian's own stay out: whatever names `aws.sh`, a `make aws-*` target, `local.env`, `meridian-aws`, `TRIVY_IMAGE` or `PROMTOOL_IMAGE` | S075 | open; owed to the base before S079 changes the guard | S036 |
 | Not seen on a cluster after S075: `TAKE_CLUSTER=1`, a record left `changing` by a run that failed (the refusal that names it), `make up` on an existing cluster, and `make down` refused for a record at `changing`; tests with stand-in binaries hold each. Seen: the record through a deploy, a deploy refused while another runs, and `make down` refused with the record at `ok` (S075's section) | S075 | open | S073 |
 | Limits of S075's three small checks and two unverified Renovate rules. The split-table check misses rows in block quotes and rows without a closing pipe, and flags a row inside an HTML comment, a four-space-indented row and a lone header-like line; the lane check counts `--` and `n/a` in "Out now" as running, and a session in a fresh worktree has no board; the shell-edit hook is inert until the owner sets `bashEditDiffEnabled` in `~/.claude/settings.json` and may name files that `make` targets regenerate (baselines, Mermaid blocks) once it is on; Renovate has not run the new rules, so whether Docker Hub gives the Envoy chart a push date (else the chart waits indefinitely), whether the `terraform` block's `description` key is accepted and whether the `agent-framework` label is made are unseen | S075 | open | S074 |
@@ -916,15 +923,15 @@ that day; the rest stand as their step recorded them.
 | The knowledge service's embedding client (`knowledge_mcp/embedding_client.py`) posts with a buffered call, so the whole reply of the gateway, 2xx or not, is held in memory before the client reads it, and nothing caps its size (the timeout is per read); the runtime's client got a streamed read with a cap in this step, and the same change is owed here | S073 (its contract K6 stopped on it, 2026-10-07) | open; low: the gateway is a peer behind mutual TLS | S069 |
 | No real withheld completion and no real refusal of a structured request has been seen from a real provider, so `drafted_by` for a withheld completion rests on a mocked transport and a scripted provider, and the evaluation baseline's `model_asked` has not moved (no recorded or scripted case is one); the measurement costs money and the owner says yes first (T-67) | S069 (E6, boundary review) | open; S071's done-when already names the refusal of a structured request, and this adds the withheld completion | S071 |
 | Not seen on a cluster after S069's first half: any of its code. A kind run would show the 400's four headers on a withheld completion, the 422 for a resume that carries a value, one `suppressed` row from each service after a flood and from a tool server after a shed call with its run named, a takeover of a run left `Running` past the lease (`stale-running`) with the late leg's end matching nothing, the access log's path of a request with an encoded address, and the metric `not-started` of a resume that could not read its run | S069 (the step's evidence) | open; the second half of S069 holds the cluster and deploys this code | S069 |
-| What an apply of the AWS module would settle, none of it seen: whether `db.t4g.small` and a PostgreSQL 17 minor are offered in the Region (ADR 6, not verified); whether `CREATE EXTENSION vector` works on the instance; whether the secret RDS manages waits out a recovery window and keeps its name (ADR 6, not verified); whether ECR removes a repository that holds an image without the module's `force_delete` (ADR 6, not verified); whether a budget can be written in EUR (the module uses USD); the CPU-credit charges of burstable nodes (ADR 6, not verified); whether the Free plan withholds EKS, RDS or `t3.large`, and the quotas; the add-on defaults for Kubernetes 1.36; whether the Pod Identity trust conditions, the `eks-cluster-name` one in particular, let the EBS CSI driver and the workload get credentials, and whether the nodes join; whether an Identity Center principal is accepted as the access entry; how `allowed_account_ids` fed from a sensitive variable and the lookups of managed policies by name behave at plan; the real times of an apply and a removal; and what the whole costs against the sketch (about USD 0.35 an hour from ADR 6's prices, not from a bill). The module's README holds the list as its checklist | S036 (reports of T1, T2b and T2d; the infrastructure review) | open; only an apply settles them, and the apply is asked at S079's paid stop | S079 |
-| `aws.sh` never ran against a real `aws` CLI or a real Terraform with credentials, and its tests use stand-in programs: what a real plan prints for a sensitive variable (`(sensitive value)` is the documentation's word), whether the redaction meets a shape it does not know (a VPC, subnet or instance identifier, an IPv6 address, a host written with dashes, a `db-` identifier, the cluster's CA, the sign-in's start URL are not covered, and a four-part version number is hidden as an address), the plan file's real mode, `stat -f` and bash 3.2 on macOS, and a differently cased variable file on a case-insensitive file system; the last words of the removal's prompt show only after the answer is typed, because the filter holds a partial line and `sed -u` is GNU-only | S036 (reports of T2, T2c and T2d; the second and third reviews) | open | S079 |
-| What `aws.sh` does not close, each stated in the module's README and none built: `terraform`, `aws`, `git` and `sha256sum` come from the caller's `PATH`; `~/.terraformrc` (a credentials helper, `dev_overrides`), `~/.terraform.d`, a `credential_process` or sign-in helper in the AWS configuration, a shell start-up variable, an exported function and `LD_PRELOAD`; a clean filter in the repository's own `.git/config` runs during the status call; a changed `HOME` in the same checkout plans against an empty state without a stop (a count of the state's resources logged by `plan` is not built); a link at the plan's or the record's path is followed; a stray `terraform.tfstate` in the module's directory is not refused; a 777 parent directory of the local file is accepted; inherited file descriptors stay open | S036 (reviews 2 and 3; T2e) | open; listed, not built | S079 |
-| Small ends of the AWS script and module, all low: a "no" at the removal's question is reported as a failed removal; the empty-state sentence prints the state's path under home; `make aws-scan` without Docker prints the shell's error and no sentence; a sentence of `aws.sh`'s header is broken across two lines; `identity.tf`'s comments still say each role trusts one service account, which the README says is not observed until an apply; the comment above the EBS CSI add-on says more of a removal order than the module holds | S036 (reports of T2b, T2c and T2d) | open; low | S079 |
-| What the AWS module leaves to production, each named beside its test value in its README and none built: private subnets behind a NAT gateway, deletion protection and a final snapshot, retained backups, a second zone, customer-managed keys, control-plane logging, flow logs and RDS IAM authentication (the scan's nine MEDIUM and three LOW findings), a separate role for the VPC CNI, a launch template that pins the node metadata service, an ECR lifecycle policy, `rds.force_ssl` pinned in a parameter group, a network-level limit on which pods reach the database (its security group admits the whole cluster), lock hashes for `linux_arm64` and `windows_amd64`, a remote state bucket with locking, and a role per team in place of one cluster administrator. S079 reuses the module's script, scan and the lessons of its reviews, so it is the step that decides which of these its own module takes | S036 (reviews; README) | open; not built, by design | S079 |
-| The Meridian chart on the AWS cluster is not built: the controllers it needs (an edge, cert-manager), the eleven database roles and Secrets that CloudNativePG makes on kind and nothing makes on RDS, the chart's `automountServiceAccountToken: false` against the token volume Pod Identity injects, and a service that reads Secrets Manager (none does); a removal also gains an order once anything is installed (Kubernetes objects, then the cluster, then the network). The module is infrastructure only on purpose, and whether it is applied at all is asked at S079's stop | S036 (design; README) | open; no step runs the platform on a managed AWS cluster | S079 |
-| Where the AWS apply is run is the owner's choice and nothing checks it: a machine or an operating-system user where no session runs and no credential is readable by one (no `~/.aws` a session can read), with a sign-in of about an hour that is removed afterwards (`aws sso logout`); on a machine where a session runs and credentials exist, neither the script nor the guard stops a session that means to apply or remove (T-100). The cost, from fresh prices, and this are said to the owner before the yes | S036 (security reviews) | open; the owner's to choose | S079 |
-| The AWS rules of the command guard read text and list what they do not see, once in the secret-rotation runbook and once in the module's README: the two generic rules for the removal verb read the whole command, so a commit message or pull request body that names it is denied for `terraform` and `tofu` (write it to a file); the second tool's bare `state rm`, `import` and `force-unlock` are not asked; `gh … -b`, `-t` and `--subject` are not blanked as `--body` is; a working directory that reaches the module only through `..` or a link is not seen; wrappers before `aws` (`timeout`, `nice`, `watch`, `env -i`, `xargs`, `find -exec`, a brace group, a path prefix), the `hashicorp/terraform` image, `terragrunt` and `state replace-provider`; readers after a `cd` into a credentials directory or through `find`, a redirect or a glob; `git config --global` with a key that runs a program and `git add -f` of the local file; `printenv` of a credential; and S075's asks that stay asks (`sts get-session-token`, `assume-role`, `ecr get-login-password`, `eks get-token`, `configure export-credentials`), with `kms schedule-key-deletion` and `organizations close-account` asking and not denied. A try at emptying a search's quoted pattern, to spare a session's false alarms, was taken out because it hid a command (a quoted word is read as a use of what it names: search with the Grep tool) | S036 (T3b, T3d; the reviews of T3 and T3b) | open; listed, not built | S079 |
-| What the guard and the settings of S036 rest on was not verified in a live session: whether the harness's working directory follows a `cd` of an earlier call, whether an `ask` in the settings beats an `allow` (`Bash(terraform -chdir=*aws* plan*)` against `Bash(terraform -chdir=* plan*)`), whether the settings' `./` denies match a file reached by an absolute path from another checkout, and whether the bare `Grep` and `Glob` tools are held by the `Read` denies; Codex reads no settings file, so it has the hook's rules alone | S036 (reviews of T3 and T3b) | open; each needs a probe in a live session | S079 |
+| What an apply of the AWS module would settle, none of it seen: whether `db.t4g.small` and a PostgreSQL 17 minor are offered in the Region (ADR 6, not verified); whether `CREATE EXTENSION vector` works on the instance; whether the secret RDS manages waits out a recovery window and keeps its name (ADR 6, not verified); whether ECR removes a repository that holds an image without the module's `force_delete` (ADR 6, not verified); whether a budget can be written in EUR (the module uses USD); the CPU-credit charges of burstable nodes (ADR 6, not verified); whether the Free plan withholds EKS, RDS or `t3.large`, and the quotas; the add-on defaults for Kubernetes 1.36; whether the Pod Identity trust conditions, the `eks-cluster-name` one in particular, let the EBS CSI driver and the workload get credentials, and whether the nodes join; whether an Identity Center principal is accepted as the access entry; how `allowed_account_ids` fed from a sensitive variable and the lookups of managed policies by name behave at plan; the real times of an apply and a removal; and what the whole costs against the sketch (about USD 0.35 an hour from ADR 6's prices, not from a bill). The module's README holds the list as its checklist | S036 (reports of T1, T2b and T2d; the infrastructure review) | open; only an apply settles them, and the apply is asked at S079's paid stop (it may be answered no, and S079's first half changed nothing in this module; the self-managed module's own list is a row of its own, further down) | S079 |
+| `aws.sh` never ran against a real `aws` CLI or a real Terraform with credentials, and its tests use stand-in programs: what a real plan prints for a sensitive variable (`(sensitive value)` is the documentation's word), whether the redaction meets a shape it does not know (a VPC, subnet or instance identifier, an IPv6 address, a host written with dashes, a `db-` identifier, the cluster's CA, the sign-in's start URL are not covered, and a four-part version number is hidden as an address), the plan file's real mode, `stat -f` and bash 3.2 on macOS, and a differently cased variable file on a case-insensitive file system; the last words of the removal's prompt show only after the answer is typed, because the filter holds a partial line and `sed -u` is GNU-only | S036 (reports of T2, T2c and T2d; the second and third reviews) | closed in part by S079 (2026-10-07, K2b): `redact` now hides the identifier of an instance, an image, a VPC, a subnet, a security group and its rules, a route table, an internet gateway, an Elastic IP, a network interface and a volume (`<resource-id>`), a host written with dashes that embeds an address (`<host>`) and compressed user data (`<user-data>`), with a whole synthetic plan excerpt of the self-managed module run through it (tested with made-up values; a filter, not a guarantee); open: the script has still never run against a real `aws` CLI or a real Terraform with credentials, an IPv6 address, a `db-` identifier, the cluster's CA and the sign-in's start URL are not covered (see the row on the wrapper's small ends), the plan file's real mode, `stat -f` and bash 3.2 on macOS, a differently cased variable file on a case-insensitive file system, and the removal's prompt | S079 |
+| What `aws.sh` does not close, each stated in the module's README and none built: `terraform`, `aws`, `git` and `sha256sum` come from the caller's `PATH`; `~/.terraformrc` (a credentials helper, `dev_overrides`), `~/.terraform.d`, a `credential_process` or sign-in helper in the AWS configuration, a shell start-up variable, an exported function and `LD_PRELOAD`; a clean filter in the repository's own `.git/config` runs during the status call; a changed `HOME` in the same checkout plans against an empty state without a stop (a count of the state's resources logged by `plan` is not built); a link at the plan's or the record's path is followed; a stray `terraform.tfstate` in the module's directory is not refused; a 777 parent directory of the local file is accepted; inherited file descriptors stay open | S036 (reviews 2 and 3; T2e) | open; listed, not built. Since S079's K2b the whole list holds for the second module word for word (its README's "What the wrapper does not stop"), and the state holds the rendered boot scripts, with the Elastic IP in them, in clear (from the provider's schema, not seen) | S079 |
+| Small ends of the AWS script and module, all low: a "no" at the removal's question is reported as a failed removal; the empty-state sentence prints the state's path under home; `make aws-scan` without Docker prints the shell's error and no sentence; a sentence of `aws.sh`'s header is broken across two lines; `identity.tf`'s comments still say each role trusts one service account, which the README says is not observed until an apply; the comment above the EBS CSI add-on says more of a removal order than the module holds | S036 (reports of T2b, T2c and T2d) | open; low; K2b's report names none of these ends as changed, so they stand | S079 |
+| What the AWS module leaves to production, each named beside its test value in its README and none built: private subnets behind a NAT gateway, deletion protection and a final snapshot, retained backups, a second zone, customer-managed keys, control-plane logging, flow logs and RDS IAM authentication (the scan's nine MEDIUM and three LOW findings), a separate role for the VPC CNI, a launch template that pins the node metadata service, an ECR lifecycle policy, `rds.force_ssl` pinned in a parameter group, a network-level limit on which pods reach the database (its security group admits the whole cluster), lock hashes for `linux_arm64` and `windows_amd64`, a remote state bucket with locking, and a role per team in place of one cluster administrator. S079 reuses the module's script, scan and the lessons of its reviews, so it is the step that decides which of these its own module takes | S036 (reviews; README) | closed by S079 (2026-10-07), by the decision the row asked for: the self-managed module takes one, a metadata service at version 2 with a hop limit of 1 on every instance, set in the module itself; it leaves the rest as the managed one does, each in its README: public subnets with no NAT gateway (AWS-0164) and open egress (AWS-0104) and no flow logs (AWS-0178), all three accepted for an environment that lives an hour, a local state under home, two lock platforms, and a managed policy on the node roles that allows more than a node needs (a row of its own). The managed module's list stays in its README, not built, by design | S079 |
+| The Meridian chart on the AWS cluster is not built: the controllers it needs (an edge, cert-manager), the eleven database roles and Secrets that CloudNativePG makes on kind and nothing makes on RDS, the chart's `automountServiceAccountToken: false` against the token volume Pod Identity injects, and a service that reads Secrets Manager (none does); a removal also gains an order once anything is installed (Kubernetes objects, then the cluster, then the network). The module is infrastructure only on purpose, and whether it is applied at all is asked at S079's stop | S036 (design; README) | open; no step runs the platform on a managed AWS cluster. Nor on the self-managed one, by design: it installs Calico and nothing else, so a volume claim and a `LoadBalancer` Service stay pending and there is no ingress (its README says so, and the comparison in ADR 6 with it); whether the platform runs on either AWS cluster at all is asked at the paid stop | S079 |
+| Where the AWS apply is run is the owner's choice and nothing checks it: a machine or an operating-system user where no session runs and no credential is readable by one (no `~/.aws` a session can read), with a sign-in of about an hour that is removed afterwards (`aws sso logout`); on a machine where a session runs and credentials exist, neither the script nor the guard stops a session that means to apply or remove (T-100). The cost, from fresh prices, and this are said to the owner before the yes | S036 (security reviews) | open; the owner's to choose, for the self-managed module's three wrapper lines as for the managed module's: its README says the owner runs them after the cost is stated and a yes, from where no session holds credentials, and nothing checks it | S079 |
+| The AWS rules of the command guard read text and list what they do not see, once in the secret-rotation runbook and once in the module's README: the two generic rules for the removal verb read the whole command, so a commit message or pull request body that names it is denied for `terraform` and `tofu` (write it to a file); the second tool's bare `state rm`, `import` and `force-unlock` are not asked; `gh … -b`, `-t` and `--subject` are not blanked as `--body` is; a working directory that reaches the module only through `..` or a link is not seen; wrappers before `aws` (`timeout`, `nice`, `watch`, `env -i`, `xargs`, `find -exec`, a brace group, a path prefix), the `hashicorp/terraform` image, `terragrunt` and `state replace-provider`; readers after a `cd` into a credentials directory or through `find`, a redirect or a glob; `git config --global` with a key that runs a program and `git add -f` of the local file; `printenv` of a credential; and S075's asks that stay asks (`sts get-session-token`, `assume-role`, `ecr get-login-password`, `eks get-token`, `configure export-credentials`), with `kms schedule-key-deletion` and `organizations close-account` asking and not denied. A try at emptying a search's quoted pattern, to spare a session's false alarms, was taken out because it hid a command (a quoted word is read as a use of what it names: search with the Grep tool) | S036 (T3b, T3d; the reviews of T3 and T3b) | open; listed, not built. S079 measured the hook's answer to the wrapper's new lines (see the section) and found two gaps that are rows of their own (the settings' deny globs, and a by-hand run in a module's directory); the rest of the list is unchanged | S079 |
+| What the guard and the settings of S036 rest on was not verified in a live session: whether the harness's working directory follows a `cd` of an earlier call, whether an `ask` in the settings beats an `allow` (`Bash(terraform -chdir=*aws* plan*)` against `Bash(terraform -chdir=* plan*)`), whether the settings' `./` denies match a file reached by an absolute path from another checkout, and whether the bare `Grep` and `Glob` tools are held by the `Read` denies; Codex reads no settings file, so it has the hook's rules alone | S036 (reviews of T3 and T3b) | open; each needs a probe in a live session. S079's measurement of 2026-10-07 was the hook's own answer to lines read from a file (a probe of the hook, not a live session), so none of the four premises is settled by it | S079 |
 | Nothing in CI runs `make aws-validate`, `make aws-scan` or a plan, and no pipeline identity exists for AWS: a bump of the provider or of the Trivy pin, or a change to the module, is checked by whoever merges it, by hand (Part A says so); S022 owns Terraform and the scan in the pipeline, for Azure first | S036 (README; the infrastructure review) | open | S022 |
 | What a Google Cloud scaffold should copy from S036 and what it should avoid. Copy: the provider's own pin of the account or project beside the script's (`allowed_account_ids` is the one pin that holds for a hand-typed command: find the counterpart in the provider's documentation); a local file that is read and never run, owner's and mode 600, with a name the guard's reader rule covers; an environment the script chose; a saved plan bound to its commit, its age and its hash; sensitive variables for an address and an e-mail; closed lists of instance types as a cost ceiling; managed policies and roles read by name, since two AWS pages disagreed on one ARN's path; trust conditions on the workload identity's tokens; a state outside the checkout, a default-workspace check and a removal that refuses over an empty state; a scan ignore file whose entries are one check ID with a reason above, held by tests (an inline `trivy:ignore` or `tfsec:ignore` and a YAML configuration refused); the scan offline from an image pinned by digest; a test that holds the script's exports to the module's variables; and a redaction written for Google Cloud's identifiers before a plan is read. Avoid: sourcing the local file; a variable that is not marked sensitive; `cidrhost` on an IPv6 range; a README sentence that says a control holds before a test has tried to break it (the second review found seven, the third one more); and a test parameter built from the clock | S036 (all six reviews) | closed by S078 (2026-10-07), by the design: kept are (i) the provider's own pin, as a precondition on the text that no run has seen refuse (the provider has no list of projects; the counterpart is the module's own check, not a provider setting), (v) sensitive variables, (vi) closed lists, (vii) in kind only (a Google role is a name, there is no ARN whose path two pages could give differently, and whether the one node role exists as named is not seen: ADR 7, question 16), (viii) in kind only (the binding's principal names one namespace and one ServiceAccount; it is not a set of conditions on a token), (x) an ignore file of one check ID with a reason above, held by tests, with inline ignores and a configuration file refused (it holds no entry), and (xi) the scan offline from the pinned image; fell away because no plan or apply path exists: (ii) the local file, (iii) the script's environment, (iv) the saved plan's record, (ix) the default-workspace check and the removal over an empty state (the state's place is a sentence of the README), (xii) the exports test, and (xiii) the redaction before a plan is read (listed in the README as what to build first). Avoided: no sourced file, every variable naming a project, billing account or address is sensitive, the address is a validated IPv4 /32, the README labels each control and says what no one has seen, and no test parameter comes from the clock | S078 |
 | No pytest-level timeout: a hung test ends only with its own bound or CI's job limit of 15 minutes (the stack's tool bound, 30 s, keeps one run's 16 calls inside the 600 s lease and the job, and a hung fixture or any other test is not bounded at all); `pytest-timeout` is a new development dependency | S074 (review of the first half, M-2) | open; the owner's question c | S074 |
@@ -948,12 +955,24 @@ that day; the rest stand as their step recorded them.
 | Every figure of S068's expiry was measured on one machine with the data in memory: the builds of 0027 and 0029 (each blocks writers of its table while it runs), a batch of 10,000 rows, the closing call (measured with no counters planted), the cost of an insert into the new indexes (argued, not timed), the write-ahead log of a batch (estimated, not measured) and a dry run's count over tens of millions of rows | S068 (reviews, F2) | open; the first database that is not in memory is the Azure one | S020 |
 | Rows the upkeep role wrote (every `audit.expire` and `ledger.expired` row, a credit's and a close's) are never removed by the audit expiry, so they stay for ever: a few rows for each operator action, with slugs and tenant IDs and no personal data; a period for them needs a function of their own and the owner's answer | S068 (F1) | open | S020 |
 | Migration 0031 sets a default on the database, which only the database's owner may do: on kind the migrations' role is that owner; on a managed server where it owns the schemas and not the database the file fails and the migrate Job with it (not tried on Azure). A restore without the database's own settings, or a copy made from a template, loses the default while the ledger of migrations still says 0031 is applied, and nothing looks for that drift. The upkeep command's one connection uses psycopg's server-side prepared statements from the sixth call, which a pooler in transaction mode would break (none is used) | S068 (the database re-read of U5, U5b and F2) | open; low | S020 |
-| Rules for the command guard and the settings for Google Cloud, owed on the day a credential for it could exist on a machine where a session runs: `gcloud` beyond the two verbs it reads (a secret's value, an access or identity token), `gsutil`, `~/.config/gcloud` and the `gcp-*` targets; with them a redaction for Google's identifiers (a project ID, `*.googleapis.com` names, a Cloud SQL connection name) and, if the module were ever applied by more than one careful person, a wrapper of S036's kind. None exists by decision: no credential exists, and a hand-typed `terraform plan` in the module's directory is allowed and reaches nothing. The next rule of the guard goes into the development base first | S078 (design; README) | open; not built, by design | S079 |
-| The open questions of ADR 7 that only an apply settles, and the README's list of what `validate` and the scan cannot see (the project pin never seen to refuse, the Cloud Resource Manager API that must already be on, `billing_project`'s API and role, the node role's name and its reach into Artifact Registry, Private Service Connect with `ipv4_enabled = false` and no `private_network`, the forwarding rule's empty scheme, the DNS left off, the public-range setting beside private nodes, a cluster without `network_policy` beside Dataplane V2, the generated instance name, a budget with no currency, the quota of a trial account, how long an enabled API takes, whether workload identity reads the one secret, whether the nodes' one reader grant is enough to pull the image, whether the cluster's temporary default pool is created under an organization's default-grants constraint, whether `SYSTEM_COMPONENTS` alone is accepted beside the default `logging_service`, and the instance's first disk size against the ceiling of 20 GB) | S078 (README; ADR 7) | open; the module is never applied, so nothing settles these unless the owner applies it | no step: the owner's word |
-| What the Google Cloud module leaves to production, each beside its test value in its README and none built: deletion protection and a final backup, more retained backups, a regional cluster and database, a chosen release channel and version, Cloud SQL's logging flags and subnet flow logs (the scan's six MEDIUM and one LOW finding), a private control-plane endpoint, a managed firewall at the edge, a remote state bucket, customer-managed keys, a node-pool `network_policy`, and a role per team. S079 builds a twin beside this module, so it is the step that decides which of these its own takes | S078 (scan; README) | open; not built, by design | S079 |
-| A second Google Cloud module (S079's self-managed cluster) cannot sit in `infra/terraform/gcp/`: the scan's tests hold one cluster and one subnet block to the directory because an ignore-file entry covers every resource of it, and `make gcp-validate` and `make gcp-scan` each name that one directory. The validate door takes a module's name from a closed list (`aws`, `gcp`), so a new name or a new directory, with its own scan recipe, is the shape | S078 | open | S079 |
-| The Google provider is pinned `~> 8.6` and its lock holds 8.6.0, which was published on 2026-10-06, a day before the module was written (8.5.0 a week before); no run has used it beyond `init` and `validate`. Renovate's `terraform` group moves the lock after a week and its note names `make gcp-validate` and `make gcp-scan`; the release notes of the 8 series are unread. S079's twin pins the same provider and is the next step to read them | S078 (G1's report) | open | S079 |
-| The Google Cloud module's `workload_service_account` may be up to 253 characters, but the secret's ID is the 18-character prefix `meridian-gcp-test-` and that name, against Secret Manager's limit of 255: a name of more than 237 characters passes the validation and fails an apply. A bound of 237 on the variable would close it | S078 (G4's report) | open; low | S079 |
+| Rules for the command guard and the settings for Google Cloud, owed on the day a credential for it could exist on a machine where a session runs: `gcloud` beyond the two verbs it reads (a secret's value, an access or identity token), `gsutil`, `~/.config/gcloud` and the `gcp-*` targets; with them a redaction for Google's identifiers (a project ID, `*.googleapis.com` names, a Cloud SQL connection name) and, if the module were ever applied by more than one careful person, a wrapper of S036's kind. None exists by decision: no credential exists, and a hand-typed `terraform plan` in the module's directory is allowed and reaches nothing. The next rule of the guard goes into the development base first | S078 (design; README) | open; not built, by design. The twin of S079 changes nothing here: it is never applied either and no credential exists | S079 |
+| The open questions of ADR 7 that only an apply settles, and the README's list of what `validate` and the scan cannot see (the project pin never seen to refuse, the Cloud Resource Manager API that must already be on, `billing_project`'s API and role, the node role's name and its reach into Artifact Registry, Private Service Connect with `ipv4_enabled = false` and no `private_network`, the forwarding rule's empty scheme, the DNS left off, the public-range setting beside private nodes, a cluster without `network_policy` beside Dataplane V2, the generated instance name, a budget with no currency, the quota of a trial account, how long an enabled API takes, whether workload identity reads the one secret, whether the nodes' one reader grant is enough to pull the image, whether the cluster's temporary default pool is created under an organization's default-grants constraint, whether `SYSTEM_COMPONENTS` alone is accepted beside the default `logging_service`, and the instance's first disk size against the ceiling of 20 GB) | S078 (README; ADR 7) | open; the module is never applied, so nothing settles these unless the owner applies it. The row had no step when S078 merged ("no step: the owner's word"), against the plan's rule that every backlog row names one (the owner asked on 2026-10-07 whether any did); S079 holds the Google Cloud scaffold's other rows and writes its twin, so it judges this one at its close. Verdict of the first half (2026-10-07): kept as the list of what was never seen. The owner has not applied the module and none is planned, and the twin adds its own such list (a row of its own, further down); the row is closed only if the owner applies the module | S079 |
+| What the Google Cloud module leaves to production, each beside its test value in its README and none built: deletion protection and a final backup, more retained backups, a regional cluster and database, a chosen release channel and version, Cloud SQL's logging flags and subnet flow logs (the scan's six MEDIUM and one LOW finding), a private control-plane endpoint, a managed firewall at the edge, a remote state bucket, customer-managed keys, a node-pool `network_policy`, and a role per team. S079 builds a twin beside this module, so it is the step that decides which of these its own takes | S078 (scan; README) | closed by S079 (2026-10-07), by the decision the row asked for: the twin has no database, registry or managed cluster, so most of the list does not arise; it takes private nodes for the workers (no external address, Cloud NAT for the way out) and OS Login on every instance, and it leaves the rest: a private control-plane endpoint through IAP or an internal load balancer (designed, not built; the control plane's one external address is the scan's one accepted finding, GCP-0031), subnet flow logs and customer-managed disk keys (reported by the scan, not accepted), and a remote state bucket. The scaffold's list stays in its README, not built, by design | S079 |
+| A second Google Cloud module (S079's self-managed cluster) cannot sit in `infra/terraform/gcp/`: the scan's tests hold one cluster and one subnet block to the directory because an ignore-file entry covers every resource of it, and `make gcp-validate` and `make gcp-scan` each name that one directory. The validate door takes a module's name from a closed list (`aws`, `gcp`), so a new name or a new directory, with its own scan recipe, is the shape | S078 | closed by S079 (2026-10-07): the twin is `infra/terraform/gcp-kubeadm/`, a directory of its own with an ignore file of its own, and the door takes its name (`aws.sh validate gcp-kubeadm`, `make gcp-kubeadm-validate`, `make gcp-kubeadm-scan`, each with the recipe's directory and its pinned image); `plan`, the applying command and the removing command refuse the word with the sentence the managed scaffold's word gets | S079 |
+| The Google provider is pinned `~> 8.6` and its lock holds 8.6.0, which was published on 2026-10-06, a day before the module was written (8.5.0 a week before); no run has used it beyond `init` and `validate`. Renovate's `terraform` group moves the lock after a week and its note names `make gcp-validate` and `make gcp-scan`; the release notes of the 8 series are unread. S079's twin pins the same provider and is the next step to read them | S078 (G1's report) | open: the twin's lock is a byte copy of the scaffold's, so the two move together, and K3 read the provider's pages for two resources at v8.6.0 and not the release notes of the 8 series; read at S079's close, or by the first pull request of Renovate's `terraform` group that moves the lock, whichever comes first | S079 |
+| The Google Cloud module's `workload_service_account` may be up to 253 characters, but the secret's ID is the 18-character prefix `meridian-gcp-test-` and that name, against Secret Manager's limit of 255: a name of more than 237 characters passes the validation and fails an apply. A bound of 237 on the variable would close it | S078 (G4's report) | open; low; the twin declares no such variable (its two service accounts have fixed names), so the question does not arise there and the bound would go on the scaffold's variable | S079 |
+| The tests that hold the variable validations of the three Terraform modules (170 of them: 63 in `test_aws_script.py`, 107 in `test_gcp_module.py`) need the `terraform` program and SKIP where it is missing, and the `python` workflow installs only Helm and uv: on the hosted runner they have never run. Those modules are never applied, so CI was meant to be their gate, and the pull requests of S036 and S078 said "the tests hold" of runs made on the development machine alone. Every other tool the suite needs fails in CI when it is missing (`jq`, Helm, the database, Docker); this one skips without a word. Install the pinned `terraform` in the workflow (a `_VERSION` there needs a Renovate reader) or make the marker fail under CI as the `jq` one does | S073 (K14's reading of the pull request's skipped tests: 178, where the run before S078 merged had 71 and the development machine has 8) | closed by S079 (2026-10-07, K2c), as far as a check can close it before it has run: the count was 225 in four files (63 in `test_aws_script.py`, 107 in `test_gcp_module.py`, 53 in `test_aws_kubeadm_module.py`, 2 in `test_aws_kubeadm_bootstrap.py`; K2b then moved the managed module's rules into a fifth file); the marker, `needs_terraform` in `tests/meridian/terraformsupport.py`, fails the test under `GITHUB_ACTIONS=true` with one line when the program is missing and skips elsewhere (shown by hiding the program: 107 failed with the variable set and 107 skipped without it, on one file); the `python` workflow installs Terraform 1.16.5 through `hashicorp/setup-terraform` pinned to a commit, read by a rule of Renovate's `terraform` group, and a test holds that the pin satisfies every module's `required_version`. Not seen on the runner until this pull request's check: no run of the workflow has used the step yet, so whether the program installs there and every marked test passes stays open until that check is green | S079 |
+| The settings' deny globs for Read, Edit and Write name `~/.local/state/meridian-aws/**` and not the second module's state directory `~/.local/state/meridian-aws-kubeadm/`, a sibling and not a child, so a file tool of Claude Code is not denied that state, its plan or its record by the settings (the hook's patterns read `.tfstate`, `.tfplan` and `meridian-aws` as substrings and do deny a `cat` of the new state file: measured on 2026-10-07 from lines in a file, not in a live session). The hidden-variable globs (`./infra/terraform/aws/.*tfvars*`) name the first directory only too, and whether `./**/*.auto.tfvars*` matches a dot-name is not measured (the wrapper itself refuses such files). The review of K2b found the same (M2) and read it from the file: the Read tool answered "File does not exist" for both state paths, so its probe could not tell them apart. A tightening that needs no ask: three more globs and the mirror in the guard's case file | S079 (K2b's report; the session's measurement; the security review of K2b, M2 and L5) | open; K6, a contract out when this was written, takes the names into the settings and the guard as a tightening; the owner's guard task and the base's copy stay | S079 |
+| A `terraform` run by hand in the second module's directory passes the command guard unasked for a plan: measured on 2026-10-07 on this branch's hook, from lines in a file and not in a live session, `-chdir` into `infra/terraform/aws-kubeadm` and a `cd` there followed by a plan both answered nothing, and so did `init` (as `init` does for the first module, which makes no cloud call). The hook reads the first module's directory as `terraform/aws` followed by an end character, and `terraform/aws-kubeadm` is no such text (a hyphen does not end it); the same lines for the first module ask for the plan and deny a by-hand apply, whereas an apply by hand in the second module's directory asks by the generic rule and is not denied. The settings' ask for a plan with `-chdir` into a path that holds `aws` also matches the second module's name, but the form with a `cd` has no such rule, and whether an ask beats an allow is not verified (a row above). The wrapper's own lines are read: `aws.sh plan aws-kubeadm` and the applying line ask, the removing line is denied, and a `cat` of either state file is denied. The security review of K2b measured more: for the second module `show`, `output`, `state list`, `workspace new` and `plan -out` answer nothing either, and a `tee` into its plan's path passes (`aws\.tfplan` does not match `aws-kubeadm.tfplan`), where for the first module the plan, `show`, `output` and `state list` ask and `plan -out`, an apply, `import`, `state rm` and `workspace new` are denied. `show` is the one that matters: after the owner's apply it reads the state with no credential, and `terraform` is not in the reader rule's program list. The review's fix is the module name `aws(-kubeadm)?` in the three patterns (`aws_dir_re`, `aws_cwd_re`, `aws_steer_path`) and the mirror in the case file; a target named `aws-kubeadm-plan` does not contain `aws-plan`, so a rule for the creating targets must name it | S079 (K2b's report; the session's measurement, checked again by the documents contract; the security review of K2b, M1) | open; K6, out when this was written, makes that tightening with cases; the creating targets and the base's copy wait for the owner to start the guard's task | S079 |
+| The two files that K2b cut the wrapper's tests into are 1,406 lines (`test_aws_script.py`) and 1,436 (`test_aws_script_plan.py`), against the ceiling of 800; the original was 2,996 and over it already (S036). They are not named a deliberate exception: K2b's report gives the reason for the cut it made (by the wrapper's own concern, and a third file for the managed module's `.tf` rules) and none why the halves cannot be cut again, and each finding's test runs once per module through one fixture, which is the only argument for keeping a concern together. Either cut them along that fixture's own concerns (the local file and the environment; the plan, the record and the apply; the state and the removal) or list them among the exceptions S074's size check holds | S079 (K2b's report) | open | S074 |
+| What only an apply of the self-managed AWS module would settle, none of it seen (the module's README holds the list as its checklist): whether the hairpin rule or the own-address rule was needed and which source address the Elastic IP gives a packet; that `ssm put-parameter --value file://` reads the file; whether the default key `aws/ssm` needs no `kms:` statement; that the managed policy on the node roles allows what the account's version of it says (`aws iam get-policy-version` settles that and needs no apply) and whether the explicit Deny on parameter reads stops the Systems Manager agent from registering a node, in which case Session Manager, the only way onto a node, is lost; that the Ubuntu image carries the agent; that `kubeadm init --skip-token-print` keeps the token out of cloud-init's log; that `ip_protocol = "4"` is accepted; that containerd's default configuration has exactly one `SystemdCgroup` line and that containerd 2.2.1 and kubelet 1.36 work together (read from pages, not seen); that kubeadm writes the Elastic IP into every kubeconfig; that snapd seeds inside its bound; the digest of the Calico manifest against the release's own file (one fetch); the account's vCPU quota for the Standard family (six vCPUs at the defaults; a quota of five fails after two instances bill); the real times of an apply and a removal, the join window of 240 tries and the first boot at all; the default tags on the root volumes; and what an hour costs against a bill | S079 (the security review and the two infrastructure reviews; the reports of K1, K1c, K1d and K1e) | open; only an apply settles them, and the apply is asked at S079's paid stop | S079 |
+| The Google Cloud twin rests on premises that no page settled, each read from the report of K3 and none tested against Google: the character set of a firewall rule's description and name (the AWS module's review found an apostrophe the API refuses; no test holds the twin's descriptions to a set); the regional Secret Manager URL for adding a version and for reading one (the regional host with the path by analogy; the reference pages hide the regional form); which subnet addresses Google reserves; how long an IAM grant takes to apply; that an instance has no setting that limits a pod's reach to the metadata server; that a new service account has no role; that `curl -H @file` needs curl 7.55 or later; and the role names for OS Login and IAP. The twin is never applied, so a page read, not an apply, settles each | S079 (K3's report) | open; a contract that reads those pages can close part of it with no project | S079 |
+| The Calico pin and the signing key's fingerprint of the self-managed modules have no reader: Renovate reads a version in a workflow, a `Makefile` or `pins.env`, and the AWS module holds `calico_version`, `calico_manifest_sha256` and the key's fingerprint as variable defaults, the twin holds copies, and a test holds the twin equal to the AWS module; the repository's rule says a pin of another shape needs a line in `tests/test_renovate_config.py` that says why it has none, and none exists, and `make test` does not fail on it. Calico v3.33.0 was out on 2026-10-01 against the pinned v3.32.2, and the package key expires on 2026-12-29 | S079 (K1's report) | open; before the apply, which reads both | S079 |
+| Small ends of the self-managed module's boot scripts, all low and none seen: `kubeadm token create` is read through `$(...)`, so a NUL in its output would warn (the control plane's own command, not reachable by a writer of the parameter); `gpg --show-keys` may print its trustdb notices on stderr; `sysctl --system` under `set -e` ends the boot on an unrelated failing key in `/etc/sysctl.d` (a stock image has none); `put-parameter` in the control plane has no `timeout`, only a try count; the worker's 240 tries last 2,400 s only at the default pause, and a pause set low in the environment (tests only) shortens the window; and the 16 KB bound is measured on the compressed text with Python's gzip, a few bytes from Terraform's | S079 (K1b, K1d and K1f reports) | open; low | S079 |
+| The node roles of the self-managed AWS module carry `AmazonSSMManagedInstanceCore`, which allows twelve actions on `*` that a node does not need (associations, documents, inventory, compliance and patch snapshots; the page was read on 2026-10-07 and the account's copy has not been); the module denies parameter reads and leaves the rest, because narrowing the managed policy means a customer-managed one. Whether the policy is left or narrowed is asked at the paid stop with the Deny question above | S079 (K1c's report) | open; low | S079 |
+| Small ends of the wrapper's second module: `redact` does not hide an IPv6 address (the module makes none, so a plan cannot print one until it does) and is shared with the Azure scripts, where the new shapes have never been looked for; `test_the_two_state_directories_are_named_by_their_modules_literal_names` pins the test-side table and the script's own literals are held by the `-backend-config=path=` assertions alone; the plan record has four lines and a three-line record from before K2b is refused once and the plan made again; the word `aws` after `plan`, `apply` or `destroy` is refused (the closed list is one word there), which is reversible; and from the security review of K2b, a gzip blob that Terraform printed over several lines would leave its continuation unredacted (the rule matches a line that starts `H4sI`; a plan shows the attribute as known after apply, so it matters for `show` and `state pull` only), and three `redact` edge cases (a token shaped `sg-deadbeef-...` is eaten because the dash counts as a boundary, upper-case identifiers survive though AWS never prints them, and an `aws_route` identifier survives though the module has none). K6b takes the review's other low findings (the record parser's partial fifth line, a run that does not say its module, the removal's order in the README) | S079 (K2b's report; the security review of K2b, L1 to L4) | open; low | S079 |
+| `requires_jq` in `tests/meridian/kindsupport.py` is a plain `skipif`, so a test that needs `jq` skips without a word under CI, where the plan's Part A and the contract that built the Terraform marker both said it fails; the runner image probably ships `jq`, so it has not been seen to matter | S079 (K2c's report) | open; low | S074 |
+| ADR 6's note of 2026-10-07 holds three sentences that the later contracts made false and that S079's documents contract could not edit (the ADR is the owner's to amend by a further dated note, as the note says): that the twin on Google Cloud is "designed and not written" (it is written, K3), that the self-managed module's `validate` was run by hand on a copy because nothing runs it (`make aws-kubeadm-validate` exists since K2a; nothing in CI runs it), and the row on what each needs before an apply, which says an apply path does not exist (the wrapper is the path, K2b). The Azure platform document's section had the same three and was corrected | S079 (the documents contract) | open; a further dated note in ADR 6 at the paid stop, with whatever the apply falsifies | S079 |
 
 ## Part C — Step details
 
@@ -14340,6 +14359,496 @@ each before a fix.
   T-15, T-19, T-20) and what a Google Cloud scaffold copies and avoids.
 - For the owner: the decisions above.
 
+### S079 — Self-managed Kubernetes: applied once on AWS, a scaffold on Google Cloud
+**Status:** doing · **Started:** 2026-10-06 · **Finished:** —
+**Goal:** a cluster whose control plane the owner's account runs itself, on the
+cloud's virtual machines, so that the owner can see what a provider takes off
+your hands when a cluster is "managed" (the owner, 2026-10-06: "we will build
+it on aws, gcp just scafold"); a Terraform module for AWS, its twin for Google
+Cloud, the comparison with the managed cluster of each cloud in ADR 6, ADR 7
+and the Azure platform document; and, with the owner, one apply on AWS once the
+cost is stated. This record is the first half, the pull request that carries
+it: the modules, the wrapper's word for the second module, the checks, the
+comparison and the threat model's rows, implemented as code, tested with
+stand-ins and never applied. Nothing ran in AWS or in Google Cloud and no
+instance booted.
+
+**Decisions** (the main session's unless marked; the owner may overturn any;
+the design, with its threat note, was written on 2026-10-06 before the first
+contract, and where a review or a result reversed one, the entry says which and
+what was wrong):
+
+- **Two halves; this pull request is the first, and the row says `doing`.** The
+  second half is the owner's apply of the AWS module, from where no session
+  holds credentials, asked after the cost is stated and a yes (the paid stop,
+  below); the Google Cloud twin is never applied. If the owner answers no, this
+  section closes the step as done with its second half not built, and says so.
+- **kubeadm.** The upstream installer leaves every part visible: static pods
+  for the API server, the controller manager, the scheduler and etcd, a CA
+  under `/etc/kubernetes/pki`, a bootstrap token for the join. That is what the
+  owner asked to see. Rejected: k3s (one binary with an embedded datastore,
+  which hides it), kOps and Cluster API (they automate the steps this is meant
+  to show and make more cloud resources to remove) and Talos (a second thing to
+  learn at once).
+- **One control-plane node and two workers, a stacked etcd, no load balancer in
+  front of the API server.** A cluster that lives an hour. What a production
+  control plane adds (three nodes, an odd quorum, a load balancer, snapshots of
+  etcd off the node) is in the comparison, with the statement that a managed
+  cluster's fee buys exactly that.
+- **A module of its own with a small network of its own, copied from S036's and
+  not shared** (the plan's row said "reuses S036's network"; the advisor's
+  first reading had that sentence changed before the first contract). S036's
+  module is reviewed and may be applied by itself, a switch for the cluster's
+  kind would put a `count` on every EKS resource and on its tests, and a shared
+  child module is what S036's scan tests refuse. It has no database, registry
+  or secret store; one cluster at a time on AWS is two states.
+- **The wrapper takes the module as a word from a closed list**, not a path:
+  `select_module` sets one row of literals (`aws`, `aws-kubeadm`, and `gcp`
+  with a directory only, for `validate`), and the directory, the state's
+  directory and file, the saved plan and its record are each derived from the
+  row. K2a gave `validate` the second name; K2b gave `plan`, the applying
+  command and the removing command the word `aws-kubeadm`. The record gained a
+  fourth line, `module=`, so a plan or record of the other module is refused
+  whatever its hash says. Both modules read the one local file, because the
+  account, Region, address and e-mail belong to the owner's account and one
+  file means one account pin (the cost: the modules cannot carry different
+  addresses, and a test holds that a second file is never read). The state of
+  the second module is a sibling directory, `meridian-aws-kubeadm`, not a child
+  of the first's (so the settings' globs for the first do not reach it: a row).
+  The three wrapper lines are published in the module's README, marked
+  implemented, tested with stand-ins and never run, and not for sessions
+  (K2b's decision, reversible). No `make` target plans, applies or removes the
+  module: the targets come with the guard's rules in one contract, so that no
+  creating command exists that the guard does not read.
+- **Nodes: Ubuntu 24.04 from the publisher's public parameter, `t3.medium` or
+  `t3.large` from a closed list, 20 GiB encrypted `gp3` root volumes, a
+  metadata service at version 2 with a hop limit of 1, no key pair and no port
+  22.** A person reaches a node through Session Manager. The instances run in
+  `unlimited` CPU credit mode. **The first review's advice was `standard`, and
+  that was wrong for this instance family:** the second infrastructure review
+  doubted it, and three pages of the EC2 guide, read on 2026-10-07, say a T3
+  gets no launch credits because it supports unlimited mode, so a `standard`
+  node would have started a CPU-heavy boot at 20 percent of each vCPU (K1f).
+- **The API server's address is an Elastic IP the module makes**, so the
+  certificate's extra name is known before the node boots; the control plane
+  waits, with a bound, until the metadata service reports it as the node's
+  address before `kubeadm init`.
+- **The join command passes through one Parameter Store parameter, and the
+  design's way of keeping it out of the state was wrong.** The design created
+  the parameter empty and ignored its value (`ignore_changes`). K1 read the
+  provider's source (v6.67.0): a refresh reads a SecureString back with
+  decryption and sets `value` into the state, and `ignore_changes` hides the
+  value from the plan, not from the state, and every plan, apply and removal
+  refreshes first, so the one-hour token and its hash would have sat in the
+  state and its backup. The parameter is created with a write-only value
+  (`value_wo`, `value_wo_version = 1`), which the provider documents as never
+  stored; read from the source and the documentation, **not seen in a state**.
+- **A worker joins only what its template says.** It requires the address in
+  the parameter to equal the control plane's Elastic IP and passes the
+  template's own address to `kubeadm join`; the pattern of the join command is
+  ASCII-only (`LC_ALL=C` in both scripts, after the security review showed
+  that the pattern matched fullwidth digits in a UTF-8 locale), a NUL is a
+  refusal, and the worker's error line is masked and cut. `kubeadm init` runs
+  with `--skip-token-print`. This replaces the design's sentence that the
+  node's cloud-init log holds the join command for the node's life.
+- **A pinned signing key and a pinned network plugin.** The package
+  repository's key must be a file that holds exactly one key, the pinned one,
+  unexpired; it expires on 2026-12-29, after which `apt-get update` fails with
+  apt's own error and the pin's check still passes, so the apply comes before
+  that date or the pin is read again. Calico v3.32.2 is applied from a local
+  file whose SHA-256 was checked (v3.33.0 was newest on 2026-10-01; v3.32.2 is
+  the newest patch of a line Calico lists as tested with Kubernetes 1.34 to
+  1.36). The default Kubernetes minor is 1.36 and the list is 1.35 and 1.36:
+  the review's memory of containerd 1.7 in Ubuntu 24.04 was wrong (the package
+  page lists 2.2.1 in `noble-updates`), and 1.36 is the newest minor that both
+  that package and Calico support.
+- **A node role holds Session Manager's managed policy, which allows more than
+  a node needs, and an explicit Deny on every parameter read** (the control
+  plane's role, all; a worker's, all but the join parameter). The security
+  review's memory that the managed policy allows `ssm:GetParameter` on `*` was
+  confirmed by its page on 2026-10-07; the Deny is right whether or not the
+  page had agreed. **The design's sentence "a pod cannot use the node's role"
+  was too strong:** a hop limit of 1 stops a pod with its own network
+  namespace, not one on the host network (`calico-node`, `kube-proxy`, any
+  `hostNetwork` pod). The module's comment, its README and T-102 say so.
+- **Egress stays open, and three scan findings are accepted for an hour-lived
+  network:** `AWS-0164` (public subnet), `AWS-0104` (open egress, two security
+  groups) and `AWS-0178` (no flow logs, MEDIUM, which the recipe's filter hides
+  and the file records for the reader), each with its reason above it in the
+  module's ignore file, held by tests (exactly these IDs, a reason above each,
+  no inline ignore, one subnet and two egress rules so that an entry cannot
+  cover a new resource unseen). The reason for the egress is that no fixed
+  address exists for the repositories, the registries and the snap store and
+  that the nodes hold nothing of value for the hour; narrowing the ports would
+  not silence the check.
+- **The control plane is created last, user data goes out compressed, a new
+  image does not replace a node, and a second apply is never done.** The
+  security-group rules the nodes need now come before the instances (the
+  critical finding below), which gave a new order: the workers, then the rule
+  that reads their addresses, then the control plane; the workers poll, so
+  booting first is fine. The instances take `user_data_base64 =
+  base64gzip(...)` because the fixes had taken the control plane's script past
+  16 KB raw (compressed it is about 8 KB). `ignore_changes = [ami]` and a
+  README sentence say: remove, then apply.
+- **Timing and retries as the second review settled them.** A worker polls for
+  the join command 240 times, 10 seconds apart, a window that a test holds
+  above the sum of what only the control plane spends first (1,385 seconds by
+  the scripts' own bounds); every package call is retried a bounded number of
+  times because `DPkg::Lock::Timeout` probably does not cover the lists lock
+  (from memory, about 70 percent); `HOME`, the bridge modules and the three
+  sysctl settings are set; the script waits for containerd's socket.
+- **Terraform in CI, as far as the tests need it.** The `python` workflow
+  installs Terraform 1.16.5 through `hashicorp/setup-terraform` pinned to a
+  commit, and the marker `needs_terraform` fails the 225 tests that need the
+  program under `GITHUB_ACTIONS=true` instead of skipping (K2c). The workflow
+  runs no `init`, `validate`, plan or apply: the validate and the scan stay
+  local commands.
+- **The Google Cloud twin, `infra/terraform/gcp-kubeadm/`: three Compute Engine
+  instances, the same cloud-init in the same text where the cloud allows it,
+  the join command in a regional Secret Manager secret, never applied and no
+  command that creates it.** A test holds the boot scripts' common functions
+  equal to the AWS module's, function by function, and holds the differences
+  as differences. Where it departs: the firewall names its sources by address
+  and its targets by service account (the scan read a rule that names sources
+  by service account as open to the world, which is false and was proved on
+  scratch variants); the API endpoint is the control plane's internal address,
+  and the external address is only a certificate name; the workers have no
+  external address and leave through Cloud NAT; OS Login is set on each
+  instance; `europe-north1` is out of the twin's region list and, by K3b, out
+  of the managed scaffold's (ADR 7's first note still lists eleven), because
+  the locations page (read 2026-10-07, updated 2026-09-30) says that region has
+  no regional secrets. **One scan finding is accepted, by the session's decision
+  and for the owner to overturn:** GCP-0031 (HIGH, an instance has a public
+  address), because the design asks for the API server from the owner's one
+  address and there is one external address in the module, on the control
+  plane, admitting nothing but 6443 from that /32; production would use a
+  control plane with no external address, reached through IAP or an internal
+  load balancer (designed, not built). K3 stopped on it rather than accept it
+  itself. The three findings the scan reports and does not fail on (GCP-0029,
+  GCP-0076, GCP-0033) are not accepted and named in the README.
+- **The comparison, written once and placed three times.** A table of 14 rows
+  in ADR 6 (EKS against kubeadm on three instances), in ADR 7 (GKE against the
+  twin) and in the Azure platform document (AKS against a cluster on virtual
+  machines, a comparison for the reader and not a plan: the document's opening
+  sentence "it names no other cloud" gained one exception), with one paragraph
+  on why the platform's default stays managed: it is run by one person and its
+  chart needs volumes, a load balancer and an ingress, none of which the
+  self-managed cluster provides on its first day. K4's contract said "applied
+  once on AWS" for the self-managed cluster and "built" for AKS; the notes say
+  "validated code, to be applied" and "a plan row, not built", because neither
+  is true today (hard rule 7). ADR 7's first note was written when the twin was
+  designed and says so; a second dated note brings it to what was built.
+- **The guard: a tightening now, the rest waits.** The security review of K2b
+  found that the guard's patterns and the settings' deny globs know only the
+  first module's names; K6 (out) takes the second module's directory, plan
+  path and state directory into them, as a tightening with cases that needs
+  no ask (the session's reading of 2026-10-07). The creating `make` targets
+  and any rule beyond that wait for the owner to start the guard's task, the
+  base first (the plan's Part D question 6 and the base-first rule); until
+  then no creating `make` target exists. The session measured what the hook
+  answers today on this branch, from lines in a file: see "Not seen".
+- **The cost, stated again before the ask.** The design's figure is about USD
+  0.17 an hour in `eu-central-1` (three `t3.medium`, three small volumes, three
+  public IPv4 addresses at USD 0.005 an hour each, the Elastic IP being one of
+  them once attached; no EKS fee, no NAT gateway, no database), by the
+  session's arithmetic of 2026-10-06 and not from a bill; S036's managed
+  environment is about USD 0.35 an hour by ADR 6's prices of the same day. No
+  price is written in the module's directory, by a test. The figure is read
+  again from AWS's price files before any ask, and stays a figure of the design
+  until the owner's billing console confirms it.
+
+**Advisor:** two consultations; the handoff files hold the first, and the
+second's effect is not recorded.
+
+- **2026-10-06, 17:21 UTC, before the first contract (the design).** It changed
+  five things. The plan's row no longer says "reuses S036's network" (fixed in
+  pull request 104 before its merge, so that the row and the decision agree);
+  cloud-init waits for the Elastic IP before `kubeadm init`; the script's module
+  argument is a closed choice of names from which every file name is derived;
+  the workers poll the join parameter with a bound; and the cost figure names
+  its three address lines.
+- **2026-10-07, about 09:57 UTC, at the report of K2b and before that of K3.**
+  Its effect is not recorded in the handoff files. The design says only that
+  it came before K3's report, so that the acceptance of GCP-0031 was not put to
+  it separately: the acceptance repeats the reviewed precedent of `AWS-0164` on
+  a module that is never applied.
+
+No other consultation is recorded.
+
+**Work log:**
+
+- **A read-only map of the repository** (`mapping-2.md`), made on 2026-10-07
+  after S036 and S078 merged: what the wrapper binds to one module, what the
+  tests pin to a directory, what the guard reads, the backlog rows homed here
+  (ten), and the secrets that a cluster of one's own creates.
+- **Thirteen contracts to the `implementer`**, each in a worktree of its own,
+  carried onto the step's branch with git (the hashes are the branch's):
+  - **K1, the AWS module** (d036171): all the `.tf` files, the lock file, the
+    three boot-script templates, the tests that run the scripts whole against
+    stand-in programs, and a README; the scan's three findings reported, not
+    accepted.
+  - **K1b, the boot scripts after the security review** (5e69010): the signing
+    key's exactness and expiry, `LC_ALL=C`, the guards that stop a second run
+    before anything is touched, a NUL in the value, and 25 more hostile values.
+  - **K1c, the module after the security review** (000b557): the Deny on
+    parameter reads, the hairpin hedge, the ignore file with its tests, the
+    README's list of what only an apply settles.
+  - **K1e, the module after the infrastructure review** (5cd1f3e): no character
+    the EC2 API refuses in a rule description, instances ordered after their
+    rules, compressed user data, `ignore_changes` on the image, the third scan
+    finding accepted, the README's sections on what the cluster cannot run and
+    how to look.
+  - **K1d, the boot scripts after the infrastructure review** (e45e135): the
+    package lock, the bridge modules and settings, `HOME`, a wait for
+    containerd, a worker that says why it could not read the parameter.
+  - **K1f, after the second review** (ccb7b55, with dd08583's README): the join
+    window, the package retry, the credit mode, the error line's cut and mask,
+    a timeout on the read, the quota item.
+  - **K4, the comparison** (a433b01): the three tables and the one amended
+    sentence.
+  - **K2a, the door** (9ce2a99): `aws.sh validate aws-kubeadm`, `make
+    aws-kubeadm-validate` and `make aws-kubeadm-scan`, each run once.
+  - **K2c, Terraform in CI** (35d0c7a): the marker, the pinned step, the
+    Renovate rule and its tests.
+  - **K2b, the wrapper for the second module** (d816787): the table of modules,
+    the four-line record, a state of its own, three new redaction rules, and
+    the wrapper's test file cut in three (it was 2,996 lines).
+  - **K3, the Google Cloud twin** (7fcbc1a): 19 resources, the boot scripts held
+    equal to the AWS module's, the scan run at every severity.
+  - **K3b, the twin's scan decision and door** (0605b22): the ignore file with
+    GCP-0031 and its reason, `aws.sh validate gcp-kubeadm`, `make
+    gcp-kubeadm-validate` and `make gcp-kubeadm-scan` (both ended 0), and the
+    managed scaffold's `europe-north1` out of its region list because its
+    secret is regional (one empty regional secret); the twin's region list and
+    zone map are now held equal to the scaffold's.
+  - **K5, these documents.**
+- **Four reviews**, three of the module and one of the wrapper's second module,
+  each read by the main session and answered by contracts (below).
+- **Two contracts answer the fourth review, out and pending.** K6: the guard
+  and the settings take the second module's names (a tightening only, with
+  cases; it also edits `docs/development-environment.md` and the module
+  READMEs' lines on what the guard stops). K6b: the wrapper (the record
+  compared whole, each run saying its module, the README's state paragraph,
+  the removal's order). Their results go below when they land:
+
+K6-RESULT
+
+K6B-RESULT
+
+**Reviews:**
+
+1. **The security review of the first contract (no critical or high finding;
+   seven medium, eight low, eleven items only an apply settles).** The medium
+   findings: both node roles probably read every Parameter Store parameter in
+   the account (the managed policy; closed by the Deny, and the page confirmed
+   it); the signing-key pin checked the first fingerprint and trusted the whole
+   file; the join pattern was strict only in the C locales; a pod on the host
+   network reaches the metadata service; the key's expiry sentence was wrong
+   and the apply has a deadline; the state's place was not decided (a bare
+   `init` writes it beside the `.tf` files); the run-once guards came after the
+   side effects. Closed by K1b and K1c, with 25 hostile values added to the
+   tests and the six mutations that the suite had left green now caught (a
+   token lifetime of 0, `kubectl` fed a URL, a dropped `--proto`, a rule made
+   another way, a two-key file, the run-once guards moved after the side
+   effects).
+2. **The infrastructure review of the whole module: the first apply would have
+   failed after resources existed (one critical, two high, eight medium, eight
+   low).** The critical finding: four security-group rule descriptions held an
+   apostrophe, which the EC2 API refuses, and those are the rules the nodes
+   need to reach the API, with nothing ordering the instances after them (the
+   page's character set was read on 2026-10-07 and a test now holds every name
+   and description to it). The two high findings: no lock timeout on `apt-get`,
+   so a first boot that meets `apt-daily` ends under `set -e`; and no `overlay`
+   or `br_netfilter` module and one sysctl (the review said the Kubernetes page
+   lists them, and it does not; they were built as asked and the comment says
+   so). Its remaining findings (`HOME`, a Kubernetes minor against containerd,
+   containerd's socket, a recreate on a new image, user data near 16 KB, the
+   worker discarding every error, nothing for a person to read, the module
+   outside every check) were closed by K1d and K1e, and the last of them (no
+   check ran the module) first by K2a's door and K2c's marker. The stand-ins
+   had accepted anything, so none of the 331 tests could see any of it; K1d
+   made them refuse an argument they do not expect.
+3. **The re-read of the fixes (no critical or high finding; five medium, eight
+   low).** Every finding of the first review closed but the one about CI. The
+   five medium findings: the join window had no margin in the worst case the
+   scripts' bounds allow (240 tries now, and a test holds the relation);
+   `standard` credit mode may throttle the boot (reversed to `unlimited`: see
+   above); `apt-get update` probably does not honour the lock timeout (a
+   bounded retry); the account's vCPU quota is unchecked (an item for the
+   owner, below); and no apply path existed (K2b). Its lows include a masking
+   bypass by a non-ASCII byte inside a token (K1f deviated from the contract's
+   method, because the contract's order did not catch it: the shapes are now
+   matched on a copy with every non-printable byte deleted).
+
+4. **The security review of the wrapper's second module, K2b (verdict yes: no
+   critical or high finding; two medium, six low).** The modules cannot be
+   crossed (the word only selects a row of literals; a plan or record of the
+   other module is refused three ways), no protection got weaker, the record
+   parser accepts only the exact four lines but for a partial fifth, and
+   `redact` changed 22 lines of 304,602 in the repository's own text, all new
+   fixtures. The two medium findings are one gap seen twice: the guard's
+   patterns and the settings' deny globs know only the first module's names, so
+   a by-hand `show`, `output`, `state list`, `workspace new` or `plan -out` in
+   the second module's directory gets no decision from the hook (where the
+   first module's asks or is denied), the settings' ask for a plan with
+   `-chdir` into a path holding `aws` still matches the second name (read, not
+   measured), a `tee` into its plan path passes, and the Read, Edit and Write
+   tools are open on `~/.local/state/meridian-aws-kubeadm/`; and the state
+   holds more than the README said: the owner's /32, the budget's e-mail
+   address and the account number inside ARNs, in clear (Terraform marks a
+   value sensitive in the display only). The low findings: the record parser
+   accepts a partial fifth line (harmless: every field is regex-bound); a
+   forgotten word on `destroy` targets the costlier managed module and no run
+   prints its module's name; a gzip blob split over lines would leave its
+   continuation unredacted; three edge cases of `redact`; the hidden-variable
+   globs name the first directory only; and the README's removal order says
+   release the address before the instances, where an address cannot be
+   released while associated. Answered by K6 (the guard and the settings) and
+   K6b (the wrapper), out and pending.
+
+**Result / verification:**
+
+- **Nothing was planned or applied.** No account exists for the session and no
+  credential is on the machine, and no `aws` or `gcloud` command, plan, apply,
+  removal or import ran. The only real Terraform calls were `fmt`, `init`,
+  `validate`, `providers lock` and `console` on scratch copies, and the two
+  `make` targets of K2a. The modules are **implemented as code and tested with
+  stand-ins**: the wrapper's tests run the script against programs that pretend
+  to be `terraform` and `aws`, and the boot scripts' tests run each script
+  whole against programs that pretend to be `kubeadm`, `aws`, `curl`,
+  `systemctl` and the rest, which proves the scripts' own logic and no flag,
+  package, lock, module or output format of a real tool. The policy scan is
+  **implemented and run offline**. The apply is **designed**.
+- **What the implementers reported (claims, not the main session's runs).**
+  The module's three test files passed 478 tests at K1f's close; K2b's
+  contract line of five files passed 1,318 (1,538 with the module and marker
+  files); the twin's four files and two more passed 923 at K3's; K2a's contract line
+  passed 1,017 with 73 subtests; and `make aws-kubeadm-validate` printed
+  "Success! The configuration is valid." and `make aws-kubeadm-scan` ended
+  clean, each ending 0 (K2a). Each contract's `make docs` printed 14 checks
+  passed and `make test` ended OK. The tests of the wrapper run once per module
+  through one fixture: 1,163 where the managed module's had been 575.
+- **The whole suite on the final tree, with `main` merged in, run by the main
+  session:**
+
+FINAL-SUITE-RESULT
+
+- **Hosted runner.** The 225 tests that need the Terraform program have never
+  run on the runner: not seen on the runner until this pull request's check.
+  The demonstration that the marker fails under CI and skips outside it was
+  made on the development machine by hiding the program.
+
+**Not seen** (the whole of it; each is a statement about what has not met a
+real thing):
+
+- **Nothing was planned, applied or removed, in either cloud.** No account and
+  no project exists for a session, and no credential.
+- **No instance booted.** The boot scripts ran only against stand-in programs.
+  Whether kubeadm, containerd 2.2.1 and kubelet 1.36 come up together, whether
+  Calico does, whether the join works, whether `--skip-token-print` keeps the
+  token out of the log, whether the Deny stops the Systems Manager agent from
+  registering a node, and whether the Ubuntu image carries the agent are not
+  seen. The README's list is the longer one (a row of the backlog).
+- **The Terraform tests have not run on the CI runner.** They run there for the
+  first time with this pull request's checks.
+- **The guard's answers to the wrapper's new lines were measured from lines
+  read out of a file, on the branch's own hook, not in a live session** (the
+  session's measurement, repeated by the documents contract): `aws.sh plan
+  aws-kubeadm` asks, the applying line asks, the removing line is denied, a
+  `cat` of either module's state file is denied, and a `terraform` plan run by
+  hand in the second module's directory passes unasked (both the `-chdir` form
+  and the `cd` form), where the same line for the first module asks and an
+  apply by hand there is denied. The security review of K2b measured the same
+  and found `show`, `output`, `state list`, `workspace new`, `plan -out` and a
+  `tee` into the plan's path unasked for the second module too. Whether the
+  settings' ask beats the settings' allow for the `-chdir` plan is not
+  verified, and neither is whether the Read tool is denied the second state
+  (the review's probe answered "File does not exist" for both paths).
+- **The state was never seen.** What it would hold in clear is read from the
+  provider's schema, not from a real state: the rendered boot scripts with the
+  Elastic IP, the addresses, the account number inside ARNs, the owner's /32
+  and the budget's e-mail address (the module's README said less until the
+  review of K2b).
+- **The twin's own boot is further from a test than the AWS one's:** the
+  regional Secret Manager URLs are by analogy with the global ones (the
+  reference pages hide the regional form), and a list of premises that no page
+  settled is a row of the backlog.
+- **The cost is a figure of the design,** not a bill and not a price file read
+  again.
+
+**Not done, by decision or left open:**
+
+- **The second half: the paid stop.** The owner applies the AWS module once,
+  after the cost is stated and a yes, from a machine or an operating-system
+  user where no session holds credentials, with the three lines of the wrapper
+  (`plan`, `apply`, `destroy` and the word `aws-kubeadm`); what came up is
+  recorded, it is removed, and the run's cost is logged. It may be answered no.
+  The cost is the design's figure above, stated again from fresh prices first.
+  Whether S036's managed cluster is applied as well is asked then, and one
+  cluster at a time on AWS is the suggestion. **What the owner is told first:**
+  the account's vCPU quota for the Standard instance family (six vCPUs at the
+  defaults; a quota of five fails the third instance after two are billing);
+  that the package signing key expires on 2026-12-29, so the apply comes before
+  it; the open question of whether the Deny on parameter reads stops the
+  Systems Manager agent from registering a node, the only way onto one; that a
+  failed boot stays up and bills until it is removed, and the budget's e-mail
+  comes after money is spent; and that a second apply is never done.
+- **The guard's two narrowings and the creating `make` targets.** The settings'
+  deny globs and the by-hand run in a module's directory (two rows) are the
+  tightening that K6 (out, pending) makes for the second module's names; that
+  contract is not the owner's guard task, which still waits to be started, the
+  base first, and the targets that plan, apply and remove the second module
+  come in that task. No creating command exists until then.
+- **Not built:** workload identity for pods, a StorageClass, a load balancer
+  controller, an ingress, a cloud controller manager, three control-plane nodes
+  and a load balancer, a backup of etcd, encryption of etcd beyond the volume's,
+  an audit policy, flow logs, a retry of the join, a narrowed egress, a
+  customer-managed policy in place of the managed one, a self-managed
+  deployment view, and the platform's chart on either AWS cluster. The README
+  of each module and the comparison name each.
+- **Views and ADR 1.** If the AWS cluster is applied it is the first thing on
+  AWS that is not "Designed": `deployment-aws.dsl`'s header, C-05, the scope
+  line on a second deployed cloud and ADR 1's successor come due at the paid
+  stop, whichever cluster is applied (S036's section says so too).
+
+**What the owner should know** (the pull request body repeats it):
+
+- **Three decisions to overturn, if the owner wants:** the scan's three accepted
+  findings on the AWS module and its one on the twin (GCP-0031: the control
+  plane's external address, with IAP or an internal load balancer as the
+  production value), and the apply of the twin, which is never done.
+- **A reversal of the design, in the owner's interest to know:** the join
+  command's parameter is write-only because the design's way would have put the
+  token in the state; the nodes' credit mode is `unlimited`, not `standard`;
+  and a pod on the host network can reach a node's role, so the design's
+  "a pod cannot" is gone.
+- **ADR 6 holds three sentences the later contracts made false,** and this step
+  could not edit that ADR: a row of the backlog names them.
+- **A gap seen twice by two people:** the guard and the settings were written
+  for the first module's names, so a by-hand plan, `show` or `output` in the
+  second module's directory passes unasked, where for the first module the plan
+  asks and an apply is denied (the session's measurement and the security
+  review of K2b agree); K6 closes it for the names, and the plan's rows say what
+  was measured.
+
+**Follow-ups:**
+
+- In the backlog, each with its step: the settings' deny globs and the by-hand
+  run in a module's directory (S079, the guard contract; K6 takes the names
+  into the guard and the settings); the wrapper's two test files over the
+  ceiling (S074); what only an apply of the self-managed
+  module settles, the twin's unsourced premises, the Calico and key pins
+  without a reader, the boot scripts' small ends, the managed policy's other
+  actions and the wrapper's small ends (S079); a skipped `jq` under CI (S074);
+  and ADR 6's three sentences (S079). Rows changed: the apply of the managed
+  module, the wrapper's gaps and the guard's lists keep their home at S079 with
+  the first half's verdict; the two rows on what each module leaves to
+  production and the one on a second Google Cloud module are closed by the
+  decisions above; the Terraform-in-CI row is closed, as far as a check can
+  close it before it has run; the row that S078 left without a step is homed
+  here and kept.
+- For the owner: the decisions above and the four questions at the paid stop.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -14951,3 +15460,22 @@ each before a fix.
   recorded slip. Part A's Renovate list gains the two commands. Six backlog
   rows new, one of them with no step (the open questions only an apply
   settles), two closed (the threat rows and what a scaffold copies and avoids).
+- **PLAN-VERSION, 2026-10-07:** S079, first half: a Terraform module for a
+  self-managed Kubernetes cluster on AWS (one control-plane instance and two
+  workers brought up by kubeadm from two boot scripts, Calico from a pinned
+  manifest, the join command through one write-only parameter, no key pair and
+  no secret in user data or state), the wrapper's word `aws-kubeadm` for plan,
+  apply and removal with a state, a saved plan and a record of its own, a
+  twin for Google Cloud, `make` targets that check both and none that create
+  anything, and Terraform installed in the `python` workflow so that 225 tests
+  run on the runner (not yet seen there). ADR 6, ADR 7 (a second dated note)
+  and the Azure platform document hold the comparison of a managed and a
+  self-managed cluster.
+  Implemented as code and tested with stand-ins; nothing was planned or
+  applied and no instance booted. Three reviews of the module (one critical
+  and two high findings, all closed; the critical one would have failed the
+  first apply after resources existed) and one of the wrapper (no critical or
+  high). The step stays open for its second half, one apply in the owner's
+  account, asked after the cost is stated. T-102 new (102 threats) and T-36,
+  T-37, T-42 and T-100 changed. Five backlog rows closed or closed in part,
+  the rest of the rows homed here kept with a verdict, eleven new.

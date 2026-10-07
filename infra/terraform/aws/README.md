@@ -265,7 +265,9 @@ is done. All five go through [`aws.sh`](../aws.sh) except the scan.
 The same script drives the [self-managed module](../aws-kubeadm/README.md)
 (S079), which has no `make` target that plans, applies or removes it yet: the
 three commands take the one word `aws-kubeadm` (`aws.sh plan aws-kubeadm`, and
-so on), and with no word they work on this module. Everything in the sections
+so on), and with no word they work on this module. The owner runs those three
+lines, after the cost is stated and a yes, from where no session holds
+credentials, as for this module's own. Everything in the sections
 below that is about the script (the pin, the local file, the environment, the
 saved plan, the git it needs, the files that may not change a plan) holds for
 both modules, each from its own directory, plan, record and state; the

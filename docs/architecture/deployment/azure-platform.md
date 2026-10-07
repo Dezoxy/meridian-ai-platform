@@ -188,9 +188,10 @@ So that two mappings can be read side by side, each says, for its cloud:
 This section is a comparison for the reader and not a plan: it sets AKS, which
 the plan builds, beside a cluster on virtual machines that is not built and not
 planned for Azure. It is the one place where this document names another cloud,
-because the only self-managed cluster the project wrote is on AWS, and the
-comparison cannot be made without saying so (the opening's sentence "it names no
-other cloud" carries that exception and no other). It adds no fact the
+because the self-managed clusters the project wrote are on AWS and Google
+Cloud, and the one it means to apply is on AWS, so the comparison cannot be made
+without saying so (the opening's sentence "it names no other cloud" carries that
+exception and no other). It adds no fact the
 repository does not hold: every cell on the AKS side says what a file holds or
 that none does, and every cell on the other side is what the AWS module declares
 and its reviews found. Written on 2026-10-07 (S079).
@@ -206,17 +207,20 @@ owner's account runs itself is validated code (`infra/terraform/aws-kubeadm/`),
 to be applied once by the owner for about an hour after its cost is stated and
 the owner says yes, and it has not been applied; on Google Cloud the managed
 cluster is validated code that is never applied, and a self-managed twin is
-designed and not written. Every capability below is labelled validated code,
-tested with stand-ins or designed, and none of the three means deployed.
+validated code too, tested with stand-ins and never applied. Every capability
+below is labelled validated code, tested with stand-ins or designed, and none of
+the three means deployed.
 
 **Nothing in the table was applied, and nothing on Azure exists.** AKS is a plan
 row (S020 is `todo`): in the table's AKS column "plan row only" is this
 document's own status word for that, and where no file says anything the cell
 says "not described". The right-hand column is not an Azure design. It is what
 the AWS module `infra/terraform/aws-kubeadm/` declares, which is validated code
-that `terraform validate` accepts (run by hand on a copy), with two boot scripts
-tested with stand-ins, that is, run against programs that pretend to be the real
-tools; never planned and never applied. That the same work carries over to
+that `terraform validate` accepts (`make aws-kubeadm-validate`, a command of the
+repository; nothing in CI runs it), with two boot scripts tested with stand-ins,
+that is, run against programs that pretend to be the real tools; never planned
+and never applied (the repository's wrapper can plan it, by the owner's hand,
+and has never met an account). That the same work carries over to
 virtual machines on Azure is the design's expectation, which nothing on Azure
 tests, and Azure's own parts (its network, a place to keep a join command, a
 pod's identity) are not designed. The full table of the AWS pair, with the file
@@ -241,7 +245,7 @@ No price is stated here, and no vendor page was fetched for this section.
 | Logs and audit | Not named anywhere: Log Analytics, Application Insights and Azure Monitor as a backend (list above); diagnostic settings are a plan row with no destination | No audit policy and no log shipped; a node's own boot log only | AKS: plan row only. Other: not planned |
 | What bills (the resources and their units, no amount) | Not described. A subscription budget exists and alerts at 50, 80 and 100 percent of actual spend: it detects and does not stop spend (table above) | Instances by time, root volumes by size, public addresses by time, no control-plane fee | AKS: not described. Other: not planned |
 | What breaks at night, and who is paged | Not described: no Azure monitoring is named and no one is paged; the project's alert rules and runbooks are written for the kind cluster (`docs/operations/README.md`) | Nobody is paged; one control-plane instance is a single point of failure | AKS: not described. Other: not planned |
-| What each needs before an apply | S020 depends on S007, S019, S055 and S056; the subscription is a free trial whose upgrade is pending (table above) | On AWS: a look at the account's vCPU quota and an apply path that does not exist yet. On Azure: nothing is planned, so nothing is needed | AKS: plan row only. Other: not planned |
+| What each needs before an apply | S020 depends on S007, S019, S055 and S056; the subscription is a free trial whose upgrade is pending (table above) | On AWS: a look at the account's vCPU quota, and the owner's run of the wrapper's three lines after the cost is stated and a yes, from where no session holds credentials (the wrapper is tested with stand-ins and has never met an account; no `make` target creates the module). On Azure: nothing is planned, so nothing is needed | AKS: plan row only. Other: not planned |
 
 Why the platform's default stays managed. The self-managed cluster as built on
 AWS has no backup of etcd, no certificate renewal, no pod identity, no volumes,

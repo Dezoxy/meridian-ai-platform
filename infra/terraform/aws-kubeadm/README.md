@@ -209,9 +209,8 @@ managed module, and any other word (`aws` and `gcp` included, and a path) is
 refused before a program runs. There is no `make` target for them yet: the
 targets come in a later change together with the command guard's rules, so that
 no creating command exists that the guard does not read. The owner runs the
-commands below from a machine where no session holds the credentials, at the
-step's paid stop and after the cost is stated, not before; a session does not
-run them:
+commands below, after the cost is stated and the owner says yes, from where no
+session holds credentials; a session does not run them, and none has:
 
 ```sh
 infra/terraform/aws.sh plan aws-kubeadm
