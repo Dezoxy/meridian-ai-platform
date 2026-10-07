@@ -14349,6 +14349,38 @@ of the step's branch at 3270162, before this record):
   checks) and `make lint` ended 0; the whole suite at six workers beside the
   kind cluster and no other run with a database: 17,370 passed, 8 skipped (3
   min 53 s). The commit after it fills this line.
+- **What the pull request's first run in CI showed, and K12.** The hosted
+  runner failed one test of this branch that never failed on the development
+  machine: all twenty runs of the rate store's liveness probe in one container
+  returned 1. Read, not rerun. The liveness rule (on `main` since the store
+  got TLS) called the store unhealthy when the certificate file's second was
+  later than the server's start second, and that start is computed from two
+  numbers each cut down to the second: it can lie up to two seconds below the
+  real start, so a file written just before a start could read as newer than
+  the server, on every probe for the container's life. On a cluster that is
+  one restart of the store about 70 seconds after its pod starts, on a node
+  whose boot second has a large fraction; the development machine's is near
+  zero (measured: six containers), which is why nothing here ever saw it. K12
+  (eea3599) changes the rule to "more than two seconds later", corrects the
+  chart's comment that had called "equal" safe, and tests the rule at the
+  probe's own start second +0, +1, +2 (healthy) and +3 (unhealthy), also with
+  the real image; with the old rule +1 fails on any machine. Its cost is
+  written in the chart: a certificate written within two seconds after a start
+  is not seen as newer, which only a by-hand `make cert-renew` typed as the pod
+  starts can meet. The test that failed now prints what the probe said. A
+  second fault showed while K12's gates ran under load: the stand-in `kubectl`
+  of two test files logged a call in two writes, and the two halves of a pipe
+  could cut each other's line (three changes read as two, once); each call is
+  one write now. The advisor was asked before the fix and confirmed fixing the
+  rule here, not the test; it corrected the session's reason for the two
+  seconds (two cuts, not a step of the clock).
+- **Gates after K12** (the tip, not 4efe910): the rate store's three test
+  files, `test_kind_cert_renew.py` and `test_kind_upkeep_script.py`, three
+  times, 225 passed each; `make test`, `make docs` and `make lint` ended 0.
+  The whole suite was NOT run again on the development machine after K12: the
+  pull request's run in CI on the tip is the whole-suite evidence for it. K12
+  was not deployed: the rule's new form is not seen on kind, and kind's host
+  could not show the fault in any case.
 
 **Not seen** (the first half's list; the second half's items are above):
 
