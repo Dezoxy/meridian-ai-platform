@@ -100,10 +100,13 @@ class Repo:
         self.git("commit", "-q", "-m", message)
 
     def prove(
-        self, manifest: str, scopes: tuple[str, ...] = ("toy.sh", "toy.d")
+        self,
+        manifest: str,
+        scopes: tuple[str, ...] = ("toy.sh", "toy.d"),
+        ref: str = "HEAD",
     ) -> subprocess.CompletedProcess[str]:
         (self.root / "manifest.txt").write_text(manifest, encoding="utf-8")
-        arguments = ["--ref", "HEAD", "--manifest", "manifest.txt"]
+        arguments = ["--ref", ref, "--manifest", "manifest.txt"]
         for scope in scopes:
             arguments += ["--scope", scope]
         return subprocess.run(
@@ -385,6 +388,82 @@ toy.sh 8-9
         run = self.repo.prove("== toy.d/nothing.sh\n+ x\n", ("toy.sh",))
         self.assertEqual(run.returncode, 1, run.stdout)
         self.assertIn("FAIL toy.d/nothing.sh: cannot be read on disk", run.stdout)
+
+    def test_a_target_outside_every_scope_fails(self) -> None:
+        # Lines 6-7 of the old file move to a file that no --scope covers: the
+        # lines are accounted for and unread by anything that guards the scopes.
+        write_honest(self.repo)
+        self.repo.write("toy.d/one.sh", "# shellcheck shell=bash\n" + lines_of(
+            [(3, 3), (9, 10), (13, 16)]
+        ))
+        self.repo.write("outside.sh", lines_of([(6, 7)]))
+        manifest = HONEST.replace("toy.sh 6-7\n", "", 1).replace(
+            "== toy.d/two.sh", "== outside.sh\ntoy.sh 6-7\n== toy.d/two.sh"
+        )
+        run = self.repo.prove(manifest)
+        self.assertEqual(run.returncode, 1, run.stdout)
+        self.assertIn("FAIL outside.sh: a target outside every --scope", run.stdout)
+        self.assertNotIn("PROOF HOLDS", run.stdout)
+
+    def test_an_old_file_outside_every_scope_fails(self) -> None:
+        # Lines are copied out of a file that stays as it is and that no --scope
+        # covers: they would be in two places, and nothing would say so.
+        self.repo.write("other.sh", "copied\n")
+        self.repo.commit("a file outside the scopes")
+        write_honest(self.repo)
+        part = self.repo.root / "toy.d" / "one.sh"
+        part.write_text(part.read_text() + "copied\n", encoding="utf-8")
+        manifest = HONEST.replace("toy.sh 13-16\n", "toy.sh 13-16\nother.sh 1-1\n", 1)
+        run = self.repo.prove(manifest)
+        self.assertEqual(run.returncode, 1, run.stdout)
+        self.assertIn("FAIL other.sh: an old file outside every --scope", run.stdout)
+        self.assertNotIn("PROOF HOLDS", run.stdout)
+
+    def test_an_old_file_and_a_target_inside_a_directory_scope_are_in_scope(
+        self,
+    ) -> None:
+        # The honest split names toy.sh (a file scope) and toy.d/ (a directory):
+        # a path under a directory scope is in it, and a name that only starts
+        # with the scope's text is not.
+        write_honest(self.repo)
+        self.assertEqual(self.repo.prove(HONEST).returncode, 0)
+        self.repo.write("toy.dx/three.sh", "echo x\n")
+        run = self.repo.prove(HONEST + "== toy.dx/three.sh\n+ echo x\n")
+        self.assertEqual(run.returncode, 1, run.stdout)
+        self.assertIn("FAIL toy.dx/three.sh: a target outside every --scope", run.stdout)
+
+    def test_a_manifest_that_opens_no_target_fails(self) -> None:
+        run = self.repo.prove("# nothing here\n\n", ("toy.sh",))
+        self.assertEqual(run.returncode, 1, run.stdout)
+        self.assertIn("FAIL the manifest opens no target", run.stdout)
+        self.assertNotIn("PROOF HOLDS", run.stdout)
+
+    def test_the_account_says_it_read_the_disk_when_scope_files_differ_from_head(
+        self,
+    ) -> None:
+        write_honest(self.repo)  # toy.sh changed, two parts new: three files
+        run = self.repo.prove(HONEST)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        first = run.stdout.splitlines()[0]
+        self.assertIn("NOTE", first)
+        self.assertIn("working tree", first)
+        self.assertIn("3 files", first)
+
+    def test_the_account_has_no_note_when_scope_files_equal_head(self) -> None:
+        write_honest(self.repo)
+        self.repo.commit("the split")
+        run = self.repo.prove(HONEST, ref="HEAD~1")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertNotIn("NOTE", run.stdout.splitlines()[0])
+        self.assertNotIn("working tree", run.stdout.splitlines()[0])
+
+    def test_a_file_outside_the_scopes_that_differs_is_not_counted(self) -> None:
+        write_honest(self.repo)
+        self.repo.commit("the split")
+        self.repo.write("notes.txt", "outside\n")
+        run = self.repo.prove(HONEST, ref="HEAD~1")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertNotIn("working tree", run.stdout.splitlines()[0])
 
 
 if __name__ == "__main__":

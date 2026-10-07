@@ -25,6 +25,7 @@ The reader and the rules are in ``smokepartssupport.py``; the reader's own
 tests are in ``test_smoke_parts_reader.py``.
 """
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -33,6 +34,7 @@ from kindsupport import (
     SMOKE_PART_HINT,
     smoke_text,
 )
+from servicesupport import REPO_ROOT
 from smokepartssupport import (
     COMMON_LINE,
     PART_LINE,
@@ -302,7 +304,7 @@ def test_a_file_in_a_sub_directory_of_smoke_d_is_not_sourced(tmp_path: Path) -> 
         ),
         pytest.param(
             FIRST + "f() { echo; }; g\n",
-            "not a definition",
+            "something after the closing brace",
             id="a command after a function",
         ),
         pytest.param(FIRST + "trap cleanup EXIT\n", "not a definition", id="a trap"),
@@ -325,6 +327,153 @@ def test_an_executable_part_is_a_problem(tmp_path: Path) -> None:
     (problem,) = part_problems(kind_dir / "smoke.d" / "01-first.sh")
 
     assert "executable" in problem
+
+
+LEADING = "# shellcheck shell=bash\n"
+
+
+@pytest.mark.parametrize(
+    ("part", "says"),
+    [
+        pytest.param(
+            LEADING + "#   1. first:     does it\n# The URL.\nreadonly A=1\n",
+            "no blank line follows its leading comment block (line 4)",
+            id="a constant's comment right after the paragraph",
+        ),
+        pytest.param(
+            LEADING + "#   1. first:     does it\nreadonly A=1\n",
+            "no blank line follows its leading comment block (line 3)",
+            id="code right after the paragraph",
+        ),
+        pytest.param(
+            LEADING + "# The URL.\n\nreadonly A=1\n",
+            "does not begin with a numbered paragraph",
+            id="a comment that is no paragraph",
+        ),
+        pytest.param(
+            LEADING + "# The URL.\nreadonly A=1\n",
+            "does not begin with a numbered paragraph",
+            id="a first constant's comment, no blank line after the first line",
+        ),
+        pytest.param(
+            LEADING + "#   1. first:     does it\n",
+            "a blank line must follow",
+            id="a paragraph and nothing after it",
+        ),
+    ],
+)
+def test_a_part_whose_leading_comment_block_the_header_would_take_is_a_problem(
+    tmp_path: Path, part: str, says: str
+) -> None:
+    kind_dir = toy(tmp_path, parts={**PARTS, "01-first.sh": part})
+
+    problems = part_problems(kind_dir / "smoke.d" / "01-first.sh")
+
+    assert any(says in problem for problem in problems), problems
+
+
+@pytest.mark.parametrize(
+    "part",
+    [
+        LEADING + "\n# The URL.\nreadonly A=1\n",
+        LEADING + "readonly A=1\n",
+        LEADING
+        + "#   1. first:     does it\n#                 on two lines\n\nreadonly A=1\n",
+        LEADING + "#  10. tenth:     two digits\n\n# The URL.\nreadonly A=1\n",
+        LEADING,
+    ],
+)
+def test_a_part_with_no_leading_block_or_one_numbered_paragraph_and_a_blank_is_fine(
+    tmp_path: Path, part: str
+) -> None:
+    kind_dir = toy(tmp_path, parts={**PARTS, "01-first.sh": part})
+
+    assert part_problems(kind_dir / "smoke.d" / "01-first.sh") == []
+
+
+def test_a_source_line_the_entry_never_reaches_is_not_in_place(tmp_path: Path) -> None:
+    # Lexically each part is sourced once, in place; bash never reads the one
+    # inside the `if`, nor the one after the `exit`.
+    guards = ("if false; then\n{0}fi\n", "exit 0\n{0}", "true || {{\n{0}}}\n")
+    for number, guard in enumerate(guards):
+        entry = entry_file(
+            after=sourcing(*PART_NAMES[:2]) + guard.format(sourcing("02-second.sh"))
+        )
+
+        problems = layout_problems(toy(tmp_path / str(number), entry))
+
+        assert any(
+            "between common.sh's line and the first precondition" in p for p in problems
+        ), (guard, problems)
+
+
+def test_comments_blank_lines_source_pairs_and_definitions_between_are_fine(
+    tmp_path: Path,
+) -> None:
+    after = sourcing(*PART_NAMES) + (
+        "# a comment\n\nreadonly KEPT=1\nkept=\nkept_function() {\n  :\n}\n"
+    )
+
+    assert layout_problems(toy(tmp_path, entry_file(after=after))) == []
+
+
+def test_the_reader_of_the_region_does_not_read_past_the_first_precondition(
+    tmp_path: Path,
+) -> None:
+    entry = entry_file(after=sourcing(*PART_NAMES))  # trap, calls and `if` follow
+    assert "if ((failures" in entry
+
+    assert layout_problems(toy(tmp_path, entry)) == []
+
+
+# ── the entry is executable in git's index, and no part is ───────────────────
+def index_modes() -> dict[str, str]:
+    """The mode of each file of the entry and the parts in git's index."""
+    done = subprocess.run(
+        ["git", "ls-files", "-s", "--", "infra/kind/smoke.sh", "infra/kind/smoke.d"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    modes = {}
+    for line in done.stdout.splitlines():
+        meta, path = line.split("\t", 1)
+        modes[path] = meta.split()[0]
+    return modes
+
+
+def mode_problems(modes: dict[str, str]) -> list[str]:
+    """What is wrong with the index modes of the entry and the parts. `make smoke`
+    runs the entry as a program: without the bit it is "Permission denied". A part
+    is sourced, and an executable one invites running it alone."""
+    problems = []
+    if modes.get("infra/kind/smoke.sh") != "100755":
+        problems.append(f"smoke.sh is {modes.get('infra/kind/smoke.sh')}, not 100755")
+    parts = {p: m for p, m in modes.items() if p.startswith("infra/kind/smoke.d/")}
+    problems += [f"{p} is {m}, not 100644" for p, m in parts.items() if m != "100644"]
+    return problems
+
+
+def test_the_entry_is_executable_in_the_index_and_no_part_is() -> None:
+    modes = index_modes()
+
+    assert any(path.startswith("infra/kind/smoke.d/") for path in modes), modes
+    assert mode_problems(modes) == []
+
+
+def test_the_mode_rule_says_which_file_lost_or_gained_the_bit() -> None:
+    modes = {
+        "infra/kind/smoke.sh": "100644",
+        "infra/kind/smoke.d/shared.sh": "100755",
+        "infra/kind/smoke.d/01-edge.sh": "100644",
+    }
+
+    assert mode_problems(modes) == [
+        "smoke.sh is 100644, not 100755",
+        "infra/kind/smoke.d/shared.sh is 100755, not 100644",
+    ]
+    assert mode_problems({}) == ["smoke.sh is None, not 100755"]
 
 
 def test_a_name_defined_in_two_places_is_named(tmp_path: Path) -> None:

@@ -41,7 +41,15 @@ Exit 0 and a short account only when ALL hold:
    in scope, changed or removed, and not in the manifest, fails; so does an
    OLDPATH that is still on disk without an ``==``: its lines would then be in
    two places;
-5. file modes are not looked at.
+5. every ``==`` target and every OLDPATH lies under some ``--scope``: lines
+   moved into a file no scope covers, or copied out of one that stays as it is,
+   would be in two places with nothing guarding them;
+6. the manifest opens at least one target (an empty manifest proves nothing);
+7. file modes are not looked at.
+
+The proof reads the DISK, not a commit: it is run before the commit by design.
+When the working tree differs from HEAD for any file under a scope, the first
+line of the account says so, with the count (a NOTE, never a failure).
 
 The final newline: a file's lines are the text between newlines and whether it
 ends with a newline is compared on its own. A target ends with a newline unless
@@ -273,10 +281,29 @@ def scope_files(ref: str, scopes: list[str]) -> tuple[set[str], set[str]]:
     return disk, at_ref
 
 
+def in_scope(path: str, scopes: list[str]) -> bool:
+    """``path`` is a scope, or is under one that is a directory."""
+    for scope in scopes:
+        scope = posixpath.normpath(scope.replace(os.sep, "/"))
+        if path == scope or path.startswith(scope + "/"):
+            return True
+    return False
+
+
 def check_scope(
     ref: str, scopes: list[str], targets: list[Target], old: dict[str, OldFile]
 ) -> list[str]:
-    problems: list[str] = []
+    problems: list[str] = [
+        f"{t.path}: a target outside every --scope"
+        for t in targets
+        if not in_scope(t.path, scopes)
+    ]
+    problems += [
+        f"{path}: an old file outside every --scope (its lines would be in two "
+        "places, and nothing guards the second)"
+        for path in sorted(old)
+        if not in_scope(path, scopes)
+    ]
     disk, at_ref = scope_files(ref, scopes)
     if not disk and not at_ref:
         problems.append(f"scope {', '.join(scopes)} holds no file on disk or at {ref}")
@@ -322,8 +349,40 @@ def falls(targets: list[Target]) -> list[str]:
     return notes
 
 
-def account(targets: list[Target], old: dict[str, OldFile], notes: list[str]) -> None:
-    print("shell_split_proof: every line used once, every file byte for byte")
+def changed_in_scope(scopes: list[str]) -> int:
+    """How many files under the scopes differ from HEAD in the working tree
+    (changed, new or removed)."""
+    done = subprocess.run(
+        ["git", "status", "--porcelain", "-z", "--untracked-files=all", "--", *scopes],
+        capture_output=True,
+        check=False,
+    )
+    if done.returncode != 0:
+        raise Unreadable("git status failed")
+    count = 0
+    skip = False
+    for entry in (entry for entry in done.stdout.split(b"\0") if entry):
+        if skip:  # the old name of a rename or a copy
+            skip = False
+            continue
+        count += 1
+        skip = bool({entry[:1], entry[1:2]} & {b"R", b"C"})
+    return count
+
+
+def account(
+    targets: list[Target],
+    old: dict[str, OldFile],
+    notes: list[str],
+    changed: int,
+) -> None:
+    first = "shell_split_proof: every line used once, every file byte for byte"
+    if changed:
+        first += (
+            " (NOTE: read from the working tree, which differs from HEAD in "
+            f"{changed} file{'' if changed == 1 else 's'} under the scopes)"
+        )
+    print(first)
     added: list[str] = []
     for target in targets:
         moved = sum(i.end - i.start + 1 for i in target.items if i.old is not None)
@@ -354,6 +413,8 @@ def prove(ref: str, manifest: str, scopes: list[str]) -> int:
     targets = parse_manifest(manifest)
     old = load_old(ref, targets)
     problems: list[str] = []
+    if not targets:
+        problems.append("the manifest opens no target: it proves nothing")
     for target in targets:
         problems += check_target(target, old)
     problems += check_usage(targets, old)
@@ -362,7 +423,7 @@ def prove(ref: str, manifest: str, scopes: list[str]) -> int:
         for problem in problems:
             print(f"FAIL {problem}")
         return 1
-    account(targets, old, falls(targets))
+    account(targets, old, falls(targets), changed_in_scope(scopes))
     return 0
 
 

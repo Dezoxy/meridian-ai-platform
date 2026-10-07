@@ -8,8 +8,14 @@ whole of today's script is read as a second proof that it reads real text.
 
 import re
 
-from kindsupport import SMOKE_SH
-from smokepartssupport import COMMON_LINE, read_definitions
+import pytest
+from kindsupport import KIND_DIR, SMOKE_SH
+from smokepartssupport import (
+    COMMON_LINE,
+    Definitions,
+    part_files,
+    read_definitions,
+)
 
 
 # ── the reader, shape by shape ───────────────────────────────────────────────
@@ -117,14 +123,13 @@ def test_the_reader_reads_arrays_arithmetic_and_continued_lines() -> None:
         "readonly JOINED=a\\\n"
         "b\n"
         'readonly PATH_OF="${KIND_DIR}/x.json"\n'
-        'readonly ROOT="$(cd "$(dirname "$0")" && pwd)"\n'
         "count=0\n"
     )
 
     found = read_definitions(text)
 
     assert found.problems == []
-    assert found.constants == ["LIST", "MARGIN", "TWO", "JOINED", "PATH_OF", "ROOT"]
+    assert found.constants == ["LIST", "MARGIN", "TWO", "JOINED", "PATH_OF"]
     assert found.globals == ["count"]
 
 
@@ -157,3 +162,130 @@ def test_the_reader_finds_what_a_regex_counts_in_todays_whole_script() -> None:
         "not a definition: require_local_docker",
         "not a definition: need_cluster",
     ]
+
+
+# ── what the review ran through the reader unseen (M3) ───────────────────────
+RUNS_AT_SOURCE_TIME = [
+    pytest.param(
+        "a=1 echo x\n", "a word after the value", id="a command after a global"
+    ),
+    pytest.param(
+        "readonly A=1 echo x\n",
+        "a word after the value",
+        id="a command after a constant",
+    ),
+    pytest.param('a="" > /tmp/f\n', "a word after the value", id="a redirection"),
+    pytest.param('a="">/tmp/f\n', "a redirection", id="a redirection with no space"),
+    pytest.param("a=1 <<<x\n", "a redirection", id="a here-string"),
+    pytest.param(
+        "f() { :; } && { echo x; }\n",
+        "after the closing brace",
+        id="a group after a function",
+    ),
+    pytest.param(
+        "f() { :; }; echo x\n",
+        "after the closing brace",
+        id="a command after a function",
+    ),
+    pytest.param(
+        "f() {\n  :\n}; echo x\n", "after the closing brace", id="a command after }"
+    ),
+    pytest.param(
+        "f() {\n  :\n} && echo x\n", "after the closing brace", id="&& after }"
+    ),
+    pytest.param(
+        "a=1 \\\necho x\n", "a word after the value", id="a continued command"
+    ),
+    pytest.param("a=1 \\\n  echo x\n", "a word after the value", id="an indented one"),
+    pytest.param(
+        "readonly X=$(date)\n", "command substitution", id="a constant that runs"
+    ),
+    pytest.param(
+        "readonly X=`date`\n", "command substitution", id="a backtick constant"
+    ),
+    pytest.param(
+        'readonly X="$(date)"\n', "command substitution", id="in double quotes"
+    ),
+    pytest.param(
+        'readonly X="a-`date`"\n', "command substitution", id="backtick quoted"
+    ),
+    pytest.param("x=$(date)\n", "command substitution", id="a global that runs"),
+]
+
+
+@pytest.mark.parametrize(("text", "says"), RUNS_AT_SOURCE_TIME)
+def test_the_reader_reports_what_would_run_when_the_part_is_sourced(
+    text: str, says: str
+) -> None:
+    found = read_definitions(text)
+
+    assert any(says in problem for problem in found.problems), found.problems
+
+
+def test_a_command_after_a_closing_brace_does_not_hide_the_next_function() -> None:
+    found = read_definitions("f() {\n  :\n}; echo x\ng() {\n  :\n}\n")
+
+    assert found.functions == ["f", "g"]
+    assert len(found.problems) == 1
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "readonly P='a $(b) `c` d'\n",
+        "readonly M=$((A * 2 / 3))\n",
+        "name=1  # a comment, with a word\n",
+        "readonly A=1 # c\n",
+        "readonly A=( a b )\n",
+        "readonly A=(\n  a\n  b\n)\n",
+        'readonly A="x \\$(not run)"\n',
+        "f() { :; } # note\n",
+        'f() { echo "${x}"; }\n',
+        "f() { x=${y:-a}; z=${#y}; }\n",
+        "f() { { :; }; }\n",
+        'f() { echo "a } b"; }\n',
+        "readonly A=a\\\nb\n",
+    ],
+)
+def test_the_reader_does_not_report_a_definition_that_runs_nothing(text: str) -> None:
+    assert read_definitions(text).problems == []
+
+
+# ── the entry and the parts, read as files ───────────────────────────────────
+def read_files() -> dict[str, Definitions]:
+    return {
+        path.name: read_definitions(path.read_text(encoding="utf-8"))
+        for path in [KIND_DIR / "smoke.sh", *part_files(KIND_DIR)]
+    }
+
+
+def test_the_reader_finds_the_same_names_in_the_files_as_in_the_rebuilt_text() -> None:
+    lines = SMOKE_SH.splitlines()
+    start = lines.index(COMMON_LINE) + 1
+    stop = next(i for i, line in enumerate(lines) if line.startswith("trap "))
+    whole = read_definitions("\n".join(lines[start:stop]))
+
+    files = read_files().values()
+
+    # The entry and the parts, each read alone, give the names the rebuilt text
+    # gives (105 functions, 106 constants and 24 globals on 2026-10-08): nothing
+    # a cut moved is lost from the reader's sight, or read twice.
+    assert sorted(n for d in files for n in d.functions) == sorted(whole.functions)
+    assert sorted(n for d in files for n in d.constants) == sorted(whole.constants)
+    assert sorted(n for d in files for n in d.globals) == sorted(whole.globals)
+    assert len(whole.functions) >= 105
+    assert len(whole.constants) >= 106
+    assert len(whole.globals) >= 24
+
+
+def test_no_constant_or_global_of_the_entry_or_the_parts_runs_a_command() -> None:
+    # The count behind read_definitions' docstring: a `readonly` whose value
+    # holds a command substitution would run it when the part is sourced.
+    runs = [
+        problem
+        for found in read_files().values()
+        for problem in found.problems
+        if "substitution" in problem
+    ]
+
+    assert runs == []
