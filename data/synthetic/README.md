@@ -340,7 +340,8 @@ read the diff of `data/evaluation/injection-summary.md`.
 `POST /claims/{claim_id}/files` and the claimant's form (S080, called "S070
 uploads" in the code's comments), the route that exists only with the upload
 switch on (it is off by default). Status: the files are implemented; no demo of
-them has been run on a cluster yet. They are made in
+them has been run on a cluster yet (the run on kind of 2026-10-07 posted a PDF
+of 100 KiB, which is none of these files). They are made in
 code, by the same seeded generator and with the standard library only, so no
 file is a real person's document and none is copied from elsewhere:
 

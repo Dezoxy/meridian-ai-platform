@@ -115,7 +115,12 @@ def test_the_factory_path_of_a_deployment_imports_and_is_callable(name: str) -> 
     command = container["command"]
     module, _, attribute = command[command.index("--factory") + 1].partition(":")
 
-    assert command[0] == "uvicorn"
+    # The five that serve TLS start through the start module, which calls
+    # uvicorn with the same words (S069); the Claims API runs uvicorn.
+    if name == "claims-api":
+        assert command[0] == "uvicorn"
+    else:
+        assert command[:3] == ["python", "-m", "meridian.platform.common.tlsstart"]
     assert f"{module}:{attribute}" == FACTORIES[name]
     assert callable(getattr(importlib.import_module(module), attribute))
 

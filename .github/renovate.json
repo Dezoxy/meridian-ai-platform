@@ -192,7 +192,7 @@
       ],
       "groupName": "terraform",
       "prBodyNotes": [
-        "CI installs Terraform only to run the modules' variable validations (`terraform console` on scratch copies, `TERRAFORM_VERSION` in `.github/workflows/python.yml`); it never runs init, validate, plan or apply. Before merging, run `make azure-plan` and read the plan, for the AWS module `make aws-validate` and `make aws-scan` (neither needs an account), for the Google Cloud module `make gcp-validate` and `make gcp-scan` (neither needs a project or a credential), for the self-managed AWS module `make aws-kubeadm-validate` and `make aws-kubeadm-scan` (neither needs an account), and for its Google Cloud twin `make gcp-kubeadm-validate` and `make gcp-kubeadm-scan` (neither needs a project or a credential)."
+        "CI installs Terraform only to run the modules' variable validations (`terraform console` on scratch copies, `TERRAFORM_VERSION` in `.github/workflows/python.yml`); it never runs init, validate, plan or apply. Before merging, run `make azure-plan` and read the plan, for the AWS module `make aws-validate` and `make aws-scan` (neither needs an account), for the Google Cloud module `make gcp-validate` and `make gcp-scan` (neither needs a project or a credential), for the self-managed AWS module `make aws-kubeadm-validate` and `make aws-kubeadm-scan` (neither needs an account), for its Google Cloud twin `make gcp-kubeadm-validate` and `make gcp-kubeadm-scan` (neither needs a project or a credential), and for the Azure platform module `make azure-platform-validate` and `make azure-platform-scan` (neither needs an Azure sign-in)."
       ]
     },
     {
@@ -222,7 +222,7 @@
       ],
       "groupName": "cert-manager",
       "prBodyNotes": [
-        "approver-policy and cert-manager arrive together. Look up which cert-manager version the new approver-policy release is built against (its release notes or go.mod), and move both charts to versions that agree. Renovate does not propose a new tag for the images of cert-manager's components or of approver-policy, only a new digest of the same tag: move their tags and digests by hand, with the commands in `infra/kind/README.md`. CI does not start the platform; run `make up` and `make smoke` on this branch and put what they printed in a comment."
+        "approver-policy and cert-manager arrive together. Look up which cert-manager version the new approver-policy release is built against (its release notes or go.mod), and move both charts to versions that agree. Renovate does not propose a new tag for the images of cert-manager's components or of approver-policy, only a new digest of the same tag: move their tags and digests by hand, with the commands in `infra/kind/README.md`. CI does not start the platform; run `make up` and `make smoke` on this branch and put what they printed in a comment. If `make up` or Helm fails with a conflict on `livenessProbe` owned by `meridian-kind`, the new approver-policy chart renders its own liveness probe: release the field first, then drop the apply and set the chart's value, as `infra/kind/manifests/approver-policy-liveness.yaml` and `infra/kind/README.md` say."
       ]
     },
     {

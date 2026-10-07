@@ -3,18 +3,29 @@
 # aws-validate`, `make aws-plan`, `make aws-apply` and `make aws-destroy` (S036),
 # and the self-managed one (infra/terraform/aws-kubeadm, S079) by this script's
 # own command line: it has the validate and scan targets and no target that plans,
-# applies or removes it yet.
+# applies or removes it yet. Its validate door takes the Azure platform module
+# (infra/terraform/azure, S020) too, which has the validate and scan targets and
+# nothing that plans, applies or removes it.
 #   validate  format check, init with no backend, validate. Needs no AWS
 #             credential (it is run with none) and no local file, and never
 #             calls the aws CLI. It takes the name of a module, one of aws
-#             (the default), gcp, aws-kubeadm and gcp-kubeadm. `validate gcp`
-#             runs the same three commands on infra/terraform/gcp (S078),
+#             (the default), gcp, aws-kubeadm, gcp-kubeadm and azure. `validate
+#             gcp` runs the same three commands on infra/terraform/gcp (S078),
 #             `validate aws-kubeadm` on infra/terraform/aws-kubeadm (S079, the
-#             self-managed cluster's module) and `validate gcp-kubeadm` on
-#             infra/terraform/gcp-kubeadm (S079, its Google Cloud twin), with no
-#             credential of any cloud. The Google Cloud modules are
-#             never planned and never applied: validate is the one command that
-#             takes the words gcp and gcp-kubeadm.
+#             self-managed cluster's module), `validate gcp-kubeadm` on
+#             infra/terraform/gcp-kubeadm (S079, its Google Cloud twin) and
+#             `validate azure` on infra/terraform/azure (S020, the Azure
+#             platform module), with no credential of any cloud. The Google Cloud
+#             modules are never planned and never applied: validate is the one
+#             command that takes the words gcp and gcp-kubeadm. The Azure
+#             platform module has no plan, apply or removal path yet either:
+#             validate is the one command that takes the word azure, and the
+#             other three refuse it with the usage line.
+#             Terraform's data directory, where init puts the providers, is a
+#             private directory under ~/.cache/meridian-terraform named for the
+#             module, never .terraform in the module's directory
+#             (data_dir_for_validate below): a validate leaves nothing in the
+#             module.
 #   plan      init, then plan into the module's saved plan (aws.tfplan, or
 #             aws-kubeadm.tfplan); changes nothing in AWS. Records the module,
 #             the commit, the time and the plan file's SHA-256 beside the plan,
@@ -63,8 +74,10 @@
 # Terraform and the aws CLI are each run with an environment this script chose
 # (run_clean below), not the caller's: TF_LOG*, TF_WORKSPACE, TF_DATA_DIR,
 # TF_CLI_CONFIG_FILE, TF_REATTACH_PROVIDERS, TF_CLI_ARGS*, any other TF_VAR_* and
-# AWS_ENDPOINT_URL* never reach either. Every Terraform call is made without
-# colour, so that no escape sequence stands between redact and a number.
+# AWS_ENDPOINT_URL* never reach either. (validate gives Terraform a TF_DATA_DIR of
+# its own, the one name of the script's choosing beyond the base list; the
+# caller's never.) Every Terraform call is made without colour, so that no escape
+# sequence stands between redact and a number.
 set +x
 set -euo pipefail
 umask 077 # the plan, its record and the state are written under this
@@ -127,7 +140,7 @@ done < <(compgen -e | grep '^TF_VAR_' || true)
 
 usage() {
   printf 'usage: %s <validate|plan|apply|destroy>\n' "$(basename "$0")" >&2
-  printf '       %s validate [aws|gcp|aws-kubeadm|gcp-kubeadm]  (the module to check, aws if none)\n' "$(basename "$0")" >&2
+  printf '       %s validate [aws|gcp|aws-kubeadm|gcp-kubeadm|azure]  (the module to check, aws if none)\n' "$(basename "$0")" >&2
   printf '       %s <plan|apply|destroy> [aws-kubeadm]  (the self-managed module; the managed one if no word)\n' "$(basename "$0")" >&2
   exit 2
 }
@@ -158,8 +171,8 @@ refuse_gcp() {
 #   PLAN_REVIEW    what the owner reads in the plan before applying it
 #   MODULE_VARS    the module's variables load_aws_env gives it (an array: not
 #     read-only); each one is a variable the module declares in variables.tf
-# The gcp and gcp-kubeadm rows have a directory and nothing else: validate is
-# their only command.
+# The gcp, gcp-kubeadm and azure rows have a directory and nothing else: validate
+# is their only command.
 select_module() {
   case "$1" in
     aws)
@@ -222,6 +235,21 @@ select_module() {
       PLAN_REVIEW=
       MODULE_VARS=()
       ;;
+    azure)
+      MODULE_DIR="${TF_DIR}/azure"
+      MODULE_REL=infra/terraform/azure
+      MODULE_NAME=azure
+      PLAN_FILE=
+      PLAN_RECORD_FILE=
+      STATE_DIR_UNDER_HOME=
+      STATE_FILE_NAME=
+      MODULE_README=
+      CMD_PLAN=
+      CMD_APPLY=
+      CMD_DESTROY=
+      PLAN_REVIEW=
+      MODULE_VARS=()
+      ;;
     *) usage ;;
   esac
   readonly MODULE_DIR MODULE_REL MODULE_NAME PLAN_FILE PLAN_RECORD_FILE
@@ -269,6 +297,18 @@ tf_signed() {
   local sub="$1"
   shift
   run_clean signed terraform -chdir="${MODULE_DIR}" "${sub}" -no-color "$@"
+}
+# validate's own terraform: the same, with Terraform's data directory (the
+# providers init downloads, .terraform in the module's directory by default) set
+# to DATA_DIR, which data_dir_for_validate made. TF_DATA_DIR is set here and
+# nowhere else, from nothing the caller gave, so no other command's directory
+# moves (the default-workspace check of plan, apply and the removal reads
+# .terraform/environment in the module's directory) and the caller's own value is
+# never passed on (run_clean drops it).
+tf_validating() {
+  local sub="$1"
+  shift
+  run_clean plain env "TF_DATA_DIR=${DATA_DIR}" terraform -chdir="${MODULE_DIR}" "${sub}" -no-color "$@"
 }
 tf_state_list() { run_clean plain terraform -chdir="${MODULE_DIR}" state list -no-color; }
 
@@ -570,17 +610,42 @@ file_sha256() {
 # left out, which selects the managed module (the costlier one).
 log_module() { log "module: ${MODULE_NAME}"; }
 
+# Where validate's Terraform keeps the providers it downloads: a directory of the
+# caller's cache named for the module, made private (the umask is 077 for the
+# whole script, and the mode is set again, so a directory that was open to others
+# is closed). It is under HOME and not under XDG_CACHE_HOME, which the script
+# does not pass on: no value of the caller chooses it. HOME is one of the names
+# run_clean passes on; it has to be an absolute path, or the directory would be
+# made wherever the script happens to run. A symbolic link in its place is
+# refused, not followed. Sets DATA_DIR (read-only once set).
+data_dir_for_validate() {
+  [[ "${HOME-}" == /* ]] ||
+    die "HOME is not an absolute path, and validate keeps Terraform's providers under \$HOME/.cache/meridian-terraform, not in the module's directory"
+  local dir="${HOME}/.cache/meridian-terraform/${MODULE_NAME}"
+  [[ ! -L "${dir}" ]] ||
+    die "${dir} is a symbolic link; validate will not put Terraform's providers behind one (remove the link)"
+  # Every directory this makes is 700 by the script's umask; -m would reach only
+  # the last one of a path (shellcheck SC2174), so the last is closed by chmod.
+  mkdir -p "${dir}" ||
+    die "cannot make ${dir}, where validate keeps Terraform's providers"
+  chmod 700 "${dir}" ||
+    die "cannot close ${dir} to other users"
+  DATA_DIR="${dir}"
+  readonly DATA_DIR
+}
+
 cmd_validate() {
+  data_dir_for_validate
   log "terraform fmt -check"
-  tf_plain fmt -check -diff 2>&1 | redact ||
+  tf_validating fmt -check -diff 2>&1 | redact ||
     die "terraform fmt found a file to format; run: terraform -chdir=${MODULE_REL} fmt"
   log "terraform init -backend=false"
   # readonly: the committed lock file decides the provider, and a check does not
   # rewrite it.
-  tf_plain init -backend=false -input=false -lockfile=readonly 2>&1 | redact ||
+  tf_validating init -backend=false -input=false -lockfile=readonly 2>&1 | redact ||
     die "terraform init failed"
   log "terraform validate"
-  tf_plain validate 2>&1 | redact ||
+  tf_validating validate 2>&1 | redact ||
     die "terraform validate failed"
 }
 
@@ -759,7 +824,7 @@ cmd_destroy() {
 # Every command takes at most one word after it, the name of a module from a
 # closed list, and a word that is not on the list (a path, another spelling, a
 # second word) is refused with the usage line before any program runs:
-#   validate           aws (the default), gcp, aws-kubeadm or gcp-kubeadm
+#   validate           aws (the default), gcp, aws-kubeadm, gcp-kubeadm or azure
 #   plan, apply, destroy   aws-kubeadm, or no word for the managed module; gcp and
 #                      gcp-kubeadm are refused with a sentence that says why, and
 #                      so is the word aws on these three (the managed module is no
@@ -777,6 +842,7 @@ case "$1" in
       gcp) select_module gcp ;;
       aws-kubeadm) select_module aws-kubeadm ;;
       gcp-kubeadm) select_module gcp-kubeadm ;;
+      azure) select_module azure ;;
       *) usage ;;
     esac
     need_tools terraform
