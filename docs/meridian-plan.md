@@ -338,9 +338,11 @@ Cost rules:
   inputs changed, not on every step.
   CI renders every Mermaid block on every pull request (S089). Under
   rootless Docker, which the virtual machine runs, neither target can
-  write its PNGs, so there the pull request's job is the proof and the
-  PDF is built by starting `Docs / Architecture PDF` on the branch,
-  which publishes nothing from a branch.
+  write its PNGs, so there the pull request's job is the proof for a
+  diagram. `Docs / Architecture PDF` refuses a start on a branch other
+  than `main` and runs on a pull request only when the scripts, the
+  `Makefile` or the workflow changed, so a PDF of a branch is built by
+  hand there: S089's section has the order of the commands.
 - Broad searches go to an Explore subagent, which returns conclusions instead
   of file dumps.
 - The Azure environment exists only on demo days (C-04).
@@ -20483,10 +20485,21 @@ two lines about which job runs Mermaid.
   four. Its source was written first and holds the page ("Code layering and
   import rules", its two sections and the diagram's image line), with "4
   Mermaid diagrams to render".
-- Seen in CI, not on the machine: the pull request's `derived diagrams` job
-  is the first run of the new step, and `Docs / Architecture PDF`, started
-  on the branch, builds the PDF with the page (a branch publishes nothing).
-  The pull request records both results.
+- The PDF, by hand, because `make pdf` stops at the render: the folder
+  `generated/mermaid-pdf` made world-writable, `scripts/render-mermaid.sh`
+  on it ("rendered 4 Mermaid diagram(s)"), then the Pandoc command of
+  `scripts/architecture-pdf.sh` (exit 0). 350 pages; the page is chapter 9
+  on pages 167 to 170, the diagram is embedded on page 168 at 1310 by 1872
+  pixels and the table's text is on page 169. Read as extracted text and
+  an extracted image: the machine has no tool that draws a PDF page, so
+  the table's layout on paper was not seen.
+- `Docs / Architecture PDF` started on the branch: **failed**, as it is
+  built to ("Architecture PDFs are published from main only"). The
+  session had expected a build that publishes nothing and had written
+  that into Part A and the pull request without reading the workflow's
+  first step; both were corrected before the merge.
+- Seen in CI: the pull request's `derived diagrams` job, the first run of
+  the new step, passed in 2 min 2 s on the first commit.
 - The `infra-reviewer` read the workflow's diff and the script: no
   critical, high or medium finding and one low (the render container has
   the network, which a render does not need; a pull request from a fork
@@ -20495,9 +20508,10 @@ two lines about which job runs Mermaid.
   runner's user, no pin or action added, and the 15 minutes enough. It
   noted that the script passes when no block is found; four tracked files
   hold one today.
-- Not seen: the page in the Documentation tab in a browser; a pull request
-  with a broken fence failing the new step in CI (locally the script exits 1
-  on a failed render, as the five failures above show).
+- Not seen: the page in the Documentation tab in a browser; the PDF's pages
+  drawn; a pull request with a broken fence failing the new step in CI
+  (locally the script exits 1 on a failed render, as the five failures
+  above show).
 
 **Follow-ups:** the component view of the Agent Runtime is S090 (`todo`,
 after S083). The render under rootless Docker is in the follow-up backlog,
