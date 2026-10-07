@@ -38,7 +38,7 @@ import secrets
 import stat
 import sys
 from collections.abc import Iterable, Iterator, Mapping
-from contextlib import contextmanager, suppress
+from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import dataclass
 from functools import partial
 from itertools import chain
@@ -154,14 +154,19 @@ def _replace(path: Path, data: bytes, temporaries: list[Path]) -> None:
     temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
     temporaries.append(temporary)
     try:
-        try:
-            # `open` owns the descriptor from the moment the opener returns it and
-            # closes it on every failure; this function never closes one by number.
-            with open(temporary, "xb", opener=_create_private) as stream:
-                stream.write(data)
-        except FileExistsError:  # only `open` raises it (a write cannot): not ours
-            temporaries.remove(temporary)
-            raise
+        # `open` owns the descriptor from the moment the opener returns it and closes
+        # it on every failure; this function never closes one by number. Only the
+        # `open` call is guarded: `FileExistsError` there means the name is taken by
+        # a file that is not ours, but one raised in the body is any other failure.
+        with ExitStack() as stack:
+            try:
+                stream = stack.enter_context(
+                    open(temporary, "xb", opener=_create_private)
+                )
+            except FileExistsError:
+                temporaries.remove(temporary)
+                raise
+            stream.write(data)
         os.chmod(temporary, mode)
         os.replace(temporary, path)
         temporaries.remove(temporary)

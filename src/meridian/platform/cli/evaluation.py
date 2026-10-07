@@ -328,7 +328,9 @@ WorkloadOption = Annotated[
 GoldenSetOption = Annotated[
     Path, typer.Option("--golden-set", help="The workload's golden set.")
 ]
-RegistryOption = Annotated[
+# The path given to `--registry`; unlike `RegistryDirOption` (`--registry-dir` of
+# `cli/registry.py`) it is not checked to exist, so the name says path.
+RegistryPathOption = Annotated[
     Path, typer.Option("--registry", help="Directory holding the registry.")
 ]
 LimitOption = Annotated[
@@ -351,7 +353,7 @@ def run_command(
     report_path: ReportPathOption,
     workload: WorkloadOption = DEFAULT_WORKLOAD,
     golden_set: GoldenSetOption = DEFAULT_GOLDEN_SET,
-    registry_dir: RegistryOption = DEFAULT_REGISTRY_DIR,
+    registry_dir: RegistryPathOption = DEFAULT_REGISTRY_DIR,
     limit: LimitOption = None,
     pace: PaceOption = DEFAULT_PACE_SECONDS,
     allow_empty: AllowEmptyOption = False,

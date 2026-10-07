@@ -362,6 +362,9 @@ def test_a_parse_that_stops_at_the_end_of_a_text_names_the_last_line() -> None:
 # Deeper than the parser's recursion allows: `compose` gives up at about half the
 # interpreter's limit of 1,000 frames, so this is twice that in brackets.
 NESTING = 1_000
+# The sweep looks for the parser's limit between these two depths, and finds it only
+# when it lies strictly between them.
+SHALLOWEST = 100
 
 
 def test_a_text_nested_too_deep_to_compose_is_refused_as_not_yaml() -> None:
@@ -401,7 +404,7 @@ def composes(depth: int) -> bool:
 
 
 def the_shallowest_depth_that_does_not_compose() -> int:
-    composing, failing = 100, NESTING
+    composing, failing = SHALLOWEST, NESTING
     while failing - composing > 1:
         middle = (composing + failing) // 2
         if composes(middle):
@@ -422,6 +425,12 @@ def test_no_nesting_depth_near_the_parsers_limit_ends_in_an_exception() -> None:
     # one depth just under the limit composes and then overflows the check; whether
     # one does depends on the caller's depth, so both parities of it are tried.
     limit = the_shallowest_depth_that_does_not_compose()
+    assert SHALLOWEST + 4 < limit < NESTING, (
+        f"the shallowest depth that does not compose is {limit}, outside the sweep's "
+        f"bounds ({SHALLOWEST} and {NESTING}), where it would measure nothing: the "
+        "interpreter's recursion limit has moved; change SHALLOWEST and NESTING so "
+        "that the limit lies between them"
+    )
 
     ends = {
         (depth, frames): ends_with_frames_between(depth, frames)

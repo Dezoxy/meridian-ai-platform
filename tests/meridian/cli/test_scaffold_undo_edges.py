@@ -454,6 +454,64 @@ def test_replace_closes_the_descriptor_it_opened_when_the_write_is_interrupted(
                 real_close(descriptor)
 
 
+class CollidingBuffer:
+    """Bytes whose buffer cannot be taken, with a ``FileExistsError``: raised inside
+    the write, after ``open`` has created the temporary file, which no real write
+    does."""
+
+    def __buffer__(self, flags: int) -> memoryview:
+        raise FileExistsError(errno.EEXIST, LEAKED)
+
+
+def test_a_file_exists_error_raised_inside_the_write_still_removes_the_temporary(
+    tmp_path: Path,
+) -> None:
+    # Arrange: the temporary is created by `open`, and then the write raises the
+    # error that only `open` may raise.
+    target = tmp_path / "file.txt"
+    target.write_text("old")
+    temporaries: list[Path] = []
+
+    # Act
+    with pytest.raises(FileExistsError):
+        scaffold_writes._replace(
+            target,
+            CollidingBuffer(),  # type: ignore[arg-type]
+            temporaries,
+        )
+
+    # Assert: the temporary is gone from the disk, and nothing is left noted
+    # for the undo to look for.
+    assert [path.name for path in tmp_path.iterdir()] == ["file.txt"]
+    assert temporaries == []
+    assert target.read_text() == "old"
+
+
+def test_a_temporary_name_that_already_exists_is_not_removed_and_is_not_noted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Arrange: the random part of the name is fixed, and a file of someone else
+    # already holds the temporary's name.
+    target = tmp_path / "file.txt"
+    target.write_text("old")
+    other = tmp_path / ".file.txt.0123456789abcdef.tmp"
+    other.write_text("not ours")
+    temporaries: list[Path] = []
+    monkeypatch.setattr(
+        scaffold_writes.secrets, "token_hex", lambda nbytes: "0123456789abcdef"
+    )
+
+    # Act
+    with pytest.raises(FileExistsError):
+        scaffold_writes._replace(target, b"new", temporaries)
+
+    # Assert: the other file is still there with its own bytes, the target is
+    # untouched, and the path is not noted: the undo must not remove it either.
+    assert other.read_text() == "not ours"
+    assert target.read_text() == "old"
+    assert temporaries == []
+
+
 class OnceFalse(str):
     """A line that raises an interrupt the first time it is tested for truth."""
 
