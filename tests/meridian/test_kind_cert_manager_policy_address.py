@@ -5,8 +5,9 @@ the database's did until contract N3. Now the file holds the same placeholder
 (not a CIDR, so a plain `kubectl apply -f` of it is refused by the API server)
 on that one rule, and `up.sh` fills the API server's address in through the one
 function that also serves the database's policy (``apply_api_server_policy``).
-The three 10250 ingress rules (the webhooks) are not narrowed: the address the
-API server's calls arrive from is not known to be the endpoint's.
+No ingress rule of the file names 10250 (the two webhooks): the API server calls
+them from the node, which a policy of the cluster's network plugin does not stop,
+so there is no address to fill in and no second placeholder.
 
 Nothing here needs a cluster. The functions of ``common.sh`` and ``up.sh`` run
 in bash against the stub ``kctl`` of ``test_kind_database_policy_address.py``,
@@ -121,7 +122,7 @@ def test_up_changes_the_6443_rule_of_the_egress_policy_and_nothing_else(
     assert "API-SERVER" not in applied
 
 
-def test_up_narrows_no_webhook_rule_and_the_only_ipblock_is_the_api_servers(
+def test_up_applies_no_webhook_rule_and_the_only_ipblock_is_the_api_servers(
     tmp_path: Path,
 ) -> None:
     _, applied, _ = apply_policy(tmp_path, one_slice(NODE))
@@ -130,9 +131,9 @@ def test_up_narrows_no_webhook_rule_and_the_only_ipblock_is_the_api_servers(
     webhooks = [d for d in documents if d["metadata"]["name"].endswith("webhook")]
     assert len(webhooks) == 2
     for policy in webhooks:
-        assert policy["spec"]["ingress"] == [
-            {"ports": [{"port": 10250, "protocol": "TCP"}]}
-        ]
+        assert policy["spec"]["policyTypes"] == ["Ingress"]
+        assert "ingress" not in policy["spec"]
+    assert "10250" not in json.dumps(documents)
     assert json.dumps(documents).count("ipBlock") == 1
 
 
@@ -281,12 +282,12 @@ def test_the_header_says_what_make_up_fills_and_what_a_stale_address_shows() -> 
     assert "EndpointSlice" in header and "make up" in header
     assert "a plain `kubectl apply -f`" in header
     assert "TCP 6443 to any address" not in header
-    # The webhook rules are not: the address of the API server's calls is not
-    # known to be the endpoint's, nobody measured it, and the rule stays open.
-    assert "not known" in header and "measured" in header
+    # The webhooks' port is not: no rule admits it, because the API server calls
+    # from the node, which no policy of this plugin stops (measured on kind).
+    assert "measured on kind 2026-10-07" in header
     assert "the same case" not in header
-    # What the open ports allow, said plainly (any pod, forged reviews, a flood).
-    assert "forged" in header and "fail closed" in header
+    # Why no pod may call it: the webhooks fail closed, and a flood could stall.
+    assert "failurePolicy: Fail" in header
     assert "stall" in header
     # deploy.sh and smoke.sh do not compare this policy with the endpoint, and
     # how a stale address shows itself.

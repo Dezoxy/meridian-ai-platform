@@ -1599,8 +1599,8 @@ first `make up` and `make smoke` after it have run on one.
 
 | File | Namespace | What it says |
 |---|---|---|
-| [`manifests/cert-manager-networkpolicy.yaml`](manifests/cert-manager-networkpolicy.yaml) | `cert-manager` | Ingress denied, except 10250 to the two webhooks (the API server calls them, `failurePolicy: Fail`; no peer, see below) and 9402 to the controller's metrics from Prometheus. Egress: DNS and TCP 6443 to the API server's address alone (`make up` reads it from the `kubernetes` EndpointSlice and fills it in, as it does the database's; `make deploy` and `make smoke` do not compare this policy with the endpoint) |
-| [`manifests/observability-networkpolicy.yaml`](manifests/observability-networkpolicy.yaml) | `observability` | Ingress denied, except one rule per peer: the collector from the namespace `meridian` and from the log agent's pods in `logging` (namespace and pod label) on 4318; Tempo from the collector (4317) and Grafana (3200); Loki from the collector and Grafana (3100) and from its own pods (7946, its memberlist); Grafana from Prometheus (3000); Prometheus from Grafana and the collector (9090); kube-state-metrics from Prometheus (8080); and 10250 to the Prometheus operator (no peer). Egress is open |
+| [`manifests/cert-manager-networkpolicy.yaml`](manifests/cert-manager-networkpolicy.yaml) | `cert-manager` | Ingress denied, except 9402 to the controller's metrics from Prometheus; the two webhooks' port (10250, `failurePolicy: Fail`) is admitted from no pod, and the API server, which calls from the node, needs no rule (see below). Egress: DNS and TCP 6443 to the API server's address alone (`make up` reads it from the `kubernetes` EndpointSlice and fills it in, as it does the database's; `make deploy` and `make smoke` do not compare this policy with the endpoint) |
+| [`manifests/observability-networkpolicy.yaml`](manifests/observability-networkpolicy.yaml) | `observability` | Ingress denied, except one rule per peer: the collector from the namespace `meridian` and from the log agent's pods in `logging` (namespace and pod label) on 4318; Tempo from the collector (4317) and Grafana (3200); Loki from the collector and Grafana (3100) and from its own pods (7946, its memberlist); Grafana from Prometheus (3000); Prometheus from Grafana and the collector (9090); kube-state-metrics from Prometheus (8080); and 10250 to the Prometheus operator from Prometheus alone (its webhook and its metrics share the port). Egress is open |
 | [`manifests/smoke-networkpolicy.yaml`](manifests/smoke-networkpolicy.yaml) | `meridian` | The pods of smoke's telemetrygen Jobs may reach DNS and the collector's 4318, and nothing reaches them |
 | [`manifests/smoke-rate-store-networkpolicy.yaml`](manifests/smoke-rate-store-networkpolicy.yaml) | `meridian` | The probe pod of smoke's rate store line (the pods with the label `meridian-smoke=network-probe`) may send to the rate store on 6379, so that only the store's ingress rule can stop it |
 | [`manifests/logging-networkpolicy.yaml`](manifests/logging-networkpolicy.yaml) | `logging` | Ingress and egress denied for every pod; the log agent may reach DNS and the collector's 4318 and nothing else (S064) |
@@ -1624,15 +1624,22 @@ What stays open, in one list:
   half-right egress policy that broke a cold `make up` would be worse. A
   compromised pod there can still reach whatever the other namespaces admit.
 - The three webhooks (cert-manager's, approver-policy's, the Prometheus
-  operator's) are open on one port each to any pod of the cluster, because
-  the API server calls them from the node's address, which changes with every
-  cluster. They are TLS endpoints that answer admission reviews, and they
-  answer anyone: any pod can post a forged review and read the verdict, and
-  nothing is applied by one, so nothing is changed. A flood against the two
-  that fail closed (cert-manager's and approver-policy's) can stall the
-  issuance and renewal of certificates; the operator's is
-  `failurePolicy: Ignore`. Nobody has measured whether the address the API
-  server's calls arrive from is the endpoint's, so none is narrowed.
+  operator's) listen on 10250, and no pod may reach that port except
+  Prometheus on the operator's, which serves its metrics there. No rule
+  admits the API server, the one caller: it calls from the node, and on
+  kind a call that starts on the node passes every NetworkPolicy. Seen on
+  kind on 2026-10-07, for the API server's call to a pod by way of the pod
+  proxy: it arrived from the node's own address on the pod network
+  (10.244.0.1) and reached a pod of `meridian`, whose ingress is denied by
+  default; not seen separately, for a webhook call through the Service's
+  address. A cluster with more than one node, or a plugin that polices the
+  node, would need one `ipBlock` peer on each, filled in the way the
+  egress address is; if a cold `make up` shows a webhook unreachable (no
+  certificate issued, smoke fails), each rule comes back with the node's
+  pod-network address as its one peer. The change is in the files and
+  tested without a cluster; a cold `make up` has not run it. The two that
+  fail closed (cert-manager's and approver-policy's) are the ones a flood
+  could have stalled; the operator's is `failurePolicy: Ignore`.
 - The collector's rule admits every pod of `meridian` that the chart's policies
   let out, and on a cluster where the chart is not installed (`make up` alone)
   every pod of `meridian` can push to it: `default-deny` is the chart's.

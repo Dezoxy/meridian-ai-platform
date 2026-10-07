@@ -78,7 +78,7 @@ readonly RATE_STORE_PROBE_COMMANDS='+ping'
 # refuses the file as it stands; a test keeps this string equal to the file's.
 readonly DATABASE_POLICY_FILE="${KIND_DIR}/manifests/platform-db-networkpolicy.yaml"
 # cert-manager's policies take the same placeholder, on the one egress rule for
-# TCP 6443 (S063, contract FB); its three 10250 ingress rules name no address.
+# TCP 6443 (S063, contract FB); the webhooks' port 10250 has no ingress rule.
 readonly CERT_MANAGER_POLICY_FILE="${KIND_DIR}/manifests/cert-manager-networkpolicy.yaml"
 readonly API_SERVER_PEERS_PLACEHOLDER='to: [{ipBlock: {cidr: API-SERVER-ADDRESS/32}}]'
 

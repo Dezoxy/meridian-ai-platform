@@ -53,24 +53,36 @@
 #                    native OTLP receiver, /api/v1/otlp)
 #   kube-state-      8080 from Prometheus (its ServiceMonitor)
 #   metrics
-#   prometheus-      10250 TCP, no peer. The API server calls the operator's
-#   operator         admission webhook (`failurePolicy: Ignore`: a call that
-#                    fails is let through, silently), and Prometheus scrapes
-#                    the same port. The API server is the kind node, at an
-#                    address that changes with every new cluster and that no
-#                    pod selector can name, so the rule names the port and no
-#                    peer: any pod of the cluster may open a connection to this
-#                    one port of this one pod. What it reaches is a TLS
-#                    endpoint that answers admission reviews, and it answers
-#                    anyone: any pod can post a forged review and read the
-#                    verdict. This webhook fails open, so a forged review or
-#                    a flood of them stops nothing; a review applies nothing,
-#                    so nothing is changed by a forged one. A rule by the
-#                    address the API server's calls arrive from would narrow
-#                    it, but that address is not known to be the endpoint's
-#                    and nobody has measured it, so the rule stays open (the
-#                    two webhooks of cert-manager, which fail closed, are the
-#                    ones a flood can stall: cert-manager-networkpolicy.yaml)
+#   prometheus-      10250 TCP from Prometheus alone. The one port of the operator
+#   operator         serves its admission webhook and its metrics, which the
+#                    chart's ServiceMonitor has Prometheus scrape (`https`), so
+#                    Prometheus is the one peer. The API server alone calls the
+#                    webhook (`failurePolicy: Ignore`: a call that fails is let
+#                    through, silently), and it needs no rule. It calls from
+#                    the node, and a call that starts on the node passes every
+#                    NetworkPolicy of this cluster's network plugin: measured
+#                    on kind 2026-10-07, the API
+#                    server's call to a pod arrived from 10.244.0.1 (the node's
+#                    address on the pod network) and reached a pod of
+#                    `meridian`, whose ingress is denied by default, with no
+#                    rule that admits it (seen on kind 2026-10-07, for a call by
+#                    way of the pod proxy; a webhook call through the Service's
+#                    address is not seen separately, and is taken to leave from
+#                    the same place). The kind cluster has one node and the API
+#                    server runs on it. A rule for the API server would be
+#                    needed on a cluster with more than one node, or with a
+#                    plugin that polices the node: one ipBlock peer, filled in
+#                    the way the database's policy is. If a cold `make up`
+#                    shows the operator's webhook unreachable (an object it
+#                    should have refused is let through: it fails open, so
+#                    nothing says so), that peer is added with the node's
+#                    pod-network address. No other pod may reach the port (it
+#                    was open to every pod of the cluster until S072); the two
+#                    webhooks of cert-manager, which fail closed, are the ones
+#                    a flood could stall: cert-manager-networkpolicy.yaml. This
+#                    change is implemented here and tested without a cluster;
+#                    it is not seen on kind. If Prometheus's target for the
+#                    operator is down on the Targets page, this rule is wrong
 # Prometheus scrapes itself, on 9090 and on its reloader's 8080 (the chart's
 # self-monitoring ServiceMonitor). The rule above admits Grafana and the
 # collector only, and none is written for the pod itself: a connection from a
@@ -83,8 +95,8 @@
 # `make grafana`) is not a connection into the pod's network from another pod:
 # the container runtime opens it from inside the pod's own network namespace,
 # so no ingress rule is written for it; if the cluster shows it blocked, the
-# rule to add is port 3000 with no peer, as for the operator. The kubelet's
-# probes are not blocked by a policy.
+# rule to add is port 3000 with no peer (it would admit every pod: decide it
+# then). The kubelet's probes are not blocked by a policy.
 #
 # Egress is open, for every pod of the namespace, and that is a stated gap, not
 # an oversight. Prometheus scrapes the kubelet's port 10250 and cAdvisor on the
@@ -250,7 +262,16 @@ spec:
       app: kube-prometheus-stack-operator
   policyTypes: [Ingress]
   ingress:
-    - ports:
+    # Prometheus scrapes this port (the chart's ServiceMonitor, `https`): the
+    # webhook and the metrics share it, so this is the one peer. Nor does the
+    # API server need one: the API server calls from the node (the header says
+    # why). No other pod.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+              operator.prometheus.io/name: kube-prometheus-stack-prometheus
+      ports:
         - port: 10250
           protocol: TCP
 ---
