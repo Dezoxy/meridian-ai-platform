@@ -116,7 +116,12 @@ k() { kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meri
 4. **The way in.** A service reaches the collector on port 4318 only if its
    NetworkPolicy has the egress rule (the chart renders it for a pod that is
    given the collector's address) and the collector's namespace admits it
-   (`infra/kind/manifests/observability-networkpolicy.yaml`). It verifies the
+   (`infra/kind/manifests/observability-networkpolicy.yaml`). Since S072 that
+   file also denies egress from `observability` by default (implemented in
+   files and tested without a cluster, not seen on kind): the collector may
+   reach the resolver, Tempo, Prometheus and Loki on their ports and nothing
+   else, so a collector that cannot write to one of them may be refused by
+   `egress-otel-collector`, not by the store. It verifies the
    collector's certificate against the authority in the ConfigMap
    `telemetry-ca`:
 

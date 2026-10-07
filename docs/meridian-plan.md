@@ -550,7 +550,7 @@ both readings the same hour ("yes both are right, go on").
 | S069 | Runtime and gateway edges | Without a change to a prompt or a rule: a validation error in the triage's two answers logs the field; the tool-call limits can differ by agent, or the plan says why not; a failed resumed leg does not leave the first leg's value to be read as the answer; `drafted_by` is right for a completion the filter withheld and the provider billed; the runtime's client of the gateway is bounded per call; a resumed leg that outlived its lease cannot write over the leg that took the run; `service_url_problem` refuses what the HTTP client refuses; a shed tool call's audit row names its run where that can be checked; the refusal flood's count covers the caller check and the throttles; an embedding input is bounded in tokens; the health check watches the certificate the server loaded; the ingestion's data class has a tenant of its own (T-60, the owner's decision when the step opens). Cut in two on 2026-10-06 (the design in Part C): a first half with no lane, and a second half on the cluster, the server's certificate and the health check (R11) and the ingestion's tenant (R12, which the owner decides at S020). Built as, first half (2026-10-07; implemented and tested, none of it run on a cluster, no real provider called): the Claims API logs the failed fields of the runtime's answer, of the triage proposal and of the brief's output, and counts a stored proposal as stored; a leg ends its run only over the `updated_at` its own start or claim wrote, with no new column, and a late leg answers the stored status with no output; a resume that carries a value is refused with a 422; the runtime's call to the gateway has a deadline of 30 s as a whole, a timeout per phase, a reply cap of 1 MiB and `Accept-Encoding: identity`; a refused prompt and a withheld completion are told apart on the wire (`X-Meridian-Completion: withheld` and three headers naming the deployment) and the withheld one has its drafter on record; `service_url_problem` also asks the HTTP client; a shed tool call's row names its run where the run's own row can be read; every service writes the summary of a refusal flood's last window through one writer; a module that exits at import is a failed load; the access log's path is unquoted to a fixed point and loses a userinfo part; the scaffold names the host; the tool span names its step. Not built, each as a decision with its reason in the section: limits per agent (R2), an embedding bound in tokens (R10), a ceiling on the rate limits (B13), a breaker shared between processes (B14), one word for the two limits (B18), a holder column and the second host's scaffold | doing: the first half is done (2026-10-07); R11 waits for the cluster lane and R12 for the owner's decision at S020 | S064, S037 |
 | S070 | Claims intake and what the adjuster is told | The owner decides first whether uploads are built or stay out (T-38: the largest item here; if built it is a step of its own, split off when this one opens); a report dated as a recent loss is seen for what it is, or T-66 says why it cannot be; the adjuster's page marks a recommendation that rests on the model's answer, so a steered model's `approve` does not read as the rules'. Built as, first half (2026-10-07; implemented and tested against PostgreSQL and in the pages' own tests, none of it run on a cluster, nothing paid, no fingerprint moved): the adjuster's claim page says beside a recommendation whether it rests on a model's reading of the exclusion clauses or on the rules alone, and the queue marks it in a column, from one function over the stored fields (no new field, no migration); it reaches the 6 steered recommendations that wait for an adjuster and not the 28 automatic approvals, which no page lists; the page labels the loss date and the report date as not checked and shows two gaps in days, with no rule or bound, and T-66 says why; the claimant's name pattern is built from a read before the claim's row is locked and only for a request the claim can go on with, so a refused request pays no compile (a stale page and a documents post past the cap still do); the redaction is split into six modules by a proven move; the differential test classifies every lost run, its generator writes the forms it lacked and both date guards are pinned from both sides; the e-mail pass reads its placeholder from the mapping; and an international Hungarian phone number is cut at a space before a second number, in a form narrowed after a review (R3b) and narrowed again after a second (R3c, 951b72c), so that it turns the plain shape and not every text the row quoted. Not built, each with its reason in the section: uploads (the owner's decision is open), a bound on what a name may replace, a reorder of the assessor's checks, the wider cut of a dotted number with a `06` group and a third date guard (the owner's questions), and the fix of three known leaks of the phone matcher | doing: the first half is done (R3c and its review stand; the whole suite is the main session's); the owner's decision on uploads and four more questions are open, and the second half holds what the owner decides | S067 |
 | S071 | Measurements that need a live model | Costs money (about fifty chat calls and some embedding calls; the owner says yes before any, and the amount is stated first): a real model's answers to the injection cases the screen lets through, recorded beside the golden recording; a model's refusal of a structured request seen from a real provider; retrieval measured with a real embedding, in the evaluation and in S038's one failing check; the judge compared with labels a person wrote for a sample; a held-out set for the injection screen, and a decision on what a false alarm may cost; CLM-0034's `unsure` settled by a prompt or recorded as the right answer; retrieval over a graph measured again only if the synthetic data gains something relational to find | todo | S067 |
-| S072 | The cluster outside `meridian`, second round | On kind: the Prometheus and CloudNativePG operators' reach into Secrets and ConfigMaps of every namespace is narrowed or recorded as accepted with its reason; DNS and the collector cannot carry data out unseen (T-84), or the residual is stated; writes to Prometheus and Loki pass a policy, and the three hops behind the collector are encrypted or the plan says why not; egress from `observability` and the admission webhooks' port are bounded; `cnpg-system` and `envoy-gateway-system` have Pod Security labels and a policy; the owner decides whether node-exporter stays off; Tempo mounts no API token | doing: four files-only contracts have landed (2026-10-07; implemented and tested, none of it seen on a cluster): Tempo's and Loki's pods mount no service-account token (three keys); `cnpg-system` and `envoy-gateway-system` warn and audit at Pod Security `restricted` from a render, not confirmed by the API server; the certificate policy for the services names the eight URIs and six DNS names the chart renders, not a wildcard; an alert on the rate store's restart loop. The documents record the four accounts that read Secrets in every namespace (not two), the accepted reaches, the residuals and the one measurement (seen on kind: the API server's calls arrive from the node's address on the pod network and pass a default-deny ingress). Left, on the cluster lane after S073's second half: the CloudNativePG operator confined (with a written fall-back), egress from `observability`, the webhooks' port, the policies of the two namespaces, the dry run of the labels, and the corrections the render and the measurement call for; the owner decides the writes clause and node-exporter (stays off) | S064, S066 |
+| S072 | The cluster outside `meridian`, second round | On kind: the Prometheus and CloudNativePG operators' reach into Secrets and ConfigMaps of every namespace is narrowed or recorded as accepted with its reason; DNS and the collector cannot carry data out unseen (T-84), or the residual is stated; writes to Prometheus and Loki pass a policy, and the three hops behind the collector are encrypted or the plan says why not; egress from `observability` and the admission webhooks' port are bounded; `cnpg-system` and `envoy-gateway-system` have Pod Security labels and a policy; the owner decides whether node-exporter stays off; Tempo mounts no API token | doing: the first part is on `main` (2026-10-07; implemented and tested, none of it seen on a cluster): Tempo's and Loki's pods mount no service-account token (three keys); the namespaces of the CloudNativePG operator and of Envoy Gateway warn and audit at Pod Security `restricted` from a render, not confirmed by the API server; the certificate policy for the services names the eight URIs and six DNS names the chart renders, not a wildcard; an alert on the rate store's restart loop. The documents record the four accounts that read Secrets in every namespace (not two), the accepted reaches, the residuals and the one measurement (seen on kind: the API server's calls arrive from the node's address on the pod network and pass a default-deny ingress). The cluster batch is written in files and tested without a cluster, and not seen on kind (2026-10-07; five contracts, W, E, C, N and S): no pod reaches the webhooks' port 10250 but Prometheus, on the operator's; egress from `observability` is denied by default and admitted by rule; the CloudNativePG operator is released into `meridian` under `config.clusterWide=false` and a policy of its own (`cnpg-system` is gone); `envoy-gateway-system` is denied by default and admitted by rule, and `make deploy` refuses a cluster without the operator's policy; smoke compares a Deployment's name as text. Left: the infrastructure review of the batch, the cold run and what it must show, the probes the main session runs in it, then the pull request; the owner decides the writes clause and node-exporter (stays off) | S064, S066 |
 | S073 | Renewals, upgrades and what smoke cannot see | On kind: a renewal is seen for the collector's certificate and the database's, and something alerts before the database's end; the services do not all restart in the same minute at a renewal; approver-policy is restarted when it hangs, and a repaired policy does not wait an hour for cert-manager's retry; a first install that fails has a way back that was tried; the chart bounds its rollback history and `make images` says what to remove; the scripts' `kubectl` calls have a request timeout; a manual sweep Job does not hide a stopped schedule; the failure paths of smoke's newer lines are seen once on a cluster with something broken on purpose; the line that reads approver-policy's wording says so when it fails; probes that time out under load have a recorded answer for the machine the cluster runs on now | doing: the first half is done (2026-10-07: the builds and the runs R0 to R4e, with the answer for the machine recorded); the second half is open: the ingestion's 503 word on a real refusal, the node paused with three deploys, certificates of one hour with all eight renewed, the cold run and a rotation of the rate store's password (the owner's to run or to accept as not seen); approver-policy's liveness probe is not built | S064, S066 |
 | S074 | Test suite and file sizes | Without the cluster: `infra/kind/smoke.sh`, `test_kind_manifests.py` and the four test files over 800 lines are split along the lines their own tests already cut; the six functions over 50 lines are under it (counted by signature plus body without the docstring, as the section says: by the whole count the row used, four of the six, `assess`, `build_report`, `build_injection_report` and `summarise`, are still over); the template-database fixture survives a test that patches the runner's file list; the tests that failed once under load (a lost connection in a parallel run, a tool server's timeout, the gateway's fallback test) are run repeatedly on the machine the suite runs on now and either hold by construction or are closed as not reproduced, with the numbers; the slowest test of the job is under ten seconds; one CPU-time helper; `unused_port()` on macOS has its answer written down; the owner decides whether CI gates on coverage | doing: the first half is done (2026-10-07; tested, none of it run on a cluster): the two upkeep test files, `test_toolserver_meters.py`, `test_claims_graph.py` and `test_kind_manifests.py` are split by moves a script proves, the template database's builder passes the list it read at import, the stack and demo tests that failed under load no longer rest on the machine's speed (argued; the measurement run, 25 loops of each beside a whole suite, has not run), the counting test takes 0.03 s alone where CI saw 47 s, and one CPU-time helper serves nine files; three questions wait for the owner (coverage in CI, a size check, a pytest-level timeout); the second half is built except what waits (2026-10-07; implemented and tested, none of it run on a cluster): S076's leftovers are closed or accepted row by row (the registry `schemas` link and `--check` line, the services edit's small ends, the scaffold's undo, the import walker's limits pinned, the golden set's workload tied to `Report` by its own validator, the claimant's closed tables read-only and three stale sentences), `run_command`, `build_report` and `render_summary` are under 50 lines by signature plus body (37, 47 and 29) with `--help`, every report and the committed summary byte for byte the same, and two of the half's own commits carried a defect that the review reproduced and a contract fixed; what waits: `infra/kind/smoke.sh`'s split (S073 on `main`), the loaders' helper and the split of `test_redaction_hungarian.py` (S070), and the rows the section's last table keeps | S064, S066, S037 |
 | S075 | Harness, guard and Renovate | `make docs` notices a blank line that splits a table; the command guard's known gaps to a Secret's values and to superuser SQL are closed or listed where a session reads them, and a hook that times out has a known outcome; a rule for an implementer that edits through the shell, and a guard or a rule for `make up` and `make down` from an old checkout (both the owner's); the workflow linter knows the runner label; Renovate's week of waiting is a required check or the plan says why not (the owner's decision), an image is not proposed before the chart that installs it, and the two pgvector versions are one | done (not built: the two pgvector versions are not one, because the newest CloudNativePG image still holds 0.8.6; the owner chose package-manager holds over a required check, and uv's `exclude-newer` cannot go in before 2026-10-10; N4, the guard's own files, is the owner's open question 6; the shell-edit hook is inert until the owner sets `bashEditDiffEnabled`) | — |
@@ -737,7 +737,7 @@ that day; the rest stand as their step recorded them.
 | `enforce` for Pod Security Admission on the `meridian` namespace, which has `warn` and `audit` at `restricted` since S019: a server-side dry run of `enforce=restricted` reported no violation, but a cold `make up` under it (CloudNativePG's init Job) was not tried (T-85) | S019 | open | S020 |
 | The Model Gateway's egress rule towards the providers and Key Vault, with FQDN-aware egress or private endpoints (T-19); the chart has none, because on kind the gateway calls nothing outside | S019 | open | S020 |
 | No NetworkPolicy outside `meridian`: the collector accepts a push from any pod of another namespace (T-68, T-84). Since S055 the `cert-manager` namespace is one more without a policy and without Pod Security labels, though its pods meet `restricted` as rendered | S019, S055 | closed by S063 for `cert-manager` and `observability`: ingress denied except a rule for each peer, Pod Security labels at `restricted` (warn and audit), the collector open to `meridian`'s pods alone, probed by smoke on kind; what stays open has rows of its own | S063 |
-| DNS and the collector are open to the pods that use them and could carry data out (T-84) | S019 | closed in part by S072's documents (2026-10-07): the residual of DNS is stated in T-84 for every namespace whose egress admits the resolver, and no script touches the cluster's resolver. Open: the collector's half shrinks with egress from `observability`, which is the cluster batch | S072 |
+| DNS and the collector are open to the pods that use them and could carry data out (T-84) | S019 | closed in part by S072's documents (2026-10-07): the residual of DNS is stated in T-84 for every namespace whose egress admits the resolver, and no script touches the cluster's resolver. The collector's half is the egress policy of the cluster batch (contract E, `cd1d3b9`): `observability` denies egress by default and the collector may reach the resolver, Tempo, Prometheus and Loki on their ports and nothing else; implemented in files and tested without a cluster, not seen on kind. DNS stays the way out there too (the resolver is admitted). Open: the cold run | S072 |
 | The database pod may reach TCP 6443 at any address on kind, not only the API server's: its instance manager calls the API server at the node's own address (T-84) | S019 | closed by S063: `make up` fills the API server's address into the database's and cert-manager's policies, `make deploy` and `make smoke` compare the database's; proved by hand on kind | S063 |
 | Whether each service is safe to run with two replicas is not measured, so every disruption budget protects nothing yet (T-17) | S019 | open | S027 |
 | The images of the platform charts (Envoy Gateway, the Prometheus stack, Tempo, Loki, the operator and, since S055, cert-manager, whose pods read every Secret) are pinned by chart version, not by digest; PostgreSQL's, the collector's and telemetrygen's are by digest | S019 | closed by S063: every image a chart starts is pinned by its index digest and seen so on kind; four images that nothing starts stay by tag, and `infra/kind/README.md` says what would start each | S063 |
@@ -843,10 +843,10 @@ that day; the rest stand as their step recorded them.
 | `tests/meridian/workloads/claims_triage/test_claims_graph.py` is about 1,780 lines; its stubs and helpers would have to move to a support module before it can be split | S031 (python review) | closed by S074 (first half): the file (2,296 lines on the branch, 346 collected) is ten files (the largest 477 lines) and `graphsupport.py`; the collected total is unchanged | S074 |
 | A tool server deployed before its runtime refuses every call of an agent with workers (`worker-missing`). One image runs all six services on kind, so it cannot happen there; a rollout order (the runtime first) is needed where the services are deployed apart | S031 (security review) | open | S020 |
 | One workload declares workers; the scaffold for a new agent writes one without them, and nothing has built a second graph of subgraphs | S031 | closed by S076 as a decision, not built: a second supervisor-and-subgraph example written by the scaffold would be a second graph to keep true with no workload asking for it, and since S037 a new workload may be on either host; the scaffold's output and `config/registry/README.md` say that workers are an edit a person makes in `agents.yaml` | S076 |
-| The Prometheus operator and the CloudNativePG operator read and write Secrets and ConfigMaps in every namespace, so either can read the two authorities' keys, overwrite them, or change the ConfigMap `telemetry-ca` that says what the services trust for telemetry (they read it at each new connection: no restart, no alert) | S063 (security review) | open in part; S072's documents (2026-10-07) say, from a render, that FOUR accounts read Secrets in every namespace and that two more read ConfigMaps (T-68, T-88). Accepted, with the reason in the section: the Prometheus operator (no key narrows it), cert-manager's controller (reads and writes Secrets, needs both) and Envoy Gateway's controller (reads). To be built in the cluster batch: the CloudNativePG operator confined (`config.clusterWide=false`, released into `meridian`, so its rules are a Role there and not a ClusterRole over every namespace), with a written fall-back (if a cold `make up` does not bring the database up under it, the change is taken out and the reach is recorded as accepted with "tried, and what failed") | S072 |
+| The Prometheus operator and the CloudNativePG operator read and write Secrets and ConfigMaps in every namespace, so either can read the two authorities' keys, overwrite them, or change the ConfigMap `telemetry-ca` that says what the services trust for telemetry (they read it at each new connection: no restart, no alert) | S063 (security review) | open in part; S072's documents (2026-10-07) say, from a render, that FOUR accounts read Secrets in every namespace and that two more read ConfigMaps (T-68, T-88). Accepted, with the reason in the section: the Prometheus operator (no key narrows it), cert-manager's controller (reads and writes Secrets, needs both) and Envoy Gateway's controller (reads). Built in files by the cluster batch (contract C, `5e95705`; implemented and tested without a cluster, not seen on kind): the CloudNativePG operator is released into `meridian` with `config.clusterWide=false` under a NetworkPolicy of its own, so its rules are a Role in `meridian` and its ClusterRole holds only nodes, webhook configurations and image catalogs; `cnpg-system` is gone. The residual, stated: that Role still holds `pods/exec` and writes on Secrets and ConfigMaps over all of `meridian`, so the operator's account can still read and overwrite the six services' TLS keys and the ConfigMap `telemetry-ca` there; what stands against it is who can reach the account. The other three accounts stay accepted. The written fall-back holds until a cold `make up` has brought the database up under the confinement: if it does not, the change is taken out and the reach is recorded as accepted with "tried, and what failed" | S072 |
 | Prometheus's OTLP receiver and Loki's push API take writes from Grafana and from the collector directly, past the collector's policy and TLS; the three hops from the collector to Tempo, Loki and Prometheus are clear text inside `observability`; the collector asks a sender for no certificate, so each of the six services can push under another's name (T-68) | S063 (security review) | closed in part by S072's documents (2026-10-07): the three hops stay clear text, as a decision with its reason (T-90). Open: the writes to Prometheus and Loki, which wait for the owner's word (the row of S072 gives no "or" for them; the session recommends amending it to "or the residual is stated"); and the third part, a client certificate at the collector, which is outside the step's row and does not gate its close | S072 |
-| Egress from `observability` is open (Prometheus scrapes the kubelet and the API server at the node's address), and port 10250 of the three admission webhooks admits any pod: a forged review changes nothing, a flood against the two that fail closed can stall the issuing of certificates | S063 | open; S072 measured the address once (seen on kind, 2026-10-07: the API server's calls arrive from the node's address on the pod network and pass a default-deny ingress), and the bound is the cluster batch's: the peerless rules are removed or given that address, and `observability`'s egress is written with the node's address the scripts already hold | S072 |
-| `cnpg-system` and `envoy-gateway-system` have neither Pod Security labels nor a NetworkPolicy; Pod Security on the three labelled namespaces warns and audits and enforces nothing, and `audit` records nothing on kind (no audit policy) | S063 (security review) | closed in part by S072 (contract L, `80d26c9`; implemented and tested without a cluster): the two namespaces carry `warn` and `audit` at `restricted`, from a render of both charts' pods, "not confirmed by the API server"; Envoy's proxy pods are made at run time and were read in the source, not seen. Open: the server-side dry run of the level (cluster batch), the two namespaces' NetworkPolicies (cluster batch; the CloudNativePG operator's confinement removes `cnpg-system` if it holds), and the second half (enforce waits on a cold `make up`; `audit` needs a new cluster with an audit policy), which is outside the step's row | S072 |
+| Egress from `observability` is open (Prometheus scrapes the kubelet and the API server at the node's address), and port 10250 of the three admission webhooks admits any pod: a forged review changes nothing, a flood against the two that fail closed can stall the issuing of certificates | S063 | open in part; S072 measured the address once (seen on kind, 2026-10-07: the API server's calls arrive from the node's address on the pod network and pass a default-deny ingress), and the cluster batch bounds both in files (implemented and tested without a cluster, not seen on kind). Contract W (`67b6ef2`): cert-manager's webhook and approver-policy's, the two that fail closed, lose their peerless rule on 10250, so no pod reaches them (the API server comes in from the node); the Prometheus operator's rule is kept with Prometheus as its one peer, because its webhook and its metrics share the port. Contract E (`cd1d3b9`): `observability` denies egress by default and admits the resolver, the node's published address on 6443 and 10250 through the one placeholder the scripts fill, and each pod's named peers. Residuals, stated: one placeholder serves both ports, so the pods of the three workloads that need only the API server (the operator with its two hook Jobs, kube-state-metrics, Grafana) can open the kubelet's port too, though it asks for a credential and their accounts hold no right on the node (not read on this cluster); the node passes every policy, so a policy here bounds pods and not the node (T-84). Open: the cold run, and a target found down is added once from what it shows | S072 |
+| `cnpg-system` and `envoy-gateway-system` have neither Pod Security labels nor a NetworkPolicy; Pod Security on the three labelled namespaces warns and audits and enforces nothing, and `audit` records nothing on kind (no audit policy) | S063 (security review) | closed in part by S072, all of it implemented in files and tested without a cluster, none of it seen on kind. Labels, contract L (`80d26c9`): the two namespaces carry `warn` and `audit` at `restricted`, from a render of both charts' pods, "not confirmed by the API server"; Envoy's proxy pods are made at run time and were read in the source, not seen. Since contract C (`5e95705`) `cnpg-system` is gone (the operator is released into `meridian`, which is labelled), so L's labels for it were overtaken an hour after they landed and the labels stay on `envoy-gateway-system` alone. Policies: contract N (`faf3044`) gives `envoy-gateway-system` default-deny in both directions with five policies, and the operator has one of its own in `meridian` (contract C). Open: the server-side dry run of the level for `envoy-gateway-system` (the cluster batch's cold run), and the second half (enforce waits on a cold `make up`; `audit` needs a new cluster with an audit policy), which is outside the step's row | S072 |
 | node-exporter is off on kind, so a node's CPU, memory and disk are not observed; it alone would hold `observability` at Pod Security `privileged` | S063 | open; the owner's to overturn; the session's decision of 2026-10-07 (S072, decision 7) is that it stays off, because no rule or dashboard reads its series and it alone would make `observability` privileged; asked in a status | S072 |
 | Renovate proposes a chart a week after its release and an image at once (the docker datasource gives no dependable release date for quay.io and ghcr.io), so an image's tag can be proposed before the chart that installs it; a note on the pull request says to leave it | S063 (infra review) | closed by S075: one rule switches off Renovate's tag updates for the 17 images a chart installs by default and keeps digest updates, so an image is not proposed before its chart (the collector's two images are outside it until their pin and the chart's appVersion agree); the chart's pull request moves the tags by hand | S075 |
 | A renewal has not been seen for the collector's certificate (90 days), its authority (a year) or the database's three certificates (90 days), and nothing alerts on the database's: cert-manager's series do not cover CloudNativePG's | S063 | open in part; S073 built the database line of smoke (passed on the real Cluster, run R4d, 2026-10-07; no alert can read the dates, since CloudNativePG exports no series for them, read in run R0); not seen: a renewal of the collector's certificate, of its authority or of the database's three, which needs a forced renewal of the collector's certificate (not run in this half) and, for the database's, a lifetime in whole days that no run can wait out | S073 |
@@ -967,7 +967,7 @@ that day; the rest stand as their step recorded them.
 | The test `test_the_probes_and_the_pods_are_the_same_with_seven_services_as_with_one` fails when the clock ticks between its two runs, because each names its pod `smoke-network-<epoch>` (it failed once in K10's broad run, and passed three times alone) | S073 (K10's report) | closed by S073 (2026-10-07, K14), after it failed this step's own pull request in CI: the harness gives both runs one fixed second, shown failing first under a clock made to tick; every other name the kind scripts build from the clock, a random number or a process ID was read against its tests, and none compares two runs | S073 |
 | The tests that hold the variable validations of the three Terraform modules (170 of them: 63 in `test_aws_script.py`, 107 in `test_gcp_module.py`) need the `terraform` program and SKIP where it is missing, and the `python` workflow installs only Helm and uv: on the hosted runner they have never run. Those modules are never applied, so CI was meant to be their gate, and the pull requests of S036 and S078 said "the tests hold" of runs made on the development machine alone. Every other tool the suite needs fails in CI when it is missing (`jq`, Helm, the database, Docker); this one skips without a word. Install the pinned `terraform` in the workflow (a `_VERSION` there needs a Renovate reader) or make the marker fail under CI as the `jq` one does | S073 (K14's reading of the pull request's skipped tests: 178, where the run before S078 merged had 71 and the development machine has 8) | open | S079 |
 | Small ends of S068's last two commits, from a re-read that came back while its pull request was in its checks, none fixed there: the audit expiry's line after a failure does not say "at least" as the ledger's now does (the same commit of unknown outcome), and the kind script's test still holds the ledger's old line in its fixtures, so no test proves the script reads the new one; the two tests that plant a reserved row under a SHARE lock take the past month from a second reading of the clock, so a run in the milliseconds around a month's first instant would fail; a paragraph copied into two test files says the tests of the file call the expiry as the owner, which is true of their expiry tests only; no test asserts that a generic plan was in fact chosen on the sixth call; and only one of the two new concurrency tests was shown to fail under a mutation | S068 (a Python re-read of F3 and F4, 2026-10-07) | open; low | S074 |
-| Three small ends of the kind scripts that the infrastructure review of S073 left: `upkeep.sh` reads a `helm get` that timed out (status 124) as "the release is not installed" and says to run `make deploy`, though it stops and does no harm (L3); `smoke.sh` puts a Deployment's name unescaped into a basic regular expression, safe for a DNS label and not for a dotted name (L6); `kctl` gives a plain `delete` without `--wait=false` the request flag though it waits by default, and no call site is affected today (L7) | S073 (infrastructure review) | open | S073 |
+| Three small ends of the kind scripts that the infrastructure review of S073 left: `upkeep.sh` reads a `helm get` that timed out (status 124) as "the release is not installed" and says to run `make deploy`, though it stops and does no harm (L3); `smoke.sh` puts a Deployment's name unescaped into a basic regular expression, safe for a DNS label and not for a dotted name (L6); `kctl` gives a plain `delete` without `--wait=false` the request flag though it waits by default, and no call site is affected today (L7) | S073 (infrastructure review) | open in part: L6 is closed by S072's contract S (`0577663`; in files, tested with stand-ins, not seen on kind): `smoke.sh` compares a policy's name with the Deployment's as text, with no pattern, so a dotted name no longer matches its dash twin; L3 and L7 stay | S073 |
 | The restart share is read from `MERIDIAN_TLS_RESTART_SHARE` by `certlife._restart_share`: an empty value is 0, the old behaviour, so a chart typo that renders an empty share hides itself, while a value of only whitespace refuses the start (the Python review of S073, L4); a share written with Unicode digits or padded is read as a number | S073 (Python review) | open | S073 |
 | What a new 503 of the Model Gateway would have to look like to slip past `test_gateway_503_words.py`, so that the ingestion's word for it would be `unknown`: a status that is an attribute or an imported name (`status.HTTP_503_SERVICE_UNAVAILABLE`, `HTTPStatus.SERVICE_UNAVAILABLE`), a `JSONResponse` or `Response` with no `detail=` keyword, a site under `gateway/providers/` or outside `gateway/` and `common/` (the scan's glob is not recursive), a text from a second mapping like `LIMIT_ANSWERS`, or one of the four texts reused for another cause (the test passes and the word is then ambiguous); an f-string `detail` fails loudly | S073 (Python review) | open | S069 |
 | `meridian registry contracts` ends in a traceback and exit 1 for an output directory it cannot read (`--out` with mode 600, with or without `--check`), for a contract file it cannot read (mode 000) and for one that is not UTF-8, and it follows a dangling `--out` link and creates the link's target; `contract_problems` and `write_contracts` (`platform/toolserver/contracts.py`) catch nothing and `cli/registry.py` calls them bare. It predates S074 (the file is as on `main`); the smallest fix is `except (OSError, UnicodeDecodeError)` around both calls and a line through `_fail`, as `schemas` has | S074 (the re-read of the second half, L-e) | open; low | S074 |
@@ -976,11 +976,16 @@ that day; the rest stand as their step recorded them.
 | S074's second half has two tests that cannot be shown to fail on the code they replace: the `_replace` descriptor test (the fix is right by construction, no `os.close` is left; the test fails when `with open` is replaced by a bare `open`, not on the old code) and the `re._compiler` test (passes on any 3.13, the import fails first). Two low points are left on purpose: `_graded_cases` takes nine parameters because it mirrors `build_report`'s, and the test that pins four committed reports fails when a fifth is committed | S074 (reviews of the second half, L-b, L3, L4, L6) | open; low; no change planned | S074 |
 | S075's checks: the split-table check's docstring (`scripts/check_docs_consistency.py`) names fences and indented tables but not block quotes, a row without a closing pipe, an HTML comment or a lone header-like line, and the lane check's header (`.claude/hooks/check-lanes.sh`) does not say that `--` and `n/a` in "Out now" count as running; the limits are accepted and written in S074's section, and the smallest fixes are a docstring sentence and a header sentence, or two more values in `empty()`, which is a change to a harness hook and the owner's to approve | S075 (S074's second half) | open; not built | S074 |
 | Renovate has not run S075's three new rules: whether Docker Hub gives the Envoy chart a push date (else the chart waits indefinitely, `.github/renovate.json`), whether the `terraform` block's `description` key is accepted and whether the `agent-framework` label is made are unseen; nothing to code, a sentence to write when Renovate next runs (S078's branch edits the same file, so it is not touched before that merge) | S075 (S074's second half) | open; after Renovate's next run | S074 |
-| Sentences in `infra/` that a render of the add-ons' charts (2026-10-07) showed inexact: `manifests/cert-manager-networkpolicy.yaml` says the controller "reads every Secret" (near line 53), and cert-manager's controller also writes them; `manifests/telemetry-ca.yaml` (near lines 31 to 40) and `manifests/service-ca.yaml` (near line 18) list the readers of the authorities' keys without Envoy Gateway's controller, and say only the two operators write; `infra/kind/README.md` (near lines 253, 271, 294, 679, 2066 and 2090) and the comment in `smoke.sh` near line 205 name two cluster-wide readers or "the one switch"; the S063 section's sentence that the one switch drops every role the chart creates is history and stays, T-68 and row 708 say what the render showed | S072 (documents) | open: comments only, no behaviour; corrected with the cluster batch's edits to the same files | S072 |
-| `manifests/cert-manager-networkpolicy.yaml`, near lines 17 to 21, says the address the API server's calls arrive from "is not known, nobody has measured it", and `infra/kind/README.md` (near line 1631) and `manifests/observability-networkpolicy.yaml` (near lines 56 to 71) say the same of the other webhooks' port. Measured once on kind (S072, 2026-10-07): the calls of the API server to a pod arrive from the node's address on the pod network and pass a default-deny ingress. The sentence is to be corrected, and the peerless rules on 10250 (cert-manager's webhook, approver-policy's, the Prometheus operator's) bounded, in the cluster batch | S072 (measurement) | open | S072 |
+| Sentences in `infra/` that a render of the add-ons' charts (2026-10-07) showed inexact: `manifests/cert-manager-networkpolicy.yaml` says the controller "reads every Secret" (near line 53), and cert-manager's controller also writes them; `manifests/telemetry-ca.yaml` (near lines 31 to 40) and `manifests/service-ca.yaml` (near line 18) list the readers of the authorities' keys without Envoy Gateway's controller, and say only the two operators write; `infra/kind/README.md` (near lines 253, 271, 294, 679, 2066 and 2090) and the comment in `smoke.sh` near line 205 name two cluster-wide readers or "the one switch"; the S063 section's sentence that the one switch drops every role the chart creates is history and stays, T-68 and row 708 say what the render showed | S072 (documents) | open: comments only, no behaviour. The cluster batch's contracts (W, E, C, N) edited these files and took none of the sentences listed here: `cert-manager-networkpolicy.yaml` still says (near line 63) that the controller "reads every Secret of the cluster", and `telemetry-ca.yaml` (near line 37) that "the two operators can also write Secrets cluster-wide". Contract C made two more false: `telemetry-ca.yaml` (near lines 34 to 36) and `service-ca.yaml` (near lines 18 to 20) list the CloudNativePG operator among the cluster-wide readers of the authorities' keys, and in files it reads no Secret of `cert-manager` or `observability` any more. One comments-only change corrects them together | S072 |
+| `manifests/cert-manager-networkpolicy.yaml`, near lines 17 to 21, says the address the API server's calls arrive from "is not known, nobody has measured it", and `infra/kind/README.md` (near line 1631) and `manifests/observability-networkpolicy.yaml` (near lines 56 to 71) say the same of the other webhooks' port. Measured once on kind (S072, 2026-10-07): the calls of the API server to a pod arrive from the node's address on the pod network and pass a default-deny ingress. Closed by S072's contract W (`67b6ef2`; in files, tested without a cluster, not seen on kind): the three sentences are rewritten to say who calls the port and why no rule admits it (and they carry the measurement's own limit: a webhook call through the Service was not seen separately), and the peerless rules on 10250 are gone for cert-manager's webhook and approver-policy's and bound to Prometheus for the operator's | S072 (measurement) | closed in files; the cold run sees it | S072 |
 | Smoke's check 10 asks for a Certificate in `default` with the URI `.../sa/meridian-smoke-refused`. Since contract P the services' policy lists exact URIs, so that URI is also refused inside `meridian` and the check no longer proves the namespace selector alone (the test that held it says so: `test_the_request_is_in_a_namespace_the_services_policy_does_not_select`). Either `REFUSED_URI` becomes a listed name such as the gateway's and the old assertion returns, or the weaker check is accepted and the line says what it proves | S072 (contract P) | closed by S072 (F1), implemented and tested with stand-ins, not seen on kind: `REFUSED_URI` is the Claims API's listed URI, so the namespace selector is again the one reason for the refusal, and the test holds the URI, the duration and the usages against the policy's manifest; the cold run of the cluster batch sees it | S072 |
-| `BY_HAND` in `src/meridian/platform/cli/workload.py` lists what the scaffold leaves to a person (the service entry, a chart entry with a certificate) and does not say that a service with a Certificate needs its ID, and its `<service>.meridian.svc` name where it serves TLS, in the `meridian-services` policy's two lists or the issuer refuses its certificate (`config/registry/README.md` says so since contract P). Its test is read before the line is edited | S072 (contract P) | open | S072 |
+| `BY_HAND` in `src/meridian/platform/cli/workload.py` lists what the scaffold leaves to a person (the service entry, a chart entry with a certificate) and does not say that a service with a Certificate needs its ID, and its `<service>.meridian.svc` name where it serves TLS, in the `meridian-services` policy's two lists or the issuer refuses its certificate (`config/registry/README.md` says so since contract P). Its test is read before the line is edited | S072 (contract P) | open; the cluster batch took none of it (a change under `src/`, outside a batch of manifests, scripts and documents): it stays, does not gate the close, and the closing record re-homes it to a step that exists | S072 |
 | Loki's chart renders a ClusterRole with no rules (`loki-clusterrole`) bound to the `loki` ServiceAccount, and a `loki-memcached` ServiceAccount although memcached is off, whose token key contract T's two keys do not touch; no pod uses either, so they grant and mount nothing. Envoy Gateway's chart leaves its certgen RBAC and its topology-injector webhook configuration on the cluster after the hook ran (no delete policy on them) and renders a cluster-wide ValidatingAdmissionPolicy. A value that switches the first two off was not looked for | S072 (render) | open; noticed, harmless as rendered | S072 |
+| Loki's usage report to its vendor's statistics host is now refused by `observability`'s egress policy (contract E, `cd1d3b9`; in files, not seen on kind), and no value switches it off: `values/loki.yaml` has no `analytics` block, so the chart's default stands, which the contract read as on (Tempo's and Grafana's reports and update checks are off in their values). Loki should log a failed report and go on; that is not seen. `loki.analytics.reporting_enabled: false` is one value and one test, to be set only if the default is confirmed on | S072 (contract E) | open; the cold run reads Loki's log for the refused report, and the value is set in S072's close or the row is re-homed there | S072 |
+| `api_server_matches_policy` (`infra/kind/common.sh`, used by `make deploy` and `make smoke`) reads and compares the address in the database's policy alone, though `make up` fills the placeholder in five policies (the database's, cert-manager's, `observability`'s, the CloudNativePG operator's and Envoy Gateway's): a node address that changes under a running cluster (Docker restarted) shows in the other four as an operator, a webhook or the edge that stops working, and nothing compares it. Its message says "run `make up`", which is true for all five. Contracts C and N both noticed it and did not change it | S072 (contracts C and N) | open: a row of the same read and comparison for each policy, with the policy named in the message | S073 |
+| A warm cluster made before contract C is not detected by `up.sh`: it holds the CloudNativePG operator's release in its own namespace, cluster-wide, and Helm would meet cluster-scoped objects owned by the old release. The README, the script's comment and the new policy's header say to make the cluster again (`make down`, then `make up`), only for a cluster that is disposable and never to clear a fault nobody has looked at (CLAUDE.md, rule 8) | S072 (contract C) | open: a check at the start of `up.sh` that reads for the old release and stops with that sentence, instead of a Helm error | S073 |
+| What the cluster batch's reports could not settle from files and the cold run cannot settle either, each costing a log line or a status and not a Ready pod: Grafana's plugin catalogue (the preinstall at start and the plugin update checks are not in the render; a refused download is logged and, by Grafana's documentation, does not hold readiness; not seen); whether Envoy Gateway's controller calls a proxy pod, and on what port (no such call is read in the files; the egress rules name none); ports 18001 and 18002 of the controller, which have no rule because their clients run only for a global rate-limit policy or a Wasm extension and the repository has neither; whether the Prometheus operator calls Prometheus's pods; and the connections taken as unfiltered pod-to-self traffic (Loki's compactor on 9095, Tempo's modules, Prometheus scraping itself on 9090 and 8080). A run that ends green shows that nothing failed in its minutes, not that these hold | S072 (contracts E and N) | open: each is read in the pods' logs of the cold run and, if one shows a refusal, one rule is added from what it shows; none gates the close | S072 |
+| The CloudNativePG chart renders two ClusterRoles of its own, `cnpg-cloudnative-pg-view` and `-edit` (read, and read and write, on the operator's own objects), bound to no account and aggregated to no built-in role (no aggregation label in the render); contract C left them. On AKS, where people sign in (S021), whether someone is bound to them is part of who may change a database Cluster | S072 (contract C) | open; noticed, harmless as rendered on kind | S020 |
 
 ## Part C — Step details
 
@@ -15753,11 +15758,12 @@ address of the API server's calls is known.
 **This record is written while the step is `doing`.** Four contracts of
 files only have landed (T, L, P, R below), the documents of this record are
 the fifth, and one measurement has been made on the cluster by the main
-session. The cluster batch is ahead and waits for the cluster lane, which
-S073's second half holds first. **Nothing but the measurement has been seen
-on the cluster.** Every capability below is labelled implemented (in files
-and tests, none run on a cluster), seen (on kind, by the measurement alone)
-or designed.
+session. The cluster batch was then ahead, waiting for the cluster lane; it
+is written in files since, and its record is the second part, "The cluster
+batch", after the first part's "Follow-ups". **Nothing but the measurement
+has been seen on the cluster.** Every capability below is labelled
+implemented (in files and tests, none run on a cluster), seen (on kind, by
+the measurement alone) or designed.
 
 **What the render changed in what the repository believed.** On 2026-10-07 a
 render with `helm template` of every pinned chart, with the repository's own
@@ -15891,7 +15897,9 @@ reading, below, changed the second and the fourth):
    pods) and its webhook's service moves. **The written fall-back:** if a
    cold `make up` does not bring the database up under it within the
    contract, the change is taken out and the reach is recorded as accepted
-   with "tried, and what failed".
+   with "tried, and what failed". (Built in files since, by contract C: the
+   second part below says what changed on the way, and that the
+   confinement is not seen on kind.)
 3. **DNS, the residual stated.** No script touches the cluster's resolver; the
    five egress rules that name it (`meridian`'s chart policies, the
    database's, smoke's, `cert-manager`'s and `logging`'s) let a name carry a
@@ -15912,12 +15920,14 @@ reading, below, changed the second and the fourth):
    default, and the same reason that decides the writes decides them.
 5. **Egress from `observability` and the webhooks' port: measured, then
    bounded.** The measurement is made (above); the policies and the
-   placeholder's use are the cluster batch's, each seen by a cold `make up`.
+   placeholder's use are the cluster batch's, each seen by a cold `make up`
+   (written in files since, not yet seen: the second part below).
 6. **The two bare namespaces:** labels at `restricted` in `warn` and `audit`
    as the three labelled namespaces have (built, contract L), the server-side
    dry run on kind before they are called confirmed, and one policy each
    from the render's ports (the cluster batch; the CloudNativePG operator's
-   confinement removes one of the two namespaces if it holds).
+   confinement removes one of the two namespaces if it holds, and in files
+   it does: `cnpg-system` is gone, and `envoy-gateway-system` has its policy).
 7. **node-exporter stays off** unless the owner says otherwise: no rule or
    dashboard reads its series, and it alone would make `observability`
    privileged. Asked in a status.
@@ -16017,9 +16027,8 @@ webhooks' port (above).
     (a new pod is a new series); neither Loki nor Tempo renders anything
     that needs the API server; the three pods of the two operators'
     namespaces meet `restricted` in the render.
-- **The cluster batch has started in files** and is not in this record's
-  pull request: contract W (the webhooks' port) is written and waits on a
-  branch of its own, and the egress contract is out.
+- **The cluster batch** was not in the first pull request. It is written in
+  files since (W, E, C, N and S), and its log is in the second part below.
 
 **Result / verification:** the implementers' claims, not the main session's
 runs (the main session runs every gate on the branch and fills the line
@@ -16061,25 +16070,8 @@ promtool's, run by `make alerts`: the implementer's run, `SUCCESS`).
 - on another network plugin, UDP, and the webhook calls' own source address
   (the measurement's list above).
 
-**What is left**, in the order of the cluster batch (after S073's second half
-frees the lane, each seen by one cold `make up`; the measurement is first and
-is made):
-
-1. The webhooks' port and `observability`'s egress, one after the other
-   (both edit the same manifest and tests). The first is written and waits
-   on a branch of its own: the two webhooks that fail closed lose their
-   peerless rule, and the operator's rule keeps the port for Prometheus
-   alone, because its webhook and its metrics share it. The egress contract
-   is out.
-2. The CloudNativePG operator confined and released into `meridian`, with
-   the fall-back above; then the policy of `envoy-gateway-system` (and of
-   `cnpg-system` if the confinement is taken out).
-3. The server-side dry run of the labels, and the corrections of the new rows
-   (the comments the render and the measurement showed inexact; the
-   scaffold's `BY_HAND` line).
-4. Rows that stay open and do not gate the close, if the owner wants them:
-   the edge's access line, the log agent's counters, the rate store's own
-   metrics, a client certificate at the collector.
+**What is left** is in the second part below, "What is left now": the
+first part's list was the cluster batch, which is written in files since.
 
 **Backlog rows of this step** (the table's rows with the home S072; "closed"
 means this record closed it, and the row's status is brought to say so):
@@ -16088,25 +16080,30 @@ means this record closed it, and the row's status is brought to say so):
 |---|---|
 | The access logs (uvicorn's, the edge's) keep a request's query string | Stays: not taken; does not gate the close |
 | The Prometheus operator and kube-state-metrics may read Secrets in every namespace | Closed as accepted, with the render's facts (the owner may overturn) |
-| DNS and the collector are open to the pods that use them | Closed in part: DNS's residual stated; the collector's half is the egress contract |
+| DNS and the collector are open to the pods that use them | Closed in part: DNS's residual stated; the collector's half is contract E's egress policy, in files, not seen on kind |
 | The certificate policy admits any `*.meridian.svc` name | Closed in part by P, in files, not seen: no new name; the residual stays |
 | The rate store's own metrics are scraped by nothing | Stays, as a stated residual (T-92) |
 | No rule reads the rate store's restarts | Closed by R, in files and unit-tested, not loaded on a cluster, not seen firing |
-| The Prometheus operator and the CloudNativePG operator read and write Secrets and ConfigMaps | Open in part: three accepted, the CloudNativePG operator to be confined with a fall-back |
+| The Prometheus operator and the CloudNativePG operator read and write Secrets and ConfigMaps | Open in part: three accepted; the CloudNativePG operator confined to `meridian` by contract C, in files, not seen on kind, with its fall-back standing; the residual, a Role in `meridian` that still execs into pods and writes Secrets and ConfigMaps there, so the six services' TLS keys |
 | Prometheus's OTLP receiver and Loki's push API take writes | Closed in part: the hops' decision; the writes wait for the owner; the client certificate is outside the row |
-| Egress from `observability` is open, and port 10250 of the three webhooks | Stays: the cluster batch, with the address measured |
-| `cnpg-system` and `envoy-gateway-system` have neither labels nor a policy | Closed in part by L (labels, in files, not confirmed by the API server); the policies and the dry run are the cluster batch; enforce and audit are outside the row |
+| Egress from `observability` is open, and port 10250 of the three webhooks | Open in part: bounded in files by W and E, not seen on kind; the residuals are one placeholder for 6443 and 10250, and the node passing every policy |
+| `cnpg-system` and `envoy-gateway-system` have neither labels nor a policy | Closed in part, in files, not seen on kind: labels by L (not confirmed by the API server; the dry run is open), `cnpg-system` gone by C, the gateway's namespace denied by default by N and the operator's policy in `meridian` by C; enforce and audit are outside the row |
 | node-exporter is off on kind | Stays: the owner's; the session's decision is off |
 | `smoke.sh` is near 2,900 lines; Tempo's pod mounts an API token | Home S074; Tempo's half closed in files by T (Loki's too) |
 | The log agent's own counters are scraped by nothing | Stays: not taken; does not gate the close |
 | Nothing alerts on missing data (home S073) | Not touched; its home is the owner's call |
+| Three ends of the kind scripts (S073's row: `upkeep.sh`'s timeout, `smoke.sh`'s unescaped name, `kctl`'s `--wait`) | Home S073; the second closed in files by S, not seen on kind; the other two stay |
+| The sentences in `infra/` the measurement answered (the webhooks' "nobody has measured it") | Closed by W in files, not seen on kind |
 
 **New rows** (Part B's follow-up backlog, each homed at this step's cluster
-batch): the sentences in `infra/` the render showed inexact; the sentences
-the measurement answers (the webhooks' "nobody has measured it"); smoke's
-check 10 after the exact lists (closed by F1, in files); the scaffold's
-`BY_HAND` line; Loki's empty
-ClusterRole and Envoy's hook leftovers.
+batch): the sentences in `infra/` the render showed inexact (still open, and
+contract C made two more false); the scaffold's `BY_HAND` line (still open);
+smoke's check 10 after the exact lists (closed by F1, in files); Loki's empty
+ClusterRole and Envoy's hook leftovers. The cluster batch adds five, in Part
+B: Loki's usage report (S072), the one policy `api_server_matches_policy`
+reads (S073), a warm cluster made before C (S073), the unknowns the cold run
+cannot settle (S072) and the CloudNativePG chart's `view` and `edit`
+ClusterRoles (S020).
 
 **Follow-ups:**
 
@@ -16120,6 +16117,280 @@ ClusterRole and Envoy's hook leftovers.
   default); (2) node-exporter: it stays off unless overturned (no node CPU,
   memory or disk is observed on kind). On AKS (S020) the operators' reach
   comes back with real stakes.
+
+**The cluster batch (second part of this record, 2026-10-07).** Five
+contracts of files and tests, each in a worktree of its own and carried to
+the step's branch `s072-cluster-batch` by the main session: W, E, C, N and
+S. **All of it is implemented in files and tested without a cluster. None
+of it has been seen on kind:** the only thing seen there for this step is the
+first part's measurement. Every sentence below about the batch is to be read
+with that label; the cold run, when it happens, fills the line at the end of
+this part. The infrastructure review of the batch is out and has not
+returned.
+
+**Work log of the cluster batch** (hashes are on the step's branch; each
+entry says what the contract does, the decision it rests on, what was not
+known and what would show it wrong):
+
+- **W, `67b6ef2`: no pod reaches the three admission webhooks' port.**
+  cert-manager's webhook and approver-policy's, the two that fail closed
+  (`failurePolicy: Fail`), lose the rule that admitted every pod on 10250;
+  an ingress policy with no rule denies every pod, and the API server still
+  comes in, because its calls start on the node and pass every policy (the
+  measurement). The two policies are kept with no `ingress` key, as the home
+  of the comment and of the fall-back. **The decision that departs from the
+  first part's reading:** the Prometheus operator's rule is not removed but
+  given Prometheus as its one peer, because the operator serves its webhook
+  and its `/metrics` on the same port and the chart's ServiceMonitor scrapes
+  it (read in the render, `kube-prometheus-stack.yaml:4674-4699`). Not
+  known: whether a webhook call through the Service leaves from the same
+  address as a pod-proxy call (the measurement took them as the same, not
+  seen separately). What would show it wrong: a certificate that is never
+  issued (a webhook that cannot be called fails closed, loudly), the
+  operator's target down on Prometheus's Targets page, or both; the
+  fall-back, written in each place, is the node's address on the pod
+  network as the one peer. Tests: nine failed and 45 passed before the
+  manifests changed; 113 passed after, in four files.
+- **E, `cd1d3b9`: egress from `observability` is denied by default and
+  admitted by rule.** Seven policies in `observability`'s file:
+  `default-deny-egress`, `egress-dns`, `egress-node`, `egress-prometheus`,
+  `egress-grafana`, `egress-otel-collector` and `egress-loki`. Every peer is
+  a pod by label or the placeholder; no rule lacks a peer, none is open to
+  every address, none has an empty selector, and the file holds no IPv4
+  literal. Each pod's rule is its own, so that a shared rule does not give
+  the collector the kubelet. The table of what each pod calls (the render of
+  2026-10-07 and the repository's files, not memory) is in the file's
+  header. **The decision:** `make up` refuses a file that holds its
+  placeholder twice, and the database's and cert-manager's tests pin that,
+  so one `egress-node` rule serves 6443 and 10250 and selects Prometheus, the
+  operator with its two hook Jobs, kube-state-metrics and Grafana; only
+  Prometheus needs the kubelet's port. The alternative, a function that
+  fills several placeholders, would change a shared function and its pinned
+  tests. 4194 and 10255 are in the kubelet's Endpoints object and are
+  scraped by nothing, so they are not opened. What now leaves the cluster
+  and is refused: Loki's usage report to its vendor's host (a row, below),
+  the one such call found. Not known, each costing a log line or a
+  status and not a Ready pod: Grafana's plugin catalogue (not in the
+  render); whether the operator calls Prometheus's pods; Loki's compactor
+  on 9095 and Tempo's modules, taken as unfiltered pod-to-self traffic as
+  the ingress side has been since S063; Prometheus scraping itself on 9090
+  and 8080, the same. What would show it wrong: a target down on
+  Prometheus's Targets page (the kubelet's three paths, the API server,
+  CoreDNS, cert-manager's controller, Grafana, kube-state-metrics, the
+  operator and Prometheus's two), a pod not Ready, a certificate not issued,
+  a refused connection in a pod's log other than Loki's report. The way back
+  is in the file's header: a target found down is added once, from what the
+  run shows; a second round of surprises takes the egress policy out and
+  states the gap. 294 tests passed in the seven files the contract named.
+- **C, `5e95705`: the CloudNativePG operator is confined to `meridian` and
+  `cnpg-system` is gone.** The operator is released into `meridian` with
+  `config.clusterWide=false` (a `--set` in `up.sh`, not the values file),
+  under a policy of its own, `cnpg-operator`: ingress denied (no pod reaches
+  its 9443 or 8080), egress to the resolver, to the placeholder on 6443 and
+  to the database's pods on 8000. The database's own policy now admits the
+  operator by two pod labels and no namespace. Its Role is in `meridian`, so
+  its reach is every Secret and ConfigMap there and `pods/exec`, less than a
+  ClusterRole over every namespace and still the six services' TLS keys. The
+  decisions: 8000 only and not 5432, because the database's policy admits
+  the operator on 8000 alone and the Cluster has been healthy under it
+  (S019), and opening 5432 would widen the database; a warm cluster made
+  before this change is not migrated and `up.sh` does not detect it (a row,
+  below; the README says to make the cluster again). **Contract L's labels
+  for `cnpg-system` and the README's rows for it were overtaken within the
+  hour after they landed:** the namespace does not exist in files any more.
+  No STOP condition fired: the Role in `meridian` suffices for what the
+  repository deploys (one Cluster, two Databases, one ConfigMap and one
+  `helm test` Job; no Backup, ScheduledBackup, Pooler or ImageCatalog was
+  found), the render's pod meets `restricted` by the render author's
+  checker (not the API server's), no change to the chart was needed. Not
+  known: that the operator works under the Role at run time, and under
+  `default-deny` once `make deploy` adds it (the operator's policy is
+  applied before the chart's). What would show it wrong: the lines in
+  `up.sh`'s comment (`helm release platform-db failed`, the ten-minute wait
+  for the Cluster ending, the roles wait ending with `cannotReconcile`), or
+  "Instance Status Extraction Error" after `make deploy`, or a timeout on
+  6443 or a "forbidden" in the operator's log. **The written fall-back
+  stands:** the confinement is taken out and the reach recorded as accepted
+  with "tried, and what failed". Nineteen new tests, 18 red first; 852
+  passed in the files the contract named.
+- **N, `faf3044`: `envoy-gateway-system` is denied by default and admitted by
+  rule.** Five policies: `default-deny`, `egress-dns`, `egress-node`,
+  `envoy-gateway` and `envoy-proxy`. The controller takes 18000 from the
+  proxy pods and calls DNS and the API server's address through the
+  placeholder; the proxy takes the listener's port from any address and
+  calls the controller on 18000, the Claims API in `meridian` on 8000 and
+  DNS. The proxy is selected by the two labels that have run on kind and
+  that smoke and the chart already name (`component=proxy` and
+  `owning-gateway-name=edge`), not by the source's other two, because a
+  selector that missed the proxy would cut it off. **`make deploy` now
+  refuses a cluster without the operator's policy**, as it did for the
+  database's, because the chart's `default-deny` would otherwise cut the
+  operator off. **Decisions:** the listener's rule has no peer, by design:
+  the edge's requests come from the laptop through kind's port mapping to a
+  NodePort, the Service keeps the source address (read in the controller's
+  source: `Local`, not seen), and that source is not the node's own address
+  on the pod network, so the measured pass of node-originated calls does not
+  cover it; it is the one rule without a peer in the file and a test holds
+  it single. `egress-node` selects every pod that is not a proxy pod
+  (`NotIn [proxy]`), because the controller and its certgen Job share no
+  label key and the placeholder may appear once; a pod added later to the
+  namespace would be selected too. Not known: whether the controller calls
+  a proxy pod and on what port (no such call is read in the files); ports
+  18001 and 18002, which have no rule because their clients run only for a
+  global rate-limit policy or a Wasm extension, which the repository has not;
+  the controller's webhook on 9443, `failurePolicy: Ignore`, so a policy
+  fault there would be silent; the literal source of the edge's requests;
+  the proxy pods' labels, which are made at run time. What would show it
+  wrong: the certgen Job unable to reach 6443 (`helm release envoy-gateway
+  failed` and `make up` stops: loud, and the first thing a cold run
+  shows), the Gateway `edge` not programmed, a proxy pod not Ready or with
+  an xDS connection error repeated, smoke's first line (a 404 from Envoy and
+  the counter moved) or the lines through the edge to the Claims API
+  failing. The way back is in the file's header: remove `default-deny`, run
+  smoke, record what failed. 25 new tests; 843 passed in the files named.
+- **S, `0577663`: smoke compares a name as text, and two messages say
+  where the operator is.** In `check_network_service_policies` the pattern
+  that put a Deployment's name unescaped into a basic regular expression
+  is replaced by a comparison of the text after the first slash, so a
+  dotted name no longer matches its dash twin (the first of the three
+  small ends of the kind scripts in S073's row, the second; the other two
+  stay); the
+  two messages of check 10 name `meridian` and the Deployment
+  `cnpg-cloudnative-pg` and no longer the old namespace; and the line `make
+  up` prints for the gateway's policy names its controller and hook Job and
+  no longer says that all of its pods may reach 6443, which is untrue (the
+  proxy may not). Three new tests, two red first against the old script;
+  846 passed in the files named. Not known: that smoke's 46 lines still
+  pass on the cluster with the new loop (it is the same rule the old pattern
+  applied to every name that worked). One side effect to accept: the error
+  for an unreadable address names fewer policies than the file holds.
+- **The review of the batch, pending:** an `infra-reviewer` read of W, E, C,
+  N and S on the step's branch is out; what it finds goes on a line of its
+  own under "Result / verification of the cluster batch".
+
+**Decisions that changed since the first part's record** (the session's; the
+owner may overturn any):
+
+1. **The webhooks' rule is removed for two and kept with Prometheus as its
+   peer for the operator**, because the operator's webhook and its metrics
+   share a port. The first part's reading (remove the rules, or give them the
+   node's address) and W's contract took the operator's metrics to be on
+   another port.
+2. **The CloudNativePG operator was confined:** `cnpg-system` is gone, and
+   the first part's decision 2 ("will be confined") is built in files, with
+   its fall-back standing until a cold run. Contract L's labels for
+   `cnpg-system` and the README's rows for it were overtaken within the
+   hour.
+3. **One placeholder serves 6443 and 10250.** The pods of the three
+   workloads besides Prometheus that call the API server (the operator with
+   its two hook Jobs, kube-state-metrics, Grafana) can therefore open the
+   kubelet's port too. The kubelet asks for a credential and their accounts
+   hold no right on the node (read in the render, not on this cluster). The
+   alternative changes a shared function and its pinned tests.
+4. **The gateway's listener is open to any address, by design:** it is the
+   edge's public face on the laptop and its requests keep their source.
+5. **The residual of the CloudNativePG operator is stated:** its Role in
+   `meridian` still execs into pods and writes Secrets and ConfigMaps over
+   all of `meridian`, so the six services' TLS keys and the ConfigMap
+   `telemetry-ca` stay within its reach. The other three accounts stay
+   accepted as in the first part.
+6. **DNS is open in three more places:** `observability`'s, the operator's
+   and `envoy-gateway-system`'s policies each admit the resolver, so the
+   residual of the first part's decision 3 holds there too.
+7. **The node passes every policy** (the measurement), so every policy of the
+   batch bounds pods and not the node, and a process on the node reaches
+   every pod's port; the batch's rules say so where they rely on it.
+
+**Result / verification of the cluster batch:** the implementers' claims, not
+the main session's runs. W: four test files, 113 passed. E: seven test files,
+294 passed, and seven neighbours, 218. C: 852 passed in the named files and
+1,375 in the wider set. N: 843 passed. S: 846 passed. Each contract ran `make
+docs` (14 checks passed) and `make lint` (six contracts kept, none broken),
+and E, C, N and S ran `shellcheck` on the scripts they changed, with no
+output. No
+contract ran `make pytest` or the whole suite, and none touched the cluster.
+The infrastructure review of the batch is out; its result goes on the next
+line.
+
+BATCH-REVIEW-RESULT
+
+The main session's run of the whole suite on the batch's tree goes on the
+next line.
+
+FINAL-SUITE-RESULT
+
+**The cold run** (the main session's; a cluster made again with `make down`
+and `make up`, which the owner allows for a disposable cluster, and never
+after an incident: rule 8) and what it saw go on the next line. Until it is
+filled, every sentence about the batch says: implemented in files, tested
+without a cluster, not seen on kind.
+
+COLD-RUN-RESULT
+
+**Not seen** (nothing of the batch has met a cluster):
+
+- every pod of `observability` Ready and every target up under the egress
+  policy, certificates issued with the webhooks' peerless rules gone, and
+  the operator's target up under its Prometheus peer;
+- the CloudNativePG operator Ready in `meridian` under the Role, the
+  database and its two Databases reconciled under the operator's policy and
+  under the chart's `default-deny`, and `make up` run twice converging;
+- the certgen Job completing, the controller Ready, the Gateway `edge`
+  programmed and a proxy pod Ready under `envoy-gateway-system`'s policies,
+  and the edge answering through the listener's open rule (and the
+  Service's `externalTrafficPolicy`, expected `Local`);
+- `make deploy` refusing a cluster without the operator's policy, and smoke's
+  lines with the new comparison;
+- the render's rights themselves (the Role in `meridian` as the API server
+  holds it), and the labels of `envoy-gateway-system` against the API
+  server;
+- all of the first part's "Not seen", which no cluster has met either.
+
+**What is left now** (the first part's list was the batch itself, which is
+written in files):
+
+1. The infrastructure review of the batch (its result, above), and its
+   fixes if any, each with a test that fails without it.
+2. The cold run, on a cluster made again from this branch, with `make up`,
+   `make deploy` and `make smoke`, and what it must show: every pod Ready;
+   every target up; the certificates issued; smoke's lines passing (46 by E's
+   count); no pod's log naming a refused connection except Loki's usage
+   report; the operator Ready in `meridian` and nothing on the cluster named
+   after the old namespace; the database reconciling after `make deploy` with
+   no "Instance Status Extraction Error"; the operator's log without a
+   timeout on 6443 or a "forbidden"; the certgen Job done, `edge`
+   programmed and one proxy pod Ready; `make up` a second time converging.
+   Where a run shows a failure, the contract's fall-back for that part:
+   W's peer is the node's address on the pod network, E's is one more rule
+   for a target found down (a second round takes the policy out and states
+   the gap), C's is the confinement taken out and recorded as tried, N's is
+   `default-deny` removed.
+3. The probes the main session runs in that cluster, each a pod that serves
+   for a short time and ends by itself, as the measurement's did: a pod in
+   `default` cannot open 10250 on the three webhook pods (cert-manager's,
+   approver-policy's and the operator's); a pod in `observability` cannot
+   open a connection out (an address no rule names); and the labels'
+   server-side dry run for `envoy-gateway-system`, which no one has made.
+4. The pull request for the batch, then the closing record of the step: the
+   rows that stay open and do not gate the close are re-homed there to a
+   step that exists (the edge's access line, the log agent's counters, the
+   rate store's own metrics, the scaffold's `BY_HAND` line), and the owner's
+   two questions above stand.
+
+**Backlog rows of the cluster batch** are judged in the first part's table
+above and in Part B: egress from `observability` and port 10250, open in
+part (in files, not seen); the two bare namespaces, closed in part (labels:
+the gateway's namespace stays and the operator's is gone; policies: the
+gateway's has one and the operator has one in `meridian`); the operators'
+reach, open in part (three accepted, the CloudNativePG operator's Role in
+`meridian` is the residual); DNS and the collector, closed in part (the
+collector's half is E's egress policy); smoke's unescaped name, closed by S
+and its two ends left; the sentences the measurement answered, closed by W,
+and the sentences the render showed inexact, still open. Five rows are new,
+each with its home: Loki's usage report (S072), the one policy
+`api_server_matches_policy` reads (S073), a warm cluster made before C
+(S073), the unknowns the cold run cannot settle (S072) and the CloudNativePG
+chart's `view` and `edit` ClusterRoles (S020).
 
 ## Part D — Open questions
 
@@ -16821,3 +17092,19 @@ ClusterRole and Envoy's hook leftovers.
   high; its medium finding (smoke's refused request had stopped proving that
   the namespace alone refuses it) and three low ones are fixed in the same
   pull request, which closes one of the five new rows.
+- **PLAN-VERSION, 2026-10-07:** S072's cluster batch, five contracts written
+  in files and tested without a cluster, none seen on kind (still `doing`):
+  no pod reaches the webhooks' port 10250 but Prometheus, on the operator's
+  (W); egress from `observability` is denied by default and admitted by rule
+  (E); the CloudNativePG operator is released into `meridian` under
+  `config.clusterWide=false` and a policy of its own, so `cnpg-system` is gone
+  and contract L's labels for it were overtaken (C); `envoy-gateway-system`
+  is denied by default and admitted by rule, and `make deploy` refuses a
+  cluster without the operator's policy (N); smoke compares a name as text and
+  two messages name where the operator is (S). T-68, T-84 and T-88 changed;
+  T-90 and T-92 read and unchanged; no new threat. Four backlog rows judged in
+  part (DNS and the collector, the operators' reach, egress and the webhooks'
+  port, the two namespaces), one closed (the measurement's sentences), one end
+  of a row of S073's closed, five new (homes S072 twice, S073 twice, S020).
+  The cold run and the batch's review are placeholders in the section until
+  they happen.
