@@ -133,6 +133,12 @@
 {% endif %}
 
 <h2>Audit trail</h2>
+{% if file_downloads %}
+<p>Downloads of this claim's files: {{ file_downloads[0] }}, the latest at {{ file_downloads[1] }}. They are counted here and not listed below.</p>
+{% endif %}
+{% if trail_older %}
+<p>Older events are not listed: the latest {{ trail_limit }} are shown.</p>
+{% endif %}
 {% if trail %}
 <table>
 <thead>

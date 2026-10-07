@@ -14,6 +14,7 @@ import inspect
 import re
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -22,14 +23,7 @@ from servicesupport import claim_with_id
 from workloads.claims_triage.test_adjuster_pages import SECURITY_HEADERS, Page
 
 from meridian.platform.common.env import SettingsError
-from meridian.workloads.claims_triage import (
-    adjuster,
-    briefs,
-    claimant,
-    claimant_uploads,
-    file_download,
-    uploads,
-)
+from meridian.workloads.claims_triage import adjuster, file_download, page_security
 from meridian.workloads.claims_triage.app import create_app
 from meridian.workloads.claims_triage.claim_files import FileSummary
 from meridian.workloads.claims_triage.file_download import (
@@ -264,7 +258,7 @@ async def run_middleware(
 ) -> dict[str, str]:
     async def inner(scope: Any, receive: Any, send: Any) -> None:
         if marked:
-            scope[adjuster.OWN_POLICY_SCOPE_KEY] = True
+            scope[page_security.OWN_POLICY_SCOPE_KEY] = True
         await send({"type": "http.response.start", "status": 200, "headers": headers})
         await send({"type": "http.response.body", "body": b""})
 
@@ -277,7 +271,7 @@ async def run_middleware(
         return {"type": "http.request"}
 
     scope = {"type": "http", "path": path, "method": "GET", "headers": []}
-    await adjuster.SecurityHeadersMiddleware(inner)(scope, receive, collect)
+    await page_security.SecurityHeadersMiddleware(inner)(scope, receive, collect)
     return {k.decode(): v.decode() for k, v in sent[0]["headers"]}
 
 
@@ -342,7 +336,16 @@ def test_every_route_of_the_pages_but_the_download_keeps_the_pages_policy() -> N
         assert response.headers[POLICY_HEADER] == SECURITY_HEADERS[POLICY_HEADER], url
 
 
-def test_no_module_but_the_download_sets_the_mark() -> None:
-    for module in (claimant, claimant_uploads, uploads, briefs):
-        assert "OWN_POLICY_SCOPE_KEY" not in inspect.getsource(module), module.__name__
+def test_no_module_of_the_package_but_the_download_sets_the_mark() -> None:
+    # Every file of the package, so a future one is read too: the key is defined
+    # and read by the pages' middleware, and set by the download alone.
+    package = Path(file_download.__file__).parent
+    names = {
+        path.name
+        for path in package.glob("*.py")
+        if "OWN_POLICY_SCOPE_KEY" in path.read_text(encoding="utf-8")
+    }
+
+    assert names == {"page_security.py", "file_download.py"}
     assert "OWN_POLICY_SCOPE_KEY" in inspect.getsource(file_download)
+    assert "scope[OWN_POLICY_SCOPE_KEY] = True" in inspect.getsource(file_download)

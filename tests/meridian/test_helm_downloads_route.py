@@ -41,7 +41,7 @@ RULE = "downloads"
 SWITCH_ENV = "MERIDIAN_CLAIMS_DOWNLOADS"
 UPLOADS_ENV = "MERIDIAN_CLAIMS_UPLOADS"
 S021 = "S021"
-GUARD = "does not end in .localhost"
+GUARD = "is not a lower-case host name ending in .localhost"
 CLAIM_PATH = "/adjuster/claims/CLM-0001/files/"
 FILE = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
 
@@ -388,6 +388,129 @@ def test_names_that_only_look_local_are_refused() -> None:
         for switches in (UPLOADS_ON, BOTH_ON):
             done = run_helm([*helm_arguments(), *switches, *host(name)])
             assert done.returncode != 0, (name, switches)
+
+
+def values_file(tmp_path: Path, hostname: str, *, switches: bool) -> list[str]:
+    """A values file with this exact host name (a ``--set`` cannot carry a newline
+    or odd bytes the way a file can), and both switches on or off."""
+    path = tmp_path / "hostname.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "route": {
+                    "hostname": hostname,
+                    "uploads": {"enabled": switches},
+                    "downloads": {"enabled": switches},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    return ["-f", str(path)]
+
+
+REVIEWERS_INPUT = "evil.example.com\n    - x.localhost"
+
+
+def test_a_host_name_with_a_newline_and_a_second_name_does_not_pass_the_guard(
+    tmp_path: Path,
+) -> None:
+    # The second security review's input (M-D): the string ends in .localhost.
+    # The mutation "the host name's quoting removed" turns the next test red; the
+    # anchored pattern makes this one refuse.
+    stderr = refusal(*values_file(tmp_path, REVIEWERS_INPUT, switches=True))
+
+    assert GUARD in stderr
+    assert S021 in stderr
+    # Printed quoted: the newline is shown as an escape, on one line.
+    assert '"evil.example.com\\n    - x.localhost"' in stderr
+
+
+def test_the_host_name_is_rendered_quoted_so_that_it_is_one_name_always(
+    tmp_path: Path,
+) -> None:
+    # With both switches off the guard is not asked, and a value that is more than
+    # a name would have rendered as two list items. It is one quoted string.
+    documents = render(
+        [*helm_arguments(), *values_file(tmp_path, REVIEWERS_INPUT, switches=False)]
+    )
+
+    routes = of_kind(documents, "HTTPRoute")
+    assert routes[FIRST]["spec"]["hostnames"] == [REVIEWERS_INPUT]
+
+
+def test_the_guard_matches_the_name_whole_label_by_label(tmp_path: Path) -> None:
+    refused = (
+        "x.localhost\n",
+        "x.localhost\nevil.com",
+        " x.localhost",
+        "x.localhost ",
+        "a..localhost",
+        "-a.localhost",
+        "a-.localhost",
+        "a_b.localhost",
+        ".localhost",
+        "x.localhost.",
+        "X.localhost",
+        "x.localhost:8088",
+        "http://x.localhost",
+        "x.local host",
+    )
+    for name in refused:
+        done = run_helm(
+            [*helm_arguments(), *values_file(tmp_path, name, switches=True)]
+        )
+        assert done.returncode != 0, repr(name)
+    for name in ("x.localhost", "a-b.c0.localhost", "xn--a.localhost", "0.localhost"):
+        documents = render(
+            [*helm_arguments(), *values_file(tmp_path, name, switches=True)]
+        )
+        assert of_kind(documents, "HTTPRoute")[UPLOADS]["spec"]["hostnames"] == [name]
+
+
+def test_a_host_name_that_is_not_a_string_is_refused_with_the_sentence(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "list.yaml"
+    path.write_text(
+        yaml.safe_dump({"route": {"hostname": ["x.localhost"]}}), encoding="utf-8"
+    )
+
+    stderr = refusal(*BOTH_ON, "-f", str(path))
+
+    assert GUARD in stderr
+
+
+def test_the_switches_are_booleans_only_a_string_false_does_not_turn_one_on() -> None:
+    for name in ("route.uploads.enabled", "route.downloads.enabled"):
+        for word in ("false", "true", "off", ""):
+            stderr = refusal("--set-string", f"{name}={word}")
+
+            assert f"{name} must be true or false" in stderr, (name, word)
+            assert "--set, not --set-string" in stderr
+
+
+def test_a_string_false_on_a_local_name_cannot_render_the_upload_route() -> None:
+    # The reviewer rendered claims-api-uploads from this (L-A).
+    done = run_helm([*helm_arguments(), "--set-string", "route.uploads.enabled=false"])
+
+    assert done.returncode != 0
+    assert "claims-api-uploads" not in done.stdout
+
+
+def test_the_guard_and_the_comment_say_what_the_check_is() -> None:
+    template = (CHART_DIR / "templates" / "route.yaml").read_text(encoding="utf-8")
+    values = (CHART_DIR / "values.yaml").read_text(encoding="utf-8")
+
+    for text in (template, values):
+        assert "Host" in text
+        assert "127.0.0.1" in text
+        assert "port-forward" in text
+        # The false sentence of the first guard is gone.
+        assert "cannot be reached from another one" not in text
+    for text in (template, values):
+        assert re.search(r"per route or per\s+(#\s+)?match", text)
+        assert "not seen on a cluster" in " ".join(text.replace("#", " ").split())
 
 
 def test_uploads_without_the_route_is_still_refused_first() -> None:

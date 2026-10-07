@@ -70,13 +70,12 @@ from meridian.platform.common.telemetry import (
     start_span,
 )
 from meridian.platform.common.wire import WireModel
-from meridian.workloads.claims_triage.adjuster import (
+from meridian.workloads.claims_triage.adjuster import NO_SUCH_CLAIM_DETAIL, ClaimId
+from meridian.workloads.claims_triage.lifecycle import SERVICE_NAME
+from meridian.workloads.claims_triage.page_security import (
     CROSS_SITE_DETAIL,
-    NO_SUCH_CLAIM_DETAIL,
-    ClaimId,
     is_cross_site,
 )
-from meridian.workloads.claims_triage.lifecycle import SERVICE_NAME
 from meridian.workloads.claims_triage.rules import Document
 from meridian.workloads.claims_triage.triaging import answer, claim_database_failure
 
@@ -126,6 +125,16 @@ DEFAULT_RATE_PER_MINUTE = 30
 MIN_RATE_PER_MINUTE = 6
 MAX_RATE_PER_MINUTE = 600
 RATE_WINDOW_SECONDS = 60
+# The bytes the store takes in a minute, beside the files: 30 files of 1 MiB would
+# be 30 MiB, and 128 MiB (the default ceiling) would then be full in 4.3 minutes by
+# a caller who creates 43 claims first (a claim holds 3 MiB), for good, since
+# nothing deletes. 8 MiB a minute is eight full-size files, nearly three claims'
+# worth, which no person sending documents by hand comes near: the default ceiling
+# then takes 16 minutes to fill and the cap (256 MiB) 32. It is a constant and not
+# a setting: the ceilings' pattern needs an environment variable, a parser, a
+# field and a chart value for one number nobody has asked to change. The one
+# window is the rate's, 60 seconds. Past it: the rate's 429.
+MAX_BYTES_PER_MINUTE = 8 * MIB
 # How many uploads the route reads and stores at once. The pod has 192 Mi, of
 # which the Claims API itself takes about 66 MB (measured), leaving about 126 MB.
 # One upload peaks at about 2.1 MiB in the form parser and 3 to 4 MiB through to
@@ -203,6 +212,7 @@ DUPLICATE_DETAIL = "the claim already holds this file"
 READ_TIMEOUT_DETAIL = "the file did not arrive in time"
 STORE_FULL_DETAIL = "uploads are stopped: the store is full"
 RATE_DETAIL = "too many uploads in the last minute; try again shortly"
+# The sentence is the rate's for the byte budget too: one wait, one answer.
 SATURATED_DETAIL = "uploads are busy: too many at once; try again shortly"
 LOCK_BUSY_DETAIL = (
     "uploads are busy: the claim or the store is locked; try again shortly"
@@ -235,7 +245,9 @@ DUPLICATE_SQL = (
 STORE_TOTALS_SQL = (
     "SELECT count(*), COALESCE(sum(size_bytes), 0)::bigint, "
     "count(*) FILTER (WHERE received_at >= "
-    "clock_timestamp() - make_interval(secs => %s)) "
+    "clock_timestamp() - make_interval(secs => %s)), "
+    "COALESCE(sum(size_bytes) FILTER (WHERE received_at >= "
+    "clock_timestamp() - make_interval(secs => %s)), 0)::bigint "
     "FROM claims.claim_files"
 )
 # ``received_at`` is taken after the claim's lock, not when the transaction
@@ -494,8 +506,8 @@ def store_file(
         if conn.execute(DUPLICATE_SQL, (claim_id, digest.digest())).fetchone():
             raise UploadConflict("duplicate", DUPLICATE_DETAIL)
         conn.execute(LOCK_STORE_SQL, (STORE_LOCK_CLASS,))
-        ((rows, stored_bytes, recent),) = conn.execute(
-            STORE_TOTALS_SQL, (RATE_WINDOW_SECONDS,)
+        ((rows, stored_bytes, recent, recent_bytes),) = conn.execute(
+            STORE_TOTALS_SQL, (RATE_WINDOW_SECONDS, RATE_WINDOW_SECONDS)
         ).fetchall()
         if stored_bytes + size > limits.ceiling_bytes or rows + 1 > limits.ceiling_rows:
             raise HTTPException(507, STORE_FULL_DETAIL)
@@ -503,7 +515,10 @@ def store_file(
         # own: there is no caller identity), read under the store's lock so that
         # uploads at the same moment count each other. After the ceilings: a full
         # store says so rather than "slow down".
-        if recent >= limits.rate_per_minute:
+        if (
+            recent >= limits.rate_per_minute
+            or recent_bytes + size > MAX_BYTES_PER_MINUTE
+        ):
             raise HTTPException(
                 429, RATE_DETAIL, headers={"Retry-After": str(RATE_RETRY_SECONDS)}
             )
@@ -626,7 +641,9 @@ REFUSALS = (
         },
         429: {
             "model": ErrorBody,
-            "description": "The store took too many files in the last minute.",
+            "description": (
+                "The store took too many files, or too many bytes, in the last minute."
+            ),
             "headers": RETRY_AFTER,
         },
         503: {

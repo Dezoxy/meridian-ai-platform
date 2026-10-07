@@ -7,6 +7,17 @@ gets its certificates. Rendered only when `route.enabled`. With
 `route.uploads.enabled` there is a second HTTPRoute for the same service, for
 the upload paths alone (below).
 */ -}}
+{{- /*
+The two file switches are read as booleans only: in a template the string "false"
+is truthy, so `--set-string route.uploads.enabled=false` would otherwise turn the
+route on (and `--set-string ...=true` pass for a string). Everything below reads
+them as booleans, so this comes first.
+*/ -}}
+{{- range $name, $value := dict "route.uploads.enabled" .Values.route.uploads.enabled "route.downloads.enabled" .Values.route.downloads.enabled }}
+{{- if not (kindIs "bool" $value) }}
+{{- fail (printf "%s must be true or false, a boolean, and is %q: a string is not one (the string \"false\" would count as true); set it with --set, not --set-string, or in a values file without quotes" $name (toString $value)) }}
+{{- end }}
+{{- end }}
 {{- if and .Values.route.uploads.enabled (not .Values.route.enabled) }}
 {{- fail "route.uploads.enabled is true, but route.enabled is false: the upload route is a second route on the edge and has nothing to stand beside; turn the route on (route.enabled, route.hostname, route.parentRef) or turn uploads off" }}
 {{- end }}
@@ -14,19 +25,27 @@ the upload paths alone (below).
 {{- fail "route.downloads.enabled is true, but route.uploads.enabled is false: the download serves the files the upload route stores and has nothing to serve without it; turn uploads on or turn downloads off" }}
 {{- end }}
 {{- /*
-The local-only guard for both file switches. Until sign-in exists (S021) the
-upload route takes a file from anyone who reaches the host and the download
-serves every stored file to anyone who reaches the host, by walking the claim
-IDs (threat model T-38, T-69). So the chart turns either switch on only for a
-route host name that ends in `.localhost`: a name that resolves to the machine
-itself and cannot be reached from another one. On kind the edge's port is bound
-to 127.0.0.1 as well (infra/kind/cluster.yaml). S021 removes this guard when sign-in
-exists. What it does not stop: a forwarded port, or the variable set by hand
-outside the chart.
+The guard for both file switches. Until sign-in exists (S021) the upload route
+takes a file from anyone who reaches the host and the download serves every
+stored file to anyone who reaches the host, by walking the claim IDs (threat
+model T-38, T-69). What the guard IS: a check of a string. The chart turns either
+switch on only when `route.hostname` as a whole is a lower-case DNS name that ends
+in `.localhost`. It does not check who can reach the edge: Envoy matches the Host
+header, which any client can set, so the same release answers anyone who can open
+a connection to the Gateway's address. On kind the boundary is the cluster config
+that binds the published port to 127.0.0.1 (infra/kind/cluster.yaml:18), not this
+chart. The guard stops a release that turns the switches on beside a public name
+in one values file. It does not stop a Gateway that is reachable from a network (a
+LoadBalancer, a changed `listenAddress`), a port-forward, other local users or
+containers that reach the loopback port or the node's address, a `parentRef` to
+another Gateway, or the variable set by hand outside the chart. S021 removes it
+when sign-in exists. The name is matched whole (anchored, one label at a time), so
+a value with a newline or a second name neither passes nor renders as two, and it
+is printed quoted wherever it is rendered.
 */ -}}
 {{- if or .Values.route.uploads.enabled .Values.route.downloads.enabled }}
-{{- if not (hasSuffix ".localhost" .Values.route.hostname) }}
-{{- fail (printf "route.uploads.enabled or route.downloads.enabled is true, but route.hostname %q does not end in .localhost: until sign-in exists (S021) the upload and download routes take and serve files for anyone who reaches the host, so the chart turns them on only for a name that resolves to this machine; use a *.localhost name or turn them off" .Values.route.hostname) }}
+{{- if not (and (kindIs "string" .Values.route.hostname) (regexMatch "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\\.localhost$" .Values.route.hostname)) }}
+{{- fail (printf "route.uploads.enabled or route.downloads.enabled is true, but route.hostname %q is not a lower-case host name ending in .localhost: until sign-in exists (S021) the upload and download routes take and serve files for anyone who reaches the host. This check is of the string only: Envoy matches the Host header and any client can set one, and on kind the boundary is the published port bound to 127.0.0.1, not the chart. Use a *.localhost name, or turn the switches off" (toString .Values.route.hostname)) }}
 {{- end }}
 {{- end }}
 {{- if .Values.route.enabled }}
@@ -42,7 +61,7 @@ spec:
     - name: {{ required "route.parentRef.name is required when route.enabled" .Values.route.parentRef.name }}
       namespace: {{ required "route.parentRef.namespace is required when route.enabled" .Values.route.parentRef.namespace }}
   hostnames:
-    - {{ required "route.hostname is required when route.enabled" .Values.route.hostname }}
+    - {{ required "route.hostname is required when route.enabled" .Values.route.hostname | quote }}
   rules:
     - backendRefs:
         - name: claims-api
@@ -115,7 +134,7 @@ spec:
     - name: {{ .Values.route.parentRef.name }}
       namespace: {{ .Values.route.parentRef.namespace }}
   hostnames:
-    - {{ .Values.route.hostname }}
+    - {{ .Values.route.hostname | quote }}
   rules:
     - matches:
         - method: POST
@@ -174,11 +193,14 @@ not touched. The buffer is the app's UPLOAD_BODY_LIMIT_BYTES (values.yaml says
 how the two are held equal): Envoy buffers a body up to it and answers 413 above
 it. The rate limit is Local: Envoy's own token bucket, no extra service. A rule
 with no clientSelectors applies to all traffic of the targeted route, so the
-route has one bucket for every caller, six requests a minute by default, and
-Envoy answers 429 past it. There is no caller identity to key on before
-sign-in (S021): one busy claimant can use the whole allowance, and that is the
-point, since it bounds how fast the store fills. With more than one Envoy proxy
-pod each counts for itself.
+bucket is meant to be one for every caller of the route, six requests a minute by
+default, and Envoy answers 429 past it. Whether the counter is per route or per
+match (the policy's CRD says only that "each Route has its own rate limit
+counters", so the two POST matches could count apart and allow twelve): not seen
+on a cluster. The app's own rate and byte budget back it up either way. There is
+no caller identity to key on before sign-in (S021): one busy claimant can use the
+whole allowance, and that is the point, since it bounds how fast the store fills.
+With more than one Envoy proxy pod each counts for itself.
 */}}
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: BackendTrafficPolicy
@@ -204,8 +226,10 @@ spec:
 The download rule's own limit (S070 F4b), a policy that targets the rule named
 `downloads` of the uploads route and nothing else (`sectionName`; see the rule
 above for what was read and what only a cluster shows). A local rate limit, as the
-uploads': one bucket for every caller of the rule, per proxy pod, 30 a minute by
-default. The buffer is the first route's own, 64Ki, and no larger: a GET has no
+uploads': meant as one bucket for every caller of the rule, per proxy pod (per
+route or per match: not seen on a cluster, so GET and HEAD may count apart), 30 a
+minute by default; the app has its own limit of the same size, per process
+(file_download.DOWNLOAD_RATE_PER_MINUTE), which does not depend on this one. The buffer is the first route's own, 64Ki, and no larger: a GET has no
 body, so the uploads' buffer is neither needed nor wanted here.
 */}}
 apiVersion: gateway.envoyproxy.io/v1alpha1

@@ -353,9 +353,10 @@ def test_a_get_writes_one_row_with_the_claim_and_the_tenant_and_nothing_of_the_f
     )
     assert body["file_id"] not in text
     assert body["sha256"] not in text
-    # The adjuster's trail shows it as it shows every claim event.
-    page = download_client(db).get(url_of(CLAIM))
-    assert DOWNLOAD_EVENT in Page(page.text).text
+    # The adjuster's page counts the rows in one line and does not list them (F4d).
+    page = Page(download_client(db).get(url_of(CLAIM)).text)
+    assert "Downloads of this claim's files: 2, the latest at" in page.text
+    assert not [row for row in page.rows if DOWNLOAD_EVENT in row]
 
 
 def test_the_row_is_committed_before_the_first_byte_is_sent(
