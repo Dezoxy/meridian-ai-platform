@@ -49,6 +49,16 @@ PYTEST_REDIS_PORT      ?= 26379
 # Extra pytest arguments for `make pytest` and `make pytest-db`, e.g. one test
 # file, or --durations=25 as CI passes.
 PYTEST_ARGS         ?=
+# COVERAGE=1 makes `make pytest` and `make pytest-db` measure the line coverage
+# of src/meridian (pytest-cov, with xdist) and fail under the floor that
+# pyproject.toml's [tool.coverage.report] fail_under holds, the one place it is
+# written (S074). CI sets it; a run without it measures nothing and cannot fail
+# on coverage, so a person running one file is never refused. Anything but 1
+# leaves it off. --no-cov-on-fail keeps a run with a failed test from printing
+# the floor's failure as well: that run fails once, for the test (a passing run
+# below the floor still fails on the floor).
+COVERAGE            ?=
+PYTEST_COVERAGE_ARGS := $(if $(filter 1,$(COVERAGE)),--cov --cov-report=term:skip-covered --no-cov-on-fail,)
 # Worker processes for `make pytest` and `make pytest-db` (pytest-xdist -n): a
 # number, or auto for one per CPU core; 0 runs the tests in one process. Ten,
 # the owner's decision of 2026-10-06 for the 12-core development machine,
@@ -179,15 +189,16 @@ clean:
 # Run through uv, which creates and syncs .venv on first use. The targets above
 # keep working without uv; the docs CI job relies on that.
 
-## lint            ruff check, ruff format --check and the import-linter contracts
+## lint            ruff check, ruff format --check, the import-linter contracts and the file size check (800 lines, scripts/file-size-exceptions.txt)
 lint:
 	uv run ruff check .
 	uv run ruff format --check .
 	uv run lint-imports
+	uv run python scripts/check_file_sizes.py
 
-## pytest          tests under tests/meridian and tests/synthetic, including the import-contract detection test, run in parallel (PYTEST_WORKERS, default 10; 0 runs them in one process)
+## pytest          tests under tests/meridian and tests/synthetic, including the import-contract detection test, run in parallel (PYTEST_WORKERS, default 10; 0 runs them in one process; with COVERAGE=1 a run of a part of the suite fails the coverage floor)
 pytest:
-	uv run pytest -n $(PYTEST_WORKERS) $(PYTEST_ARGS)
+	uv run pytest -n $(PYTEST_WORKERS) $(PYTEST_COVERAGE_ARGS) $(PYTEST_ARGS)
 
 ## alerts          check Meridian's alert rules (infra/kind/alerts) with promtool and run their unit tests and the cost dashboard's gap tests (needs Docker and uv)
 alerts:
@@ -196,7 +207,7 @@ alerts:
 	docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /bin/promtool -v "$(CURDIR)/.alerts:/rules:ro" -w /rules $(PROMTOOL_IMAGE) check rules --lint=all --lint-fatal meridian.rules.yaml
 	docker run --rm --network none --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges --entrypoint /bin/promtool -v "$(CURDIR)/.alerts:/rules:ro" -w /rules $(PROMTOOL_IMAGE) test rules meridian.test.yaml gateway-cost.test.yaml
 
-## pytest-db       pytest in parallel (PYTEST_WORKERS, default 10; 0 runs them in one process) with a throwaway PostgreSQL 17 on 127.0.0.1:55432 and a throwaway Redis 8 on 127.0.0.1:26379, neither persisted (needs Docker; concurrent runs each need their own PYTEST_DB_CONTAINER, PYTEST_DB_PORT, PYTEST_REDIS_CONTAINER and PYTEST_REDIS_PORT); the database and Redis tests run instead of skipping
+## pytest-db       pytest in parallel (PYTEST_WORKERS, default 10; 0 runs them in one process) with a throwaway PostgreSQL 17 on 127.0.0.1:55432 and a throwaway Redis 8 on 127.0.0.1:26379, neither persisted (needs Docker; concurrent runs each need their own PYTEST_DB_CONTAINER, PYTEST_DB_PORT, PYTEST_REDIS_CONTAINER and PYTEST_REDIS_PORT); the database and Redis tests run instead of skipping; with COVERAGE=1 a run of a part of the suite fails the coverage floor
 pytest-db:
 	@set -e; \
 	docker rm -f $(PYTEST_DB_CONTAINER) $(PYTEST_REDIS_CONTAINER) >/dev/null 2>&1 || true; \
@@ -221,7 +232,7 @@ pytest-db:
 	done; \
 	MERIDIAN_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:$(PYTEST_DB_PORT)/postgres \
 	MERIDIAN_TEST_REDIS_URL=redis://127.0.0.1:$(PYTEST_REDIS_PORT)/0 \
-	MERIDIAN_REQUIRE_DB=1 uv run pytest -n $(PYTEST_WORKERS) $(PYTEST_ARGS)
+	MERIDIAN_REQUIRE_DB=1 uv run pytest -n $(PYTEST_WORKERS) $(PYTEST_COVERAGE_ARGS) $(PYTEST_ARGS)
 
 ## eval            replay the golden set through the stack with the recorded model's answers and the judge, and run the injection cases through it with a model that obeys (needs Docker); write both reports and compare them with their baselines
 eval:

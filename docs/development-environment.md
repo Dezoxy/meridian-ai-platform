@@ -222,11 +222,13 @@ guess about another.
 | The whole suite, alone, 8 workers | 2 min 03 s | |
 | The whole suite, alone, 10 workers | 1 min 55 s | The `Makefile`'s default |
 | The whole suite beside the deployed cluster, 4 workers | 3 min 10 s | 5.5 GB still available |
+| The whole suite, 6 workers, no coverage | 4 min 12 s | 2026-10-07, 20,015 tests; other sessions' work held the load at 4 to 6 |
+| The same suite with `COVERAGE=1` | 4 min 17 s | 20,028 tests, 2.0 % more; with the older tracing core it was 5 min 46 s and 5 min 53 s |
 | `make up` from no cluster | 5 min 04 s | Every pinned image resolved on amd64 |
 | The first `make deploy` | 1 min 30 s | 61 s of it waits out the ingestion's token window |
 | `make smoke` | 40 to 52 s | Over 2026-10-06; 35 lines on the deployed cluster |
 | `make demo` on a deployed cluster | 30 s | |
-| The python job in CI | about 8 min | GitHub's four-core runner |
+| The python job in CI | 10 min 1 s to 14 min 29 s | GitHub's four-core runner. On 2026-10-07, before coverage, the whole job took that long in five pull requests (the workflow's comment has the five); the limit is 30 minutes since S074 |
 | One contract at an `implementer` | 3 to 15 min | Reading, tests first, the change, its gates |
 | One review by a reviewer agent | 3 to 13 min | |
 
@@ -449,9 +451,12 @@ listed in its section of the plan.
   of its budget and its constant, and the server clamps that again), and a
   fixture puts the product's values back after each test. A run makes at most
   16 tool calls, so a hung one costs at most 16 times 30, 480 seconds, which is
-  inside the 600-second lease and CI's 15-minute job; at 60 seconds it was 960,
-  inside neither. Tests of the bound itself build no stack. There is no
-  pytest-level timeout: nothing else ends a hung test before the job does.
+  inside the 600-second lease and the 600-second per-test limit (see "The
+  suite's three gates" below); at 60 seconds it was 960, inside neither, and
+  over CI's job limit of 15 minutes as it stood then (900 seconds). Tests of
+  the bound itself build no stack. Until S074's gates (2026-10-07) there was
+  no pytest-level timeout, and nothing else ended a hung test before the job
+  did.
 - **A CPU-time test uses the one helper, `tests/meridian/cputime.py`.** It
   compares a call's thread CPU time on an input with that on one four times
   larger (linear is 4, the limit 8). A busy machine slows a window of tens of
@@ -469,3 +474,37 @@ listed in its section of the plan.
   tests replace the poll's `sleep` with a step of the script's own `SECONDS`,
   so a trace that must time out costs no real time and one that must settle
   needs a few readings, not seconds.
+
+### The suite's three gates
+
+S074 added three gates on 2026-10-07, the owner's answer to three questions.
+The plan's section for S074 ("The three gates") has the measurements; this is
+what a person at the keyboard needs.
+
+- **The file size check is part of `make lint`** (it needs no Docker). It
+  reads the files git tracks: Python under `src/`, `tests/`, `scripts/`,
+  `data/synthetic/generator/` and `spikes/`, and shell under `infra/` and
+  `scripts/`. A file over 800 lines fails unless
+  `scripts/file-size-exceptions.txt` lists it with its line count and a reason.
+  A listed file must have exactly its recorded count: one that grew fails, and
+  one that shrank fails until its entry is lowered, so a change to a listed
+  file edits its entry in the same commit, and an entry is only ever lowered
+  or removed. A listed file that is 800 lines or under, or gone, fails until
+  its line is removed. A new file over the ceiling is split, not listed.
+- **Every test has a limit of 600 seconds**, fixtures included, from
+  `timeout` in `pyproject.toml`, in every run and not only CI's. A hung test
+  fails with pytest-timeout's message and the worker lives (the method is
+  `signal`). A process a test started is not stopped by it. The paid opt-in
+  tests carry no limit. The slowest test measured here took 45.0 s without
+  coverage, so a healthy test on a loaded machine has room.
+- **Coverage is measured under `COVERAGE=1`** (`COVERAGE=1 make pytest-db`;
+  CI sets it): line coverage of `src/meridian`, which fails under the 98 that
+  `fail_under` in `pyproject.toml` holds. A run without the variable measures
+  nothing and cannot fail on coverage, so one file or a subset runs as before;
+  with the variable a subset fails, because the floor is for the whole suite
+  (one file measured 6.08 %; pytest ended with 1 and `make` with 2). The
+  measuring core is the interpreter's own monitoring, set in `pyproject.toml`
+  so that every xdist worker uses it. A whole suite costs 2.0 % more with it
+  on this machine (257.63 s against 252.52 s at six workers, 2026-10-07; see
+  "What things cost"). The data files a run leaves, `.coverage` and
+  `.coverage.*`, are ignored by git.

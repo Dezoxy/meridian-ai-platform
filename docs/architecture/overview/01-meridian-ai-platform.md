@@ -77,7 +77,7 @@ stateDiagram-v2
 
 | Container | Responsibility | Technology | Plane |
 |---|---|---|---|
-| Ingress | TLS termination and routing | Envoy Gateway (Gateway API) on kind; Application Gateway WAF in the Azure design | Edge |
+| Ingress | TLS termination and routing | Envoy Gateway (Gateway API) on kind and in the Azure design (ADR 11) | Edge |
 | Model Gateway | Provider and region policy, fallback, quotas, budgets, cost, redaction, audit | Python, FastAPI | Control |
 | Agent Runtime | Hosts workload graphs and workflows: start, pause for approval, resume, checkpoint, guardrails | Python, LangGraph and Microsoft Agent Framework hosts | Control |
 | Policy MCP Server | Policy lookup and claim history as tools | Python, MCP SDK | Control |

@@ -43,9 +43,11 @@ used everywhere: implemented, simulated, designed.
 
 - Stakeholder: SystemContext, ClaimsTriage, the scope page.
 - Engineer: Containers, ClaimsTriage, ClaimsApproval, the ADRs (ADR 9 for the
-  second agent framework and the runtime's two hosts).
+  second agent framework and the runtime's two hosts; ADR 10 for the designed
+  split into services, a database each and their own releases).
 - Architect: Containers, Governance, DeploymentAws, DeploymentGcp and
-  DeploymentAzure (all designed), the ADRs (ADR 11 for the Azure environment's
+  DeploymentAzure (all designed), the ADRs (ADR 10 for where the platform is
+  meant to go next, and what it would cost; ADR 11 for the Azure environment's
   five choices: written as Terraform, never applied).
 - Operator: Governance, DeploymentAws, DeploymentGcp and DeploymentAzure
   (designed: nothing runs on AWS, on Google Cloud or in Azure beyond the
@@ -114,6 +116,7 @@ changed by that and stays designed.
 - [0007 Map the Azure platform to Google Cloud](decisions/0007-map-the-azure-platform-to-google-cloud.md)
 - [0008 Share the gateway's rate windows in Redis](decisions/0008-share-the-gateways-rate-windows-in-redis.md)
 - [0009 Run a second agent framework behind the same host protocol](decisions/0009-run-a-second-agent-framework-behind-the-same-host-protocol.md)
+- [0010 Split the platform into services with a database each and their own releases](decisions/0010-split-the-platform-into-services-with-a-database-each-and-their-own-releases.md)
 - [0011 Run the Azure platform per demo day on AKS, Envoy at the edge](decisions/0011-run-the-azure-platform-per-demo-day-on-aks-with-envoy-at-the-edge.md)
 
 
