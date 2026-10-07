@@ -672,8 +672,8 @@ def test_up_applies_observabilitys_policies_through_the_function_before_releases
     ]
 
     # The database's, the CloudNativePG operator's (S072, contract C),
-    # cert-manager's and observability's.
-    assert len(calls) == 4
+    # cert-manager's, observability's and Envoy Gateway's (contract N).
+    assert len(calls) == 5
     assert path_line.startswith("readonly OBSERVABILITY_POLICY_FILE=")
     assert lines[applied - 1].startswith("log ")
     assert applied < first_release < stack

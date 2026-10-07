@@ -234,11 +234,11 @@ def test_the_control_of_the_two_refusals_is_the_file_as_committed(
 # ── one function serves both files ───────────────────────────────────────────
 
 
-def test_one_function_applies_the_four_files_and_the_file_is_an_argument() -> None:
+def test_one_function_applies_the_five_files_and_the_file_is_an_argument() -> None:
     lines = UP_SH.splitlines()
     calls = [line for line in lines if line.startswith("apply_api_server_policy ")]
 
-    assert len(calls) == 4
+    assert len(calls) == 5
     assert 'apply_api_server_policy "${DATABASE_POLICY_FILE}" ' in calls[0]
     # The CloudNativePG operator's (S072, contract C), next to the database's.
     assert calls[1].startswith(
@@ -248,6 +248,10 @@ def test_one_function_applies_the_four_files_and_the_file_is_an_argument() -> No
     # Observability's (S072): the same function, its file an argument too.
     assert calls[3].startswith(
         'apply_api_server_policy "${OBSERVABILITY_POLICY_FILE}" '
+    )
+    # Envoy Gateway's (S072, contract N): the fifth, applied before its release.
+    assert calls[4].startswith(
+        'apply_api_server_policy "${ENVOY_GATEWAY_POLICY_FILE}" '
     )
     assert UP_SH.count("apply_api_server_policy() {") == 1
     assert UP_SH.count("api_server_policy_manifest() {") == 1
@@ -304,12 +308,12 @@ def test_the_header_says_what_make_up_fills_and_what_a_stale_address_shows() -> 
     assert "Not proved" in header and "kindnet" in header
 
 
-def test_the_header_of_up_says_the_three_policies_get_the_address() -> None:
+def test_the_header_of_up_says_the_five_policies_get_the_address() -> None:
     header = UP_SH.split("set -euo pipefail")[0]
     flat = " ".join(line.removeprefix("#").strip() for line in header.splitlines())
 
     assert (
-        "the database's, the CloudNativePG operator's, cert-manager's and "
-        "observability's"
+        "the database's, the CloudNativePG operator's, cert-manager's, "
+        "observability's and Envoy Gateway's"
     ) in flat
     assert "EndpointSlice" in flat

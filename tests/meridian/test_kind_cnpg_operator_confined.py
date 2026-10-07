@@ -169,14 +169,14 @@ def test_the_operator_follows_the_namespaces_and_its_policy_and_precedes_the_db(
     assert path_lines.startswith("readonly CNPG_OPERATOR_POLICY_FILE=")
 
 
-def test_one_function_applies_the_four_files() -> None:
+def test_one_function_applies_the_five_files() -> None:
     calls = [
         line
         for line in UP_SH.splitlines()
         if line.startswith("apply_api_server_policy ")
     ]
 
-    assert len(calls) == 4
+    assert len(calls) == 5
     assert OPERATOR_CALL in calls
     assert UP_SH.count("apply_api_server_policy() {") == 1
 
@@ -456,13 +456,10 @@ def test_the_readme_says_where_the_operator_runs_and_what_that_costs() -> None:
         "cluster made before this change needs `make down` and then `make up`" in kind
     )
     assert "tried, and what failed" in kind
-    # The Pod Security table has no row for the namespace that is gone, and the
-    # one bare namespace left is Envoy Gateway's.
+    # The Pod Security table has no row for the namespace that is gone. The
+    # namespace that was left bare after it has its own policy now (contract N).
     assert f"| `{OLD_NAMESPACE}` |" not in kind
-    assert (
-        "`envoy-gateway-system` carries Pod Security labels and no NetworkPolicy"
-        in kind
-    )
+    assert "envoy-gateway-networkpolicy.yaml" in kind
     # The operator no longer reads the CA's private key by a cluster-wide rule.
     assert "CloudNativePG operator reads Secrets in `meridian` only" in kind
 

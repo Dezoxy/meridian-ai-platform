@@ -150,6 +150,12 @@ require_database() {
   # (it admits the operator and the services) the Cluster would go unhealthy.
   kctl -n "${NAMESPACE}" get networkpolicy platform-db >/dev/null 2>&1 ||
     die "the NetworkPolicy 'platform-db' is missing, and the chart's default-deny would cut the database off from its operator; run 'make up' first"
+  # The operator's pod is in this namespace too (S072, contract C), so the same
+  # default-deny selects it: without its own policy it would lose the API server
+  # and the database's pods, and the database would stop being reconciled. A
+  # cluster made before that change, or one whose policy was removed, lacks it.
+  kctl -n "${NAMESPACE}" get networkpolicy cnpg-operator >/dev/null 2>&1 ||
+    die "the NetworkPolicy 'cnpg-operator' is missing, and the chart's default-deny would cut the CloudNativePG operator off from the API server and the database's pods, so the database would stop being reconciled; run 'make up' first"
   # The policy names the API server's address (S063), which changes when Docker
   # restarts the node; the database would then be cut off from the API server.
   api_server_matches_policy || die "${api_server_problem}"

@@ -144,12 +144,12 @@ def test_the_namespaces_header_says_what_audit_and_warn_do_on_kind() -> None:
     assert "audit" not in cluster and "admission" not in cluster
     # `warn` reaches the client that creates a workload; a controller drops it.
     assert "warn reaches" in header and "controller drops it" in header
-    # One namespace carries labels and still no policy, as a stated gap: the
-    # operator's namespace is gone (S072, contract C), so Envoy Gateway's is the
-    # one left bare.
-    assert "envoy-gateway-system carries Pod Security labels" in header
-    assert "and no NetworkPolicy" in header
-    assert "the one namespace left bare" in header
+    # No namespace is left bare (S072): the operator's namespace is gone
+    # (contract C) and Envoy Gateway's has its own policy (contract N).
+    assert "envoy-gateway-networkpolicy.yaml" in header
+    assert "every namespace of the add-ons now has a NetworkPolicy" in header
+    assert "and no NetworkPolicy" not in header
+    assert "left bare" not in header
     assert "neither labels" not in header
 
 
@@ -820,7 +820,8 @@ def test_the_readme_says_what_stays_open_and_that_node_exporter_is_off() -> None
     assert "| `observability` | `baseline` |" not in kind
     # What the labels do on kind, and what has none, as the namespaces file says.
     assert "`audit` records nothing" in kind
-    assert "carries Pod Security labels and no NetworkPolicy" in kind
+    assert "carries Pod Security labels and no NetworkPolicy" not in kind
+    assert "envoy-gateway-networkpolicy.yaml" in kind
     assert "neither labels" not in kind
     # The operator's namespace is history (S072, contract C): no row for it.
     assert "| `cnpg-system` | `restricted` |" not in kind

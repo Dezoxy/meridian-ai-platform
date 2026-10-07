@@ -3,8 +3,9 @@
 #   1. kind cluster "meridian" (only if absent), credentials in infra/kind/kubeconfig
 #   2. namespaces (with Pod Security labels), the NetworkPolicies, Envoy Gateway and
 #      the edge Gateway: the database's, the CloudNativePG operator's,
-#      cert-manager's and observability's (each
-#      applied with the API server's address, read from the `kubernetes`
+#      cert-manager's, observability's and Envoy Gateway's (S072, contract N:
+#      denied by default, the listener's port the one rule without a peer;
+#      each applied with the API server's address, read from the `kubernetes`
 #      EndpointSlice in `default` on every run, so a cluster whose node got
 #      another address is repaired by running this again),
 #      the one for smoke's telemetrygen Jobs, the one that gives smoke's probe
@@ -90,6 +91,10 @@ readonly CERT_MANAGER_POLICY_FILE="${KIND_DIR}/manifests/cert-manager-networkpol
 # observability's takes it on the one egress rule for the node's 6443 and 10250,
 # the API server and the kubelet, which are one address on kind (S072, contract E).
 readonly OBSERVABILITY_POLICY_FILE="${KIND_DIR}/manifests/observability-networkpolicy.yaml"
+# Envoy Gateway's namespace (S072, contract N): denied by default, and the one
+# egress rule for TCP 6443 (the controller and its pre-install hook Job) takes the
+# same placeholder; it is applied before the release, which the Job runs under.
+readonly ENVOY_GATEWAY_POLICY_FILE="${KIND_DIR}/manifests/envoy-gateway-networkpolicy.yaml"
 readonly API_SERVER_PEERS_PLACEHOLDER='to: [{ipBlock: {cidr: API-SERVER-ADDRESS/32}}]'
 
 # install_release NAME NAMESPACE CHART VERSION REPO VALUES_FILE [helm args...]
@@ -367,6 +372,9 @@ apply_api_server_policy "${CERT_MANAGER_POLICY_FILE}" "cert-manager's"
 
 log "network: observability's NetworkPolicies, with the node's address (before Prometheus, Tempo, Loki and the collector)"
 apply_api_server_policy "${OBSERVABILITY_POLICY_FILE}" "observability's" "TCP 6443 and 10250"
+
+log "network: Envoy Gateway's NetworkPolicies, with the node's address (before the controller, its hook Job and the proxy pods)"
+apply_api_server_policy "${ENVOY_GATEWAY_POLICY_FILE}" "Envoy Gateway's" "TCP 6443"
 
 log "network: the NetworkPolicy of smoke's telemetrygen Jobs in meridian"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/smoke-networkpolicy.yaml" >/dev/null

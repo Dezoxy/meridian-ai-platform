@@ -1,0 +1,287 @@
+# Envoy Gateway's namespace: denied by default, admitted by rule (S072, contract
+# N). `envoy-gateway-system` holds the controller (chart gateway-helm v1.9.2,
+# release `envoy-gateway`), the controller's certgen hook Job and, made by the
+# controller at run time, the proxy pods of the Gateway `edge`. The proxy pods
+# ARE the platform's edge: every request from outside enters there. This was the
+# one namespace of the cluster's add-ons with no NetworkPolicy. `make up` applies
+# this file before the release, with the node's address in place of the
+# placeholder, as it does the database's, the operator's, cert-manager's and
+# observability's: five policies, applied together.
+#
+# How each line of the list is known:
+#   render  `helm template` of the pinned chart with kind's values (2026-10-07)
+#   source  the controller's own code, v1.9.2: the proxy pods are made at run
+#           time and are in no render
+#   run     a line the repository already depends on and that has run on kind
+# A render and a source are "read, not seen".
+#
+# THE LIST: every connection, per pod, with port, peer and how it is known.
+#
+# The controller (render: Deployment `envoy-gateway`; its selector is the three
+# labels below, and the Service `envoy-gateway`'s too)
+#   IN   18000  gRPC (xDS): the proxy pods. Render: Service port `grpc`. Source:
+#               the proxy's bootstrap names the controller's Service by DNS.
+#               A rule, from the proxy pods by label.
+#   IN   18001, 18002  the rate limit's and the Wasm cache's ports, on the same
+#               Service; their clients are proxy pods, and only for a global
+#               rate-limit policy and a Wasm extension. This repository has
+#               neither (the route's one policy sets a request buffer). No rule.
+#   IN   9443   the topology-injector webhook. Render: Service port `webhook`;
+#               `failurePolicy: Ignore`, and it acts on `pods/binding` in this
+#               namespace only; the API server alone calls it, from the node,
+#               and a call that starts on the node passes every NetworkPolicy of
+#               this cluster's network plugin: measured on kind 2026-10-07, the
+#               API server's call to a pod arrived from the node's own address
+#               on the pod network (the first of the pod range) and reached a
+#               pod whose ingress is denied by default, with no rule that admits
+#               it (seen on kind 2026-10-07, for a call by way of the pod proxy;
+#               a webhook call through the Service's address is not seen
+#               separately, and is taken to leave from the same place). So no
+#               rule. A cluster with more than one node, or a plugin that
+#               polices the node, would need one ipBlock peer on 9443, with the
+#               node's pod-network address. This webhook is `Ignore`, unlike
+#               cert-manager's two: a call that did not get through raises no
+#               error and leaves no refused request, so it is not loud, and it
+#               does not stop the edge.
+#   IN   19001  metrics. Render: the scrape annotations on the pod and the
+#               Service port. Nothing scrapes it: no monitor object is
+#               rendered, observability's policy has no rule towards this
+#               namespace and a test holds that. No rule.
+#   IN   8081   /healthz and /readyz: the kubelet, from the node. No rule.
+#   OUT  6443   the API server, at the node's address (the placeholder below):
+#               the controller reads the Gateway API objects, Services,
+#               Secrets and ConfigMaps and makes the proxy's Deployment,
+#               Service, ConfigMap and ServiceAccount (render: its Roles and
+#               ClusterRole; leader election is a Lease).
+#   OUT  53     DNS.
+#   OUT  to a proxy: none read. Nothing in the render or the source read here
+#               shows the controller dialling a proxy (the proxy dials it). Not
+#               known beyond that; the cold run below would show it as a
+#               refused connection in the controller's log.
+#
+# The certgen Job (render: Job `envoy-gateway-gateway-helm-certgen`, pod label
+# `app=certgen` and no other)
+#   OUT  6443   the API server: it makes the Secret `envoy-gateway` (the
+#               controller's certificates) and patches the CA bundle of the
+#               topology-injector webhook configuration (render: its Role and
+#               ClusterRole). It is a pre-install hook (a pre-upgrade one too):
+#               Helm runs it before the controller exists, so under the default
+#               deny it needs this rule from its first second. If it cannot reach
+#               6443 the install fails ("helm release envoy-gateway failed") and
+#               `make up` stops: loud, and the first thing a cold run shows.
+#   OUT  53     DNS, given with every pod's. Nothing read says this Job resolves
+#               a name (it reaches the API server by the address its environment
+#               holds); the rule costs nothing and its absence would stop the
+#               install.
+#   IN   none.
+#
+# A proxy pod (source: its labels, ports and security context; run: two labels)
+#   IN   10080  the Gateway's listener `http`. The Gateway's port is 80, a
+#               privileged port, and the controller adds 10000 to it (source:
+#               `servicePortToContainerPort`; the EnvoyProxy in gateway.yaml
+#               does not ask for the listener's own port). Run: smoke.sh's first
+#               line reads the counter of the listener `http-10080`. A request
+#               arrives from the laptop's loopback, port 8088, which kind maps
+#               to node port 30080 (cluster.yaml), the fixed node port of the
+#               proxy's NodePort Service (gateway.yaml), and kube-proxy forwards
+#               it to the pod. That Service sets no `externalTrafficPolicy`, so
+#               the controller's default holds: `Local` (source, v1.9.2, read,
+#               not seen). Local keeps the request's source: the pod sees the
+#               address that reached the node's port, not the node's own address
+#               on the pod network and not a pod. The files do not say which
+#               address that is (Docker's gateway address for the node's
+#               network, in all likelihood), and only a run would show it. The
+#               rule below is right whichever it is: with no peer it admits that
+#               address, and if the source were the node's it would pass
+#               anyway. The listener's port is open to any address by design,
+#               for it is the public entry (loopback only on the laptop, threat
+#               model T-01 and T-03: the port mapping's listen address). It is
+#               the only rule without a peer in this file, and a test holds
+#               that. It also admits any pod of the cluster to that port, which
+#               any pod can reach through the proxy's Service anyway.
+#   IN   19001  metrics: smoke.sh reads the listener's counter through the API
+#               server's pod proxy, which starts on the node (the path measured
+#               2026-10-07). No scraper. No rule.
+#   IN   19002, 19003  the shutdown manager and the readiness port: the
+#               kubelet, from the node (source). No rule.
+#   OUT  18000  the controller's pods (xDS), by their labels.
+#   OUT  8000   the pods of `claims-api` in `meridian`: the route's only
+#               backend, plain HTTP (route.yaml; the chart's `port`). The chart's
+#               own ingress rule admits the proxy on 8000 by namespace and the
+#               label `gateway.envoyproxy.io/owning-gateway-name=edge`: the two
+#               halves of one connection, and a test ties them. Envoy Gateway
+#               programs the Service's endpoints, so the policy sees the pod's
+#               own address; if it used the Service's address instead the plugin
+#               would translate it first, as for every other rule here (the
+#               database's header says that is not proved).
+#   OUT  53     DNS: the bootstrap names the controller by its Service's DNS
+#               name (source).
+#   OUT  6443   none: the proxy mounts no service-account token (source), so it
+#               makes no call to the API server.
+#   OUT  other  none: gateway.yaml configures no tracing, no access-log sink and
+#               no metric sink.
+#
+# THE SELECTORS.
+#   proxy pods  `app.kubernetes.io/component=proxy` and
+#               `gateway.envoyproxy.io/owning-gateway-name=edge`: the two labels
+#               smoke.sh finds the pod by, and the chart admits the edge by the
+#               second. Only labels that have run are used: a selector that
+#               missed the proxy under the default deny would cut the proxy from
+#               the controller, and the edge would never be configured. The
+#               source gives a third and a fourth (`name=envoy`,
+#               `managed-by=envoy-gateway`); they add nothing and are left out.
+#   controller  the Deployment's selector as rendered: `control-plane`,
+#               `app.kubernetes.io/name` (the chart) and
+#               `app.kubernetes.io/instance` (the release, which up.sh names).
+#   the node    one rule, one placeholder, for the controller and the Job: they
+#               share no label key (the Job's pod has `app` alone), and the
+#               function that fills the address refuses a file that holds the
+#               placeholder twice. The policy `egress-node` therefore selects
+#               every pod of the namespace that is not a proxy pod (a `NotIn`
+#               on the component label), which is these two. A pod later added
+#               here would be selected too; a test names the policies that
+#               select each of the three, so one that changes is seen.
+#
+# NOT KNOWN. Each costs a log line or a status, not the edge:
+#   - which source address a request from the laptop has when the proxy sees it
+#     (above: only a run shows it; it changes nothing in this file);
+#   - whether the API server's webhook call through the Service leaves from the
+#     node (not seen separately);
+#   - whether the controller calls a proxy (above);
+#   - whether the plugin enforces the egress rules after the Service's address is
+#     translated to the node's: the database policy's header says it is its fact
+#     and no test proves it.
+#
+# What a cold `make up` must show for the edge: the certgen Job completed and no
+# "helm release envoy-gateway failed"; the controller Ready, with no timeout to
+# 6443 and no "forbidden" in its log; the Gateway `edge` programmed and one proxy
+# pod Ready, its log free of a repeated xDS connection error; smoke's first line
+# passing (a request to the laptop's loopback, port 8088, answered 404 by Envoy,
+# the listener's counter moved) and the lines that call the Claims API through
+# the edge, which are the proof that 10080 and 8000 are admitted. To settle the
+# one open fact, read the proxy Service's `externalTrafficPolicy` as the API
+# server holds it (expected `Local`) and, if the proxy logs access, the peer
+# address of a request from the laptop. Not seen on kind: this file is
+# implemented and tested without a cluster
+# (tests/meridian/test_kind_envoy_gateway_policy.py).
+#
+# The way back, if the edge stops answering after this change: delete the policy
+# `default-deny` in this namespace (the other four are additions to a deny that
+# is then gone), run `make smoke`, and record "tried, and what failed" in the
+# plan before narrowing again. A cluster made before this change is not harmed
+# by running `make up`: the file is applied before the release, on every run.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: envoy-gateway-system
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-dns
+  namespace: envoy-gateway-system
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-node
+  namespace: envoy-gateway-system
+spec:
+  # The controller and the certgen Job: every pod here but a proxy pod.
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          - proxy
+  policyTypes: [Egress]
+  egress:
+    # The API server, at the node's address: the placeholder `make up` fills in.
+    - to: [{ipBlock: {cidr: API-SERVER-ADDRESS/32}}]
+      ports:
+        - port: 6443
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: envoy-gateway
+  namespace: envoy-gateway-system
+spec:
+  podSelector:
+    matchLabels:
+      control-plane: envoy-gateway
+      app.kubernetes.io/name: gateway-helm
+      app.kubernetes.io/instance: envoy-gateway
+  policyTypes: [Ingress]
+  ingress:
+    # xDS: the proxy pods, and no other pod, reach the controller's gRPC port.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: proxy
+              gateway.envoyproxy.io/owning-gateway-name: edge
+      ports:
+        - port: 18000
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: envoy-proxy
+  namespace: envoy-gateway-system
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: proxy
+      gateway.envoyproxy.io/owning-gateway-name: edge
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # The public entry, and the only rule of this file without a peer: the
+    # Gateway's port 80 is the container's 10080, and a request from outside
+    # keeps its source address (`externalTrafficPolicy: Local`), which is not a
+    # pod and may not be the node. Open to any address by design; the header
+    # says why it is right whichever address a run shows.
+    - ports:
+        - port: 10080
+          protocol: TCP
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              control-plane: envoy-gateway
+              app.kubernetes.io/name: gateway-helm
+              app.kubernetes.io/instance: envoy-gateway
+      ports:
+        - port: 18000
+          protocol: TCP
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: meridian
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: claims-api
+      ports:
+        - port: 8000
+          protocol: TCP

@@ -109,10 +109,13 @@
 # controller (a Deployment's ReplicaSet, the operators) is warned about in a
 # response no one reads, and the controller drops it. Nothing stops a
 # privileged pod or one on
-# the node's network. envoy-gateway-system carries Pod Security labels and no
-# NetworkPolicy: Envoy Gateway's controller and proxy are outside it. It is the
-# one namespace left bare; the CloudNativePG operator, which had one of its own,
-# is in `meridian` under its own policy since S072 (contract C).
+# the node's network. No namespace is left without a NetworkPolicy: every
+# namespace of the add-ons now has a NetworkPolicy. envoy-gateway-system, the
+# last, is denied by default and admitted by rule in
+# envoy-gateway-networkpolicy.yaml (S072, contract N), and the CloudNativePG
+# operator, which had a namespace of its own, is in `meridian` under its own
+# policy (contract C). A NetworkPolicy is not a Pod Security label and neither
+# stands in for the other.
 apiVersion: v1
 kind: Namespace
 metadata:
