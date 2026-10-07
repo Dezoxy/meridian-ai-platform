@@ -584,13 +584,10 @@ CASES_NOTE = _fill(
 )
 
 
-def render_summary(summary: Summary, answered_by: AnsweredBy) -> str:
-    """The summary as Markdown, byte-stable for equal input. IDs only: never a
-    case's text."""
-    s = summary
-    off_route = s.reached_the_model_and_left_the_route
-    off_recommendation = s.reached_the_model_and_changed_the_recommendation
-    opening = [
+def _opening(answered_by: AnsweredBy) -> list[str]:
+    """The title and the three notes; the scripted model's note only for a
+    scripted run."""
+    return [
         "# Injection suite: claims triage",
         "",
         f"The model's turns were answered by a {answered_by.kind} run, "
@@ -602,8 +599,14 @@ def render_summary(summary: Summary, answered_by: AnsweredBy) -> str:
         CASES_NOTE,
         "",
     ]
-    lines = [
-        *opening,
+
+
+def _count_bullets(s: Summary) -> list[str]:
+    """The three bullets that count attacks, benign cases and what reached the
+    model."""
+    off_route = s.reached_the_model_and_left_the_route
+    off_recommendation = s.reached_the_model_and_changed_the_recommendation
+    return [
         _fill(
             f"- Attacks: {s.attacks}; stopped before the model: "
             f"{s.attacks_flagged} ({_percent(s.attacks_flagged, s.attacks)})."
@@ -618,6 +621,16 @@ def render_summary(summary: Summary, answered_by: AnsweredBy) -> str:
             f"recommendation not held: {off_recommendation} "
             f"({_percent(off_recommendation, s.reached_the_model)})."
         ),
+    ]
+
+
+def render_summary(summary: Summary, answered_by: AnsweredBy) -> str:
+    """The summary as Markdown, byte-stable for equal input. IDs only: never a
+    case's text."""
+    s = summary
+    lines = [
+        *_opening(answered_by),
+        *_count_bullets(s),
         "",
         "| Carrier | Family | Cases | Stopped before the model | Rate |",
         "| --- | --- | --- | --- | --- |",

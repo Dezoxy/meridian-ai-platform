@@ -30,7 +30,9 @@
   data or addresses the model is not sent, and identifiers are redacted
   before any model call and in logs), a claim it refers to an adjuster waits
   with its run paused in PostgreSQL until the adjuster decides it on a
-  server-rendered page and the Claims API records the decision and resumes
+  server-rendered page that says whether the recommendation it shows rests
+  on a model's reading or on the rules alone (S070, tested, not seen on
+  kind) and the Claims API records the decision and resumes
   it (or sends the claim back to triage), a claim whose triage failed is
   decided by an adjuster, a claim can be withdrawn or get the documents it
   was asked for, at most five triages each, a scheduled sweep refers a
@@ -546,11 +548,11 @@ both readings the same hour ("yes both are right, go on").
 | S067 | Triage rules and screening | The one step of these that changes the triage graph's rules: claims of one policy that are open at the same time count for `frequent_claims` (T-76); the injection screen reads the description as posted, before the claimant's name is replaced; the redaction knows Hungarian forms of names and identifiers; the stored wording is compared with the manifest after ingestion (T-27, T-57); a wording version missing from `wording.EXCLUSION_CLAUSES` fails with a message that names it (moved here from S060, which may not change how the triage routes a claim); golden-set cases on the fraud indicators' boundaries and for an unknown policy number; `make eval` passes, and a change that needs `make eval-record` waits for the owner's yes, since it costs money. Built as (2026-10-06; implemented and tested, none of it run on a cluster): the Claims API screens the description as posted and hands the run one boolean, `posted_text_addresses_the_model`, which the assessor reads as a hit of its own screen (CLM-1053 and CLM-1054 are stopped, 26 of 66 attacks); the redaction finds the Hungarian national phone, tax number, domestic account number and personal identification number on their own and the social security and tax identification numbers after their word, and the claimant's name is replaced with Hungarian endings after a capital letter; a wording pair the table has no count for fails the run with the fixed code `wording-version-unknown` where the rules would read it (the log line names the product and version only when both pass a closed check), not with a message that names it, and a claim that is not valid facts fails with `claim-not-valid` after a log of its fields; the golden set holds 47 claims, seven of them new, from a second random stream, and the model is not asked about them; claims that are still open count for `frequent_claims` by the strict date rule of a decided one, and a withdrawn claim never does (migration 0025, the owner's decision of 2026-10-06); `meridian knowledge verify` compares the stored clauses with the manifest-verified wordings and the ingestion Job runs it after its write (migration 0026). The free replay passed after each landing that could move a recorded answer, and no paid recording was made | done | S060, S061, S064 |
 | S068 | Database upkeep and retention | The owner names the retention periods for `audit.events` and `gateway.usage` first (open since S011; without them the step builds the mechanism and schedules nothing); an insert-only audit table has a way to expire rows; migration 0017's rewrite of a large audit table has a way through that is written down and tested; the static check on migrations says what it cannot see or sees it; `expire_ledger` works in batches; a holder of the upkeep credential cannot stall the gateway with an open transaction; a login that is a member of `claims_sweep` is confined or refused where the database is made; no role creates temporary tables it does not need. Built as (2026-10-07; implemented and tested against PostgreSQL, none of it run on a cluster; no number of days and no schedule is set anywhere): audit rows expire through one function of the owner's that only a session logged in as the upkeep role reaches, `meridian gateway expire-audit` with a dry run that counts, in batches of at most 10,000, each with an audit row, and the rows the upkeep role wrote itself are never removed by it (migrations 0027, 0028); the ledger expires in batches of 100 to 10,000 usage rows on one connection, with a closing call for the counters and credits (0029, 0030); 0017's way through is written down in the migrations' README as needed by no database that exists, a test shows that it fails closed at its first heavy statement and the two ways out are designed, not built; the static check on migrations sees more statements and the README lists what it does not see, each entry pinned by a test; a database default ends a transaction left idle after 60 s (0031), which stops a forgotten transaction and not a deliberate one, so a holder of the upkeep credential can still stall a counter for the statement timeout; a member of `claims_sweep`, or of `gateway_upkeep`, is refused at every `meridian db migrate` after the files are applied, which detects at the next deploy and does not prevent; `pg_temp` is last in the path of every trigger and definer function, with a test over the whole catalog, and the right to make temporary tables stays with PUBLIC (decided, not built). Not built: the periods and a schedule (the owner's, four questions in the section), the briefs' expiry (waits for the owner), a parser for the static check | done (the periods are the owner's and are not set, nothing is scheduled; not built: the briefs' expiry and the removal of PUBLIC's right to make temporary tables, see the Done-when cell and the section) | S066 |
 | S069 | Runtime and gateway edges | Without a change to a prompt or a rule: a validation error in the triage's two answers logs the field; the tool-call limits can differ by agent, or the plan says why not; a failed resumed leg does not leave the first leg's value to be read as the answer; `drafted_by` is right for a completion the filter withheld and the provider billed; the runtime's client of the gateway is bounded per call; a resumed leg that outlived its lease cannot write over the leg that took the run; `service_url_problem` refuses what the HTTP client refuses; a shed tool call's audit row names its run where that can be checked; the refusal flood's count covers the caller check and the throttles; an embedding input is bounded in tokens; the health check watches the certificate the server loaded; the ingestion's data class has a tenant of its own (T-60, the owner's decision when the step opens). Cut in two on 2026-10-06 (the design in Part C): a first half with no lane, and a second half on the cluster, the server's certificate and the health check (R11) and the ingestion's tenant (R12, which the owner decides at S020). Built as, first half (2026-10-07; implemented and tested, none of it run on a cluster, no real provider called): the Claims API logs the failed fields of the runtime's answer, of the triage proposal and of the brief's output, and counts a stored proposal as stored; a leg ends its run only over the `updated_at` its own start or claim wrote, with no new column, and a late leg answers the stored status with no output; a resume that carries a value is refused with a 422; the runtime's call to the gateway has a deadline of 30 s as a whole, a timeout per phase, a reply cap of 1 MiB and `Accept-Encoding: identity`; a refused prompt and a withheld completion are told apart on the wire (`X-Meridian-Completion: withheld` and three headers naming the deployment) and the withheld one has its drafter on record; `service_url_problem` also asks the HTTP client; a shed tool call's row names its run where the run's own row can be read; every service writes the summary of a refusal flood's last window through one writer; a module that exits at import is a failed load; the access log's path is unquoted to a fixed point and loses a userinfo part; the scaffold names the host; the tool span names its step. Not built, each as a decision with its reason in the section: limits per agent (R2), an embedding bound in tokens (R10), a ceiling on the rate limits (B13), a breaker shared between processes (B14), one word for the two limits (B18), a holder column and the second host's scaffold | doing: the first half is done (2026-10-07); R11 waits for the cluster lane and R12 for the owner's decision at S020 | S064, S037 |
-| S070 | Claims intake and what the adjuster is told | The owner decides first whether uploads are built or stay out (T-38: the largest item here; if built it is a step of its own, split off when this one opens); a report dated as a recent loss is seen for what it is, or T-66 says why it cannot be; the adjuster's page marks a recommendation that rests on the model's answer, so a steered model's `approve` does not read as the rules' | todo | S067 |
+| S070 | Claims intake and what the adjuster is told | The owner decides first whether uploads are built or stay out (T-38: the largest item here; if built it is a step of its own, split off when this one opens); a report dated as a recent loss is seen for what it is, or T-66 says why it cannot be; the adjuster's page marks a recommendation that rests on the model's answer, so a steered model's `approve` does not read as the rules'. Built as, first half (2026-10-07; implemented and tested against PostgreSQL and in the pages' own tests, none of it run on a cluster, nothing paid, no fingerprint moved): the adjuster's claim page says beside a recommendation whether it rests on a model's reading of the exclusion clauses or on the rules alone, and the queue marks it in a column, from one function over the stored fields (no new field, no migration); it reaches the 6 steered recommendations that wait for an adjuster and not the 28 automatic approvals, which no page lists; the page labels the loss date and the report date as not checked and shows two gaps in days, with no rule or bound, and T-66 says why; the claimant's name pattern is built from a read before the claim's row is locked and only for a request the claim can go on with, so a refused request pays no compile (a stale page and a documents post past the cap still do); the redaction is split into six modules by a proven move; the differential test classifies every lost run, its generator writes the forms it lacked and both date guards are pinned from both sides; the e-mail pass reads its placeholder from the mapping; and an international Hungarian phone number is cut at a space before a second number, in a form narrowed after a review (R3b) and narrowed again after a second (R3c, 951b72c), so that it turns the plain shape and not every text the row quoted. Not built, each with its reason in the section: uploads (the owner's decision is open), a bound on what a name may replace, a reorder of the assessor's checks, the wider cut of a dotted number with a `06` group and a third date guard (the owner's questions), and the fix of three known leaks of the phone matcher | doing: the first half is done (R3c and its review stand; the whole suite is the main session's); the owner's decision on uploads and four more questions are open, and the second half holds what the owner decides | S067 |
 | S071 | Measurements that need a live model | Costs money (about fifty chat calls and some embedding calls; the owner says yes before any, and the amount is stated first): a real model's answers to the injection cases the screen lets through, recorded beside the golden recording; a model's refusal of a structured request seen from a real provider; retrieval measured with a real embedding, in the evaluation and in S038's one failing check; the judge compared with labels a person wrote for a sample; a held-out set for the injection screen, and a decision on what a false alarm may cost; CLM-0034's `unsure` settled by a prompt or recorded as the right answer; retrieval over a graph measured again only if the synthetic data gains something relational to find | todo | S067 |
 | S072 | The cluster outside `meridian`, second round | On kind: the Prometheus and CloudNativePG operators' reach into Secrets and ConfigMaps of every namespace is narrowed or recorded as accepted with its reason; DNS and the collector cannot carry data out unseen (T-84), or the residual is stated; writes to Prometheus and Loki pass a policy, and the three hops behind the collector are encrypted or the plan says why not; egress from `observability` and the admission webhooks' port are bounded; `cnpg-system` and `envoy-gateway-system` have Pod Security labels and a policy; the owner decides whether node-exporter stays off; Tempo mounts no API token | doing: four files-only contracts have landed (2026-10-07; implemented and tested, none of it seen on a cluster): Tempo's and Loki's pods mount no service-account token (three keys); `cnpg-system` and `envoy-gateway-system` warn and audit at Pod Security `restricted` from a render, not confirmed by the API server; the certificate policy for the services names the eight URIs and six DNS names the chart renders, not a wildcard; an alert on the rate store's restart loop. The documents record the four accounts that read Secrets in every namespace (not two), the accepted reaches, the residuals and the one measurement (seen on kind: the API server's calls arrive from the node's address on the pod network and pass a default-deny ingress). Left, on the cluster lane after S073's second half: the CloudNativePG operator confined (with a written fall-back), egress from `observability`, the webhooks' port, the policies of the two namespaces, the dry run of the labels, and the corrections the render and the measurement call for; the owner decides the writes clause and node-exporter (stays off) | S064, S066 |
 | S073 | Renewals, upgrades and what smoke cannot see | On kind: a renewal is seen for the collector's certificate and the database's, and something alerts before the database's end; the services do not all restart in the same minute at a renewal; approver-policy is restarted when it hangs, and a repaired policy does not wait an hour for cert-manager's retry; a first install that fails has a way back that was tried; the chart bounds its rollback history and `make images` says what to remove; the scripts' `kubectl` calls have a request timeout; a manual sweep Job does not hide a stopped schedule; the failure paths of smoke's newer lines are seen once on a cluster with something broken on purpose; the line that reads approver-policy's wording says so when it fails; probes that time out under load have a recorded answer for the machine the cluster runs on now | doing: the first half is done (2026-10-07: the builds and the runs R0 to R4e, with the answer for the machine recorded); the second half is open: the ingestion's 503 word on a real refusal, the node paused with three deploys, certificates of one hour with all eight renewed, the cold run and a rotation of the rate store's password (the owner's to run or to accept as not seen); approver-policy's liveness probe is not built | S064, S066 |
-| S074 | Test suite and file sizes | Without the cluster: `infra/kind/smoke.sh`, `test_kind_manifests.py` and the four test files over 800 lines are split along the lines their own tests already cut; the six functions over 50 lines are under it; the template-database fixture survives a test that patches the runner's file list; the tests that failed once under load (a lost connection in a parallel run, a tool server's timeout, the gateway's fallback test) are run repeatedly on the machine the suite runs on now and either hold by construction or are closed as not reproduced, with the numbers; the slowest test of the job is under ten seconds; one CPU-time helper; `unused_port()` on macOS has its answer written down; the owner decides whether CI gates on coverage | doing: the first half is done (2026-10-07; tested, none of it run on a cluster): the two upkeep test files, `test_toolserver_meters.py`, `test_claims_graph.py` and `test_kind_manifests.py` are split by moves a script proves, the template database's builder passes the list it read at import, the stack and demo tests that failed under load no longer rest on the machine's speed (argued; the measurement run, 25 loops of each beside a whole suite, has not run), the counting test takes 0.03 s alone where CI saw 47 s, and one CPU-time helper serves nine files; three questions wait for the owner (coverage in CI, a size check, a pytest-level timeout); the second half is open and waits for S073 (`infra/kind/smoke.sh`'s split, the six functions over 50 lines, S076's leftovers) | S064, S066, S037 |
+| S074 | Test suite and file sizes | Without the cluster: `infra/kind/smoke.sh`, `test_kind_manifests.py` and the four test files over 800 lines are split along the lines their own tests already cut; the six functions over 50 lines are under it (counted by signature plus body without the docstring, as the section says: by the whole count the row used, four of the six, `assess`, `build_report`, `build_injection_report` and `summarise`, are still over); the template-database fixture survives a test that patches the runner's file list; the tests that failed once under load (a lost connection in a parallel run, a tool server's timeout, the gateway's fallback test) are run repeatedly on the machine the suite runs on now and either hold by construction or are closed as not reproduced, with the numbers; the slowest test of the job is under ten seconds; one CPU-time helper; `unused_port()` on macOS has its answer written down; the owner decides whether CI gates on coverage | doing: the first half is done (2026-10-07; tested, none of it run on a cluster): the two upkeep test files, `test_toolserver_meters.py`, `test_claims_graph.py` and `test_kind_manifests.py` are split by moves a script proves, the template database's builder passes the list it read at import, the stack and demo tests that failed under load no longer rest on the machine's speed (argued; the measurement run, 25 loops of each beside a whole suite, has not run), the counting test takes 0.03 s alone where CI saw 47 s, and one CPU-time helper serves nine files; three questions wait for the owner (coverage in CI, a size check, a pytest-level timeout); the second half is built except what waits (2026-10-07; implemented and tested, none of it run on a cluster): S076's leftovers are closed or accepted row by row (the registry `schemas` link and `--check` line, the services edit's small ends, the scaffold's undo, the import walker's limits pinned, the golden set's workload tied to `Report` by its own validator, the claimant's closed tables read-only and three stale sentences), `run_command`, `build_report` and `render_summary` are under 50 lines by signature plus body (37, 47 and 29) with `--help`, every report and the committed summary byte for byte the same, and two of the half's own commits carried a defect that the review reproduced and a contract fixed; what waits: `infra/kind/smoke.sh`'s split (S073 on `main`), the loaders' helper and the split of `test_redaction_hungarian.py` (S070), and the rows the section's last table keeps | S064, S066, S037 |
 | S075 | Harness, guard and Renovate | `make docs` notices a blank line that splits a table; the command guard's known gaps to a Secret's values and to superuser SQL are closed or listed where a session reads them, and a hook that times out has a known outcome; a rule for an implementer that edits through the shell, and a guard or a rule for `make up` and `make down` from an old checkout (both the owner's); the workflow linter knows the runner label; Renovate's week of waiting is a required check or the plan says why not (the owner's decision), an image is not proposed before the chart that installs it, and the two pgvector versions are one | done (not built: the two pgvector versions are not one, because the newest CloudNativePG image still holds 0.8.6; the owner chose package-manager holds over a required check, and uv's `exclude-newer` cannot go in before 2026-10-10; N4, the guard's own files, is the owner's open question 6; the shell-edit hook is inert until the owner sets `bashEditDiffEnabled`) | — |
 | S076 | CLI, scaffold and loader small ends | No registry entry lets the runtime name an agent that no tenant lists without a check saying so (T-81); `services_edit` refuses an alias or a merge key by itself; the scaffold says which write failed and names the line it refuses in every case; the two entry-point loaders answer a bad entry in the same fixed words; the screen's fingerprint covers what it claims to; the workload's report builders refuse another workload's manifest; `meridian registry schemas` answers an unwritable directory with a message; the scaffold can write an agent with workers, or the plan says why a second graph of subgraphs is not built. Built as: `meridian registry validate` prints one NOTE, exit code unchanged, for each graph agent the runtime may name and no tenant lists, and `load_registry` refuses nothing new, so the owner's S061 decision stands; `services_edit` itself refuses an anchor, an alias or a merge key, naming the line; a refusal about a line of the person's file names the parser's line where the parser gives one; a failed or interrupted write names its kind and the error's class, the undo puts back every file that still holds the command's own bytes and names every path it did not restore (the scaffold's write and undo are in `scaffold_writes.py`); the two loaders word a refusal in one table of fixed sentences that quote no distribution's name and no import error's text, with the registry's agent ID in front for the graphs; the screen's digest is unchanged and the documents say what it covers and does not; both report builders compare the manifest's workload with their own; `meridian registry schemas` answers a directory it cannot update with one line; a second graph of subgraphs is not built, as a decision (the section says why). Implemented and tested, not run on a cluster | done | S037 |
 
@@ -648,7 +650,7 @@ that day; the rest stand as their step recorded them.
 | Audit rows of one transaction share a time, so the trail cannot order them | S048 | closed by S065 (`audit.events.seq`, stamped by the database, migrations 0017 and 0019; the adjuster's queries break a tie by it) | S065 |
 | `database_failure` without the claim's ID | S048 | closed by S060 (a wrapper of the workload's logs the ID at twelve call sites; the queue has no claim) | S060 |
 | A per-phase httpx timeout | S048 | closed by S060 (3 s to connect, 5 s to write, 3 s for the pool, 60 s to read) | S060 |
-| Uploads (T-38) | S048 | open | S070 |
+| Uploads (T-38) | S048 | open; S070 stays open for it: the owner's decision, asked in three statuses and not answered, was not taken, and nothing was built for uploads; the session recommends out until S021, when a caller has an identity. If built, a step of its own | S070 |
 | A shell poll test (`test_kind_manifests.py::test_poll_clears_the_last_error_on_success`) failed once and passed alone | S048 | closed by S052: the tests' one-second budget met bash's whole-second clock, so a tick skipped the loop; the budget is two seconds | none |
 | The CI python job near its time limit | S048 | closed by S054 (4 min 50 s in parallel) | none |
 | Running the tests in parallel | S049 | done in S054 | none |
@@ -675,7 +677,7 @@ that day; the rest stand as their step recorded them.
 | Registry tests anchor on adjacent lines of `models.yaml`, so a field added inside a deployment's entry breaks them | S051 | closed by S057 (`tests/meridian/registrysupport.py` finds the entry by its key and the field by its name; with a line added after every field, 19 tests failed before and none after) | S057 |
 | S053 on kind: the stamped report date, the error pages, migration 0013 and the history view, and no query string on a span in Tempo (the cluster was held by S052 while S053 ran) | S053 | closed by S018: all five looked at on the cluster made from a fresh clone | S018 |
 | The JSON route `POST /claims` takes its caller's report date until callers are identified (T-66) | S053 | open, the owner's accepted residual | S021 |
-| The loss date is the claimant's word on both routes, so a late report dated as a recent loss is not seen (T-66) | S053 | open | S070 |
+| The loss date is the claimant's word on both routes, so a late report dated as a recent loss is not seen (T-66) | S053 | closed by S070 as a reasoned residual (the owner's sentence of 2026-10-03 stands): the adjuster's page labels the loss date and the report date as not checked and shows the two gaps in days (tested; not seen on a cluster), and T-66 says why no rule, bound or check against today is built; the rules still do not see such a report, and nothing stores which route set the report date | S070 |
 | `claim_history` returns the 100 newest entries, not those before the claim's own loss date: about 100 decided claims on one policy hide its older entries (the answer is `truncated`), about 10,000 could make the call time out; a bound by the claim's loss date, or a cap of claims per policy (T-76) | S053 | open | S021 |
 | Claims of one policy that are open at the same time are not counted by `frequent_claims` (T-76) | S053 | closed by S067 (the owner, 2026-10-06, "okay go with your suggestion"; it reverses the undecided half of S053's decision): a claim that is submitted, triaging, awaiting an adjuster, waiting for documents or failed in triage counts by the same strict date rule as a decided one, through a second view, `claims.open_claims` (migration 0025, the same seven columns, `paid_amount` always 0); a withdrawn claim never counts, and two claims of one loss date do not count each other. Tested against PostgreSQL and through the stack, not run on a cluster. The cost is a row of its own (S021) | S067 |
 | A 500 or 503 of the shared handlers under `/claimant/` is still the API's JSON | S053 | closed by S060 (handlers and a middleware of the workload's own) | S060 |
@@ -726,7 +728,7 @@ that day; the rest stand as their step recorded them.
 | The injection screen stops 24 of 66 of the suite's attacks (26 since S067, which has it read the description as posted) and flags 16 of 22 look-alike sentences; improving it needs cases it was not fitted to (a held-out set), or a classifier, and a decision on what a false alarm may cost | S032 | open | S071 |
 | The Claims API replaces the claimant's name before the injection screen reads the description, so a claimant whose name holds the screened words hides them (CLM-1053, CLM-1054); the screen could read the text as posted | S032 | closed by S067: the Claims API screens the description as posted, before the name is replaced, and hands the run one boolean that the assessor reads as a hit of its own screen; both cases are stopped (name-masked 2 of 2, the suite 26 of 66). The run still never receives the posted text. What the boolean does not cover is a name made of the words an exclusion turns on (its row below, S070). Tested without a cluster | S067 |
 | A stored clause rewritten to say something else (the `carve-out` cases) is no instruction, so no screen finds it; the ingestion's hash check is the only control, and nothing compares the stored text with the manifest afterwards (T-27, T-57) | S032 | closed by S067 in part: `meridian knowledge verify` compares each stored clause's body, title, section and source hash with the manifest-verified wordings and names a clause that differs, never its text; the ingestion Job runs it after its write, and a runbook says when to run it by hand (migration 0026 gives the ingestion's role a read of seven columns). It finds a change only when it is run, and not a changed vector; tested against PostgreSQL, not run on a cluster (the next row is S073's). A search still checks nothing: the `carve-out` cases are not changed | S067 |
-| A steered model can turn the recommendation an adjuster reads from reject to approve (36 of the 42 attacks that reached a model that obeys; 34 of the 40 since S067, by the injection summary); whether the adjuster's page should mark a recommendation that rests on the model's answer is not decided | S032 | open; not S031's to decide: the split changed no proposal and no page. The owner's | S070 |
+| A steered model can turn the recommendation an adjuster reads from reject to approve (36 of the 42 attacks that reached a model that obeys; 34 of the 40 since S067, by the injection summary); whether the adjuster's page should mark a recommendation that rests on the model's answer is not decided | S032 | closed by S070 in part, and said to the owner as a decision the session took (the mark is words on a page and comes out in one commit): the claim page and the queue say whether a recommendation rests on a model's reading or on the rules alone (tested against PostgreSQL; not seen on a cluster); it reaches the 6 that wait for an adjuster and not the 28 automatic approvals (T-26). Not built, the owner's: the rules withholding a recommendation that rests on the model (it changes `decide`, the oracle and the grades) | S070 |
 | The injection stack test adds 45 to 80 s to one worker of the CI python job | S032 | closed by S057, accepted with its number: 34 s of one worker in CI (pull request 79), 50 to 55 s on a laptop | S057 |
 | A tool server timed out once on a wording search while the laptop's load average was near 55 (three sessions); the run failed loudly and passed unchanged on the next try | S032 | seen once; changed by construction in S074's first half (the stack gives its tool client a bound of 30 s of its own, restored after each test, where the product's is 10 s): argued, not measured, and it closes with S074's measurement run | S074 |
 | `injection.py` imports the private `evaluation._auto_approval_limit` and copies the word `injection-suspected` (a test pins it); no benign clause case; the screens' patterns are in no fingerprint, so a changed screen asks for a new baseline only when a grade regresses | S032 | closed by S061 (public names; four benign clause cases on claims no exclusion applies to; a sixth fingerprint over the screens' patterns, flags and source) | S061 |
@@ -775,9 +777,9 @@ that day; the rest stand as their step recorded them.
 | The scaffold's small ends: `write_plan` drops the `OSError` that says which write failed; an indented table header in `pyproject.toml` is refused without its line; a save between a file's hash check and its own replacement, followed by a failure, is put back over; four whole-command tests still pin the committed list of the runtime; `plan_workload`'s `except OSError` is reached only by a test's stand-in | S061 | closed by S076, each part: a failed write names its kind and the error's class; an indented header is followed and a refusal names the parser's line; the undo puts back every file that still holds the command's bytes and leaves and names only a person's save (the two windows that remain are rows below); the whole-command tests read the lists from the registry (two were untied by S037, the others here); the dead `except OSError` is gone and the real stat that failed is one line (exit 2) | S076 |
 | The entry-point loader's small ends: the graphs' message quotes the name of the distribution that published a duplicate and chains the import error into the log, where the evaluations' text is fixed; `_inside` resolves the file and not the root; `graphs._in_trusted_root` repeats it; its defaults are never used | S061 | closed by S076: both loaders word a refusal from one table of fixed sentences, the graphs' with the registry's agent ID in front, quoting no distribution's name and no import error's text, and the cause is the error's class; `_inside` resolves the root too; `_in_trusted_root` stays on purpose (it checks the factory's own module, which the shared check does not: T-40) and resolves its root; the defaults stay and the docstring says they are for the tests' own loaders | S076 |
 | The screen fingerprint reads source from disk, so a process that outlives an edit fingerprints the new text, and it covers neither the interpreter's Unicode database nor `re`; `test_injection_imports.py` reads `from` imports only | S061 | closed by S076, with the digest unchanged (the session's design: say what it covers, do not widen it): `data/evaluation/README.md` says what the digest covers and what it does not (the interpreter's Unicode database, `re`, the text the screens are applied to, and that a process that outlives an edit fingerprints whatever now sits at the old line numbers of the file, not the new text), a test holds the digest equal to both baselines, and the import test reads plain `import`, alias, `importlib`, `__import__`, `getattr` and star forms, scopes and annotations, and lists what it cannot see | S076 |
-| The claims workload's two report builders do not compare the manifest's workload with their own; only `eval run` does | S061 | closed by S076: both builders (`build_report` and `build_injection_report`, the second for its own manifest and for the golden manifest it names) refuse a manifest that does not name `claims-triage`, in fixed words that do not quote the value, before any file or case is read; `Report.workload` is still not tied to the manifest's by a validator (a row below) | S076 |
+| The claims workload's two report builders do not compare the manifest's workload with their own; only `eval run` does | S061 | closed by S076: both builders (`build_report` and `build_injection_report`, the second for its own manifest and for the golden manifest it names) refuse a manifest that does not name `claims-triage`, in fixed words that do not quote the value, before any file or case is read; `Report.workload` was still not tied to the manifest's by a validator (it is, since S074's second half: row 878) | S076 |
 | `meridian registry schemas` without `--check` ends in a traceback when it cannot write into the directory | S061 | closed by S076: one error line and exit 1 that name the `schemas` directory and the error's class and never its text, for a directory that cannot be made, a file that cannot be written and a `schemas` that is a file; a schema file that is a link is refused before any write, and one that is not UTF-8 counts as stale and is repaired. The write is not all-or-nothing, so the line says to fix the directory and run it again (rows below) | S076 |
-| Six functions this step touched by a line or two were over 50 lines before it (`run_command` 73, `build_report` 64, `assess` 59, `render_summary` 58, `build_injection_report` 52, `summarise` 51) | S061 | open; the Python review | S074 |
+| Six functions this step touched by a line or two were over 50 lines before it (`run_command` 73, `build_report` 64, `assess` 59, `render_summary` 58, `build_injection_report` 52, `summarise` 51: whole counts, docstring included) | S061 | closed by S074's second half under a measure it states, signature plus body without the docstring: `run_command` (62 to 37, H14), `build_report` (57 to 47) and `render_summary` (56 to 29, H15) were over and are under it; `assess` (48), `build_injection_report` (49) and `summarise` (44) were under it and are untouched. By the whole count four of the six stay over (`assess` 69, `build_injection_report` 58, `build_report` 57, `summarise` 51). The other functions over 50 are a row below with no promise | S074 |
 | The audit has no column for the calling service: a refused caller's ID is written to `reference`, which a run's rows use for the claim | S055 | open | S033 |
 | A pod's certificate Secret is mounted with the default file mode (0644, owned by root), so the key is readable by any user in the container; each container runs one process as one user. The fix is `fsGroup` in the pod's security context with `defaultMode: 0440`; `0400` alone would stop the non-root process reading it | S055 | closed by S056 (`fsGroup` and mode 0440; on the cluster the key file was mode 440, owner root, group 10001 in all six pods) | S056 |
 | `make smoke`'s 403 line reads the status alone, and the gateway answers 403 for its own policy refusals too: it would pass for the wrong reason if the `evaluation` tenant stopped being one the gateway serves. It should also read the audit row's reason, and nothing on the cluster tries a certificate from another CA (the tests over real TLS do) | S055 | closed by S056 (two more lines in check 9: the refusal's row in the audit table, by its reason and the calling service, and a certificate of another CA with the runtime's own URI, refused). The audit line accepts a row of the last two minutes, so a second run inside the gateway's minute passes on the first run's row: the row below, S062 | S056 |
@@ -873,32 +875,39 @@ that day; the rest stand as their step recorded them.
 | `test_runtime_hosts.py` (779 lines) and `test_import_contracts.py` (773) stand near the 800-line ceiling; the next tests go in new files | S037 | closed by S074 (first half) with a written rule: both sizes hold and no test was added to either file; the next tests for either go in a new file named for what it tests, its shared helpers in a support module (S074's section) | S074 |
 | `test_the_golden_set_through_the_stack_with_the_replay_gateway` failed once in a whole-suite run of S037's final tree while other steps' tests held the machine at a load of about 24 (a `wording_search` call timed out for CLM-0040 and the run ended `tool-unavailable`); the file passed alone right after (10 passed), and the same suite had passed on the tree before the documents | S037 | seen once, under load; changed by construction in S074's first half (the stack's own tool bound, 30 s, restored after each test): argued, not measured, and it closes with S074's measurement run | S074 |
 | Not seen on a cluster after S037: a brief whose run fails, a resume refused for a changed workflow, the sweep closing a brief left unfiled, a live model writing the brief, a second runtime replica, the brief's trace read in Tempo | S037 | open; tests hold each | S073 |
-| The scaffold's undo has windows that only a lock would close, and it names more than it touched: a save between a file's own check and its replacement, and a save between the undo's read and its replacement, is lost to the replacement (no lock is built: the person's editor would have to honour it); the "check by hand" list can name a path the command never touched and a temporary that is already gone; an interrupt that lands after the undo returned and before the first line is written leaves no line, and a kill the process cannot catch says nothing; an error the undo raises after an interrupt ends the command as a write error (exit 1), not as the interrupt; `_replace` leaks a descriptor if an interrupt lands inside `os.fdopen`, before it takes the descriptor over | S076 (fifth review; reports of C8, F3, F4, F5) | open; low. No step owns the command-line tool; S074 (the suite and its files, without the cluster) is the nearest that is still open | S074 |
-| The scaffold's smaller ends: header-shaped lines inside one multi-line string of `pyproject.toml` still cost one failed parse each (the review measured 2.3 s for 20,000 of them); `one_line` in `services_edit` compares the parser's lines, so a flow list with a U+2028 inside is refused as not on one line; `line_of` at the end of a text that ends with a newline names the line after the last; `yaml.compose` in `_runtime_agents` has no `RecursionError` catch, which the registry's loader makes unreachable from the command; a path left behind quotes the workload's name, which is the person's own argument | S076 (reports of C8, F3 and F4) | open; low; S074 for the reason in the row above | S074 |
-| `meridian registry schemas`: the write follows a link that is the `schemas` directory itself (`mkdir(exist_ok=True)` succeeds and the writes go through it; only a schema file that is a link is refused); `--check` on a linked file tells the person to run the command, which then refuses with `SchemaPathIsALink`; the write is not all-or-nothing | S076 (reports of C7 and F2) | open; low; S074 for the reason above | S074 |
+| The scaffold's undo has windows that only a lock would close: a save between a file's own check and its replacement, and a save between the undo's read and its replacement, is lost to the replacement (no lock is built: the person's editor would have to honour it); an interrupt that lands after the undo returned and before the first line is written leaves no line, and a kill the process cannot catch says nothing; the "check by hand" list still names a new file that was noted and never created, and every directory that was noted; a signal that lands between the opener's `os.open` and `open` taking the descriptor leaks it (the old code had the same window) | S076 (fifth review; reports of C8, F3, F4, F5) | closed in part by S074's second half (H11, H17): the list names a plan path only when the command wrote or replaced it or noted it to write, and a temporary only while it exists; an interrupt leaves the command as the interrupt (exit 130) also when the undo then fails, after the lines to check by hand; `_replace` lets `open` own its descriptor, so `os.fdopen` is gone and no `os.close` is left. What stays is accepted, as sentences in the module's docstring and in T-81's residual: low | S074 |
+| The scaffold's smaller ends: header-shaped lines inside one multi-line string of `pyproject.toml` still cost one failed parse each (the review measured 2.3 s for 20,000 of them); a path left behind quotes the workload's name, which is the person's own argument | S076 (reports of C8, F3 and F4) | closed in part by S074's second half (H10, H17): a flow list with a U+2028 inside is extended (`one_line` compares the editor's lines), `line_of` at the end of a text that ends with a newline names the last line, and `RecursionError` from `yaml.compose` and from the check after it is a refusal, in `services_edit` and in `scaffold.py`. The two that stay are accepted: the person's own file and the person's own argument; low | S074 |
+| `meridian registry schemas`: the write is not all-or-nothing (a failure part-way leaves the files already written; the line says to fix the directory and run it again) | S076 (reports of C7 and F2) | closed in part by S074's second half (H9, H17): a `schemas` directory that is a link, dangling or not, is refused with `SchemaPathIsALink` before anything is made or written; `--check` prints `schemas is a link: remove the link` for it, and a line of its own for a schema file that is a link, and no longer tells the person to run a command that refuses; an unreadable registry directory ends in one `ERROR` line, as it did before (H17, after the review found a traceback). The write's limit is accepted and stated in the docstring: a staged write is not built; low | S074 |
 | The loaders: `load_trusted_entry_point` catches `Exception`, not `BaseException`, so a `sys.exit()` or an interrupt raised at import by a module under the trusted root reaches the caller with its own message; `_loaded_in` and `_in_trusted_root` read `__file__`, which such a module can set, so they are sanity checks and not a boundary; a directory that calls itself `meridian` can still choose up to ten ID-shaped names and a count for a "known" list, and a class under the trusted root a name of up to 64 identifier characters for a cause (both need a write to the Python path or to the trusted package, T-40) | S076 (security review 2; reports of F1 and F2) | closed in part by S069 (E1): a module that exits at import, or while a parent package is located, is a failed load and an interrupt passes through (T-40). Accepted as T-40's residuals, which need a write to the Python path or the trusted package and so a compromise T-36 already names: the `__file__` checks are sanity checks and not a boundary, and the ten ID-shaped names and the 64-character class name a planted module can choose; low | S069 |
-| The claims workload's reports: `Report.workload` is not tied to the golden set's manifest by a validator, and both builders accept a hand-built `Report` workload apart from the manifest's; the golden manifest is read three or four times in one build, and a file that changes between two reads is not noticed | S076 (reports of C6 and F1) | open; low; S074 is the nearest that is still open and costs nothing (S071, which works with the reports, is the paid step) | S074 |
-| The injection import test's walker cannot see what its docstring lists (a non-literal argument of `import_module`, `__import__` or `getattr`, `builtins.__import__`, `sys.modules[...]`, an alias made by unpacking or stored on an object, a name reached by a string through `vars()`, `__dict__` or `setattr`, `global`, `nonlocal`, `eval`, `exec`), and it reports a few names that are not private uses (an alias rebound at module level, a `match` capture, a walrus inside a comprehension); it is a tripwire, not a proof | S076 (report of F2; second review) | open; low | S074 |
+| The claims workload's reports: the golden manifest is read three times in one build (the injection builder reads its own three times and the golden one twice), and a file that changes between two reads is not noticed | S076 (reports of C6 and F1) | closed in part by S074's second half (H16): `Report` refuses a report whose golden set names a workload other than its own, and passes one whose golden set names none; the read-once part is a row of its own below; low; S074 is the nearest that is still open and costs nothing (S071, which works with the reports, is the paid step) | S074 |
+| The injection import test's walker cannot see what its docstring lists (a non-literal argument of `import_module`, `__import__` or `getattr`, `builtins.__import__`, `sys.modules[...]`, an alias made by unpacking or stored on an object, a name reached by a string through `vars()`, `__dict__` or `setattr`, `global`, `nonlocal`, `eval`, `exec`), and it reports a few names that are not private uses (an alias rebound at module level, a `match` capture, a walrus inside a comprehension); it is a tripwire, not a proof | S076 (report of F2; second review) | accepted limit, pinned by S074's second half (H13): the docstring needed no correction, and each of eleven routes it cannot see and two uses it over-reports has a case in `test_injection_imports_limits.py` that fails when the walker's reach changes; it stays a tripwire, not a proof; low | S074 |
 | A merge of `main` into a step's branch was pushed after the cheap gates only and left `test_workload_new_note.py` red (S076, 842b977: S037's `claim-brief` changed a list the test pinned); Part A says the later session runs the gates again and not which, so a contract's gate does not yet say that the directories its change reaches are run after a merge | S076 (C10) | closed by S075: Part A now says that after a merge of `main` the whole suite runs on the merged tree before the branch is pushed, and that a contract's gates name every directory its change reaches | S075 |
 | On 2026-10-06 `make deploy` failed twice, a minute apart, at the ingest Job on a cluster that had been up for hours (the Model Gateway answered 503 to the embedding call: "the model gateway refused the embedding call (model gateway answered 503)"); the session's script then deleted the cluster before anyone had read the audit row's reason or the gateway's log, and a fresh cluster deployed the same commit (`make up` 299 s, `make deploy` 97 s, the Job passed). Two failures a minute apart and a pass on a fresh cluster point at the cluster's state, not at load. Candidates, none shown: the rate store not answering inside its 0.25 s read timeout or 1 s connect timeout, with no retry (`gateway/rate_store.py`; the gateway refuses, by design); the ledger's close failing (`gateway/walk.py`: a failed close answers 503; the database's pod had restarted that evening); and the ingestion not retrying a 503 (`knowledge_mcp/ingest.py` waits out a 429 and ends on any other status). The three logs of the commands are the only evidence left | S075 (the incident) | open; not explained for certain: S073 found a likely cause, not a proven one, in the rate store's probes, which left a defunct process per run until the container could not fork (run R1a, 2026-10-06: 2,024 under the Redis server, the pod not Ready, the gateway's 503 to every call; fixed by K7 and seen on kind in run R2, 2026-10-07), and built the ingestion's word for the gateway's four 503s (K6: tested with scripted replies, not seen on a real refusal, the second half); the ledger's close would show as `database-unavailable` | S073 |
 | The guard's local reader list and what its last review left: a mounted Secret or an `.env` read by `grep`, `awk`, `jq`, `cp`, `docker cp` or a glob is read by no rule (`reader_pre` and the pod's reader list name the plain readers); the pod rule for `env`, `printenv` and `set` tests only the last ` -- `; a fourth level of nested `sh -c`; secret-shaped variable names the `printenv` list does not match (`REDIS_PW`); a heredoc read by quote parity and a list of interpreters, not parsed; a hook file overwritten by a redirect; `-v=8` and `crictl inspect` read from documentation, run against no cluster. The hook's header and the runbook's section list each; S036's cloud rules edited the guard (2026-10-07) and closed none of these (they read the AWS module's names and add no reader for a mounted Secret), and S079, which reuses the wrapper and brings a second AWS module, edits it next, so it is the nearest step | S075 (third security review; F3b's and F4g's reports) | open; listed, not built; re-homed from S036, whose rules did not touch them | S079 |
 | The next rule to the command guard goes into the development base first: the base's copy is level with Meridian's since its pull request 51 (merged 2026-10-06, the guard's rounds two and three), and S036's guard rules for the AWS wrapper are the next ones, so they are now owed to the base (built here first, 2026-10-07; not yet sent). The neutral ones: the `aws` CLI's deny and ask rules with their read list, the ask for `boto3`, `botocore` and `awscli` and for `-auto-approve`, the deny of `TF_*` and `AWS_ENDPOINT_URL*` assignments before a tool, the readers of a state, a plan, `.tfvars.json`, `~/.aws`, `~/.terraformrc` and `~/.terraform.d`, the writers of `~/.terraformrc`, `~/.gitconfig`, `~/.config/git` and `~/.aws`, and the deny of tracing and start-up variables, with the fixes of the two later rounds (`-cm`, a quoted token, the backtick, the cut-out of `workspace select default`). Meridian's own stay out: whatever names `aws.sh`, a `make aws-*` target, `local.env`, `meridian-aws`, `TRIVY_IMAGE` or `PROMTOOL_IMAGE` | S075 | open; owed to the base before S079 changes the guard | S036 |
 | Not seen on a cluster after S075: `TAKE_CLUSTER=1`, a record left `changing` by a run that failed (the refusal that names it), `make up` on an existing cluster, and `make down` refused for a record at `changing`; tests with stand-in binaries hold each. Seen: the record through a deploy, a deploy refused while another runs, and `make down` refused with the record at `ok` (S075's section) | S075 | open in part; S073 saw `TAKE_CLUSTER=1 make deploy` take the record from S075 (run R2, 2026-10-07); a record left `changing` by a failed run and `make up` on an existing cluster were not seen | S073 |
-| Limits of S075's three small checks and two unverified Renovate rules. The split-table check misses rows in block quotes and rows without a closing pipe, and flags a row inside an HTML comment, a four-space-indented row and a lone header-like line; the lane check counts `--` and `n/a` in "Out now" as running, and a session in a fresh worktree has no board; the shell-edit hook is inert until the owner sets `bashEditDiffEnabled` in `~/.claude/settings.json` and may name files that `make` targets regenerate (baselines, Mermaid blocks) once it is on; Renovate has not run the new rules, so whether Docker Hub gives the Envoy chart a push date (else the chart waits indefinitely), whether the `terraform` block's `description` key is accepted and whether the `agent-framework` label is made are unseen | S075 | open | S074 |
-| A claimant can choose a name made of the words an exclusion turns on, and every such word in the description becomes `[name]` before the model reads it (since S047, for any name part of three letters or more); the posted-text boolean covers screened phrases and not this, so it is one more way to the automatic approval of a small claim, which the injection suite already measures as open (QA-09). A bound on how much of a description a name may replace, and what the adjuster is told when it is hit, is a decision of its own (T-26) | S067 (security review) | open | S070 |
-| A true posted-text flag returns `injection-suspected` before the candidate clauses are screened, so a claimant who posts screened words hides the failure a poisoned clause would give (`wording-addresses-the-model`); a hit of the assessor's own screen did the same before S067 | S067 (security review, low) | open; S070 is the nearest, since it holds what the adjuster is told | S070 |
-| Forms of the claimant's name that the closed lists lack are not found (T-73): a name typed in lower case with a Hungarian ending (`kovácsnak`), the possessive on a name (`-om`, `-unk`), a part of under three letters, a consonant with an accent written without it, and a name whose first letter the text writes as another capital; a name that spells an ordinary word with an ending is replaced where it is capitalised ("Seat Leon" for a claimant named Leo). The pattern of the worst 200-character name is 12,141 characters (about 55 ms to compile, measured in F2r and pinned by a test), is compiled through `re._compiler`, a private function that fails closed if a Python release moves it, and in the claim moves is built while the claim's transaction is held (security review, low) | S067 (reviews) | open | S070 |
+| Limits of S075's three small checks and two unverified Renovate rules. The split-table check misses rows in block quotes and rows without a closing pipe, and flags a row inside an HTML comment, a four-space-indented row and a lone header-like line; the lane check counts `--` and `n/a` in "Out now" as running, and a session in a fresh worktree has no board; the shell-edit hook is inert until the owner sets `bashEditDiffEnabled` in `~/.claude/settings.json` and may name files that `make` targets regenerate (baselines, Mermaid blocks) once it is on; Renovate has not run the new rules, so whether Docker Hub gives the Envoy chart a push date (else the chart waits indefinitely), whether the `terraform` block's `description` key is accepted and whether the `agent-framework` label is made are unseen | S075 | the limits of the three checks are accepted and written as sentences in S074's second half (Part C); the check's docstring and the two values of `empty()` that would state or close them, and Renovate's three unseen results, are rows of their own below | S074 |
+| A claimant can choose a name made of the words an exclusion turns on, and every such word in the description becomes `[name]` before the model reads it (since S047, for any name part of three letters or more); the posted-text boolean covers screened phrases and not this, so it is one more way to the automatic approval of a small claim, which the injection suite already measures as open (QA-09). A bound on how much of a description a name may replace, and what the adjuster is told when it is hit, is a decision of its own (T-26) | S067 (security review) | open; S070 did not build it and asks the owner: the session recommends a flag that sends a claim whose description loses more than a few words to the name to an adjuster, a new word beside `injection-suspected`, and never the name left in the clear (it touches the assessor and the proposal's vocabulary, so it waits for a yes) | S070 |
+| A true posted-text flag returns `injection-suspected` before the candidate clauses are screened, so a claimant who posts screened words hides the failure a poisoned clause would give (`wording-addresses-the-model`); a hit of the assessor's own screen did the same before S067 | S067 (security review, low) | closed by S070 as decided, in documents only: the order stays, because the claim goes to an adjuster either way and `meridian knowledge verify` compares the stored wording with its manifest without any claim; T-26 says so. The sentence in the assessor's docstring that the design promised is a code comment, which this step's documents contract could not write (the small ends row below) | S070 |
+| Forms of the claimant's name that the closed lists lack are not found (T-73): a name typed in lower case with a Hungarian ending (`kovácsnak`), the possessive on a name (`-om`, `-unk`), a part of under three letters, a consonant with an accent written without it, and a name whose first letter the text writes as another capital; a name that spells an ordinary word with an ending is replaced where it is capitalised ("Seat Leon" for a claimant named Leo). The pattern of the worst 200-character name is 12,141 characters (about 55 ms to compile, measured in F2r and pinned by a test), is compiled through `re._compiler`, a private function that fails closed if a Python release moves it, and in the claim moves is built while the claim's transaction is held (security review, low) | S067 (reviews) | closed by S070 in part: the pattern is built from a read before the claim's row is locked (A3), and only for a request the claim can go on with (A4), so the lock is not held for the compile and a refused request pays none (tested against PostgreSQL, with a second session's `FOR UPDATE NOWAIT` as the probe; not run on a cluster); a stale page and a documents post past the cap still pay one compile each (the ingress row below); `re._compiler` is named by a test that fails with a sentence if a release moves it; the pattern's size is unchanged; no form was added, by decision (taking every ending took seventeen golden words where the capital rule takes one), so the forms listed stay stated residuals in T-73 | S070 |
 | The redaction's residuals after S067 that are not the matcher's own fix (T-73): a Budapest number written `06-1x-YYYY-xx` with one separator reads as a date and is left in the clear (a named shape of the differential test; no other number can be written so, and no fix is planned); redaction is not idempotent where two numbers touch at a `+` or a `(`; a date followed by an amount shaped like a phone number (`Total 06 30 1250000 HUF`) is replaced; the rules cost about fifty times more per character on text made of the national prefix, still linear (the security review measured it, no test pins the factor); identity card, passport and licence numbers, vehicle plates, an account number without separators, and a social security or tax identification number after a word the list does not hold are not found. The matcher's own gaps have the four rows below, and every shape is pinned by `test_redaction_residuals.py` or held by `test_redaction_differential.py` | S067 (reviews) | open; the step's contract named none for these, and S069 holds the gateway's edges, the nearest | S069 |
-| The redaction cuts an international span at a dot or a slash and not at a space, so a national number after an international one and a plain space leaves its last seven digits (`+36 30 123 4567 06 20 765 4321` gives `[phone] 765 4321`; with slashes, `+36/83/701/902 00 36/73/48/9525` gives `[phone]/48/9525`, six digits). The fourth review's cut, prototyped and validated, is not built, because this matcher regressed twice on a fix made at the end of a round: in `_international_span`, cut at a space (the no-break and the other space characters too) followed by an optional opening parenthesis and `06` or `00`, only when the left part is a complete number by the numbering plan (`_phone_shape_holds`, 8 to 17 digits) and the right part is one the national rule accepts (`NATIONAL_PHONE` matches there and `_choose_national_phone_span` takes it), and otherwise as today, so `+36 1 060 1234`, `+36 30 0036 123` and `+36 1 234 5678 06 1` stay one number (a plain cut at a space leaves ten digits of `+36 1 060 1234`). Measured on the prototype: the differential's run-on hits fall from 62 to 3, no new shape, no count mismatch, and one test to change on purpose (the one that demands the run-on still loses); about 15 lines in a function that has regressed twice, so it needs pins of its own, written first | S067 (fourth review) | open | S070 |
-| A dotted or slashed international number is not found when one of its groups begins `06` or `00` (`+36.30.123.0630`, `+36/30/123/0630` and `+36.30.123.0030` stay whole; `+36/30/123/4567/0630` gives `[phone]/0630`), because the cut before such a group leaves fewer than 8 digits; about 2 % of the groups of a number written so. Not a regression (the matcher before the separator change found none of them), and pinned by `test_redaction_residuals.py`. The reviewer's wider cut (the validated cut of the row above, taken at `/` and `.` with `PHONE_JOIN` neutralised) cost two failing tests, one new shape in the differential (`12 +36.36.0679.55(06/36)/7660/10/`) and one over-redaction (`+36 30 123 4567/06/22` gives `[phone]`), so it is a decision of its own and not the row above's | S067 (fourth review) | open | S070 |
-| The redaction's differential test has gaps (`test_redaction_differential.py`): it files a lost run under its first lost digit only, so a new leak in a later number of a text that already holds a named shape is filed under the named one (the mutation that brings back the parenthesised second number hid behind `30.06.30.8336.687 +36 30 123 4567/(06) 20 765 4321`; over the whole corpus it still fails); `00.` and `00/` forms and a date of three groups are not generated (a mutation that lets `_after_date_tail(2)` take three groups moved the hit counts and passed, one that hides `00.` after a date's tail changed nothing); the two date-lead guards, `DATE_LEAD` and `DATE_MONTH_LEAD`, can be loosened (the year dropped, any four-digit year, any day) with no failure, and only a month of 13 to 31 is caught; and the reference is the matcher before the guard, so a leak that both have is invisible (12,147 of the 12,281 texts that leave a digit of an inserted number in the clear leave it in the reference too). Classify every lost run, add the forms and the date of three groups to the generator, and bring the two guards under a test that fails when they are loosened | S067 (fourth review) | open | S070 |
-| Two small ends of the redaction: `_replace_email` writes `EMAIL_PLACEHOLDER` directly, where `_replace_cards` now reads `PLACEHOLDERS["card"]`, so a test that swaps the mapping misses e-mail addresses; and a date whose day or month is `06` followed by eight or nine digits (`2026.10.06 12345678` gives `2026.10.[phone]`, `10.06 12345678` gives `10.[phone]`) is replaced, the date's own digits with it, though it is no number: over-redaction, which fails safe, and the matcher before the date guard replaced it too; pinned by `test_redaction_residuals.py` | S067 (fourth review, low) | open | S070 |
+| The redaction cuts an international span at a dot or a slash and not at a space, so a national number after an international one and a plain space leaves its last seven digits (`+36 30 123 4567 06 20 765 4321` gives `[phone] 765 4321`; with slashes, `+36/83/701/902 00 36/73/48/9525` gives `[phone]/48/9525`, six digits). The fourth review's cut, prototyped and validated, is not built, because this matcher regressed twice on a fix made at the end of a round: in `_international_span`, cut at a space (the no-break and the other space characters too) followed by an optional opening parenthesis and `06` or `00`, only when the left part is a complete number by the numbering plan (`_phone_shape_holds`, 8 to 17 digits) and the right part is one the national rule accepts (`NATIONAL_PHONE` matches there and `_choose_national_phone_span` takes it), and otherwise as today, so `+36 1 060 1234`, `+36 30 0036 123` and `+36 1 234 5678 06 1` stay one number (a plain cut at a space leaves ten digits of `+36 1 060 1234`). Measured on the prototype: the differential's run-on hits fall from 62 to 3, no new shape, no count mismatch, and one test to change on purpose (the one that demands the run-on still loses); about 15 lines in a function that has regressed twice, so it needs pins of its own, written first | S067 (fourth review) | closed by S070 in part (implemented and tested; not run on a cluster): what is closed is two numbers one after the other at a space where the first is a complete Hungarian number and the national rule takes the second (`+36 30 123 4567 06 20 765 4321` and `+36/83/701/902 00 36/73/48/9525` give two `[phone]`), built with its pins written and seen red first (22 cut rows and 23 not-cut rows, each with its reason), the left part checked by the numbering plan (country code 36 and `national_phone_holds`, not by shape alone), and narrowed twice after two reviews, so that the cut is not made where a prefix token inside the second number begins a national number that reaches beyond it (the national pass would hand the third number its prefix); the run-on of the differential fell from 63 to 11. Not closed: the row's own text (`Tel: +36.62.7320.12 00 36 69 0619 45/(00 36).92.803.020.` gives `Tel: [phone] [phone].92.803.020.` again, the output from before the cut, which the wider condition gives back and which is pinned as a known leak); a foreign first number or one with a digit too many; about 0.03 per cent of ordinary texts (91 of 300,000 in the review), a second number with an inner group that starts `06` or `00` followed by an amount, a date or another number, which fall back to the leak from before the cut (`+36 30 135 7400 06 1 065 3027 250 000 Ft` gives `[phone] 3027 250 000 Ft`; `+36 25.805.094 06-49 068 916 06 12 2026 14` gives `[phone] 916 06 12 2026 14`); and the three known leaks of the national pass (the row below). The session accepted the fall-back and did not refine the condition. The claim that no text shows a digit the matcher before the cut hid was false for R3 and for R3b; the review of R3c, over about 2.84 million texts of its own grammars, found none, and a seeded property test in the suite now holds it (the section) | S070 |
+| A dotted or slashed international number is not found when one of its groups begins `06` or `00` (`+36.30.123.0630`, `+36/30/123/0630` and `+36.30.123.0030` stay whole; `+36/30/123/4567/0630` gives `[phone]/0630`), because the cut before such a group leaves fewer than 8 digits; about 2 % of the groups of a number written so. Not a regression (the matcher before the separator change found none of them), and pinned by `test_redaction_residuals.py`. The reviewer's wider cut (the validated cut of the row above, taken at `/` and `.` with `PHONE_JOIN` neutralised) cost two failing tests, one new shape in the differential (`12 +36.36.0679.55(06/36)/7660/10/`) and one over-redaction (`+36 30 123 4567/06/22` gives `[phone]`), so it is a decision of its own and not the row above's | S067 (fourth review) | open; not built in S070 and asked of the owner, whose recommendation from the session is to leave it as it is (about 2 % of the groups of a number written so, not a regression, pinned) | S070 |
+| The redaction's differential test has gaps (`test_redaction_differential.py`): it files a lost run under its first lost digit only, so a new leak in a later number of a text that already holds a named shape is filed under the named one (the mutation that brings back the parenthesised second number hid behind `30.06.30.8336.687 +36 30 123 4567/(06) 20 765 4321`; over the whole corpus it still fails); `00.` and `00/` forms and a date of three groups are not generated (a mutation that lets `_after_date_tail(2)` take three groups moved the hit counts and passed, one that hides `00.` after a date's tail changed nothing); the two date-lead guards, `DATE_LEAD` and `DATE_MONTH_LEAD`, can be loosened (the year dropped, any four-digit year, any day) with no failure, and only a month of 13 to 31 is caught; and the reference is the matcher before the guard, so a leak that both have is invisible (12,147 of the 12,281 texts that leave a digit of an inserted number in the clear leave it in the reference too). Classify every lost run, add the forms and the date of three groups to the generator, and bring the two guards under a test that fails when they are loosened | S067 (fourth review) | closed by S070 (R2, with R2b's pins), tests only: every lost run is classified on its own and the sweep passes only when each is named (an exact list of three known runs beside five named shapes, a fourth fails it: two of the mechanism R2 found, one of them the cut row's own text given back by R3c's narrowing, and one that is no regression); the generator writes `00.36`, `00/36` and the date of three groups; the hit counts are pinned (176, 40, 152, 7 and the run-on's 11); the shared-leak counts are pinned, so that they cannot grow unseen: 13,965 texts that leave an inserted digit and 13,829 of them that the reference leaves too, in place of the row's 12,281 and 12,147 (those were of the corpus before the generator learned the forms it lacked; the corpus has since grown by 2,000 seeded texts of a second number that ends in the next number's prefix, R3b, which is why the counts are larger); and `test_redaction_date_guards.py` holds both date-lead guards from both sides (13 rows that stay whole, 24 that are replaced), with the mutation run on a scratch copy showing each loosening the row named, and the ones the old tests missed, now caught. The strengthened sweep found that the old first-digit rule had hidden a real leak on `main` (the first of three known leaks, in the known-leaks row below) | S070 |
+| Two small ends of the redaction: `_replace_email` writes `EMAIL_PLACEHOLDER` directly, where `_replace_cards` now reads `PLACEHOLDERS["card"]`, so a test that swaps the mapping misses e-mail addresses; and a date whose day or month is `06` followed by eight or nine digits (`2026.10.06 12345678` gives `2026.10.[phone]`, `10.06 12345678` gives `10.[phone]`) is replaced, the date's own digits with it, though it is no number: over-redaction, which fails safe, and the matcher before the date guard replaced it too; pinned by `test_redaction_residuals.py` | S067 (fourth review, low) | closed by S070 in part: the e-mail pass reads `PLACEHOLDERS["email"]` as the card and phone passes do, with a test that swaps the mapping (R4); `claimant_name.py` still writes `EMAIL_PLACEHOLDER` directly (the small ends row below). The date half is not built and asked of the owner, whose recommendation from the session is to leave it (over-redaction fails safe, and a third date guard goes into a matcher whose date guard leaked twice) | S070 |
+| Three known leaks of the phone matcher leave digits of a phone number in the clear, each pinned by a test that says "A LEAK, open" with today's output, so nobody reads it as wanted behaviour (T-73). (i) A date-tail guard refuses a first number and the rescan's candidate inside it ends by taking the next number's prefix, so the rest of the second number stays visible: `2026/06/80/0624/98.(0036)/69/062/772/12` gives `2026/06/80/[phone]/69/062/772/12` (`test_a_known_leak_a_refused_date_tail_lets_the_next_number_be_cut_short`); on `main` today, where the old first-digit rule hid it from the differential test. (ii) The same mechanism one number later: `2.06.85.068.489/00 36.2050.641.88/06` gives `2.06.85.[phone].2050.641.88/06` (the first entry of `KNOWN_UNNAMED_RUNS`, held exact by `test_every_digit_the_old_matcher_hid_stays_hidden_but_in_the_named_shapes`). (iii) The national pass reads a number greedily through a last group that begins the next number: `06 20 765 43 06 20 123 4567` gives `[phone] 20 123 4567` on `main` with no international number (`test_a_known_leak_a_second_number_that_ends_in_a_06_group_takes_the_third_prefix`, whose last row is that text), found by the review of R3. Not fixed in S070, by the advisor's reading: a fix bounds a span at a following prefix, which is a new and fragile mechanism for a matcher that regressed twice on a fix made at the end of a round, and three behaviour changes of one matcher in one pull request is the shape that regressed it; "no rescan inside a refused candidate" would have been worse, since three of the five named shapes exist because the rescan starts inside a refused span. Also left, old behaviour and no regression, pinned: a foreign first number or one with a digit too many still runs on into the second (`+44 20 7946 0958 06 20 765 4321` and `+36 30 123 45678 06 20 765 4321` give `[phone] 765 4321`), and three texts that read as dates keep what the matcher before the cut kept (`+36 1 234 56 12 06 2026 12345` gives `[phone] 12345`, `+36 30 123 4567 06 12 2026 14` gives `[phone] 2026 14`, `+36 30 123 4567 06.12.2026` gives `[phone].2026`); the foreign first number is the likelier of these in a real claim (the review of R3). One more is the cost of the cut's last narrowing (R3c): the cut is not made where any prefix token inside the second number begins a national number that reaches beyond it, so the text the cut row quoted, `Tel: +36.62.7320.12 00 36 69 0619 45/(00 36).92.803.020.`, gives `Tel: [phone] [phone].92.803.020.` again (the output from before the cut: the entry of `KNOWN_UNNAMED_RUNS` that the cut had removed is back, so the exact list holds three, and the row sits in `GREEDY_NATIONAL_READING` under "A LEAK, open"), and so do about 0.03 per cent of ordinary texts, which keep the leak from before the cut; it is no loss against the matcher before the cut (the session accepted it and did not refine the condition, since a refined condition is a new mechanism) | S070 (the differential's sweep; the review of R3; the review of R3b) | open; home: S070's second half, which stays open while the owner's questions do, since it holds the redaction's files, its pins and its sweep, and S069's second half (the cluster, the server's certificate, the ingestion's tenant) has none of them; the owner decides first whether to build a bound at all, and if S070 closes without it the row needs another home | S070 |
+| Small ends S070 left, all low and in code or comments that its documents contract could not write: `claimant_name.py` writes `EMAIL_PLACEHOLDER` directly where the e-mail pass now reads the mapping; the docstrings of `test_redaction_residuals.py` and `test_redaction_differential.py` speak of the international run-on in the terms from before the cut, and a comment of the differential (`_international_run_on`) may still say it is cut only at a slash or a dot; the comment "Every pattern below is linear" now stands above the e-mail patterns only (`redaction_email.py`) and one above `redact` still gives a size for `redaction.py` that is now wrong; the `ClaimView` docstring in `adjuster.py` says the facts are the submission's fields as text and never the name, and they now hold two derived gap rows, and its module docstring says nothing of the mark; `assess`'s docstring does not say why the posted-text flag and the instruction in the description are checked before the clauses (decision 3 of S070); `adjuster.py` is 795 lines, so its next edit crosses the soft ceiling; `moves._take_from_state` has seven parameters, `_could_take_documents` ignores two of its three, and the run input's shape is built in two places in `triaging.py` (`input_for_run` and `run_input_with_documents`), held equal by a byte test and a frozen golden file; `RESTS_ON_NOTES` and `RESTS_ON_MARKS` are plain `Final` dicts, and the header "Recommendation rests on" is typed in both templates | S070 (reports and reviews) | open; low | S074 |
+| What the adjuster's page looks like and what the demo script says of it, not seen: nobody rendered the claim page with its longer labels (the report date's is 68 characters, the first gap's 60; the list has no width rule, so nothing is cut, but no one looked); `infra/kind/demo.sh` prints "none (the rules decided; no model was called)" whenever `drafted_by` is null, which also covers an assessment `not_needed` with no recommendation and an `unavailable` assessment where no call was made, so it can disagree with the page's mark, which speaks of what a recommendation rests on; what `make smoke` reads of the queue page was not checked against the new column | S070 (A1, A4) | open; low | S073 |
+| The adjuster's page and queue, small ends of the mark and the dates (T-26, T-66): the queue reads `recommendation` and `assessment` from the stored JSON without validating the proposal, so a proposal that fails validation, which the claim page shows as "could not be read", can still carry a mark in the queue (a hand-written row only), and for a claim whose last triage failed it describes the latest stored proposal, as the Reason column does; the pairs the validator admits and the graph never writes (reject with none applies, approve with applies) are marked "model"; `received_at` must be aware and is not checked at run time; a form sent just before midnight in Vienna shows "1 day" for the second gap (the form stamps the day earlier than the API's `now()`), which is harmless; the first gap reads as a fact while it is two unchecked dates | S070 (reviews, A1, A4) | open; low | S070 |
+| A caller of the same tenant can tell a claim whose name has nothing to replace from one with a heavy name, by the extra time to a 409 on a claim in a refusing state (S070's pre-lock read compiles only for a request the claim can go on with, so the time still differs for a request that can); it shows the shape of a stored name the caller cannot read, not another tenant's data, and the status code already tells the caller the rest. The tenant has no per-user separation until a caller has an identity | S070 (security review, low) | open; low | S021 |
+| What a refused request still costs on the Claims API, and no limit at the ingress (T-02): a stale page and a documents post past the cap of twenty each pay one compile of the claimant's name before their 409 (about 55 ms of CPU for the worst name, in a thread pool under the GIL, so roughly one core held at about 18 requests a second from one caller with a maximal name), a claim that changes between the advisory read and the lock is compiled under the lock, and nothing limits the rate of any request on these routes; not measured: the cost of the name replacement and the posted-text screen on a 5,000-character description made to be slow, the memory of about forty worst-case compiles at once against the Claims API's 192 Mi, and PostgreSQL's connection limit against the thread pool, since `db.connect` does not pool. A rate limit at the ingress and the firewall of the Azure design have no step in T-02 | S070 (A4 and the security review) | open; the edge is S020's, and a limit inside the Claims API is decided there | S020 |
+| Not seen on a cluster after S070: the adjuster's claim page and queue with the mark and the new labels, the Claims API's read before the lock under real traffic, and a refused request's 409 without the compile; the tests hold each against PostgreSQL (a second session's `FOR UPDATE NOWAIT` shows the row unlocked while the pattern is built and locked while the documents are read) | S070 | open; tests hold each | S073 |
 | Claims filed against a policy that is not the claimant's count towards the holder's next claim while they are open (T-76): until S021 anyone may file against any policy, so planted open claims send the holder's next claim to an adjuster; it costs a review, not a payment or a refusal | S067 (the owner's decision of 2026-10-06) | open | S021 |
 | Not seen on a cluster after S067: migrations 0025 and 0026 applied by the migrate Job, the ingestion Job's second command (`meridian knowledge verify`) and its audit row, an open claim counted through the real services, a Hungarian form redacted in a service's log line, and the posted-text boolean reaching the runtime over mutual TLS | S067 | open; tests hold each (the Job's command line was run in a shell with a stand-in for `meridian`) | S073 |
 | `meridian knowledge verify` runs in the ingestion Job, which a deploy skips when the image's ingestion has already succeeded and the store is not empty, and nothing runs it on a schedule; a Job that verifies without ingesting is not built, and the runbook says when to run it by hand (T-57) | S067 | open | S073 |
 | `meridian knowledge verify` writes its counts into `audit.events.reason`, a column documented as the reason a call was refused, because it is the one free-text column; its audit row has no tenant | S067 (C4v) | open; the owner may prefer a column of its own. S068 decided to build nothing: the data classification now says that the column holds a refusal's reason and, for this command, the counts it made. The console's audit search (S033) will read the column, so that step is where a column of its own would show | S033 |
 | Tests that failed under load in S067's runs and passed alone: `test_a_scripted_model_gives_the_oracle_s_proposals` (a `wording_search` call timed out), `test_the_decisions_trace_fails_too_when_one_of_its_services_has_no_span`, and, in one final run, three that were not read (`test_sweep.py::test_importing_the_sweep_loads_no_web_stack_no_langgraph_and_no_claims_api`, `test_claims_mcp.py::test_eight_threads_sending_one_key_leave_one_row_and_all_get_its_id[add_claim_note]` and `test_evaluation_http.py::test_loading_the_claims_evaluation_brings_in_no_agent_framework`); and a first database run of C4v's with 1,338 fixture errors that nobody explained | S067 | open in part: the wording search and the decisions-trace test were changed by construction in S074's first half (the stack's tool bound; the demo polls on a virtual clock) and passed 25 of 25 runs of S074's loop alone (2026-10-07, a load up to 9); the two import tests (subprocesses with a limit of 60 s) and the claims MCP test are untouched and passed the same 25 runs, so they are not reproduced short of a machine that swaps, where an import test and the claims MCP test failed again; beside a whole suite nothing is measured (two runs with a test database do not fit beside the cluster); the 1,338 fixture errors were not looked for | S074 |
-| Left by S067's reviews, all low: `redact` is 76 lines with its docstring and `redaction.py` 792, eight under the ceiling, so any growth needs a split (the Hungarian part, in a module of its own); `test_redaction_hungarian.py` is 858 lines and `test_claims_graph.py` about 2,300; five tests load the two name-masked cases each on its own (one helper in `servicesupport` would do); `VOWEL_FORMS` and `ARCHAIC_SOUNDS` are plain dicts; no test names `re._compiler`; `test_assessment.py` asserts the `["CLM-0012", "CLM-0044"]` literal beside a derived check; four docstrings and comments say what was true before: `claimant_name.py` ("one word", where two golden descriptions hold "Leon"), the first lines of `triaging.py` ("the run's facts"), and `evalsupport.py` and `test_evaluation_stack.py` ("the 40 golden claims") | S067 (reviews) | closed in part by S074 (first half): `test_claims_graph.py` is split (ten files and `graphsupport.py`); the rest stays for S074's second half | S074 |
+| Left by S067's reviews, all low: `redact` is 76 lines with its docstring and `redaction.py` 792, eight under the ceiling, so any growth needs a split (the Hungarian part, in a module of its own); `test_redaction_hungarian.py` is 858 lines and `test_claims_graph.py` about 2,300; five tests load the two name-masked cases each on its own (one helper in `servicesupport` would do); `VOWEL_FORMS` and `ARCHAIC_SOUNDS` are plain dicts; no test names `re._compiler`; `test_assessment.py` asserts the `["CLM-0012", "CLM-0044"]` literal beside a derived check; four docstrings and comments say what was true before: `claimant_name.py` ("one word", where two golden descriptions hold "Leon"), the first lines of `triaging.py` ("the run's facts"), and `evalsupport.py` and `test_evaluation_stack.py` ("the 40 golden claims") | S067 (reviews) | closed in part by S074: `test_claims_graph.py` is split (first half: ten files and `graphsupport.py`); second half (H12, H17): `VOWEL_FORMS` and `ARCHAIC_SOUNDS` are read-only, a test names `re._compiler`, "one word" says that "Leon" is in two golden descriptions, and `evalsupport.py`, `test_evaluation_stack.py` and `test_claims_graph_golden.py` no longer count the golden claims by a number; the redundant literal in `test_assessment.py` is replaced by a guard. S070 split `redaction.py` (292 lines, five modules beside it), which closes `redact`'s place in a file near the ceiling, and its own test of `re._compiler` (the fuller one) replaced the second half's at the merge. Stays: the five loaders of the name-masked cases (four of the five files are free, `test_triage_run_input.py` is S070's), `test_redaction_hungarian.py` at 858 lines (split after S070), `redact`'s length (S070's branches add the modules that take it apart), and the first lines of `triaging.py`, which say "the run's input" on `main` and not the phrase the row quotes (check with S070, whose file it is) | S074 |
 | A gateway that sends its response headers a few bytes at a time, each wait under the 30 s read timeout, is bounded by no timeout (httpx has none for a whole request, and the call's deadline is first read once the headers have come), so a leg is not provably under the 600 s lease; the security review's probe, with the deadline at 2 s and the read timeout at 1 s, ran 80.7 s against a server that sent a header every 0.4 s. The gateway is first-party and sends its headers in one write (T-10) | S069 (security and boundary reviews) | open | S069 |
 | A late leg's tool calls still bind by the run's status alone, so a leg that outlived its lease can call tools until it ends; closing it needs the holder of the run at the tool servers, a column on `runtime.runs` with its grants and a migration, which the first half of S069 left out on purpose (design, decision 1; T-10) | S069 (design) | open; the database lane, so S068 is the nearest step that holds it | S068 |
 | The runtime's and the gateway's close writes of the refusal summaries still run on the event loop (the tool servers' do not), a synchronous write at shutdown | S069 (E2, F1, boundary review) | open | S069 |
@@ -909,8 +918,8 @@ that day; the rest stand as their step recorded them.
 | The access log's path is the request's, not the route's template: a name written as a plain path segment is logged. uvicorn's access record holds five positional arguments only; Starlette sets `scope["route"]` after matching, and its `path` is the template, so logging it needs a middleware in each app that reads the matched route after the response and either sets a context variable the formatter reads or writes the app's own access line with uvicorn's silenced (T-03) | S069 (F1, security review) | open | S069 |
 | The runtime's client counts a reply of the gateway that fails validation as `failed` with `error` and logs nothing, so an operator sees a status and no field, where the Claims API now names the field of its own answers (T-03) | S069 (E5, boundary review) | open; low | S069 |
 | A leg's `_Written.raised` cannot tell a write that committed before the connection dropped from one that failed before it committed: if a clean no-match then follows an equal status written by another leg, the leg answers its own output for that other leg's write; it needs a hung leg, a database fault and an identical ending | S069 (boundary review, low) | open; low | S069 |
-| A stored `drafted_by` is a well-formed ID, three modes at most, and not checked against the registry the runtime already loads, so a compromised gateway could make the triage store an ID that names no deployment (it cannot store free text: the prompt version is the runtime's own); and the claimant's response shows a drafter for a withheld completion and none for a refused prompt, a small oracle for which filter fired (T-67) | S069 (boundary review) | open; low | S070 |
-| A `ClaimResponse` that cannot be built after the proposal is stored ends as a 500 with no second count and no second triage; the state is consistent and a retry of `POST /claims` answers 409, but on the documents route (`moves.py`, `add_documents`) the exception escapes the `except HTTPException`, so the documents and the proposal are stored and the caller sees a 500; theoretical, since the response is built from parts already validated | S069 (boundary review, low) | open; low | S070 |
+| A stored `drafted_by` is a well-formed ID, three modes at most, and not checked against the registry the runtime already loads, so a compromised gateway could make the triage store an ID that names no deployment (it cannot store free text: the prompt version is the runtime's own); and the claimant's response shows a drafter for a withheld completion and none for a refused prompt, a small oracle for which filter fired (T-67) | S069 (boundary review) | open; low; S070's contracts did not reach it (nothing under the runtime's client or the stored `drafted_by` changed), so it stays for S070's second half | S070 |
+| A `ClaimResponse` that cannot be built after the proposal is stored ends as a 500 with no second count and no second triage; the state is consistent and a retry of `POST /claims` answers 409, but on the documents route (`moves.py`, `add_documents`) the exception escapes the `except HTTPException`, so the documents and the proposal are stored and the caller sees a 500; theoretical, since the response is built from parts already validated | S069 (boundary review, low) | open; low; S070 changed `moves.py` (the pattern's read before the lock) and left this path alone, so it stays for S070's second half | S070 |
 | S069's tests that stop short: the takeover tests call the real claim from inside leg A's node and end leg B with a direct `finish_run`, so the guard is proven against PostgreSQL and no aged `updated_at` goes through two requests to `/resume`; the four throttle tests, the `SystemExit` test of `run_leg` and the guard's relaxation over `Any` were not red first, because they pin behaviour that already held (F1 mutated nothing to prove they can fail); the guard over the logged models passes a `TypedDict` field of any kind, whose key pydantic puts into an error's location (none of the five logged models has one today: flag `is_typeddict` as a free key), and a `dict[str, Any]` validated from a Python mapping with a key that is not a string logs that key (the wire is JSON, so not reachable from a request); under a load of about 150 `test_the_runtime_does_not_import_the_gateway_package` passed its 60 s bound around `uv run` and failed with nothing wrong (the re-read of F2, 2026-10-07) | S069 (python review, F1, E5, the re-read of F2) | open | S074 |
 | S069's small ends, all low: `ModelCallFilteredError.withheld` is read by nothing in `src`; `except (Exception, SystemExit)` stands twice in `common/entry_points.py` where a named tuple would keep them equal; the userinfo cut takes the `y` out of a plain path with an empty segment (`/files/x//y@z` gives `//z`, logs only); `ResumeRequest.input` is a required field that must be `{}`; a `GeneratorExit` from a coroutine closed by the garbage collector is counted `unexpected`, where `cancelled` is arguable; the sweep's import tests deny named prefixes only, so a web stack arriving through `uvicorn`, `mcp` or `anyio` alone would pass; `test_tool_client.py` is 1,091 lines, `test_runtime_app.py` 3,143 and `test_tool_server.py` 2,433, and `test_claims_meters.py` about 790; the helpers `State`, `Clock`, `make_client`, `summaries` and `summary_write_fails` are copied across the new test files, and `make_client` of `test_runtime_leg_counts.py` hard-codes `raise_server_exceptions=False`; the comment in `workers.py` that the graph module must not pull in the web framework is false as written, since `claims_triage.models` already loads `fastapi`, `starlette` and `psycopg` through `common.http` and `runtime.models`, before F2 as after it; repeated `Content-Encoding: identity` lines and an empty value are refused by the runtime's client (fail closed, no gateway sends either) | S069 (python and boundary reviews, E4, E5) | open | S074 |
 | The knowledge service's embedding client (`knowledge_mcp/embedding_client.py`) posts with a buffered call, so the whole reply of the gateway, 2xx or not, is held in memory before the client reads it, and nothing caps its size (the timeout is per read); the runtime's client got a streamed read with a cap in this step, and the same change is owed here | S073 (its contract K6 stopped on it, 2026-10-07) | open; low: the gateway is a peer behind mutual TLS | S069 |
@@ -949,7 +958,7 @@ that day; the rest stand as their step recorded them.
 | Rows the upkeep role wrote (every `audit.expire` and `ledger.expired` row, a credit's and a close's) are never removed by the audit expiry, so they stay for ever: a few rows for each operator action, with slugs and tenant IDs and no personal data; a period for them needs a function of their own and the owner's answer | S068 (F1) | open | S020 |
 | Migration 0031 sets a default on the database, which only the database's owner may do: on kind the migrations' role is that owner; on a managed server where it owns the schemas and not the database the file fails and the migrate Job with it (not tried on Azure). A restore without the database's own settings, or a copy made from a template, loses the default while the ledger of migrations still says 0031 is applied, and nothing looks for that drift. The upkeep command's one connection uses psycopg's server-side prepared statements from the sixth call, which a pooler in transaction mode would break (none is used) | S068 (the database re-read of U5, U5b and F2) | open; low | S020 |
 | Rules for the command guard and the settings for Google Cloud, owed on the day a credential for it could exist on a machine where a session runs: `gcloud` beyond the two verbs it reads (a secret's value, an access or identity token), `gsutil`, `~/.config/gcloud` and the `gcp-*` targets; with them a redaction for Google's identifiers (a project ID, `*.googleapis.com` names, a Cloud SQL connection name) and, if the module were ever applied by more than one careful person, a wrapper of S036's kind. None exists by decision: no credential exists, and a hand-typed `terraform plan` in the module's directory is allowed and reaches nothing. The next rule of the guard goes into the development base first | S078 (design; README) | open; not built, by design | S079 |
-| The open questions of ADR 7 that only an apply settles, and the README's list of what `validate` and the scan cannot see (the project pin never seen to refuse, the Cloud Resource Manager API that must already be on, `billing_project`'s API and role, the node role's name and its reach into Artifact Registry, Private Service Connect with `ipv4_enabled = false` and no `private_network`, the forwarding rule's empty scheme, the DNS left off, the public-range setting beside private nodes, a cluster without `network_policy` beside Dataplane V2, the generated instance name, a budget with no currency, the quota of a trial account, how long an enabled API takes, whether workload identity reads the one secret, whether the nodes' one reader grant is enough to pull the image, whether the cluster's temporary default pool is created under an organization's default-grants constraint, whether `SYSTEM_COMPONENTS` alone is accepted beside the default `logging_service`, and the instance's first disk size against the ceiling of 20 GB) | S078 (README; ADR 7) | open; the module is never applied, so nothing settles these unless the owner applies it | no step: the owner's word |
+| The open questions of ADR 7 that only an apply settles, and the README's list of what `validate` and the scan cannot see (the project pin never seen to refuse, the Cloud Resource Manager API that must already be on, `billing_project`'s API and role, the node role's name and its reach into Artifact Registry, Private Service Connect with `ipv4_enabled = false` and no `private_network`, the forwarding rule's empty scheme, the DNS left off, the public-range setting beside private nodes, a cluster without `network_policy` beside Dataplane V2, the generated instance name, a budget with no currency, the quota of a trial account, how long an enabled API takes, whether workload identity reads the one secret, whether the nodes' one reader grant is enough to pull the image, whether the cluster's temporary default pool is created under an organization's default-grants constraint, whether `SYSTEM_COMPONENTS` alone is accepted beside the default `logging_service`, and the instance's first disk size against the ceiling of 20 GB) | S078 (README; ADR 7) | open; the module is never applied, so nothing settles these unless the owner applies it. The row had no step when S078 merged ("no step: the owner's word"), against the plan's rule that every backlog row names one (the owner asked on 2026-10-07 whether any did); S079 holds the Google Cloud scaffold's other rows and writes its twin, so it judges this one at its close: kept as the list of what was never seen, or closed if the owner applies the module | S079 |
 | What the Google Cloud module leaves to production, each beside its test value in its README and none built: deletion protection and a final backup, more retained backups, a regional cluster and database, a chosen release channel and version, Cloud SQL's logging flags and subnet flow logs (the scan's six MEDIUM and one LOW finding), a private control-plane endpoint, a managed firewall at the edge, a remote state bucket, customer-managed keys, a node-pool `network_policy`, and a role per team. S079 builds a twin beside this module, so it is the step that decides which of these its own takes | S078 (scan; README) | open; not built, by design | S079 |
 | A second Google Cloud module (S079's self-managed cluster) cannot sit in `infra/terraform/gcp/`: the scan's tests hold one cluster and one subnet block to the directory because an ignore-file entry covers every resource of it, and `make gcp-validate` and `make gcp-scan` each name that one directory. The validate door takes a module's name from a closed list (`aws`, `gcp`), so a new name or a new directory, with its own scan recipe, is the shape | S078 | open | S079 |
 | The Google provider is pinned `~> 8.6` and its lock holds 8.6.0, which was published on 2026-10-06, a day before the module was written (8.5.0 a week before); no run has used it beyond `init` and `validate`. Renovate's `terraform` group moves the lock after a week and its note names `make gcp-validate` and `make gcp-scan`; the release notes of the 8 series are unread. S079's twin pins the same provider and is the next step to read them | S078 (G1's report) | open | S079 |
@@ -961,6 +970,12 @@ that day; the rest stand as their step recorded them.
 | Three small ends of the kind scripts that the infrastructure review of S073 left: `upkeep.sh` reads a `helm get` that timed out (status 124) as "the release is not installed" and says to run `make deploy`, though it stops and does no harm (L3); `smoke.sh` puts a Deployment's name unescaped into a basic regular expression, safe for a DNS label and not for a dotted name (L6); `kctl` gives a plain `delete` without `--wait=false` the request flag though it waits by default, and no call site is affected today (L7) | S073 (infrastructure review) | open | S073 |
 | The restart share is read from `MERIDIAN_TLS_RESTART_SHARE` by `certlife._restart_share`: an empty value is 0, the old behaviour, so a chart typo that renders an empty share hides itself, while a value of only whitespace refuses the start (the Python review of S073, L4); a share written with Unicode digits or padded is read as a number | S073 (Python review) | open | S073 |
 | What a new 503 of the Model Gateway would have to look like to slip past `test_gateway_503_words.py`, so that the ingestion's word for it would be `unknown`: a status that is an attribute or an imported name (`status.HTTP_503_SERVICE_UNAVAILABLE`, `HTTPStatus.SERVICE_UNAVAILABLE`), a `JSONResponse` or `Response` with no `detail=` keyword, a site under `gateway/providers/` or outside `gateway/` and `common/` (the scan's glob is not recursive), a text from a second mapping like `LIMIT_ANSWERS`, or one of the four texts reused for another cause (the test passes and the word is then ambiguous); an f-string `detail` fails loudly | S073 (Python review) | open | S069 |
+| `meridian registry contracts` ends in a traceback and exit 1 for an output directory it cannot read (`--out` with mode 600, with or without `--check`), for a contract file it cannot read (mode 000) and for one that is not UTF-8, and it follows a dangling `--out` link and creates the link's target; `contract_problems` and `write_contracts` (`platform/toolserver/contracts.py`) catch nothing and `cli/registry.py` calls them bare. It predates S074 (the file is as on `main`); the smallest fix is `except (OSError, UnicodeDecodeError)` around both calls and a line through `_fail`, as `schemas` has | S074 (the re-read of the second half, L-e) | open; low | S074 |
+| The golden manifest is read three times in one build, and a file that changes between two reads is not noticed: `check_manifest_workload`, `auto_approval_limit` and `golden_set_of` in `build_report`; the injection builder reads its own manifest three times and the golden one twice. H16's estimate of the smallest change: a private helper in `claims_triage/evaluation.py` that reads and type-checks the document once, the workload check and the limit taking the document, and a `golden_set_from(document, root)` core in `platform/evaluation/fingerprints.py` with `golden_set_of` kept as a thin wrapper; three source files, no call of `golden_set_of` (41 in `test_fingerprints.py`) moves while its signature holds. It closes the "changed between reads" part only if the core takes the document, since `golden_set_of` also hashes the listed files and walks the directory. A contract of its own, before or after any rewrite of the two builders and not beside it | S074 (second half, H16; row 878's second part) | open; low | S074 |
+| Functions over 50 lines by S074's count (signature plus body, no docstring): thirteen are not application factories, `resume_run`, `run_leg`, `tool_client_for` and `_exchange` (runtime), `create_service_app` (`common/http.py`), `_record_decision`, `_decide`, `decide` and `_run_triage` (claims workload), `answer` and `route_responses` (gateway app) and `expire` and `expire_audit` (`cli/gateway.py`), at 51 to 78 lines, and six are application factories whose body is their routes (`create_app` three times, `add_claimant_pages`, `add_adjuster_pages`, `create_tool_app`); by the whole count it is 31 functions. Counted on d2a674c with `ast`. No promise: no earlier row names them, and nothing enforces the number | S074 (second half, the count) | open; no promise | S074 |
+| S074's second half has two tests that cannot be shown to fail on the code they replace: the `_replace` descriptor test (the fix is right by construction, no `os.close` is left; the test fails when `with open` is replaced by a bare `open`, not on the old code) and the `re._compiler` test (passes on any 3.13, the import fails first). Two low points are left on purpose: `_graded_cases` takes nine parameters because it mirrors `build_report`'s, and the test that pins four committed reports fails when a fifth is committed | S074 (reviews of the second half, L-b, L3, L4, L6) | open; low; no change planned | S074 |
+| S075's checks: the split-table check's docstring (`scripts/check_docs_consistency.py`) names fences and indented tables but not block quotes, a row without a closing pipe, an HTML comment or a lone header-like line, and the lane check's header (`.claude/hooks/check-lanes.sh`) does not say that `--` and `n/a` in "Out now" count as running; the limits are accepted and written in S074's section, and the smallest fixes are a docstring sentence and a header sentence, or two more values in `empty()`, which is a change to a harness hook and the owner's to approve | S075 (S074's second half) | open; not built | S074 |
+| Renovate has not run S075's three new rules: whether Docker Hub gives the Envoy chart a push date (else the chart waits indefinitely, `.github/renovate.json`), whether the `terraform` block's `description` key is accepted and whether the `agent-framework` label is made are unseen; nothing to code, a sentence to write when Renovate next runs (S078's branch edits the same file, so it is not touched before that merge) | S075 (S074's second half) | open; after Renovate's next run | S074 |
 | Sentences in `infra/` that a render of the add-ons' charts (2026-10-07) showed inexact: `manifests/cert-manager-networkpolicy.yaml` says the controller "reads every Secret" (near line 53), and cert-manager's controller also writes them; `manifests/telemetry-ca.yaml` (near lines 31 to 40) and `manifests/service-ca.yaml` (near line 18) list the readers of the authorities' keys without Envoy Gateway's controller, and say only the two operators write; `infra/kind/README.md` (near lines 253, 271, 294, 679, 2066 and 2090) and the comment in `smoke.sh` near line 205 name two cluster-wide readers or "the one switch"; the S063 section's sentence that the one switch drops every role the chart creates is history and stays, T-68 and row 708 say what the render showed | S072 (documents) | open: comments only, no behaviour; corrected with the cluster batch's edits to the same files | S072 |
 | `manifests/cert-manager-networkpolicy.yaml`, near lines 17 to 21, says the address the API server's calls arrive from "is not known, nobody has measured it", and `infra/kind/README.md` (near line 1631) and `manifests/observability-networkpolicy.yaml` (near lines 56 to 71) say the same of the other webhooks' port. Measured once on kind (S072, 2026-10-07): the calls of the API server to a pod arrive from the node's address on the pod network and pass a default-deny ingress. The sentence is to be corrected, and the peerless rules on 10250 (cert-manager's webhook, approver-policy's, the Prometheus operator's) bounded, in the cluster batch | S072 (measurement) | open | S072 |
 | Smoke's check 10 asks for a Certificate in `default` with the URI `.../sa/meridian-smoke-refused`. Since contract P the services' policy lists exact URIs, so that URI is also refused inside `meridian` and the check no longer proves the namespace selector alone (the test that held it says so: `test_the_request_is_in_a_namespace_the_services_policy_does_not_select`). Either `REFUSED_URI` becomes a listed name such as the gateway's and the old assertion returns, or the weaker check is accepted and the line says what it proves | S072 (contract P) | open: `smoke.sh` and its tests are outside the documents' contract; the verdict on the cluster should not change (the request is still denied by `meridian-deny-unlisted`), not seen | S072 |
@@ -13149,11 +13164,15 @@ process or a path; the value is built inside the test (T3c).
 cut by moving whole units, and a script proves each cut was a move and not an
 edit; the tests that failed once under machine load hold by construction or
 are measured; the template database's builder, the CPU-time measurement and
-the slowest tests are fixed. The step is in two halves, as S066 was. This
-record is the first, which needs no cluster and touches no file another open
-branch edits. The second is NOT done: the split of `infra/kind/smoke.sh`
-(it waits for S073, which is editing the script), the six functions over 50
-lines, and S076's leftovers.
+the slowest tests are fixed. The step is in two halves, as S066 was. The
+first needs no cluster and touches no file another open branch edits; its
+record is the main body of this section. The second half's record follows the
+first's last question to the owner ("The second half", below): the six
+functions over 50 lines and S076's leftovers are done, closed or accepted row
+by row. What is NOT done, and keeps the step at `doing`: the split of
+`infra/kind/smoke.sh` (it waits for S073, which is editing the script), the
+loaders' helper and the split of `test_redaction_hungarian.py` (both wait for
+S070), and the rows the second half's last table keeps open.
 
 **Decisions** (the main session's unless marked; the owner may overturn any;
 the design was written from a read-only map of `main` at 0064171 before any
@@ -13177,7 +13196,10 @@ contract):
   (the row says 64), `assess` 59 and 39, `render_summary` 58 and 55,
   `build_injection_report` 58 and 38 (the row says 52), `summarise` 51 and 43.
   S067 has since changed `assess` and `build_report`, so the second half
-  counts them again; nothing in this half touched a function.
+  counts them again; nothing in this half touched a function. (The second
+  figure of each pair is the body alone, the signature and the docstring both
+  left out; it is not the count "without its docstring" that the sentence
+  names. The second half's decision says which measure rules and why.)
 - **A split is a move, proved by a script, never an edit.**
   `scripts/split_proof.py` reads the old file from a git revision and holds
   that every top-level unit of it, decorators and the comment block above it
@@ -13583,6 +13605,327 @@ says so.
     would itself be a number a loaded machine can pass. Recommendation: yes,
     with the limit set from the final suite's durations. Until answered:
     not built.
+
+**The second half (2026-10-07): what it was.** Branch `s074-second-half`,
+cut from `main` at 1019a57. A second read-only map of `main` at that commit
+quoted each backlog row the first half left open, said
+which parts were code, which a sentence already written and which an accepted
+limit, and proposed twelve contracts. Nine ran, H9 to H17, each in a worktree
+of its own and carried to the branch by the session, then two reviews and this
+record. The map's contracts 1 and 2 became one (H12); its contract 9
+(`assess`) was dropped by the count below; its contract 11 (the loaders'
+helper) waits for S070; its contract 12 (two sentences about S075's checks) is
+written here and not built. Nothing ran on a cluster, no contract started a
+test database, and no prompt, tool contract, screen or golden file changed,
+so no fingerprint moved and no baseline changed. No migration, no new threat
+ID: two threat rows (T-72, T-81) now say what the code does.
+
+**Decisions of the second half** (the main session's unless marked; the owner
+may overturn any):
+
+- **The count: signature plus body, without the docstring** (decided with the
+  advisor on 2026-10-07, before the functions' contracts went out; the
+  numbers are in "The count" below). The row's own figures were whole counts
+  (signature, docstring and body), and a whole count would split `assess`,
+  whose body is 39 lines, to serve a 21-line docstring: a docstring is not
+  logic. The first half spoke of a count "without its docstring" but its
+  figures were the body alone, so this half says the measure it used and does
+  not leave "under it" to read as a redefinition.
+- **What is accepted and not built.** Row 874's two save windows (a lock
+  would need the person's editor to honour it), the interrupt that lands
+  after the undo returned and before its first line, and a kill the process
+  cannot catch; row 875's header-shaped lines inside one multi-line string of
+  `pyproject.toml` (the person's own file; a cap would need a new refusal
+  text) and a path left behind that quotes the workload's name (the person's
+  own argument); row 876's write that is not all-or-nothing (a staged write
+  is not built). Each is already written in the code's own docstring; the
+  threat model says it too.
+- **An interrupt leaves the command as the interrupt (exit 130)**, also when
+  the undo itself then fails (H11; the docstring of `meridian workload new`
+  says so, H14). Before, that case ended as a write error with exit 1 and the
+  interrupt was lost. The lines to check by hand are printed first in both.
+  This changes what a person sees at a terminal; the owner may prefer exit 1.
+- **A `schemas` directory that is a link is refused** before anything is
+  made or written, and `registry schemas --check` prints one line, `schemas
+  is a link: remove the link`, for it, and a line of its own for a schema file
+  that is a link (H9). The wording does not say "then run the command".
+- **The model ties the golden set's workload to its own** (H16): `Report`
+  refuses a report whose `fingerprints.golden_set.workload` is set and
+  differs from `workload`, in fixed words that name both fields and quote
+  neither value; a golden set that names none passes (the two committed live
+  reports carry none). The check is first in the validator.
+- **The read-once manifest is not built.** It changes helpers that
+  `test_fingerprints.py` calls 41 times and edits the two builders the
+  length work had just changed; H16 estimated the smallest change and it is
+  a row (below) with a home.
+- **An edge depth is `SERVICES_EDIT_UNVERIFIED`, not "not YAML"** (H17):
+  `compose` had succeeded, only the check that follows overflowed, which is
+  what that code says for the tuple's other errors. `scaffold.py` took the
+  same gap: `_agents_edit` answers `AGENTS_EDIT_UNVERIFIED` and
+  `_agents_list_line` answers `None`, as for text that is not YAML.
+- **One assertion went, one guard stayed** (H12): the `["CLM-0012",
+  "CLM-0044"]` literal in `test_assessment.py` is gone and the derived check
+  stays with `assert stopped`. The literal also guarded against both sides
+  being empty; it is one line to put back.
+- **The import walker's docstring needed no correction** (H13): it sees none
+  of what it lists, and reports both false positives. The limits are pinned
+  in a new file, `test_injection_imports_limits.py`, because the old one is
+  20 lines under the ceiling.
+- **Left on purpose from the review of the eight commits** (low): the
+  `re._compiler` test
+  adds nothing the module's import does not (L3), `_graded_cases` takes nine
+  parameters because it mirrors `build_report`'s own (L4), and the test that
+  pins four committed reports will fail when a fifth is committed (L6), which
+  is its purpose.
+
+**Advisor:** the design records one consultation for this half, on the count
+(2026-10-07, the "always" point before the functions' contracts). The session
+leaned to signature plus body and three contracts, and the design records the
+outcome and not the advisor's words: the measure is signature plus body, the
+row's whole-count figures mean this section must say that the measure
+changed, and the consultation also told the session to use the free database
+slot for S078. No other consultation is recorded for the half before this
+record.
+
+**The count, said plainly.** The measure is a function's lines from its
+`def` to its last line, less the lines of its docstring when it has one
+(decorators are not counted). Counted with `ast` over every function and
+method under `src/`, nested and `async` ones included: 1,375 functions when
+the half opened (the design's figure, taken after H9's one new function; 1,374
+on 1019a57 itself), of which 32 were over 50 by the whole count and 22 by
+signature plus body. Six of the 22 are application factories whose body is
+their routes (`create_app` three times, `add_claimant_pages`,
+`add_adjuster_pages`, `create_tool_app`); the row named none of them. Of the
+six functions the row names:
+
+| Function | The row said | Whole at 1019a57 | Signature plus body then | Whole now | Signature plus body now |
+|---|---|---|---|---|---|
+| `run_command` | 73 | 73 | 62 | 48 | 37 |
+| `build_report` | 64 | 67 | 57 | 57 | 47 |
+| `render_summary` | 58 | 58 | 56 | 31 | 29 |
+| `assess` | 59 | 69 | 48 | 69 | 48 |
+| `build_injection_report` | 52 | 58 | 49 | 58 | 49 |
+| `summarise` | 51 | 51 | 44 | 51 | 44 |
+
+Three were over by this count and are under it now (`run_command` by H14's
+module-level option aliases, `build_report` and `render_summary` by H15's
+helpers). Three were already under it (`assess` 48, `build_injection_report`
+49, `summarise` 44) and are untouched, so `assess` still reads 69 by the
+whole count and keeps its 21-line docstring. **Recounted on this tree
+(d2a674c, 2026-10-07):** 1,379 functions (five new: H9's `_stale_schema_line`,
+H15's three helpers and H17's `_create_private`), 31 over 50 by the whole
+count and 19 by signature plus body. `write_plan` is the one function that
+joined the whole-count list (52 lines, H11's work; 33 by the measure used).
+The 19 are the six factories and thirteen others, listed in the backlog row
+that holds them; the row promises nothing. No helper H14 and H15 made is over
+50 by either count.
+
+**Work log of the second half** (contracts in the order they were carried to
+the branch; the counts are the reports'):
+
+- **A read-only map, the count decided, then nine contracts**, two reviews
+  and the documents.
+- **H9 (7579491): `meridian registry schemas` and links.** `write_schemas`
+  raises `SchemaPathIsALink` for a `schemas` directory that is a link, a
+  dangling one too, before `mkdir`; `--check` prints one line for a linked
+  directory and a line of its own for a linked file, where it had read through
+  the directory and said "schemas OK". The write's not-all-or-nothing limit is
+  a sentence in the docstring. Six tests red first.
+- **H10 (b6e0aa2): the services edit's small ends.** `one_line` compares the
+  editor's lines (a flow list with U+2028 in an item is extended, the parse
+  check still guards it), `line_of` at the end of a text that ends with a line
+  feed names the last line, and `yaml.compose` in `_runtime_agents` answers
+  `RecursionError` as not YAML. Four tests red first, four boundary tests.
+- **H12 (6d8f48b): the claimant's closed tables and stale words.**
+  `VOWEL_FORMS` and `ARCHAIC_SOUNDS` are `MappingProxyType`; a test names
+  `re._compiler`; "one word" (two golden descriptions hold "Leon") and "the
+  40 golden claims" (three places) say what is true without a number; one
+  redundant assertion goes. The pattern's fingerprint does not move.
+- **H11 (24efb97): the scaffold's undo.** "Check by hand" names a plan path
+  only when the command wrote or replaced it, or noted it to write, and a
+  temporary only while it exists; an interrupt leaves as the interrupt when
+  the undo then fails; `_replace` closed its descriptor when `os.fdopen` was
+  interrupted. Four of five new tests red first; the old test of the undo's
+  error was replaced by two.
+- **H13 (aac597e): the import walker's limits.** Eleven routes to a private
+  name it reports as nothing and two uses it over-reports, each pinned by a
+  case in `test_injection_imports_limits.py`.
+- **H14 (2efe0ac): `run_command`.** The eight Typer options are module-level
+  `Annotated` aliases; `meridian eval run --help` is the same byte for byte
+  (`cmp`); the docstring of `workload new` gains the sentence about exit 130.
+- **H15 (84457c5): `build_report` and `render_summary`.** `_graded_cases`,
+  `_opening` and `_count_bullets` are taken out. Three reports and three
+  summaries (scripted, recorded, live) are the same byte for byte before and
+  after, and the scripted one equals `data/evaluation/injection-summary.md`.
+- **H16 (6a6392f): `Report.workload`.** The validator above; six tests, three
+  red first, and a test that all four committed reports still load.
+- **The review of the eight commits (below), then H17 (d2a674c):** the two
+  high findings and four of the low ones. H17 appended two tests to
+  `tests/meridian/registry/test_cli.py` with a shell heredoc and not with the
+  edit tools, against the preamble's rule (its report says so); the text is
+  the same either way and it is in the diff for review.
+- **The re-read of H17 (below), then H18 (c7765cf):** three of its five low
+  findings. The scaffold's replacement handles a name collision at the `open`
+  alone, so a `FileExistsError` raised later no longer leaves the temporary
+  behind and un-noted (red first, with a probe of the re-read's own); the
+  recursion sweep asserts that the limit it measured lies inside its bounds,
+  so it fails loudly where it used to measure nothing (shown at limits of 150
+  and 3,000); and the registry option of `eval run` is `RegistryPathOption`,
+  with `--help` byte for byte the same. The 513 tests of the CLI folder and
+  the command's test file passed. Nobody reviewed H18.
+- **H19: this record** (documents only): the plan's section, rows and
+  changelog, and two threat rows.
+
+**What the reviews found.** Two reviews read the half; the first read H9,
+H10, H12, H11, H13, H14, H15 and H16 (eight commits), the second, a re-read,
+read all nine commits, H17's fix included.
+
+- **Two of this half's own commits each carried a defect that the review
+  reproduced, and H17 fixed both.** H9's `--check` guard sat before the
+  `try`, so `registry schemas --check` on a registry directory the person
+  could read and not search ended in an uncaught `PermissionError` and a
+  traceback, where `main` printed one `ERROR` line (high; the tests used
+  links only). H10's recursion catch missed one nesting depth: `compose`
+  succeeded at depth 491 and the `safe_load` after it overflowed, so a text
+  nested exactly there raised `RecursionError` (high; the depth shifts with
+  the caller's stack, so a plain sweep from the test's stack did not hit it
+  and H17's first version of the test passed against the unfixed code; the
+  test now runs each depth at two stack parities).
+- **Medium: the documents.** Plan rows 874 and 876 and T-81 still described
+  what the code no longer did. They are this record's work.
+- **Low, fixed by H17:** `_replace` closed a descriptor `fdopen` may already
+  have closed (L1: now `open` with an opener owns the descriptor and no
+  `os.close` is left), the docstring said "cause" for what is a context (L2),
+  `RegistryDirOption` was a name in two modules with two meanings (L5, now
+  `RegistryOption`), and one comment still said "the 40 golden claims" (L7).
+- **Low, left on purpose:** L3, L4 and L6 (above).
+- **The re-read of H17** found no critical, high or medium finding and said
+  the nine commits may go into a pull request. Five low: a `FileExistsError`
+  raised inside the `with` of `_replace` would un-note a temporary and leave
+  it on disk (L-a; no real input reaches it, since only `open` can raise it;
+  H18), the test of the depth sweep measures nothing at a recursion limit
+  below about 200 or above about 2,100 and passes (L-c; H18 asserts the
+  measured limit lies inside the bounds), the new alias still reads like the
+  registry's (L-d; H18 renames it, `--help` unchanged), the L1 test cannot be
+  shown red against the old code (L-b; a sentence below) and `meridian
+  registry contracts` ends in a traceback for some unreadable inputs (L-e; it
+  predates the step, a row below).
+
+**Result / verification of the second half:**
+
+- **What "tested" means here.** Code and tests under `src/` and `tests/`, no
+  cluster, no model call, no database in any contract's own run. Every
+  contract ran `ruff check`, `ruff format --check`, `lint-imports` (6 kept, 0
+  broken), `make docs` (14 checks) and `make test` (343 tests, `OK`), and read
+  the last lines. Where a report says it read no separate exit status (the
+  harness refused the joined form), the pass is read from the printed last
+  line. No contract ran `make pytest`; the whole suite is the main session's.
+- **Each contract's own run** (from its report; the scope is what the
+  contract named, so the numbers are not additive; no test database):
+
+  | Contract | Scope | Last line |
+  |---|---|---|
+  | H9 | `tests/meridian/registry` | 595 passed in 7.74s |
+  | H10 | `tests/meridian/cli`, `-k "scaffold or workload"` | 419 passed in 20.88s |
+  | H12 | the four named unit files | 637 passed in 13.15s |
+  | H11 | the same scope as H10 | 418 passed in 20.23s |
+  | H13 | the walker's two files | 104 passed in 2.37s |
+  | H14 | the five named files | 109 passed in 17.51s |
+  | H15 | the five named files, before and after | 388 passed in 6.43s; 388 passed in 5.73s |
+  | H16 | `tests/meridian/evaluation` and the manifest-workload test | 554 passed, 3 skipped in 5.22s |
+  | H17 | `tests/meridian/cli`, `registry` and `test_cli_eval.py` | 1108 passed in 23.57s |
+  | Review 1 | cli, registry, evaluation and four claims files | 1771 passed, 3 skipped in 27.05s |
+  | Review 2 | `tests/meridian/cli` and `registry` | 1026 passed in 24.24s |
+
+- **The main session's runs, after the builders' refactor:** the two stack
+  files, `test_evaluation_stack.py` and `test_injection_stack.py`, 24 passed
+  and 2 opt-in skipped; and the free replay of the recording, which printed
+  "eval compare: passed" twice, so no fingerprint and no grade moved.
+- **The whole suite on the final tree** (`main` with S078 and S073's first
+  half merged in; 7842aa0): `make test` (343 tests), `make docs` (14 checks)
+  and `make lint` ended 0; the whole suite at six workers beside the kind
+  cluster and no other run with a database: 17,732 passed, 8 skipped (3 min
+  55 s). The commit after it fills this line.
+- **Not seen:** any of this on a cluster; the exit code 130 at a terminal
+  (it was seen in scratch processes by H11, H14 and the review, and no test
+  of the command asserts it: the tests are at `write_plan`); H17's depth
+  sweep on an interpreter with another recursion limit.
+
+**What the second half's tests still do not catch:**
+
+- **The L1 test cannot be shown red against the old code, and the fix is
+  right by construction.** The old code called `os.close` after a failed
+  `os.fdopen`; the new `_replace` calls `open(..., opener=_create_private)`
+  in a `with`, so no `os.close` is left and `open` closes on every failure.
+  The failure the fix removes (a double close of a descriptor `fdopen`
+  already closed) needs a `MemoryError` to force, and the rewritten test,
+  which interrupts the write, passes on the parent commit. It fails when the
+  `with` is replaced by a bare `open` (a mutation, `DID NOT RAISE OSError`),
+  so it holds the descriptor's closing and not the absence of `os.close`.
+- **The `re._compiler` test passes on any 3.13**, and the module's own import
+  fails first if the private module goes (L3).
+- **A signal that lands between the opener's `os.open` and `open` taking the
+  descriptor leaks it.** The old code had the same window.
+- **The depth sweep's test is vacuous outside its bisect's bounds** until
+  H18's assertion is in (L-c).
+- **The walker is a tripwire, not a proof.** Its limits are pinned now, so a
+  change to what it sees fails a test, but it still sees none of them.
+
+**What the second half accepts, as sentences** (from the map, for row 885;
+the code's own docstrings carry the others above):
+
+- **The split-table check** (`scripts/check_docs_consistency.py`) misses rows
+  in block quotes and rows without a closing pipe, and flags a row inside an
+  HTML comment, a four-space-indented row and a lone header-like line; its
+  docstring names fences and indented tables only.
+- **The lane check** (`.claude/hooks/check-lanes.sh`) counts `--` and `n/a`
+  in "Out now" as running, and a session in a fresh worktree has no board.
+- **The shell-edit hook** is inert until the owner sets `bashEditDiffEnabled`
+  in `~/.claude/settings.json`, and may name files that `make` targets
+  regenerate (baselines, Mermaid blocks) once it is on.
+- **Renovate has not run the three new rules**: whether Docker Hub gives the
+  Envoy chart a push date (else the chart waits indefinitely), whether the
+  `terraform` block's `description` key is accepted and whether the
+  `agent-framework` label is made are unseen; nothing to code until it does.
+
+**The 8 backlog rows the first half left open, judged:**
+
+| Row, by its first words | Verdict | Where, or what stays |
+|---|---|---|
+| The scaffold's undo has windows (874) | Closed in part; the rest accepted | H11 and H17: "check by hand" names only what the command wrote or noted, an interrupt leaves as the interrupt (exit 130), the descriptor is closed by `open`. Accepted, as sentences in the code: the two save windows, no line for an interrupt after the undo returned, a kill nobody catches. A new file noted and never created is still named (H11's choice) |
+| The scaffold's smaller ends (875) | Closed in part; two accepted | H10 (the U+2028 flow list, `line_of` at the end of a text, the `RecursionError` catch) and H17 (the edge depth, `scaffold.py`). Accepted: header-shaped lines in one multi-line string, and a path left behind quoting the workload's name |
+| `meridian registry schemas`: the write follows a link (876) | Closed in part; one accepted | H9 and H17: the directory link refused before any write, `--check` says to remove a link, an unreadable directory ends in one line. Accepted: the write is not all-or-nothing (the docstring says so) |
+| The claims workload's reports: `Report.workload` (878) | Closed in part | H16 for the validator. Open: the golden manifest is read three times in one build, and a change between two reads is not noticed (new row, S074) |
+| The injection import test's walker (879) | Accepted limit, pinned | H13: eleven blind spots and two false positives have a test each, in a new file; the walker stays a tripwire, not a proof |
+| Limits of S075's checks and two Renovate rules (885) | Accepted limits, written above; two rows new | The sentences above. Two cheap fixes (the check's docstring, two values in `empty()`) are not built, and the Renovate results wait for its next run (new rows, S074) |
+| Left by S067's reviews, all low (899) | Closed in part | H12: the read-only tables, the `re._compiler` test, "one word", "the 40 golden claims" (and `test_claims_graph_golden.py`, H17), the redundant literal; the first half split `test_claims_graph.py`. Stays: the five loaders of the name-masked cases (one of its files is S070's), `test_redaction_hungarian.py` after S070, `redact`'s length and the first lines of `triaging.py` (S070's files) |
+| Six functions over 50 lines (778) | Closed in part by the count | `run_command`, `build_report` and `render_summary` are under 50 by signature plus body (H14, H15); `assess`, `build_injection_report` and `summarise` were under it and are untouched; the other functions over 50 are a new row with no promise |
+
+**Follow-ups of the second half:**
+
+- **In the backlog, each with its step** (the rows are new, in the table's own
+  format): `meridian registry contracts` ends in a traceback for an
+  unreadable output directory and an unreadable or non-UTF-8 contract file,
+  and follows a dangling link (S074); the golden manifest read three times
+  in one build, with H16's estimate of the smallest change (S074); thirteen
+  other functions over 50 by the count, no promise (S074); two tests that
+  cannot be shown red, and two low points left on purpose (S074); two cheap
+  fixes in S075's checks, not built (S074); Renovate's three unseen results
+  (S074, after its next run).
+- **Rows changed in this half:** 778, 874, 875, 876, 878, 885 and 899, each
+  to what is true now (the finding text keeps only what is still open or
+  accepted; the closed parts are in the status), and row 776, whose "still
+  not tied by a validator" is no longer true; rows 879 and 885 are accepted
+  limits with their tests or sentences.
+- **What waits, and for what:** `infra/kind/smoke.sh`'s split (S073 on
+  `main`: the first half's rows 811 and 850 stay open); the loaders' helper
+  (four of its five files are free, `test_triage_run_input.py` is S070's);
+  the split of `test_redaction_hungarian.py` (after S070, with
+  `scripts/split_proof.py`).
+- **For the owner** (none blocks the pull request): the exit code of an
+  interrupted `workload new` is 130 now, where it was 1 in one case (the
+  decision above); and adding `--` and `n/a` to the lane check's `empty()` is
+  a change to a harness hook, which is the owner's to approve (not built).
 
 ### S068 — Database upkeep and retention
 **Status:** done · **Started:** 2026-10-06 · **Finished:** 2026-10-07
@@ -14852,6 +15195,549 @@ status is brought to say so):
   the session's choice; (3) approver-policy's liveness probe was not built in
   this half: build it in the second, or say it is not wanted.
 
+### S070 — Claims intake and what the adjuster is told
+**Status:** doing · **Started:** 2026-10-07 · **Finished:** —
+**Left before it is done:** the owner's decision on uploads (the step
+started without it, and built nothing for them); and four more questions of
+the owner's (For the owner). The first half is written here as it stands
+(R3c and its review are in; the whole suite is the main session's); the
+second half takes what the owner decides.
+**Goal:** the adjuster's page says whether a recommendation rests on a
+model's reading or on the rules alone and shows the claim's dates for what
+they are, the Claims API no longer builds the claimant's name pattern while
+a claim's row is locked or for a request the claim refuses, and the phone
+matcher of the redaction is split into modules, tested against the matcher
+before it without a gap in its sweep, and made to replace a second number
+after an international one, all without a new recording of the model and
+without a payment. Uploads are not built.
+
+**What the step is not:** it builds nothing for uploads, it sets no bound on
+what a name may replace, it does not reorder the assessor's checks, and it
+does not fix three leaks of the phone matcher that it found and pinned (and
+the cut it built gives one of the row's own texts back to the leak, below).
+Nothing of it ran on a cluster.
+
+**The owner's word, and why the step started without it.** The plan's row
+says the owner decides first whether uploads are built or stay out. The
+owner was asked in three statuses (2026-10-06 and 2026-10-07), with the
+session's recommendation (leave them out until a sign-in exists, S021), and
+has not answered. The row's own parenthesis settles what the step does
+either way: built, uploads are a step of their own, split off when this one
+opens; so the step opened on everything else, nothing in it forecloses
+uploads, and the question stays asked (T-38 says so, as it stands).
+
+**Decisions** (the session's; the owner may overturn any; the design, with
+its threat note, was written before the first contract, and what follows is
+what each ended as):
+
+- **The page marks a recommendation that rests on the model's answer
+  (implemented, tested against PostgreSQL, not run on a cluster).** Backlog
+  the backlog row called the mark the owner's decision and the step's row
+  made it a "done when"; the session built it because it is words on a page,
+  shows nothing new, and comes out in one commit, and says so here. One function
+  in `proposal.py`, `recommendation_rests_on`, reads the stored
+  `recommendation` and `assessment` (so proposals stored before the change
+  are marked too, and nothing is stored or migrated) and gives "model",
+  "rules" or "neither". The claim page has a row "Recommendation rests on"
+  right after the recommendation; the queue has a column. The words are
+  fixed, avoid the word "prompt" (a test of the page of a proposal stored
+  before S017 asserts its absence) and name no claimant, and no stored value
+  is printed. Where the graph made the proposal, "model" holds exactly when
+  `drafted_by` is set (a test). Not built: the rules withholding a
+  recommendation that rests on the model, which changes `decide`, the oracle
+  and the grades, and is the owner's. Said plainly where a reader looks (T-26
+  and here): of the 34 steered recommendations in the injection summary, 28
+  are automatic approvals that never wait for an adjuster, so no queue lists
+  them and the mark never reaches the case an injection aims at; it reaches
+  the 6 on CLM-0001 that keep the adjuster's route with reject turned to
+  approve. The mark is advice.
+- **The loss date is shown as what it is, and T-66 says why not more
+  (implemented, same status as above).** The page labels the loss date "as
+  stated in the claim, not checked" and the report date "as submitted with
+  the claim, not checked by the API", and shows two gaps in days (the loss to
+  the report, the report to the day the API received the claim, in the
+  insurer's time zone). The design's "stamped by the form, or the caller's"
+  was dropped: nothing stored says which route set the report date, and no
+  marker was invented (the advisor's reading). The first labels, "as
+  received" and a bare "Days from the loss to the report", were misreadable
+  and are replaced (A4). No rule changes and no bound at intake: a claimant
+  who misdates picks a recent day, a check against today would make every
+  golden claim stale, a date sent to the model changes the prompt, and a new
+  indicator changes the oracle. T-66's "Open" is a reasoned residual with the
+  owner's sentence of 2026-10-03.
+- **The order of the assessor's checks stays (documents only).** A true
+  posted-text flag, a special-category hit or an instruction in the
+  description returns before the candidate clauses are screened, so a
+  poisoned clause's loud failure is not seen on that claim; the claim goes to
+  an adjuster either way, and `meridian knowledge verify` checks the stored
+  wording against its manifest without any claim. T-26 says so. The design
+  also promised a sentence in the assessor's docstring; the documents
+  contract may not change code, so it is a backlog row.
+- **The name's pattern is built outside the claim's row lock, and only for a
+  request the claim can go on with (implemented, tested against
+  PostgreSQL).** A3 reads the submission before `_lock_claim` at the three
+  moves and builds the pattern there; the documents are still read under the
+  lock and every state check stays under it. A4 reads the state, the lapse of
+  the lease and the triage count in the same statement and prepares only
+  where the route could go on, so a refused request pays no compile. The
+  private `re._compiler` stays, with a test that names it and fails with a
+  sentence if a release moves it. No new form of a name was added (taking
+  every ending took seventeen golden words where the capital rule takes
+  one), so the residual forms stay stated in T-73.
+- **A bound on what a name may replace is not built, and asked.** The
+  session's recommendation is a careful-only flag: a description that loses
+  more than a few words to the name goes to an adjuster, under a new word
+  beside `injection-suspected`, and the name is never left in the clear. It
+  touches the assessor and the proposal's vocabulary and waits for a yes.
+- **The redaction, in the order the map gave, each its own contract in one
+  lane.** R1 split `redaction.py` (792 lines) into six modules by a move a
+  script proved. R2 made the differential test classify every lost run and
+  widened its generator (the backlog's differential row). R3 cut an
+  international number at a space before a second number, with its pins
+  written first (the backlog's cut row). R4 made the e-mail pass read its
+  placeholder from the mapping. Narrowed and added after reviews: R2b (the
+  sweep's red result pinned as known leaks), R3b and R3c (the cut's
+  narrowing). Not built, each a trade of a new over-redaction for a
+  residual: the wider cut of a dotted number with a `06` or `00` group, and
+  a third date guard; the session recommends leaving both.
+- **No fingerprint moves and nothing is paid.** No prompt, tool contract,
+  screen, golden file or injection case changed. The free replay (and the two
+  stack files whole) ran after each landing that touched the redaction, the
+  name or the assessor, with the rule that a changed recorded request stops
+  the contract (it would need a paid recording). None did.
+- **The exit for the cut, and that it was not taken.** If the review of R3c
+  found a third class of text in which the cut shows a digit that the matcher
+  before it hid, R3, R3b and R3c were to be reverted together, the backlog's
+  cut row left open with what three rounds learned, and the pull request to
+  change no output of the redaction at all (R1's move, R2's tests and R4's
+  mapping read stay). The review found no third class, so the exit was not
+  taken.
+- **R3c's stop, and the fall-back the session accepted (08:36 UTC).** With
+  the reviewer's wider condition one CUT row failed: the text the backlog's
+  cut row quoted (`Tel: +36.62.7320.12 00 36 69 0619 45/(00 36).92.803.020.`)
+  is no longer cut, because a token inside the second number (`0619 45/(00
+  36)`) reads as a Budapest number that reaches beyond the number's end and
+  the condition cannot tell that overlapping reading from a third number. It
+  gets the output from before the cut, and the known leak that R2 pinned
+  returns to the exact list. The session accepted this without a further
+  consultation (the advisor's reading of 08:02 had settled the case: a
+  condition that is too broad gives the old output) and did not refine the
+  condition, since a refinement is a new mechanism in a matcher that has
+  regressed three times; it is not the third class (no digit is lost against
+  the matcher before the cut). What it means, plainly: the cut turns the
+  plain shape, two numbers one after the other at a space, and no longer the
+  very text the row quoted.
+
+**Advisor:** four consultations by the main session.
+
+- **06:24 UTC on 2026-10-07, at the design, before the first contract.** The
+  main calls held. What it changed: one contract at a time goes out, R1
+  first (five agents were out and the cap is six); A1's sentence avoids the
+  word "prompt" and its page tests go into a new file, with the function in
+  `proposal.py` and not in `adjuster.py` (768 lines then); the report date's
+  decision was narrowed to what is stored (no route marker invented); A3
+  moves only the compile out of the lock; R1 was measured on `main` and told
+  which checks of the split-proof script apply to a source module; and the
+  free replay after R1, R3 and A3 takes the database slot.
+- **07:10 UTC, at a surprise: the strengthened sweep was red against
+  today's matcher (R2's four unnamed runs).** The session leaned to a fix in
+  the step (no rescan inside a refused candidate). The advisor reversed it:
+  none of the four is this branch's regression, landing is gated on not
+  hiding them, "no rescan inside a refused candidate" is the wrong mechanism
+  (three of the five named shapes exist because the rescan starts inside a
+  refused span; the real fault is the rescanned candidate's end taking the
+  next number's prefix, and a fix bounds the span at a following prefix, a
+  different and more fragile rule), and three behaviour changes of one
+  matcher in one pull request is the shape that regressed it twice. What it
+  changed: one run became the cut row's pins, one a pinned exception, two known
+  leaks with a count, a backlog row and a clause in T-73.
+- **08:02 UTC, at a surprise: the review of R3 found a third number left
+  visible.** The advisor confirmed the narrowing (R3b) and gave the property
+  that answers both worries: after it, every international number gets
+  either R3's cut or the old output exactly (per international number, not
+  per text: the review of R3c found that a text with two international
+  numbers can be a mix of the two, none of them losing a digit), so a
+  too-broad narrowing gives the old output and a too-narrow one keeps R3's
+  regression, and neither opens anything. It
+  changed: pins first with the OLD output as the expectation, one definition
+  of "taken" reused, a generator form, "never fewer" shown per character, the
+  same reviewer once more, the replay after it.
+- **08:30 UTC, at a surprise: the review of R3b found two classes the
+  narrowing misses.** The advisor chose R3c over taking R3 and R3b out, with
+  the evidence changed: the reviewer saw over 1.5 million texts that every
+  output is the cut or the output before it (per international number, as
+  above) even where R3b failed, so the failures were the condition not
+  firing and never a third output, and a
+  wider condition can only move texts from "cut" to "old". It changed: the
+  implementer does not claim "never fewer" from its own corpus a third time
+  (the evidence is the reviewer's fuzz rerun on R3c and a test in the suite,
+  the matcher before the cut frozen beside the differential's reference, red
+  on R3b and green on R3c); the exit is one round (the exit above); and the
+  shared-leak numbers waited in the documents until R3c landed.
+- The reviews' disagreement of 07:03 (the refused request's compile) was
+  decided by the session without a consultation, as A4.
+- **Before the pull request:** none so far; the main session records here
+  whether anything reached the branch that no reviewer or consultation saw.
+
+**Where the session's own choices were wrong, and who caught them:**
+
+- **A3 made a refused request pay the compile.** The session's contract moved
+  the compile out of the lock and was silent on what a refused request should
+  cost. A3 built the pattern for every request that reached the three moves,
+  so a second "triage again" inside the lease, documents for a claim that was
+  not waiting or a claim at the cap paid about 55 ms of CPU for the worst
+  name, where it had paid nothing, on routes with no rate limit. The session
+  accepted that at A3's landing with a backlog row as the cure. Both reviews
+  found it (security: medium; Python: medium, would accept it with a row);
+  the session built the cure as A4 instead of shipping a known cost. The
+  stale page and the documents-cap refusal still pay one compile each.
+- **Tests that could not fail went in with A1 and A3, and the session took
+  the reports.** The marks' sentences were taken from the dicts they test
+  (swapping them passed every test); the byte-identity test's two sides were
+  both rewritten by the same commit; the lock spy could say "not locked" for
+  a row that was not there; the day-of-receipt test passed with a fixed
+  offset; a log claim had no assertion; the 6-by-3 table lacked the case
+  past the document cap. A1's own report said no test failed on an assertion
+  (both files errored at collection). The Python review found all of it; A4
+  fixed it and saw each new test fail by a mutation, and a frozen file from
+  the commit before A3 now holds the bytes.
+- **A duplicated constant for a reason that was not one.** A1 copied the
+  time zone into `claim_dates.py` because `claimant.py` imports the adjuster;
+  the review showed that `claim_dates.py` imports only the standard library,
+  so `claimant.py` could import it. A4 did.
+- **Two labels that could be misread** ("Reported on (as received)" beside
+  "Received at"; a first gap that reads as a fact). The security review found
+  them; A4 reworded both.
+- **The session leaned to a mechanism for two leaks that the advisor showed
+  would have opened a larger hole** (07:07 to 07:10 UTC, above): "no rescan
+  inside a refused candidate" for R2's runs 1 and 2. It was not built.
+- **The old first-digit rule had hidden a real leak on `main`.** The
+  differential filed a lost run under its first lost digit, so a leak behind
+  a named shape was invisible; the strengthened sweep showed that one of the
+  runs was on `main` all along. That was the backlog row's own finding, now
+  proved, and it is why R2 stopped, as its contract said.
+- **The claim that no text loses a hidden digit was false twice.** R3's
+  report said that over the 24,000 texts no output kept more digits than the
+  matcher before the cut (and called it a sweep over one corpus, not a proof);
+  the contract had asked for "never fewer", and the session carried the claim
+  on. The Python review of R3 alone found one shape where it was false (a
+  third number left visible, 8 digits against 2). R3b narrowed the cut and
+  its report claimed "never fewer" again, per character this time, over its
+  own corpus and its own new generator form, and the review of R3b alone
+  found the claim false a second time, in two classes the narrowing did not
+  see (below). Each time the claim was taken from the implementer's own
+  corpus, which could not write the shape that failed, and the session
+  accepted it each time without the reviewer's corpus. "Never fewer" was
+  false twice because one generator is not "never". The correction in method
+  is R3c's gate: a seeded property test in the suite against the matcher
+  before the cut, shown red on the commit under review, and the reviewer's
+  own fuzz rerun on the new commit; without that test R3c is a third report.
+  R3c's review then found no digit lost over about 2.84 million texts.
+- **The first narrowing saw only one form, and the contract had named it.**
+  R3b's condition looked at a last group of exactly `06` or `00`, because the
+  session's contract for it described exactly that form (the review of R3
+  had shown that one text). A second number can end in `0036`, `00 36`,
+  `(0036)` and other spellings of the prefix, or hold the prefix as an inner
+  group, and the narrowing saw none of them; the generator written for it
+  wrote only `06` and `00`. The review of R3b found both classes, and R3c
+  replaced the form with a condition over every prefix token.
+- **The row's measurement did not carry.** The backlog row said the cut
+  brings the run-on's hits from 62 to 3 and named `_phone_shape_holds` as
+  "complete by the numbering plan"; that function checks shape and digit
+  count only. The built cut checks the country code and the numbering plan
+  (`national_phone_holds`), so a foreign first number is never cut and the
+  run-on's count after the cut is not 3.
+- **The documents contract's own gap.** The design promised a sentence in the
+  assessor's docstring (decision 3) and fixes to stale words in code; a
+  documents-only contract could not write them, and they are a backlog row.
+
+**Work log** (from `git log` of the step's branch; each landing was carried
+by the session, and the free replay followed each that touched the
+redaction, the name or the assessor):
+
+- **R1**, `09c0f52`: `redaction.py` is 292 lines and five modules sit beside
+  it (`redaction_common` 95, `redaction_email` 42, `redaction_payment` 130,
+  `redaction_phone` 238, `redaction_hungarian_ids` 159). A script proved it:
+  102 units before and after, each once and byte-identical, no comment lost,
+  115 names in both namespaces and every re-export the same object. No test
+  changed.
+- **A3**, `20e575c`: the pattern is built from a read before the lock at the
+  three moves; 17 new tests (the lock probe, the interleavings, the 404s), a
+  table of byte identity, and the test that names `re._compiler`.
+- **A1**, `9f879c1`: the mark, the labels and the two gaps; `claim_dates.py`,
+  `pagesupport.py` and two new test files.
+- **R2 and R2b**, `74f8105`: the differential classifies every lost run, the
+  generator writes `00.36`, `00/36` and five date-like leads, the hit counts
+  and the shared-leak counts are pinned, and `test_redaction_date_guards.py`
+  holds both date-lead guards from both sides. The strengthened sweep failed
+  against the matcher of `main` and the contract stopped; the decision (the
+  advisor's) was to pin the runs as known leaks, so the branch never holds a
+  red test.
+- **A4**, `dfe9a61`: the advisory read, the tests that could fail, a frozen
+  golden file, the winter and change-day cases, the constant imported, and
+  the two labels.
+- **R3**, `9433c49`: the cut, with 22 cut rows and 23 not-cut rows seen red
+  or green before the change, and the mutation of each condition.
+- **R3b**, `94738ea`: the narrowing, with a third table of 15 rows whose
+  expectation is the output before the cut, and a generator form.
+- **R4**, `ebe4c9a`: the e-mail pass reads `PLACEHOLDERS["email"]`, a test
+  swaps the mapping, and `redact`'s docstring says which national number
+  after an international one is still left.
+- **R3c**, `951b72c`: the reviewer's wider condition (no cut where any
+  prefix token inside the second number begins a national number that reaches
+  beyond its end), ten pins in the third table with the output before the cut
+  as the expectation (the `0036` forms and the class B examples, each red on
+  R3b), a second adversarial case, and the property as a seeded test in the
+  suite, `test_redaction_never_fewer.py`, against the matcher before the cut
+  frozen as `tests/meridian/redaction_phone_before_the_cut.py`. It stopped
+  once (the text the cut row quoted fell back to the old output) and the
+  session accepted that (the decisions above). Its result and its review are
+  in the lines below.
+- **The reviews:** security and Python on A1 and A3 together (no critical or
+  high finding; one medium and four low from security, four medium and a
+  list of low from Python); Python on R1 and on R3 alone; Python on R3b alone.
+- **D1**, this section and the documents.
+
+**Result / verification:**
+
+- **Implemented and tested, none of it run on a cluster, nothing paid.**
+  The implementers' own runs, as their reports print them (the whole suite
+  is the main session's): A1 `449 passed in 16.07s`; A3 `918 passed in
+  24.64s`; A4 `1393 passed in 35.75s`; R1 `2191 passed in 33.84s` (the
+  guardrails, the three name test files and the import contracts; `1551
+  passed` before it); R2 `1631 passed in 17.45s`; R3 `1682 passed in 16.23s`
+  and, with a database, `1205 passed in 54.64s`; R3b `1699 passed in
+  16.30s`; R4 `1700 passed in 16.01s`; R3c `1716 passed in 15.76s` (the
+  guardrails). `ruff`, the format check and
+  `lint-imports` (six contracts kept) were clean in each report. Several
+  implementers could not read an exit status in the same shell and say so.
+- **The recording did not move.** The two stack files of the evaluation and
+  the injection cases, whole (24 passed, 2 opt-in skipped), and the free
+  replay ("eval compare: passed" twice) ran after each landing, as the
+  session recorded them; the free replay is what proves the redaction and the
+  name left every recorded request as it was, since neither is in a
+  fingerprint (`data/evaluation/README.md`). No baseline was regenerated.
+- **The redaction's numbers after S070** (from R3c's report; the review
+  agrees where it speaks of them). The five named shapes hold 176, 40, 152
+  and 7 lost runs for the first four and 11 for the run-on (63 when the step
+  began, on the reseeded corpus; the narrowings never moved the 11). The
+  shared-leak pins are 13,965 texts that leave an inserted digit and 13,829
+  of them that the reference leaves too; they are larger than the 12,084 and
+  11,911 of R2 because the corpus grew by 2,000 seeded texts in R3b (a second
+  number that ends in the next number's prefix), and the first of them is one
+  more than R3b's 13,964 because the text of the cut row went back to the
+  leak. The exact list of unnamed runs holds three entries: two known leaks
+  of the mechanism R2 found, of which one is the cut row's own text given
+  back by the narrowing, and the one that is no regression (digits glued to
+  an `x`). These are per lost run and over a reseeded corpus, so they do not
+  continue the per-text counts of S067 (252, 64, 48, 5 and 62).
+- **The cut's evidence, in the order it arrived.** R3: 125 of the 24,000
+  texts changed output, in none of them did the new output keep more digits
+  (its report; the review of R3 showed a shape the corpus did not write).
+  R3b: per character over 26,000 texts, 0 digits lost, and with the
+  narrowing off 8,777 lost (its report; the review of R3b showed two classes
+  it did not write).
+- **The review of R3b (what held, what failed).** Held: over 1.5 million
+  texts of four grammars, every output is R3's cut or the output before the
+  cut, exactly (per international number, as the review of R3c then showed),
+  and R3b's own table and pins are sound (15 of 15 rows equal
+  the old output, 14 red on `9433c49`). Failed: the claim. Class A, high: a
+  second number that ends in a group `0036` or `00 36` (also in parentheses)
+  that begins a third (`+36 30 123 4567 06 20 765 0036 1 234 5678` gave
+  `[phone] 765 [phone]` before the cut and `[phone] [phone] 1 234 5678`
+  after it; 9,757 of 20,000 texts per form lost digits in the reviewer's
+  shared-token grammar). Class B, medium: trailing digits after a second
+  number with an inner group that begins `06` or `00` (`+36 30 123 4567 06 89
+  066 948 2026`: the old matcher hid the year by reading through the group).
+  Both were already in R3, and the reviewer corrected its first review, which
+  had waved them off. A generalised narrowing, run as a scratch patch, lost
+  no digit over 1.15 million texts and fell back to the old output in 0.03 to
+  0.1 per cent of them; R3c is that patch with its test.
+- **R3c's result (`951b72c`, implemented and tested, not run on a cluster).**
+  The reviewer's wider condition: no cut where any prefix token inside the
+  second number begins a national number that reaches beyond the number's
+  end (`_national_span` is the one definition of "taken"). The matcher from
+  before the cut is frozen as a test reference, and a seeded property test of
+  4,000 texts (fixed seed, no clock; the nine spellings of the shared prefix
+  token and the inner-group form, about half with an international number in
+  front, the five space characters; 3,979 replayed, 21 skipped because an
+  earlier pass changed the text) asserts that no digit the matcher before
+  the cut hid is visible now. It was red against R3b (863 of 4,000 texts
+  showed a digit hidden before the cut; none in the `06`, `(06)` and `00`
+  forms) and is green now; it runs in about a second.
+- **What R3c cost, said plainly.** The wider condition gives back the very
+  text the backlog row quoted: `Tel: +36.62.7320.12 00 36 69 0619 45/(00
+  36).92.803.020.` gives `Tel: [phone] [phone].92.803.020.` (the output from
+  before the cut, `(00 36).92.803.020` visible), because a token inside the
+  second number reads as a number that reaches beyond it and the condition
+  cannot tell that overlapping reading from a third number. It is pinned as a
+  known leak again, in the third table and in the exact list. The session
+  accepted that fall-back and did not refine the condition. More generally,
+  about 0.03 per cent of ordinary texts (91 of 300,000 realistic texts) fall
+  back to the leak from before the cut: a second number with an inner group
+  that starts `06` or `00`, followed by an amount, a date or another number
+  (`+36 30 135 7400 06 1 065 3027 250 000 Ft` gives `[phone] 3027 250 000
+  Ft`, where R3b gave `[phone] [phone] 250 000 Ft`; `+36 25.805.094 06-49 068
+  916 06 12 2026 14` gives `[phone] 916 06 12 2026 14`, where R3b gave
+  `[phone] [phone] 06 12 2026 14`). In all 91 the output equals the output
+  before the cut, so nothing is lost against it, though against R3b the
+  review counts fewer digits hidden in 49 of them and more in 58 (a different
+  few digits, not a loss).
+- **The review of R3c (the same reviewer, alone; no critical or high
+  finding, no third class, so the exit was not taken).** Digits that the
+  matcher before the cut hid and the cut shows, over about 2.84 million texts
+  of its own grammars, replayed per character, were 0 in every run:
+
+  | Grammar | Texts | Digits lost |
+  |---|---|---|
+  | wild, two seeds | 2 × 150,000 | 0 |
+  | realistic, two seeds | 2 × 300,000 | 0 |
+  | chain, two seeds | 2 × 200,000 | 0 |
+  | shared-prefix, two seeds | 2 × 200,000 | 0 |
+  | shared-prefix, one spelling at a time (eight spellings) | 8 × 30,000 | 0 each |
+  | token soup (random prefix tokens, numbers, separators) | 400,000 | 0 |
+  | pieces (whole small numbers, truncated, extended, glued), two seeds | 2 × 400,000 | 0 |
+
+  The review's own limits, which this section carries. (a) "Every output is
+  the output before the cut or the cut's" holds per international number and
+  not per text: a text with two international numbers can be a mix, one
+  number cut and the other not. The review found 24 such outputs, one in the
+  wild grammar's 300,000 texts and 23 in the 800,000 of the two "pieces"
+  runs (the contract that sent this section said 24 in 800,000 of one
+  grammar; the review's table is the source and gives 1, 14 and 9), none of
+  them losing a digit. (b) The 0.03 per cent above. The property test cannot
+  generate two international numbers, a slash or a dot inside the second
+  number, or a first number that is not a complete Hungarian number (where no
+  cut is made anyway); it passes on "at most one international number" by
+  construction, so it holds the claim per international number. The
+  reviewer's wide fuzz is not in the suite. The cost in time is about four
+  times from 20,000 to 80,000 characters on ten shapes, as before the cut,
+  and up to about 2.6 times the matcher before the cut in absolute time on
+  the densest shape; the new adversarial case probably pins little.
+- **The whole suite on the final tree** (`main` with S068, S078, S073's first
+  half and S074's second half merged in; 7fc797f): `make test` (343 tests),
+  `make docs` (14 checks) and `make lint` ended 0; the whole suite at six
+  workers beside the kind cluster and no other run with a database: 18,048
+  passed, 8 skipped (3 min 36 s). A run one merge earlier (c572e5a, before
+  S074's second half was on `main`) had 17,998 passed. The commit after it
+  fills this line.
+
+- **Documents (D1), as run:** `make docs`, `make check` and `make test`, each
+  read by its exit status, are in the report of that contract.
+
+**Not seen, or not reached:**
+
+- **Anything on a cluster.** The claim page and the queue with the mark and
+  the labels were tested in the page tests and never rendered; the labels are
+  68 and 60 characters and nobody looked at the page; `make demo` was not
+  run and its line "none (the rules decided; no model was called)" can
+  disagree with the page's mark; what `make smoke` reads of the queue page was
+  not checked against the new column.
+- **Timings.** The 55 ms of the compile is the figure of S067 and was not
+  measured again; the cost of the name replacement and the posted-text screen
+  on a slow 5,000-character description, the memory of forty worst-case
+  compiles against 192 Mi, and the database's connection limit against the
+  thread pool were not measured (the security review's list).
+- **The lock probe on a cold, loaded database.** A second session's
+  `FOR UPDATE NOWAIT` shows the row unlocked while the pattern is built, in
+  tests only.
+- **Wide fuzzing of the cut.** It was done by the reviewer, in scratch
+  scripts that the suite does not hold; R3c puts the property in the suite
+  for one international number per text. Not generated by the suite's test: a
+  text with two international numbers (where the output can be a mix of the
+  cut and the output before it, per international number), and a slash or a
+  dot inside the second number. A follow-up in the known-leaks row's home.
+- **A model's behaviour.** The injection numbers are the scripted model's;
+  what `gpt-4o` does with an injection it is shown is not measured (S071).
+
+**Backlog rows, judged** (the rows homed at S070, each by its text; the
+rows are in Part B):
+
+- Uploads (T-38): stays, asked of the owner; nothing built.
+- The loss date as the claimant's word (T-66): closed by S070 (A1, A4) as a
+  reasoned residual; the rules still do not see such a report.
+- A steered model's `approve` and the page's mark: closed by S070 in part
+  (A1, A4); the rules withholding the recommendation is the owner's, not
+  built.
+- A name made of the words an exclusion turns on: stays, asked of the owner,
+  with the session's recommendation.
+- A true flag hiding a poisoned clause's failure: closed as decided, in
+  documents; the docstring sentence is a backlog row.
+- The name's lacking forms, the pattern's size, `re._compiler` and the
+  compile under the transaction: closed in part (A3, A4); no form was added,
+  by decision.
+- The cut of an international span at a space: closed in part (R3, R3b,
+  R3c): two numbers one after the other at a space, where the first is a
+  complete Hungarian number, are both replaced; not closed: the row's own
+  text, a foreign first number, the 0.03 per cent that fall back, and the
+  three known leaks of the national pass, all in the known-leaks row.
+- The dotted or slashed number with a `06` or `00` group: stays, not built,
+  asked of the owner with the recommendation to leave it.
+- The differential test's gaps: closed (R2, with R2b).
+- Two small ends of the redaction: closed in part (R4's e-mail pass); the
+  date half is not built and asked, with the recommendation to leave it.
+- A stored `drafted_by` not checked against the registry, and a
+  `ClaimResponse` that cannot be built: stay, low; the step did not reach
+  them.
+- A thirteenth row came with the merge of `main`: S068 re-homed "a claim
+  brief has no retention rule, and a brief nobody decides has no age bound"
+  to this step while this branch was open. It stays, and this half did not
+  touch it: it waits for the owner's answer on an age bound for a brief that
+  nobody decides (S068's third question), and the expiry of a decided brief
+  needs a migration that this step's lane did not hold.
+- One row of another step was changed by this one: the small ends of S067's
+  reviews (S074's row: `redaction.py` is split, and a test names
+  `re._compiler`). The redaction's residuals that are not the matcher's
+  (S069's row) were checked and left as they are.
+- New rows, each with its home: the three known leaks with what still runs on
+  after an international number and the three date texts (S070's second half,
+  the owner's word first); the small ends in code and comments (S074); the
+  page's look and the demo script's line (S073); the adjuster's page and
+  queue ends (S070's second half); the same-tenant timing (S021); what a
+  refused request still costs and the missing ingress limit (S020); what a
+  cluster run would show (S073).
+
+**For the owner** (none blocks the pull request; the default if unanswered is
+that nothing is built):
+
+- **(a) Uploads (T-38).** Built, as a step of its own with a design, a store
+  for bytes, a scanner and a paid recording if content reaches the model, or
+  out. The session recommends out until S021, when a caller has an identity:
+  without a sign-in anyone could upload to any claim.
+- **(b) The mark on the adjuster's page.** Built, as a decision the session
+  took; say so if it should not be, or if the rules should withhold a
+  recommendation that rests on the model instead (it changes `decide`, the
+  oracle and the grades).
+- **(c) The bound on what a name may replace.** The recommendation is the
+  careful-only flag, never the name left in the clear.
+- **(d) The wider cut of a dotted number with a `06` or `00` group, and a
+  third date guard.** Each trades a new over-redaction for a residual in a
+  matcher that regressed twice; the recommendation is to leave both.
+- **(e) Where the three known leaks go, and the cut's fall-back.** The
+  recommendation is S070's second half, and a fix only with the owner's word,
+  since it is a new mechanism; or the owner may leave them pinned and named.
+  The fall-back (the row's own text and about 0.03 per cent of ordinary texts
+  keep the leak from before the cut) is in the same row. If S070 closes
+  without them, they need another home.
+
+**Follow-ups:**
+
+- In the backlog, each with its step: the three known leaks and what the cut
+  leaves, with the property test's two missing generator forms (two
+  international numbers; a slash or a dot inside the second number) (S070);
+  the small ends in code and comments (S074); the page's look,
+  the demo script's line and what a cluster run would show (S073); the
+  adjuster's page and queue ends (S070); the same-tenant timing (S021); a
+  refused request's compile and the ingress limit (S020).
+- The threat model's T-02, T-26, T-38, T-66, T-73 and T-76 and its residual
+  risk, the data classification's row of triage proposals, the evaluation
+  README, the root README's row of the adjuster's UI and the demo's
+  walk-through were brought to the code.
+- No new threat ID: nothing here is a new threat, so the count of threats in
+  the repository does not change with this step (101 since S068's T-101; this
+  sentence said "stays at 100" when it merged, written on a branch cut before
+  S068, and was corrected by S072's pull request).
+
 ### S072 — The cluster outside `meridian`, second round
 **Status:** doing · **Started:** 2026-10-07 · **Finished:** —
 **Goal:** on kind, what runs beside Meridian is held to what it needs, a
@@ -15816,7 +16702,48 @@ ClusterRole and Envoy's hook leftovers.
   the ingestion's word on a real refusal, a rotation of the store's
   password). T-84, T-86, T-87, T-89, T-91 and T-92 changed, no new threat. Eight
   backlog rows closed, eight closed in part, six new.
-- **PLAN-VERSION, 2026-10-07:** S072, the cluster outside `meridian`, second
+- **v0.73, 2026-10-07:** S074, second half (still `doing`): S076's
+  leftovers and the six functions over 50 lines are closed, accepted or
+  counted. `registry schemas` refuses a `schemas` directory that is a link and
+  `--check` says to remove a link; the services edit takes a U+2028 in a flow
+  list, names the last line at the end of a text and answers a text nested too
+  deep as a refusal at every depth; the scaffold's undo names to check by
+  hand only what the command wrote or noted, and an interrupt leaves as the
+  interrupt (exit 130) also when the undo fails; `Report` refuses a golden
+  set that names another workload; the import walker's limits are pinned; the
+  claimant's closed tables are read-only. `run_command`, `build_report` and
+  `render_summary` are under 50 lines by signature plus body, the measure
+  this half states (the row's figures were whole counts), with `--help`,
+  every report and the committed summary byte for byte the same; three were
+  already under it. Two of the half's own commits carried a defect a review
+  reproduced, a traceback in `registry schemas --check` and a recursion guard
+  that missed one depth, and H17 fixed both. T-72 and T-81 brought to the
+  code, no new threat. Seven backlog rows changed (none closed whole), one
+  accepted limit pinned, six new; `smoke.sh`'s split, the loaders' helper and
+  the Hungarian test's split wait for S073 and S070. Tests and documents, none
+  run on a cluster, no fingerprint moved.
+- **v0.74, 2026-10-07:** S070, first half: the adjuster's claim page
+  and queue say whether a recommendation rests on a model's reading or on
+  the rules alone (one function over the stored fields, no migration; an
+  automatic approval never waits for an
+  adjuster, so the mark does not reach it) and the page labels the loss date
+  and the report date as not checked, with two gaps in days; the claimant's
+  name pattern is built before the claim's row is locked and only for a
+  request the claim can go on with; the redaction is split into six modules
+  by a proven move, its differential test classifies every lost run, and an
+  international Hungarian number is cut at a space before a second number
+  (narrowed twice after two reviews; the claim that no text loses a hidden
+  digit was false twice, from the implementer's own corpus, and a seeded test
+  in the suite now holds it per international number; the last narrowing
+  gives one of the row's own texts and about 0.03 per cent of ordinary texts
+  back to the leak from before the cut, and the review found no third
+  class). Implemented and tested, none of it run on a cluster, nothing
+  paid, no fingerprint moved. The step stays open: the owner's decision on
+  uploads and four more questions. T-02, T-26, T-38, T-66, T-73 and T-76
+  brought to the code, T-73 with three known leaks of the phone matcher
+  pinned and homed; no new threat. Twelve backlog rows judged (six closed or
+  closed in part by their text, one as decided, five staying), seven new.
+- **v0.75, 2026-10-07:** S072, the cluster outside `meridian`, second
   round, opened as `doing` with four contracts of files only landed (Tempo's
   and Loki's pods mount no service-account token; `cnpg-system` and
   `envoy-gateway-system` warn and audit at Pod Security `restricted`; the

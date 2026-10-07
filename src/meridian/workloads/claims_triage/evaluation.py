@@ -408,6 +408,43 @@ def _policy_of(
     raise ReportError(FILES_DISAGREE)
 
 
+def _graded_cases(
+    proposals: Mapping[str, TriageProposal | None],
+    expected: Mapping[str, Mapping[str, Any]],
+    claims: Mapping[str, Mapping[str, Any]],
+    policies: Mapping[str, Mapping[str, Any]],
+    *,
+    limit: int,
+    live: bool,
+    judgements: Mapping[str, Judgement] | None,
+    measured: Mapping[str, Measured] | None,
+    tools: Mapping[str, Sequence[ToolCall]] | None,
+) -> tuple[Case, ...]:
+    """One graded case per claim in ``expected``, sorted by claim id: the ten
+    rule grades against the claim's policy, and where the judgements, the
+    measures and the tools are all given, the judged case built from them."""
+    cases = []
+    for claim_id in sorted(expected):
+        proposal = proposals.get(claim_id)
+        case = grade(
+            proposal,
+            expected[claim_id],
+            _policy_of(expected[claim_id], claims[claim_id], policies),
+            limit,
+        )
+        if judgements is not None and measured is not None and tools is not None:
+            case = _judged_case(
+                case,
+                proposal,
+                judgements.get(claim_id),
+                measured.get(claim_id, NO_RUN),
+                tools.get(claim_id, ()),
+                live=live,
+            )
+        cases.append(case)
+    return tuple(cases)
+
+
 def build_report(
     proposals: Mapping[str, TriageProposal | None],
     expected: Mapping[str, Mapping[str, Any]],
@@ -438,27 +475,17 @@ def build_report(
         (judgements, measured, tools), (judge_fingerprint, recording_fingerprint)
     )
     check_manifest_workload(manifest_path)
-    limit = auto_approval_limit(manifest_path)
-    live = answered_by.kind == "live"
-    cases = []
-    for claim_id in sorted(expected):
-        proposal = proposals.get(claim_id)
-        case = grade(
-            proposal,
-            expected[claim_id],
-            _policy_of(expected[claim_id], claims[claim_id], policies),
-            limit,
-        )
-        if judgements is not None and measured is not None and tools is not None:
-            case = _judged_case(
-                case,
-                proposal,
-                judgements.get(claim_id),
-                measured.get(claim_id, NO_RUN),
-                tools.get(claim_id, ()),
-                live=live,
-            )
-        cases.append(case)
+    cases = _graded_cases(
+        proposals,
+        expected,
+        claims,
+        policies,
+        limit=auto_approval_limit(manifest_path),
+        live=answered_by.kind == "live",
+        judgements=judgements,
+        measured=measured,
+        tools=tools,
+    )
     return Report(
         format=REPORT_FORMAT,
         workload=WORKLOAD,
@@ -473,5 +500,5 @@ def build_report(
         ),
         absolute=ABSOLUTE,
         targets=TARGETS,
-        cases=tuple(cases),
+        cases=cases,
     )

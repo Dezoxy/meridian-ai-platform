@@ -1,4 +1,4 @@
-"""The triage graph on the golden set (S014): every one of the 40 golden claims
+"""The triage graph on the golden set (S014): every golden claim
 run through the graph with a stub model that answers as the oracle would, and
 the full proposal held against the oracle's.
 """

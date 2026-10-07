@@ -563,16 +563,48 @@ def test_an_interrupt_inside_the_undo_names_every_path_that_may_differ_and_goes_
 
 
 @pytest.mark.parametrize("place", UNDO_PLACES)
-def test_an_error_inside_the_undo_is_a_write_failure_that_names_its_class_only(
+def test_an_error_inside_the_undo_after_an_interrupt_leaves_as_the_interrupt(
     root: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     place: str,
 ) -> None:
-    # Arrange
+    # Arrange: the write is ended by an interrupt (see end_the_undo_at).
     plan = plan_workload(root, NAME)
     before = snapshot(root)
     end_the_undo_at(monkeypatch, root, place, raise_an_error)
+
+    # Act
+    with pytest.raises(KeyboardInterrupt) as ended:
+        write_plan(root, plan)
+
+    # Assert: the lines name the error's class and the paths that still differ,
+    # no text of the error is said anywhere, and the error stays in the chain.
+    captured = capsys.readouterr()
+    lines = captured.err.splitlines()
+    assert lines[0] == "ERROR " + scaffold_writes.UNDO_UNFINISHED.format("RuntimeError")
+    named = named_to_check(lines[1:], prefix="ERROR ")
+    assert len(named) == len(lines) - 1 == len(set(named))
+    assert set(named) == differing(before, snapshot(root))
+    assert LEAKED not in captured.out + captured.err
+    assert isinstance(ended.value.__context__, RuntimeError)
+
+
+@pytest.mark.parametrize("place", [SERVICES, AGENTS])
+def test_an_error_inside_the_undo_after_an_error_is_a_write_failure_naming_its_class(
+    root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    place: str,
+) -> None:
+    # Arrange: the write is ended by an error, not an interrupt, at pyproject.toml.
+    plan = plan_workload(root, NAME)
+    before = snapshot(root)
+    hook_replacements(
+        monkeypatch,
+        root,
+        before={PYPROJECT: raise_an_error, place: on_call(2, raise_an_error)},
+    )
 
     # Act
     with pytest.raises(ScaffoldWriteError) as refused:

@@ -59,6 +59,11 @@ from meridian.workloads.claims_triage.adjuster_queue import (
     QueueRow,
     load_queue,
 )
+from meridian.workloads.claims_triage.claim_dates import (
+    LOSS_DATE_LABEL,
+    REPORTED_ON_LABEL,
+    day_gaps,
+)
 from meridian.workloads.claims_triage.lifecycle import (
     DOCUMENTS_OVERDUE,
     DOCUMENTS_REFUSED_EVENT,
@@ -71,7 +76,12 @@ from meridian.workloads.claims_triage.models import (
     DecisionFailure,
     DecisionResponse,
 )
-from meridian.workloads.claims_triage.proposal import TriageProposal
+from meridian.workloads.claims_triage.proposal import (
+    RESTS_ON_MARKS,
+    RESTS_ON_NOTES,
+    TriageProposal,
+    recommendation_rests_on,
+)
 from meridian.workloads.claims_triage.triaging import (
     NUMBER_WORDS,
     arrived_documents,
@@ -354,10 +364,15 @@ def _text(value: object) -> str:
     return "" if value is None else str(value)
 
 
-def facts_of(submission: object, arrived: Sequence[str] = ()) -> dict[str, str]:
+def facts_of(
+    submission: object,
+    arrived: Sequence[str] = (),
+    received_at: datetime | None = None,
+) -> dict[str, str]:
     """The submission's fields a decision needs, and the names of documents that
     arrived later, in a row of their own when there are any. The claimant is not
-    one of the fields."""
+    one of the fields. The two dates are labelled for what they are and followed
+    by the gaps in days (``claim_dates``, S070)."""
     claim = submission if isinstance(submission, dict) else {}
     location = claim.get("loss_location")
     place = (
@@ -371,8 +386,9 @@ def facts_of(submission: object, arrived: Sequence[str] = ()) -> dict[str, str]:
     return {
         "Policy number": _text(claim.get("policy_number")),
         "Peril": _text(claim.get("peril")),
-        "Loss date": _text(claim.get("loss_date")),
-        "Reported on": _text(claim.get("reported_on")),
+        LOSS_DATE_LABEL: _text(claim.get("loss_date")),
+        REPORTED_ON_LABEL: _text(claim.get("reported_on")),
+        **day_gaps(claim, received_at),
         "Claimed amount": _euros(claim.get("claimed_amount")),
         "Loss location": place,
         "Documents named": named or "none",
@@ -410,6 +426,9 @@ def render_queue(
             "peril": _text(r.peril),
             "amount": _euros(r.claimed_amount),
             "reason": _text(r.reason),
+            "rests_on": RESTS_ON_MARKS.get(
+                recommendation_rests_on(r.recommendation, r.assessment), ""
+            ),
             # The same test as the claim's page: the sweep referred it.
             "overdue": r.state == "awaiting_adjuster"
             and r.referral_reason == DOCUMENTS_OVERDUE_REASON,
@@ -446,6 +465,14 @@ def render_claim(view: ClaimView, notice: Notice | None = None) -> str:
         decision=view.decision and (view.decision[0], _when(view.decision[1])),
         trail=[(_when(t.recorded_at), *t[1:5], _text(t.reason)) for t in view.trail],
         payable=payable,
+        # The sentence beside the recommendation; empty when nothing to mark.
+        rests_on=RESTS_ON_NOTES.get(
+            recommendation_rests_on(
+                proposal and proposal.recommendation,
+                proposal and proposal.assessment,
+            ),
+            "",
+        ),
         waiting=waiting,
         failed=failed,
         # A claim referred at the cap has no paused run: nothing to send back.
@@ -563,7 +590,7 @@ def load_claim(dsn: str, tenant: str, claim_id: str) -> ClaimView | None:
         state=state,
         since=since,
         received_at=received_at,
-        facts=facts_of(submission, arrived),
+        facts=facts_of(submission, arrived, received_at),
         proposal=proposal,
         proposal_note=note,
         decision=None if decision is None else (decision[0], decision[1]),

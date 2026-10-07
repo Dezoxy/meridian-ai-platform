@@ -291,6 +291,26 @@ def test_the_same_comparison_without_a_final_newline_is_not_blamed_on_the_newlin
     assert str(refused.value) == AGENTS_EDIT_UNVERIFIED
 
 
+# More brackets than the parser's recursion allows (it gives up at about half the
+# interpreter's limit of 1,000 frames).
+TOO_DEEP = "[" * 1_000 + "]" * 1_000
+
+
+def test_an_agents_file_nested_too_deep_to_parse_is_refused_not_raised() -> None:
+    old = f"agents:\n  - id: a\n    tools: {TOO_DEEP}\n"
+
+    with pytest.raises(ScaffoldError) as refused:
+        scaffold._agents_edit(old, NAME)
+
+    assert str(refused.value) == AGENTS_EDIT_UNVERIFIED
+
+
+def test_the_line_of_an_agents_list_nested_too_deep_to_compose_is_none() -> None:
+    old = f"agents:\n  - id: a\n    tools: {TOO_DEEP}\n"
+
+    assert scaffold._agents_list_line(old) is None
+
+
 def test_the_same_block_scalar_with_a_final_newline_is_accepted(root: Path) -> None:
     end_in_a_block_scalar(root, final_newline=True)
     agents_before = len(load_registry(root / "config/registry").agents)

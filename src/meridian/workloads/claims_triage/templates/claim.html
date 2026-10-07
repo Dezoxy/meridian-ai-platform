@@ -31,6 +31,9 @@
 <dt>Route</dt><dd>{{ p.route }}</dd>
 <dt>Reason</dt><dd>{{ p.reason }}</dd>
 <dt>Recommendation</dt><dd>{{ p.recommendation or "none" }}</dd>
+{% if rests_on %}
+<dt>Recommendation rests on</dt><dd>{{ rests_on }}</dd>
+{% endif %}
 <dt>Payable amount</dt><dd>{{ payable or "none" }}</dd>
 <dt>Exclusion clause</dt><dd>{{ p.exclusion_clause or "none" }}</dd>
 <dt>Fraud indicators</dt><dd>{{ p.fraud_indicators | join(", ") or "none" }}</dd>

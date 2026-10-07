@@ -12,6 +12,7 @@ import yaml
 from meridian.platform.cli import scaffold, scaffold_services
 from meridian.platform.cli.scaffold_services import (
     SERVICES_AGENTS_UNUSABLE,
+    SERVICES_EDIT_UNVERIFIED,
     SERVICES_NOT_YAML,
     SERVICES_NOT_YAML_AT,
     SERVICES_RUNTIME_TWICE,
@@ -274,3 +275,168 @@ def test_the_line_of_the_agents_list_of_agents_yaml_is_the_editors_line() -> Non
     text = SEPARATED + "agents:\n  - id: a\n"
 
     assert scaffold._agents_list_line(text) == 3
+
+
+def runtime_with(agents: str) -> str:
+    return lines_of(
+        "services:",
+        "  - id: agent-runtime",
+        f"    agents: {agents}",
+        "    calls: []",
+    )
+
+
+def test_a_flow_list_with_a_unicode_separator_in_an_item_is_extended() -> None:
+    # One line for an editor: the parser counts the separator as a break, so its
+    # own start and end lines differ, but the list is still extended in place.
+    item = f'"a{LINE_SEPARATOR}b"'
+    text = runtime_with(f"[{item}, claims-triage]")
+
+    new = services_edit(text, NAME)
+
+    assert new == runtime_with(f"[{item}, claims-triage, {NAME}]")
+    expected = yaml.safe_load(text)
+    expected["services"][0]["agents"].append(NAME)
+    assert yaml.safe_load(new) == expected
+
+
+def test_a_flow_list_over_two_lines_is_still_refused_with_its_line() -> None:
+    text = runtime_with("[claims-triage,\n      other]")
+
+    with pytest.raises(ServicesEditError) as refused:
+        services_edit(text, NAME)
+
+    assert str(refused.value) == SERVICES_AGENTS_UNUSABLE.format(3)
+
+
+def test_a_flow_list_over_two_lines_with_a_separator_is_still_refused() -> None:
+    text = runtime_with(f'["a{LINE_SEPARATOR}b",\n      other]')
+
+    with pytest.raises(ServicesEditError) as refused:
+        services_edit(text, NAME)
+
+    assert str(refused.value) == SERVICES_AGENTS_UNUSABLE.format(3)
+
+
+def a_mark_at(text: str, index: int) -> yaml.Mark:
+    return yaml.Mark("services.yaml", index, 0, 0, None, None)
+
+
+def test_a_mark_at_the_end_of_a_text_with_a_final_line_feed_is_on_the_last_line() -> (
+    None
+):
+    text = "a: 1\nb: 2\n"
+
+    line = scaffold_services.line_of(text, a_mark_at(text, len(text)))
+
+    assert line == 2
+
+
+def test_a_mark_inside_the_last_line_and_at_the_end_of_an_unterminated_text() -> None:
+    text = "a: 1\nb: 2"
+
+    inside = scaffold_services.line_of(text, a_mark_at(text, len(text) - 1))
+    end = scaffold_services.line_of(text, a_mark_at(text, len(text)))
+
+    assert (inside, end) == (2, 2)
+
+
+def test_a_mark_on_a_line_feed_and_on_the_line_after_it_are_told_apart() -> None:
+    text = "a: 1\nb: 2\n"
+
+    on_the_feed = scaffold_services.line_of(text, a_mark_at(text, 4))
+    after_it = scaffold_services.line_of(text, a_mark_at(text, 5))
+
+    assert (on_the_feed, after_it) == (1, 2)
+
+
+def test_a_parse_that_stops_at_the_end_of_a_text_names_the_last_line() -> None:
+    text = "services:\n  - id: [a\n"
+
+    with pytest.raises(ServicesEditError) as refused:
+        services_edit(text, NAME)
+
+    assert str(refused.value) == SERVICES_NOT_YAML_AT.format(2)
+
+
+# Deeper than the parser's recursion allows: `compose` gives up at about half the
+# interpreter's limit of 1,000 frames, so this is twice that in brackets.
+NESTING = 1_000
+# The sweep looks for the parser's limit between these two depths, and finds it only
+# when it lies strictly between them.
+SHALLOWEST = 100
+
+
+def test_a_text_nested_too_deep_to_compose_is_refused_as_not_yaml() -> None:
+    text = "[" * NESTING + "]" * NESTING + "\n"
+
+    with pytest.raises(ServicesEditError) as refused:
+        services_edit(text, NAME)
+
+    assert str(refused.value) == SERVICES_NOT_YAML
+
+
+def nested_in_the_runtimes_entry(depth: int) -> str:
+    return PLAIN + "    extra: " + "[" * depth + "]" * depth + "\n"
+
+
+def how_the_edit_ends(depth: int) -> str:
+    """``ok``, one of the two fixed refusals, or the class name of what escaped."""
+    try:
+        services_edit(nested_in_the_runtimes_entry(depth), NAME)
+    except ServicesEditError as refused:
+        if str(refused) == SERVICES_NOT_YAML:
+            return "not yaml"
+        if str(refused).startswith(SERVICES_EDIT_UNVERIFIED.split("{}")[0]):
+            return "unverified"
+        return "another refusal"
+    except Exception as escaped:
+        return type(escaped).__name__
+    return "ok"
+
+
+def composes(depth: int) -> bool:
+    try:
+        yaml.compose(nested_in_the_runtimes_entry(depth), Loader=yaml.SafeLoader)
+    except RecursionError:
+        return False
+    return True
+
+
+def the_shallowest_depth_that_does_not_compose() -> int:
+    composing, failing = SHALLOWEST, NESTING
+    while failing - composing > 1:
+        middle = (composing + failing) // 2
+        if composes(middle):
+            composing = middle
+        else:
+            failing = middle
+    return failing
+
+
+def ends_with_frames_between(depth: int, frames: int) -> str:
+    if frames == 0:
+        return how_the_edit_ends(depth)
+    return ends_with_frames_between(depth, frames - 1)
+
+
+def test_no_nesting_depth_near_the_parsers_limit_ends_in_an_exception() -> None:
+    # `compose` uses two frames per level and the check's `safe_load` a few more, so
+    # one depth just under the limit composes and then overflows the check; whether
+    # one does depends on the caller's depth, so both parities of it are tried.
+    limit = the_shallowest_depth_that_does_not_compose()
+    assert SHALLOWEST + 4 < limit < NESTING, (
+        f"the shallowest depth that does not compose is {limit}, outside the sweep's "
+        f"bounds ({SHALLOWEST} and {NESTING}), where it would measure nothing: the "
+        "interpreter's recursion limit has moved; change SHALLOWEST and NESTING so "
+        "that the limit lies between them"
+    )
+
+    ends = {
+        (depth, frames): ends_with_frames_between(depth, frames)
+        for depth in range(limit - 4, limit + 2)
+        for frames in (0, 1)
+    }
+
+    allowed = {"ok", "not yaml", "unverified"}
+    assert {key: end for key, end in ends.items() if end not in allowed} == {}

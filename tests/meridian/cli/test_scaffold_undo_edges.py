@@ -11,6 +11,7 @@ import errno
 import fnmatch
 import os
 from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -263,6 +264,252 @@ def test_a_temporary_is_checked_by_hand_when_the_undo_is_ended_before_it(
     )
     assert named == differing(before, snapshot(root))
     assert the_temporaries(named)
+
+
+def test_an_undo_ended_midway_names_no_path_the_command_never_wrote(
+    root: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Arrange: the interrupt comes at the first replacement, so services.yaml and
+    # pyproject.toml are never noted; the undo is then ended at its first removal.
+    plan = plan_workload(root, NAME)
+    before = snapshot(root)
+    real_unlink = Path.unlink
+
+    def unlink(self: Path, *args: Any, **kwargs: Any) -> None:
+        if self.name == "__init__.py":
+            raise KeyboardInterrupt
+        real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", unlink)
+    hook_replacements(monkeypatch, root, {AGENTS: interrupt})
+
+    # Act
+    with pytest.raises(KeyboardInterrupt):
+        write_plan(root, plan)
+
+    # Assert: exactly what still differs is named; the two files never written are
+    # not, and nor is agents.yaml, which was never replaced either.
+    lines = capsys.readouterr().err.splitlines()
+    named = named_in(lines[1:])
+    assert named == differing(before, snapshot(root))
+    assert named.isdisjoint(EDITED)
+
+
+def test_a_temporary_that_is_gone_is_not_checked_by_hand(
+    root: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Arrange: pyproject.toml cannot be replaced, and every removal of a temporary
+    # file removes it and is then interrupted: the temporary stays noted and is gone
+    # when the undo is ended at it.
+    plan = plan_workload(root, NAME)
+    before = snapshot(root)
+    fail_replace_of(monkeypatch, PYPROJECT)
+    real_unlink = Path.unlink
+
+    def unlink(self: Path, *args: Any, **kwargs: Any) -> None:
+        real_unlink(self, *args, **kwargs)
+        if self.name.endswith(".tmp"):
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(Path, "unlink", unlink)
+
+    # Act
+    with pytest.raises(KeyboardInterrupt):
+        write_plan(root, plan)
+
+    # Assert: nothing is named that does not exist, and everything that differs is.
+    lines = capsys.readouterr().err.splitlines()
+    named = named_in(lines[1:])
+    assert not the_temporaries(named)
+    assert named == differing(before, snapshot(root))
+    assert not the_temporaries(differing(before, snapshot(root)))
+
+
+def test_an_error_in_the_undo_after_an_interrupt_ends_the_command_as_the_interrupt(
+    root: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Arrange: an interrupt at the replacement of pyproject.toml; the undo then
+    # raises an OSError at the note of its second path.
+    plan = plan_workload(root, NAME)
+    before = snapshot(root)
+    real_settle = scaffold_writes._settle
+    calls: list[None] = []
+
+    def settle(*args: Any) -> None:
+        calls.append(None)
+        if len(calls) == 2:
+            raise OSError(errno.EIO, LEAKED)
+        real_settle(*args)
+
+    monkeypatch.setattr(scaffold_writes, "_settle", settle)
+    hook_replacements(monkeypatch, root, {PYPROJECT: interrupt})
+
+    # Act
+    with pytest.raises(KeyboardInterrupt) as ended:
+        write_plan(root, plan)
+
+    # Assert: the lines name the error's class and what may differ; the error is
+    # kept as the interrupt's context and its text is said nowhere.
+    err = capsys.readouterr().err
+    lines = err.splitlines()
+    assert lines[0] == "ERROR " + scaffold_writes.UNDO_UNFINISHED.format("OSError")
+    named = named_in(lines[1:])
+    # services.yaml was put back, but the error came at the note of it: it is not
+    # known to be settled, so it is named without differing.
+    assert named - differing(before, snapshot(root)) == {SERVICES}
+    assert differing(before, snapshot(root)) <= named
+    assert PYPROJECT not in named
+    assert isinstance(ended.value.__context__, OSError)
+    assert LEAKED not in err
+
+
+def test_an_error_after_an_error_in_the_write_still_ends_the_command_as_a_write_error(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Arrange: the other side of the rule: the first failure is an error, not an
+    # interrupt, and the undo raises one too.
+    plan = plan_workload(root, NAME)
+    real_settle = scaffold_writes._settle
+    calls: list[None] = []
+
+    def fail() -> None:
+        raise RuntimeError(LEAKED)
+
+    def settle(*args: Any) -> None:
+        calls.append(None)
+        if len(calls) == 2:
+            raise OSError(errno.EIO, LEAKED)
+        real_settle(*args)
+
+    monkeypatch.setattr(scaffold_writes, "_settle", settle)
+    hook_replacements(monkeypatch, root, {PYPROJECT: fail})
+
+    # Act
+    with pytest.raises(ScaffoldWriteError) as refused:
+        write_plan(root, plan)
+
+    # Assert
+    assert str(refused.value) == scaffold_writes.UNDO_UNFINISHED.format("OSError")
+    assert isinstance(refused.value.__cause__, OSError)
+    assert LEAKED not in str(refused.value) + "".join(refused.value.details)
+
+
+class InterruptedBuffer:
+    """Bytes whose buffer cannot be taken: the write that reads it is interrupted
+    after the file is open."""
+
+    def __buffer__(self, flags: int) -> memoryview:
+        raise KeyboardInterrupt
+
+
+def test_replace_closes_the_descriptor_it_opened_when_the_write_is_interrupted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Arrange: the descriptor `open` takes from the opener is recorded, and the
+    # write is interrupted once the file is open. Nothing may close one by number.
+    target = tmp_path / "file.txt"
+    target.write_text("old")
+    temporaries: list[Path] = []
+    opened: list[int] = []
+    closed_by_number: list[int] = []
+    real_open = os.open
+    real_close = os.close
+
+    def recording_open(*args: Any, **kwargs: Any) -> int:
+        opened.append(real_open(*args, **kwargs))
+        return opened[-1]
+
+    def recording_close(descriptor: int) -> None:
+        closed_by_number.append(descriptor)
+        real_close(descriptor)
+
+    monkeypatch.setattr(os, "open", recording_open)
+    monkeypatch.setattr(os, "close", recording_close)
+
+    # Act
+    try:
+        with pytest.raises(KeyboardInterrupt) as interrupted:
+            scaffold_writes._replace(
+                target,
+                InterruptedBuffer(),  # type: ignore[arg-type]
+                temporaries,
+            )
+
+        # Assert: the descriptor is closed, by the file object and not by number,
+        # while the interrupt's traceback still holds the frame (a file object left
+        # to the garbage collector would close it later), the temporary file is
+        # removed and un-noted as for any other interruption, and the file is
+        # untouched.
+        assert interrupted.traceback
+        (descriptor,) = opened
+        with pytest.raises(OSError, match="Bad file descriptor"):
+            os.fstat(descriptor)
+        assert closed_by_number == []
+        assert temporaries == []
+        assert [path.name for path in tmp_path.iterdir()] == ["file.txt"]
+        assert target.read_text() == "old"
+    finally:
+        for descriptor in opened:
+            with suppress(OSError):
+                real_close(descriptor)
+
+
+class CollidingBuffer:
+    """Bytes whose buffer cannot be taken, with a ``FileExistsError``: raised inside
+    the write, after ``open`` has created the temporary file, which no real write
+    does."""
+
+    def __buffer__(self, flags: int) -> memoryview:
+        raise FileExistsError(errno.EEXIST, LEAKED)
+
+
+def test_a_file_exists_error_raised_inside_the_write_still_removes_the_temporary(
+    tmp_path: Path,
+) -> None:
+    # Arrange: the temporary is created by `open`, and then the write raises the
+    # error that only `open` may raise.
+    target = tmp_path / "file.txt"
+    target.write_text("old")
+    temporaries: list[Path] = []
+
+    # Act
+    with pytest.raises(FileExistsError):
+        scaffold_writes._replace(
+            target,
+            CollidingBuffer(),  # type: ignore[arg-type]
+            temporaries,
+        )
+
+    # Assert: the temporary is gone from the disk, and nothing is left noted
+    # for the undo to look for.
+    assert [path.name for path in tmp_path.iterdir()] == ["file.txt"]
+    assert temporaries == []
+    assert target.read_text() == "old"
+
+
+def test_a_temporary_name_that_already_exists_is_not_removed_and_is_not_noted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Arrange: the random part of the name is fixed, and a file of someone else
+    # already holds the temporary's name.
+    target = tmp_path / "file.txt"
+    target.write_text("old")
+    other = tmp_path / ".file.txt.0123456789abcdef.tmp"
+    other.write_text("not ours")
+    temporaries: list[Path] = []
+    monkeypatch.setattr(
+        scaffold_writes.secrets, "token_hex", lambda nbytes: "0123456789abcdef"
+    )
+
+    # Act
+    with pytest.raises(FileExistsError):
+        scaffold_writes._replace(target, b"new", temporaries)
+
+    # Assert: the other file is still there with its own bytes, the target is
+    # untouched, and the path is not noted: the undo must not remove it either.
+    assert other.read_text() == "not ours"
+    assert target.read_text() == "old"
+    assert temporaries == []
 
 
 class OnceFalse(str):
