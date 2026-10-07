@@ -30,6 +30,7 @@ from chartsupport import rules
 from kindsupport import (
     DB_POLICY_FILE,
     KIND_DIR,
+    SMOKE_SH,
     UP_SH,
     function_body,
     function_definition,
@@ -485,7 +486,7 @@ def test_the_collector_is_kept_from_the_operator_by_the_operators_own_policy() -
 
 
 def test_smoke_says_where_the_operators_log_is_now() -> None:
-    smoke = (KIND_DIR / "smoke.sh").read_text(encoding="utf-8")
+    smoke = SMOKE_SH  # the entry and its parts, as one text (kindsupport.py)
     # Check 10's verdict on the database's certificates: both messages send the
     # reader to the Deployment in `meridian`, which the scan above cannot ask for.
     where = "in meridian (the Deployment cnpg-cloudnative-pg)"

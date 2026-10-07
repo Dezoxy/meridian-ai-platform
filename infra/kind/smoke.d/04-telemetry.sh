@@ -611,7 +611,7 @@ check_telemetry() {
   # The control of check 8's collector line: a pod the policies admit reached the
   # collector over TLS in this run. Set before the read-backs, which prove
   # something else (that the stores answered) and can fail on their own.
-  # shellcheck disable=SC2034  # read by check_network_collector (check 8), which smoke.sh still holds
+  # shellcheck disable=SC2034  # read by check_network_collector (08-network-policy.sh)
   telemetry_pushed=yes
 
   open_grafana || return 0 # it printed the FAIL line
