@@ -32,7 +32,10 @@ WINDOW_SECONDS = 61
 ALL = "all"
 COVER = "2"
 EXCLUSIONS = "3"
-LABELLED = {ALL: 28, COVER: 20, EXCLUSIONS: 8}
+# 28, 20 and 8 for the first forty claims, and six cover clauses more for the
+# claims on a fraud indicator's boundary; the floors below were measured before
+# those six queries existed and still hold.
+LABELLED = {ALL: 34, COVER: 26, EXCLUSIONS: 8}
 # FLOORS: the labelled clauses found among the chunks of one call, in the groups
 # of LABELLED (section 2 is cover, section 3 exclusions). Measured in replay
 # mode (a simulated embedding, a hashed bag of words) on PostgreSQL 17.11 with

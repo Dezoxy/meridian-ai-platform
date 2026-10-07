@@ -11,7 +11,9 @@ the assessor's builder gets the model client and no tool client at all: its
 nodes could not call a tool if they tried. No builder gets both.
 
 The nodes are the ones the graph had before the split, with their bodies,
-failure codes and idempotency step labels unchanged. Every node is labelled with
+failure codes and idempotency step labels unchanged (S067 added three codes,
+``claim-not-valid``, ``wording-version-unknown`` and ``posted-flag-not-valid``,
+and read the claim through ``claim_of``). Every node is labelled with
 its worker (``meridian.worker`` in the node's metadata), which the runtime puts
 on the node's span. The state is one ``ClaimState`` for the supervisor and every
 worker: plain data only, as the runtime runs LangGraph in strict msgpack mode.
@@ -21,12 +23,14 @@ state, so two workers in parallel would both write every key and LangGraph would
 refuse the step; parallel workers would need an output schema each.
 """
 
-from typing import Any, TypedDict
+import logging
+from typing import Any, NotRequired, TypedDict
 from uuid import UUID
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from pydantic import BaseModel, ConfigDict, StrictBool, ValidationError
+from pydantic_core import ErrorDetails
 
 from meridian.platform.common.wire import WireModel
 from meridian.runtime.failures import GraphFailure
@@ -36,6 +40,7 @@ from meridian.runtime.tracing import WORKER_KEY
 
 from .assessment import Assessed, assess
 from .models import DECISION_NOTES, ClaimFacts, Outcome
+from .posted_text import POSTED_TEXT_FLAG
 from .proposal import TriageProposal
 from .rules import (
     Assessment,
@@ -43,8 +48,24 @@ from .rules import (
     PolicyRecord,
     needs_assessment,
     policy_state,
+    reads_exclusion_count,
 )
-from .wording import Terms, probes, select_terms
+from .wording import (
+    Terms,
+    catalogue_wording,
+    exclusions_counted,
+    probes,
+    select_terms,
+)
+
+logger = logging.getLogger(__name__)
+
+# What stands for a key of the data in a location: ``extra="forbid"`` puts the
+# key an unknown field was sent under in the error's location, and the key is
+# the caller's. The same character as ``triaging.DATA_KEY``.
+DATA_KEY = "*"
+# The line of a policy whose wording the table of exclusion counts does not know.
+NO_COUNT = "the table of exclusion clauses has no count for the wording"
 
 # The worker IDs of the registry's ``claims-triage`` entry. The registry check
 # and a test keep them the same.
@@ -56,6 +77,9 @@ APPROVALS = "approvals"
 
 class ClaimState(TypedDict):
     claim: dict[str, Any]
+    # The Claims API's screen of the description as posted (S067), beside the
+    # claim: absent means false. ``posted_flag_of`` reads it.
+    posted_text_addresses_the_model: NotRequired[bool]
     policy: dict[str, Any] | None
     history: list[dict[str, Any]]
     history_truncated: bool
@@ -107,13 +131,86 @@ def policy_of(state: ClaimState) -> PolicyRecord:
     return PolicyRecord.model_validate(state["policy"])
 
 
+def invalid_fields(exc: ValidationError) -> tuple[tuple[str, str], ...]:
+    """What failed to validate, as ``(dotted location, error type)`` pairs and
+    nothing else: never the message, the input or the context, which quote the
+    claim. The same as the Claims API's own (``triaging.invalid_fields``, which
+    a test compares this with); it is not imported, as the API module pulls the
+    web framework and the database driver into the graph. A key of the data is
+    replaced (``DATA_KEY``): it is the caller's."""
+    errors = exc.errors(include_url=False, include_input=False, include_context=False)
+    return tuple((_dotted(error), error["type"]) for error in errors)
+
+
+def _dotted(error: ErrorDetails) -> str:
+    parts = [str(part) for part in error["loc"]]
+    if error["type"] == "extra_forbidden" and parts:
+        parts[-1] = DATA_KEY
+    return ".".join(parts)
+
+
+def claim_of(state: ClaimState) -> ClaimFacts:
+    """The run's claim as facts, in every node that reads it. A claim that is not
+    valid fails the run with a fixed code and a log line of the fields and kinds
+    of error: pydantic's own error quotes the value that did not fit, and the
+    run was started with it."""
+    try:
+        return ClaimFacts.model_validate(state["claim"])
+    except ValidationError as exc:
+        logger.error(
+            "the claim of the run is not valid: %s %s",
+            type(exc).__name__,
+            invalid_fields(exc),
+        )
+        raise GraphFailure("claim-not-valid") from None
+
+
+def posted_flag_of(state: ClaimState) -> bool:
+    """The Claims API's screen of the description as posted (S067): absent is
+    false, and anything that is not a boolean fails the run with a fixed code,
+    never read as a truth value: the input is the caller's. A flag can only make
+    a run more careful, so a caller that sends true for clean text sends the
+    claim to an adjuster, which is what the screen's own hit does."""
+    flag = state.get(POSTED_TEXT_FLAG, False)
+    if not isinstance(flag, bool):
+        raise GraphFailure("posted-flag-not-valid")
+    return flag
+
+
+def _unknown_wording(policy: PolicyRecord) -> GraphFailure:
+    """The failure of a policy whose wording the table of exclusion counts does
+    not know, after one log line that says so."""
+    if catalogue_wording(policy.product, policy.wording_version):
+        # An exception to the graph's rule that no tool result is repeated: the
+        # product and the version came from the policy tool, but each is a closed
+        # identifier once checked (a product of the catalogue, a version of the
+        # form "2026-01"), so neither can carry a sentence or a value of the
+        # claim. Anything else is said in fixed words.
+        logger.error("%s %s %s", NO_COUNT, policy.product, policy.wording_version)
+    else:
+        logger.error("%s of a product or version outside the catalogue", NO_COUNT)
+    return GraphFailure("wording-version-unknown")
+
+
 def terms_of(claim: ClaimFacts, policy: PolicyRecord, state: ClaimState) -> Terms:
-    return select_terms(
+    """The terms of the claim's peril. Where the rules would read "are the
+    exclusions complete" and the table has no count for the policy's wording, the
+    run fails (S067): a referral as ``unverified`` would hide the cause. Both the
+    assessor and the supervisor call this, so the run fails before the model is
+    asked. ``select_terms`` stays pure: it is called for every claim, and a claim
+    on a lapsed or expired policy, or on a peril the product does not cover, never
+    reads the count (``reads_exclusion_count``)."""
+    terms = select_terms(
         claim.peril,
         state["chunks"],
         product=policy.product,
         wording_version=policy.wording_version,
     )
+    if reads_exclusion_count(claim, policy, terms) and not exclusions_counted(
+        policy.product, policy.wording_version
+    ):
+        raise _unknown_wording(policy)
+    return terms
 
 
 NOT_NEEDED = Assessed(Assessment("not_needed"), None, None, None)
@@ -145,7 +242,8 @@ def build_intake(intake: ToolClient) -> CompiledStateGraph:
     is the view of the ``intake`` worker."""
 
     def lookup_policy(state: ClaimState) -> dict[str, Any]:
-        claim = ClaimFacts.model_validate(state["claim"])
+        claim = claim_of(state)
+        posted_flag_of(state)  # the run's input is checked once, before any call
         number = {"policy_number": claim.policy_number}
         found = intake.call("policy_lookup", number).data
         # The later keys start empty so that every node reads a key that is set,
@@ -165,7 +263,7 @@ def build_intake(intake: ToolClient) -> CompiledStateGraph:
         return {**empty, "policy": policy.model_dump(mode="json")}
 
     def load_history(state: ClaimState) -> dict[str, Any]:
-        claim = ClaimFacts.model_validate(state["claim"])
+        claim = claim_of(state)
         number = {"policy_number": claim.policy_number}
         found = intake.call("claim_history", number).data
         entries = [
@@ -193,7 +291,7 @@ def build_terms(terms: ToolClient) -> CompiledStateGraph:
     ``terms`` worker."""
 
     def retrieve_terms(state: ClaimState) -> dict[str, Any]:
-        claim = ClaimFacts.model_validate(state["claim"])
+        claim = claim_of(state)
         policy = policy_of(state)
         in_force = policy_state(policy, claim.loss_date) == "in_force"
         chunks: list[dict[str, Any]] = []
@@ -223,13 +321,20 @@ def build_assessor(model: ModelClient) -> CompiledStateGraph:
     no tool client: the worker holds no tool."""
 
     def assess_exclusions(state: ClaimState) -> dict[str, Any]:
-        claim = ClaimFacts.model_validate(state["claim"])
+        claim = claim_of(state)
+        # Read here and nowhere else; only a claim that is asked about uses it.
+        posted = posted_flag_of(state)
         policy = policy_of(state)
         terms = terms_of(claim, policy, state)
         if not needs_assessment(claim, policy, terms):
             return {"assessed": assessed_to_state(NOT_NEEDED)}
         assessed = assess(
-            model, claim, policy.product, policy.wording_version, terms.candidates
+            model,
+            claim,
+            policy.product,
+            policy.wording_version,
+            terms.candidates,
+            posted_text_addresses_the_model=posted,
         )
         return {"assessed": assessed_to_state(assessed)}
 
@@ -245,7 +350,7 @@ def build_request_approval(approvals: ToolClient) -> CompiledStateGraph:
     ``approvals`` is the view of the ``approvals`` worker."""
 
     def request_approval(state: ClaimState) -> dict[str, Any]:
-        claim = ClaimFacts.model_validate(state["claim"])
+        claim = claim_of(state)
         # Read back from the checkpointed state, so a rerun sends the same reason.
         proposal = TriageProposal.model_validate(state["output"])
         answer = approvals.call(
@@ -270,7 +375,7 @@ def build_outcome(approvals: ToolClient) -> CompiledStateGraph:
     ``approvals`` worker."""
 
     def read_outcome(state: ClaimState) -> dict[str, Any]:
-        claim = ClaimFacts.model_validate(state["claim"])
+        claim = claim_of(state)
         decision = _fitted(
             ApprovalOutcome,
             approvals.call("approval_outcome", {"claim_id": claim.claim_id}).data,
@@ -282,7 +387,7 @@ def build_outcome(approvals: ToolClient) -> CompiledStateGraph:
         return {"decision": decision}
 
     def write_note(state: ClaimState) -> dict[str, Any]:
-        claim = ClaimFacts.model_validate(state["claim"])
+        claim = claim_of(state)
         decision = state["decision"]
         if decision is None:
             raise GraphFailure("missing-decision")

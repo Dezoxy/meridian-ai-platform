@@ -89,6 +89,23 @@ INGEST_HOLDS = frozenset(
     }
 )
 HOLDS = {SEED_ROLE: SEED_HOLDS, INGEST_ROLE: INGEST_HOLDS}
+# What a fully migrated database gives the ingestion: 0022's rights and the read
+# of seven columns that 0026 added for `meridian knowledge verify`
+# (test_knowledge_verify_migration.py holds that file's own grant).
+VERIFY_COLUMNS = (
+    "product",
+    "wording_version",
+    "clause",
+    "section",
+    "title",
+    "body",
+    "source_sha256",
+)
+MIGRATED_HOLDS = {
+    SEED_ROLE: SEED_HOLDS,
+    INGEST_ROLE: INGEST_HOLDS
+    | column_holds("knowledge.chunks", "SELECT", VERIFY_COLUMNS),
+}
 TABLES = """
 SELECT n.nspname || '.' || c.relname, c.relkind::text,
     (SELECT a.attname FROM pg_attribute AS a
@@ -436,7 +453,10 @@ def test_each_role_holds_exactly_the_grants_of_the_contract(
 ) -> None:
     held = privileges(migrated_database, role)
 
-    assert held == HOLDS[role], (held - HOLDS[role], HOLDS[role] - held)
+    assert held == MIGRATED_HOLDS[role], (
+        held - MIGRATED_HOLDS[role],
+        MIGRATED_HOLDS[role] - held,
+    )
 
 
 def set_columns(statement: str) -> frozenset[str]:
@@ -611,7 +631,9 @@ def test_the_ingestion_can_neither_read_nor_write_the_policy_tables(
 @pytest.mark.parametrize(
     "statement",
     [
-        "SELECT count(*) FROM knowledge.chunks",
+        # Since 0026 the role reads seven columns, so a count of rows is allowed;
+        # the vector is still out of reach.
+        "SELECT embedding FROM knowledge.chunks",
         "UPDATE knowledge.chunks SET title = title",
         "TRUNCATE knowledge.chunks",
         "SELECT count(*) FROM audit.events",

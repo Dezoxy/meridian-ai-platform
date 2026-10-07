@@ -10,7 +10,7 @@ for every claim. The rest read one run's audit rows and trace, what happens when
 the gateway's window is not cleared between claims, and that no claimant text
 leaves the Claims API.
 
-With the scripted model every one of the 40 proposals equals the oracle,
+With the scripted model every one of the 47 proposals equals the oracle,
 CLM-0024 (claimed above the policy's limit) included: the probes lose no clause
 (see ``test_triage_retrieval.py``).
 """
@@ -82,11 +82,13 @@ STATE_AFTER_DECISION = {
     "reject": "rejected",
     "request_documents": "documents_requested",
 }
-# The 29 paused claims of the replay run, by the decision their proposal's
+# The 33 paused claims of the replay run, by the decision their proposal's
 # recommendation leads to (a claim with no recommendation asks for documents).
-DECIDED_APPROVE = 8
+# The first forty paused 8, 9 and 12; the three claims on a fraud indicator's
+# boundary add three approvals and the claim on no policy one request.
+DECIDED_APPROVE = 11
 DECIDED_REJECT = 9
-DECIDED_REQUEST_DOCUMENTS = 12
+DECIDED_REQUEST_DOCUMENTS = 13
 CHECKPOINT_TABLES = (
     "runtime.checkpoints",
     "runtime.checkpoint_blobs",
@@ -139,7 +141,8 @@ def differences(claim_id: str, proposal: TriageProposal) -> dict[str, Any]:
     citations (clause numbers in order, with the policy's product and wording
     version)."""
     expected = EXPECTED[claim_id]
-    policy = POLICIES[CLAIMS[claim_id]["policy_number"]]
+    # Empty for the claim on a policy number no policy has: it cites nothing.
+    policy = POLICIES.get(CLAIMS[claim_id]["policy_number"], {})
     wanted = {
         "route": expected["route"],
         "reason": expected["reason"],
@@ -218,15 +221,16 @@ def test_the_golden_set_through_the_stack_with_the_replay_gateway(
         if proposal.reason in STEP_8_REASONS:
             assert proposal.recommendation is None, claim_id
     routes, reasons = routes_and_reasons(proposals)
-    assert dict(routes) == {"adjuster": 29, "request_documents": 6, "auto_approve": 5}
+    assert dict(routes) == {"adjuster": 33, "request_documents": 6, "auto_approve": 8}
     assert dict(reasons) == {
         "over_threshold": 7,
         "policy_inactive": 6,
         "missing_documents": 6,
-        "within_threshold": 5,
+        "within_threshold": 8,
         "unverified": 7,
-        "fraud_indicator": 6,
+        "fraud_indicator": 9,
         "excluded": 3,
+        "policy_not_found": 1,
     }
     assert auto_approved(proposals) == [
         "CLM-0005",
@@ -234,9 +238,13 @@ def test_the_golden_set_through_the_stack_with_the_replay_gateway(
         "CLM-0016",
         "CLM-0019",
         "CLM-0021",
+        "CLM-0042",
+        "CLM-0046",
+        "CLM-0047",
     ]
-    # Auto-approval needs no model call: the five are the golden set's
-    # auto-approvals that did not ask (CLM-0011, 0015 and 0023 did).
+    # Auto-approval needs no model call: the five are the first forty's
+    # auto-approvals that did not ask (CLM-0011, 0015 and 0023 did), and the
+    # three are the claims one day off a fraud indicator's boundary.
     assert (
         set(auto_approved(proposals))
         == {c for c in EXPECTED if EXPECTED[c]["route"] == "auto_approve"} - asked
@@ -245,11 +253,11 @@ def test_the_golden_set_through_the_stack_with_the_replay_gateway(
     # ── the adjuster decides every paused claim ─────────────────────────────
     paused = sorted(c for c, p in proposals.items() if p.route == "adjuster")
     assert Counter(states(fresh_database).values()) == {
-        "awaiting_adjuster": 29,
-        "approved": 5,
+        "awaiting_adjuster": 33,
+        "approved": 8,
         "documents_requested": 6,
     }
-    assert len(paused) == 29
+    assert len(paused) == 33
     decisions = {c: decision_for(proposals[c]) for c in paused}
     for claim_id in paused:
         answer = stack.decide(claim_id, decisions[claim_id])
@@ -266,14 +274,14 @@ def test_the_golden_set_through_the_stack_with_the_replay_gateway(
         "request_documents": DECIDED_REQUEST_DOCUMENTS,
     }
     assert Counter(states(fresh_database).values()) == {
-        "approved": 5 + DECIDED_APPROVE,
+        "approved": 8 + DECIDED_APPROVE,
         "rejected": DECIDED_REJECT,
         "documents_requested": 6 + DECIDED_REQUEST_DOCUMENTS,
     }
-    # 29 requests, 29 notes and 29 decisions, one of each per paused claim; the
+    # 33 requests, 33 notes and 33 decisions, one of each per paused claim; the
     # runs that ended left no checkpoint behind.
     for table in ("claims.approval_requests", "claims.notes", "claims.decisions"):
-        assert table_count(fresh_database, table) == 29, table
+        assert table_count(fresh_database, table) == 33, table
     assert {
         claim_id: decision
         for claim_id, decision in owner_rows(
@@ -284,7 +292,7 @@ def test_the_golden_set_through_the_stack_with_the_replay_gateway(
         assert table_count(fresh_database, table) == 0, table
     assert owner_rows(
         fresh_database, "SELECT status, count(*) FROM runtime.runs GROUP BY status"
-    ) == [("Completed", 40)]
+    ) == [("Completed", 47)]
 
 
 # ── 2. a scripted model ─────────────────────────────────────────────────────
@@ -297,11 +305,11 @@ def test_a_scripted_model_gives_the_oracle_s_proposals(
     post_all(stack)
 
     proposals = stored_proposals(fresh_database)
-    assert len(proposals) == len(CLAIMS) == 40
+    assert len(proposals) == len(CLAIMS) == 47
     # The model was asked exactly where the rules need it, once per claim, but
     # for the claim whose description holds special-category data (S047).
     assert model.requests == sorted(claims_that_ask_the_model() - set(WITHHELD))
-    # Every one of the 40 equals the oracle in all eight fields, CLM-0024 (above
+    # Every one of the 47 equals the oracle in all eight fields, CLM-0024 (above
     # the policy's limit) included, but for the one deviation S047 pins; the
     # counts are the golden set's own.
     assert unequal(proposals) == WITHHELD_FROM_THE_MODEL

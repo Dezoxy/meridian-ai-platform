@@ -489,10 +489,101 @@ def test_a_claim_decided_here_counts_towards_the_next_claims_frequent_claims(
     assert decided.status_code == 201, decided.text
     assert states(fresh_database)[DECIDED_BY_THE_RULES] == "approved"
 
-    # The seeded claim and the decided one make two: the indicator. The claim
-    # that waited for its documents (not decided) did not count.
+    # The seeded claim and the decided one make two: the indicator. CLM-9101
+    # waits for its documents, so it is open and counts since S067, but it has
+    # this claim's own loss date and the date rule is strict (before the loss):
+    # it is no third entry, and the next tests change the dates.
     with_it = stack.post(later_claim_on_the_policy("CLM-9102"))
     assert with_it.status_code == 201, with_it.text
     assert indicators_of(fresh_database, "CLM-9102") == ["frequent_claims"]
     assert states(fresh_database)["CLM-9101"] == "documents_requested"
     assert states(fresh_database)["CLM-9102"] == "documents_requested"
+
+
+def an_open_copy_of(
+    golden: str, claim_id: str, loss: str, *, with_documents: bool = False
+) -> dict[str, Any]:
+    """A golden claim's values under a new ID and loss date, reported on the
+    loss date, with no documents unless asked: so the rules ask for them and the
+    claim waits (``documents_requested``), open and decided by nobody."""
+    return CLAIMS[golden] | {
+        "claim_id": claim_id,
+        "loss_date": loss,
+        "reported_on": loss,
+        "documents": CLAIMS[golden]["documents"] if with_documents else [],
+    }
+
+
+# ── claims open at the same time count (S067, T-76) ─────────────────────────
+# CLM-0021 is an accidental-damage claim on POL-0005, a policy with no seeded
+# history that the rules approve (within the threshold) when nothing counts.
+NO_HISTORY_CLAIM = "CLM-0021"
+
+
+def test_claims_filed_before_any_is_decided_make_the_next_claim_frequent(
+    stack: Stack, fresh_database: DatabaseHandle
+) -> None:
+    first = an_open_copy_of(NO_HISTORY_CLAIM, "CLM-9201", "2026-04-01")
+    second = an_open_copy_of(NO_HISTORY_CLAIM, "CLM-9202", "2026-04-15")
+    assert stack.post(first).status_code == 201
+    assert stack.post(second).status_code == 201
+    assert {states(fresh_database)[c] for c in ("CLM-9201", "CLM-9202")} == {
+        "documents_requested"
+    }
+
+    # The golden claim (loss 2026-05-17, with its documents) finds two claims of
+    # its policy lost before it, neither decided.
+    third = stack.post(CLAIMS[NO_HISTORY_CLAIM])
+
+    assert third.status_code == 201, third.text
+    assert indicators_of(fresh_database, NO_HISTORY_CLAIM) == ["frequent_claims"]
+    assert (third.json()["run_status"], third.json()["state"]) == AFTER_TRIAGE[
+        "adjuster"
+    ]
+    ((_, proposal),) = proposals_of(fresh_database, NO_HISTORY_CLAIM)
+    assert (proposal.route, proposal.reason) == ("adjuster", "fraud_indicator")
+    # Nobody decided anything: the two claims are still open.
+    assert not {"approved", "rejected"} & set(states(fresh_database).values())
+
+
+def test_three_claims_of_one_loss_date_do_not_count_each_other(
+    stack: Stack, fresh_database: DatabaseHandle
+) -> None:
+    loss = CLAIMS[NO_HISTORY_CLAIM]["loss_date"]
+    for number in (1, 2):
+        posted = stack.post(an_open_copy_of(NO_HISTORY_CLAIM, f"CLM-930{number}", loss))
+        assert posted.status_code == 201, posted.text
+
+    # The date rule is strict, so claims lost on the same day are no history of
+    # one another: the third is approved by the rules, as it is on its own.
+    third = stack.post(CLAIMS[NO_HISTORY_CLAIM])
+
+    assert third.status_code == 201, third.text
+    for claim_id in ("CLM-9301", "CLM-9302", NO_HISTORY_CLAIM):
+        assert indicators_of(fresh_database, claim_id) == [], claim_id
+    assert states(fresh_database)[NO_HISTORY_CLAIM] == "approved"
+    assert states(fresh_database)["CLM-9301"] == "documents_requested"
+
+
+def test_an_open_claim_counts_and_a_withdrawn_one_does_not(
+    stack: Stack, fresh_database: DatabaseHandle
+) -> None:
+    # POL-0021's seeded history holds one claim (2026-03-12).
+    withdrawn = an_open_copy_of(DECIDED_BY_THE_RULES, "CLM-9401", "2026-05-01")
+    assert stack.post(withdrawn).status_code == 201
+    assert stack.withdraw("CLM-9401").status_code == 200
+    assert states(fresh_database)["CLM-9401"] == "withdrawn"
+
+    # The seeded claim and the withdrawn one would make two. A withdrawn claim
+    # never counts, so this claim has one entry and no indicator.
+    waiting = an_open_copy_of(DECIDED_BY_THE_RULES, "CLM-9402", "2026-05-15")
+    assert stack.post(waiting).status_code == 201
+    assert indicators_of(fresh_database, "CLM-9402") == []
+
+    # CLM-9402 waits for its documents: it is open, and with the seeded claim it
+    # makes two (the step above is what shows the withdrawn claim apart).
+    later = stack.post(later_claim_on_the_policy("CLM-9403"))
+
+    assert later.status_code == 201, later.text
+    assert indicators_of(fresh_database, "CLM-9403") == ["frequent_claims"]
+    assert states(fresh_database)["CLM-9402"] == "documents_requested"

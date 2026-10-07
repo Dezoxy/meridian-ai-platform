@@ -10,11 +10,14 @@ from meridian.platform.guardrails.classes import (
     parse_data_class,
 )
 from meridian.platform.guardrails.redaction import (
+    ACCOUNT_PLACEHOLDER,
     CARD_PLACEHOLDER,
     EMAIL_PLACEHOLDER,
     IBAN_PLACEHOLDER,
+    NATIONAL_ID_PLACEHOLDER,
     PHONE_PLACEHOLDER,
     PLACEHOLDERS,
+    TAX_NUMBER_PLACEHOLDER,
     Redaction,
     redact,
 )
@@ -26,12 +29,15 @@ from meridian.platform.guardrails.screening import (
 )
 
 __all__ = [
+    "ACCOUNT_PLACEHOLDER",
     "CARD_PLACEHOLDER",
     "DATA_CLASS_ORDER",
     "EMAIL_PLACEHOLDER",
     "IBAN_PLACEHOLDER",
+    "NATIONAL_ID_PLACEHOLDER",
     "PHONE_PLACEHOLDER",
     "PLACEHOLDERS",
+    "TAX_NUMBER_PLACEHOLDER",
     "Redaction",
     "ScreenSourceUnavailable",
     "addresses_the_model",

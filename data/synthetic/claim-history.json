@@ -350,5 +350,61 @@
     "peril": "glass",
     "paid_amount": 910,
     "status": "closed"
+  },
+  {
+    "history_id": "HIST-0045",
+    "policy_number": "POL-0051",
+    "loss_date": "2024-01-21",
+    "peril": "third_party_liability",
+    "paid_amount": 1210,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0046",
+    "policy_number": "POL-0051",
+    "loss_date": "2024-11-18",
+    "peril": "third_party_liability",
+    "paid_amount": 4280,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0047",
+    "policy_number": "POL-0052",
+    "loss_date": "2026-02-17",
+    "peril": "collision",
+    "paid_amount": 2950,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0048",
+    "policy_number": "POL-0054",
+    "loss_date": "2025-07-10",
+    "peril": "burst_pipe",
+    "paid_amount": 3290,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0049",
+    "policy_number": "POL-0054",
+    "loss_date": "2026-07-10",
+    "peril": "storm",
+    "paid_amount": 4330,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0050",
+    "policy_number": "POL-0056",
+    "loss_date": "2025-06-30",
+    "peril": "storm",
+    "paid_amount": 1000,
+    "status": "closed"
+  },
+  {
+    "history_id": "HIST-0051",
+    "policy_number": "POL-0056",
+    "loss_date": "2026-06-29",
+    "peril": "storm",
+    "paid_amount": 3280,
+    "status": "closed"
   }
 ]

@@ -366,8 +366,9 @@ can log in and nothing more (no superuser, createdb, createrole, bypassrls or
 replication, and a member of no role: migrations 0020 and 0022 refuse the
 three newest otherwise). The seed Job runs as `policy_seed`, which holds the
 two policy tables and nothing else, and the ingestion Job as
-`knowledge_ingest`, which holds the knowledge chunks and an insert on the
-audit log: only the migration Job holds the owner's Secret, and each of the
+`knowledge_ingest`, which holds the knowledge chunks, an insert on the audit
+log and, since S067, a read of seven columns of the chunks (not the vector):
+only the migration Job holds the owner's Secret, and each of the
 other two Jobs alone holds its role's. Those two roles have no connection
 limit, as the owner's Jobs had none. The sweep's role may hold at most 4
 connections: its job runs one pod at a time and holds one connection at a
@@ -1146,7 +1147,12 @@ In order, `make deploy`:
    `meridian knowledge ingest` as `knowledge_ingest` (its audit row names that
    role), which embeds the 85 clauses of the four
    wordings through the gateway and replaces the knowledge store in one
-   transaction. Once per image: the finished Job has no expiry and is the
+   transaction. The same Job then runs `meridian knowledge verify` (S067),
+   which compares each stored clause with the manifest-verified wordings and
+   fails the Job on a difference
+   ([the runbook](../../docs/operations/runbooks/knowledge-store.md); built
+   and tested without a cluster, not yet run on one). Once per image: the
+   finished Job has no expiry and is the
    record that this image's corpus is in the store, so the next deploy of
    the same image skips it, after checking that the store is not empty. The
    Job is a record of what was done, not of what the store holds now: after
@@ -1930,7 +1936,7 @@ has no such owner.
 `make demo` posts the claims in `data/synthetic/claims.json` in order to the
 Claims API through the edge, with a W3C `traceparent` header whose trace ID the
 script made up. A claim that already has a triage proposal answers 409 and the
-script moves on to the next one, so each run uses the next claim (40 are
+script moves on to the next one, so each run uses the next claim (47 are
 available); it stops at the first 201. A claim ID someone already submitted with
 other content (through the claimant's form, which stamps its own report date)
 answers 409 too and is skipped the same way; any other 409 stops the demo. It

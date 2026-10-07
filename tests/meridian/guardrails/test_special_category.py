@@ -184,16 +184,26 @@ def test_ordinary_claimant_text_is_not_special_category(text: str) -> None:
     assert not holds_special_category(text)
 
 
-def test_exactly_one_golden_set_description_is_special_category(
+def test_the_golden_set_descriptions_that_say_hospital_are_the_special_category_ones(
     claim_descriptions: dict[str, str],
 ) -> None:
+    # The expectation is read from the descriptions, not named: a late report
+    # says "in hospital" when the generator draws that reason, and which claims
+    # draw it is not a property of the set. At least one does, so an empty set
+    # cannot pass.
     special = [
         claim_id
         for claim_id, text in claim_descriptions.items()
         if holds_special_category(text)
     ]
+    saying_hospital = [
+        claim_id
+        for claim_id, text in claim_descriptions.items()
+        if "hospital" in text.lower()
+    ]
 
-    assert special == ["CLM-0012"]
+    assert len(special) >= 1
+    assert special == saying_hospital
 
 
 def test_a_long_text_is_screened_in_linear_time() -> None:

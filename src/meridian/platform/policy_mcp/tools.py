@@ -5,13 +5,15 @@ call whose argument names another. Neither returns a holder, an address or an
 insured object, because the store keeps none (a tool result enters a prompt,
 TB-7).
 
-``claim_history`` answers from two sources in one query (S053): the seeded
-``policy.claim_history``, and ``claims.decided_claims``, a read-only view of
-the platform's own approved and rejected claims. A decided claim's entry has
-its claim ID as ``history_id`` and its state as ``status``. The view's rows are
-the run's tenant's and never the run's own claim, which the run is deciding;
-the view carries no word of the claimant, so neither does an entry. The Claims
-API writes nothing to the policy store (the owner's decision, T-66, T-76).
+``claim_history`` answers from three sources in one query (S053, S067): the
+seeded ``policy.claim_history``, ``claims.decided_claims``, a read-only view of
+the platform's own approved and rejected claims, and ``claims.open_claims``,
+one of the claims still open (submitted, triaging, failed triage, waiting for
+an adjuster or for documents; never a withdrawn one). A claim's entry has its
+claim ID as ``history_id`` and its state as ``status``. The views' rows are the
+run's tenant's and never the run's own claim, which the run is deciding; the
+views carry no word of the claimant, so neither does an entry. The Claims API
+writes nothing to the policy store (the owner's decision, T-66, T-76).
 """
 
 import logging
@@ -36,14 +38,15 @@ FROM policy.policies
 WHERE policy_number = %s
 """
 
-# Both sources in one order and one cut: %s are the policy number, the policy
-# number, the run's tenant, the run's claim and the limit, in that order. One
-# row more than the limit, to know whether the answer was cut. A decided claim
-# whose submission held no usable loss date or peril comes with a NULL there:
-# it is not an entry, and the answer is `truncated` (see claim_history).
-# The query's conditions on the view must stay plain comparisons of the view's
-# columns (leakproof operators), or PostgreSQL evaluates them above the
-# security_barrier and scans every decided claim.
+# The three sources in one order and one cut: %s are the policy number (the
+# seeded history), the policy number, the run's tenant and the run's claim (the
+# decided claims), the same three again (the open claims, S067), and the limit,
+# in that order. One row more than the limit, to know whether the answer was
+# cut. A claim of the claims store whose submission held no usable loss date or
+# peril comes with a NULL there: it is not an entry, and the answer is
+# `truncated` (see claim_history). The query's conditions on the views must stay
+# plain comparisons of the views' columns (leakproof operators), or PostgreSQL
+# evaluates them above the security_barrier and scans every claim of the view.
 SELECT_HISTORY = """
 SELECT history_id, loss_date, peril, paid_amount, status
 FROM (
@@ -53,6 +56,12 @@ FROM (
     UNION ALL
     SELECT claim_id, loss_date, peril, paid_amount, state
     FROM claims.decided_claims
+    WHERE policy_number = %s
+        AND tenant = %s
+        AND claim_id <> %s
+    UNION ALL
+    SELECT claim_id, loss_date, peril, paid_amount, state
+    FROM claims.open_claims
     WHERE policy_number = %s
         AND tenant = %s
         AND claim_id <> %s
@@ -104,11 +113,14 @@ def claim_history(conn: psycopg.Connection, call: ToolCall) -> Completed | Refus
             policy_number,
             call.binding.tenant,
             call.binding.claim_id,
+            policy_number,
+            call.binding.tenant,
+            call.binding.claim_id,
             HISTORY_LIMIT + 1,
         ),
     ).fetchall()
     kept = rows[:HISTORY_LIMIT]
-    # A decided claim the view could not read (a NULL date or peril) is no
+    # A claim the views could not read (a NULL date or peril) is no
     # entry, and the rules must know they count less than there is. A NULL date
     # sorts first under DESC, so such a row is always inside the rows read. A
     # row with a date and a NULL peril sorts by its date and may be behind the
@@ -117,8 +129,8 @@ def claim_history(conn: psycopg.Connection, call: ToolCall) -> Completed | Refus
     unreadable = sum(1 for row in rows if row[1] is None or row[2] is None)
     if unreadable:
         logger.warning(
-            "claim_history for run %s left out %d decided claims that could not "
-            "be read",
+            "claim_history for run %s left out %d claims of the claims store that "
+            "could not be read",
             call.binding.run_id,
             unreadable,
         )
