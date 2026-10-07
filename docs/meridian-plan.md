@@ -15987,7 +15987,11 @@ passed and five more 79 passed, `make test` ran 343 tests, OK. Each ran
 with no finding. None ran `make pytest`, the database suite, which their
 contracts excluded.
 
-FINAL-SUITE-RESULT
+The main session's run on the tree with `main` merged in (S074's second half
+and S070's first half; 86bf015): `make test` (343 tests), `make docs` (14
+checks) and `make lint` ended 0; the whole suite at six workers beside the
+kind cluster and no other run with a database: 18,057 passed, 8 skipped (3
+min 58 s). The commit after it fills this line.
 
 **Not seen** (nothing of the four contracts has met the cluster):
 
