@@ -13906,7 +13906,12 @@ contract for the documents. The commits, from `git log` of the step's branch:
   with a database: `4420 passed, 6 skipped, 1 error`, the error a full
   temporary directory in a test's setup, and that file alone then `85
   passed`.
-- **The whole suite on the final tree:** FINAL-SUITE-RESULT
+- **The whole suite on the final tree:** `16895 passed, 8 skipped, 8 warnings
+  in 209.08s` at six workers beside the cluster and no other run with a test
+  database, on 3e9ee13 (`main` with S069, S036 and S074 merged in),
+  2026-10-07 06:27 to 06:30 UTC, with `make test` (`Ran 343 tests`), `make
+  docs` and `make lint` ending 0 before it; the commit after it fills this
+  line.
 - **A database re-read of the last three commits** (U5, U5b and F2, up to
   `3ca4a9e`): no critical or high finding; the fixes do what the two reviews
   of U4 asked. Two medium, both tests that were missing (the two places
