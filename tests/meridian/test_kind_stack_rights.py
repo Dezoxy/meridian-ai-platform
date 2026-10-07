@@ -20,14 +20,14 @@ from pathlib import Path
 
 import pytest
 import yaml
-from test_kind_manifests import (
+from kindharness import run_cost_panel
+from kindsupport import (
     KIND_DIR,
     SMOKE_SH,
     VALUES_FILE,
     function_body,
     function_definition,
     requires_jq,
-    run_cost_panel,
 )
 
 ACCOUNT = "system:serviceaccount:observability:kube-prometheus-stack-kube-state-metrics"

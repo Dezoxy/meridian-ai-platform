@@ -12,7 +12,7 @@ the Model Gateway, the Claims API to the API server's Service address, and a pod
 that lacks the label the database's ingress admits to the database (a probe pod
 the check starts and removes; the same pod, once given the label, must reach
 it). These tests run the function in bash against a stub ``kctl`` (the harness
-is the sweep check's, in test_kind_manifests.py), run the snippet itself in
+is the sweep check's, in kindharness.py), run the snippet itself in
 Python, and render the chart to pin that the policies still say what the check's
 choice of targets takes them to say.
 """
@@ -39,7 +39,7 @@ from chartsupport import (
     rendered_chart,
     rules,
 )
-from test_kind_manifests import (
+from kindsupport import (
     KIND_DIR,
     SMOKE_SH,
     function_body,

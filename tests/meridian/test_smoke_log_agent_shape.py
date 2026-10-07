@@ -28,7 +28,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from test_kind_manifests import (
+from kindsupport import (
     SMOKE_SH,
     function_body,
     function_definition,

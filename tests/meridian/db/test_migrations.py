@@ -185,6 +185,61 @@ def test_a_second_run_applies_nothing(empty_database: DatabaseHandle) -> None:
     assert second == []
 
 
+def test_a_list_given_to_the_runner_is_applied_instead_of_the_packaged_files(
+    empty_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    given = [
+        ("0001_given.sql", "CREATE SCHEMA from_the_given_list;"),
+        ("0002_given.sql", "CREATE TABLE from_the_given_list.t (id int);"),
+    ]
+    patched = [("0001_patched.sql", "CREATE SCHEMA from_the_patched_list;")]
+    monkeypatch.setattr(runner, "migration_files", lambda: patched)
+    with connect(empty_database.dsn(OWNER), "test") as conn:
+        applied = apply_migrations(conn, files=given)
+
+        recorded = conn.execute(
+            "SELECT name, sha256 FROM public.meridian_migrations ORDER BY name"
+        ).fetchall()
+        patched_schema = conn.execute(
+            "SELECT count(*) FROM pg_namespace WHERE nspname = 'from_the_patched_list'"
+        ).fetchone()
+
+    assert applied == ["0001_given.sql", "0002_given.sql"]
+    assert recorded == [
+        (name, hashlib.sha256(text.encode("utf-8")).hexdigest()) for name, text in given
+    ]
+    assert patched_schema == (0,)
+
+
+def test_a_given_list_that_shares_a_number_is_refused_and_creates_no_ledger(
+    empty_database: DatabaseHandle,
+) -> None:
+    given = [
+        ("0017_a.sql", "CREATE SCHEMA first_of_two;"),
+        ("0017_b.sql", "CREATE SCHEMA second_of_two;"),
+    ]
+    with connect(empty_database.dsn(OWNER), "test") as conn:
+        with pytest.raises(MigrationError, match="0017"):
+            apply_migrations(conn, files=given)
+
+        ledger = conn.execute(
+            "SELECT to_regclass('public.meridian_migrations')"
+        ).fetchone()
+
+    assert ledger == (None,)
+
+
+def test_a_call_without_a_list_still_reads_the_runners_own_list(
+    empty_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patched = [("0001_patched.sql", "CREATE SCHEMA from_the_patched_list;")]
+    monkeypatch.setattr(runner, "migration_files", lambda: patched)
+    with connect(empty_database.dsn(OWNER), "test") as conn:
+        applied = apply_migrations(conn)
+
+    assert applied == ["0001_patched.sql"]
+
+
 def test_a_changed_checksum_is_refused(empty_database: DatabaseHandle) -> None:
     with connect(empty_database.dsn(OWNER), "test") as conn:
         apply_migrations(conn)

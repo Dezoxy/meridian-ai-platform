@@ -5,25 +5,25 @@ reads the CronJob ``meridian-sweep`` and its Jobs. The sweep keeps one success
 and the cluster removes a finished Job a day after it finished, so a schedule
 that stopped days ago leaves a CronJob with a last schedule time and no Job at
 all: that is a stopped schedule, not a CronJob that has finished nothing yet.
-These tests use the harness of ``test_kind_manifests.py`` (``run_sweep_check``:
+These tests use the harness of ``kindharness.py`` (``run_sweep_check``:
 ``check_sweep_job`` in bash against a stub ``kctl``).
 """
 
 from pathlib import Path
 
-from test_kind_manifests import (
+from kindharness import (
     SWEEP_CREATED,
     SWEEP_FINISHED,
     SWEEP_SCHEDULED,
     SWEEP_TOLERANCE_SECONDS,
     epoch_of,
     other_job,
-    requires_jq,
     run_sweep_check,
     seconds_after,
     sweep_cronjob_answer,
     sweep_job,
 )
+from kindsupport import requires_jq
 
 SCHEDULED_AT = epoch_of(SWEEP_SCHEDULED)
 

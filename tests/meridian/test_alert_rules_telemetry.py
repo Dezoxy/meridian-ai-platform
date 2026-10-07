@@ -19,6 +19,7 @@ import uuid
 from typing import get_args
 
 import yaml
+from kindsupport import SMOKE_SH, prometheus_name
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from servicesupport import REPO_ROOT
 from test_alert_rules import (
@@ -31,7 +32,6 @@ from test_alert_rules import (
     groups,
     series_named,
 )
-from test_kind_manifests import SMOKE_SH, prometheus_name
 
 from meridian.platform.common.metrics import METRIC_ATTRIBUTE_KEYS, make_meter_provider
 from meridian.platform.gateway.app import SERVICE_NAME as GATEWAY_SERVICE

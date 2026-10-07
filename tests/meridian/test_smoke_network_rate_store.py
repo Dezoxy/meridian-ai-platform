@@ -36,7 +36,7 @@ from chartsupport import (
     network_policies,
     rendered_chart,
 )
-from test_kind_manifests import (
+from kindsupport import (
     KIND_DIR,
     SMOKE_SH,
     function_body,

@@ -104,8 +104,10 @@ database:
   # The ingestion Job's role (knowledge_ingest): the knowledge chunks, and one
   # insert-only row of the audit log.
   ingestSecret: knowledge-ingest-db
-  # The upkeep Job's role (gateway_upkeep): three functions of the ledger, no
-  # table. Only that Job holds it; the release's workloads never do.
+  # The upkeep Job's role (gateway_upkeep): five functions, no table
+  # (close_reservation, credit_tenant, expire_ledger_batch, expire_audit_events
+  # and count_audit_events_before). Only that Job holds it; the release's
+  # workloads never do.
   upkeepSecret: gateway-upkeep-db
   # The CA that signed the database's certificate. The Secret also holds the
   # CA's private key, so the pods mount only ca.crt.
