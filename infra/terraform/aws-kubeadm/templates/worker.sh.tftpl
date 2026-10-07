@@ -20,6 +20,8 @@
 # Terraform renders this file: every shell parameter expansion is written with
 # a doubled dollar sign, and no percent sign is followed by a brace.
 set -euo pipefail
+# The alphabet of the join pattern (node-common) is bytes: see the note there.
+export LC_ALL=C
 export PATH="$PATH:/snap/bin"
 
 ROLE='worker'
@@ -41,8 +43,13 @@ ${common}
 wait_for_the_join_command() {
   local attempt value
   for ((attempt = 1; attempt <= JOIN_ATTEMPTS; attempt++)); do
+    # A NUL byte cannot live in a bash variable: command substitution would drop
+    # it and print a warning of its own. tr turns each one into a byte (\001) that
+    # no join command holds, so the value is refused by the pattern, silently, and
+    # never read as the join command that is left when the NUL is dropped.
     value=$(aws ssm get-parameter --region "$REGION" --name "$JOIN_PARAMETER_NAME" \
-      --with-decryption --query Parameter.Value --output text 2>/dev/null) || value=''
+      --with-decryption --query Parameter.Value --output text 2>/dev/null |
+      tr '\000' '\001') || value=''
     if parse_join_command "$value" "$CONTROL_PLANE_ADDRESS:$API_PORT"; then
       log "the parameter holds a join command"
       return 0
@@ -53,17 +60,31 @@ wait_for_the_join_command() {
   die "gave up after $JOIN_ATTEMPTS tries: $JOIN_PARAMETER_NAME never held a join command for $CONTROL_PLANE_ADDRESS:$API_PORT"
 }
 
+# Once per node, and the first thing the script does, before it installs or
+# restarts anything: a node that has a kubelet configuration has joined, and
+# nothing on it is touched.
+refuse_a_second_run() {
+  local kubelet_conf="$BOOT_ROOT/etc/kubernetes/kubelet.conf"
+  [[ ! -e $kubelet_conf ]] || die "this node already has $kubelet_conf, so it has joined: kubeadm join runs once per node"
+}
+
+# One shot, no retry. The join command may be older than the control plane (the
+# control plane was replaced and the parameter, with the same address, kept), and
+# then it is well formed and kubeadm refuses it: the line says what to do.
 join_the_cluster() {
-  [[ ! -e $BOOT_ROOT/etc/kubernetes/kubelet.conf ]] || die "this node has already joined: kubeadm join runs once per node"
   log "running kubeadm join"
   kubeadm join "$CONTROL_PLANE_ADDRESS:$API_PORT" \
     --token "$JOIN_TOKEN" \
-    --discovery-token-ca-cert-hash "sha256:$JOIN_HASH" || die "kubeadm join failed"
+    --discovery-token-ca-cert-hash "sha256:$JOIN_HASH" ||
+    die "kubeadm join failed. The join command in the parameter may be older than the control plane (the control plane was replaced and the parameter kept): remove this environment and apply it again."
 }
 
 for setting in JOIN_ATTEMPTS POLL_SECONDS; do
   require_number "$setting"
 done
+
+refuse_a_second_run
+make_work_dir
 
 install_aws_cli
 install_node

@@ -5,6 +5,11 @@
 # before it, and it defines the log lines, the bounded download, the strict
 # reading of a join command and the installation of containerd and kubeadm.
 #
+# The script that holds this text also sets LC_ALL=C beside its `set -euo
+# pipefail`, above it: the classes of JOIN_PATTERN ([0-9], [a-z]) are ASCII only
+# in that alphabet, and in a UTF-8 locale they match fullwidth digits, accented
+# letters and Arabic-Indic digits.
+#
 # Terraform renders this file: every shell parameter expansion is written with
 # a doubled dollar sign here, and no percent sign is followed by a brace.
 
@@ -71,16 +76,56 @@ install_aws_cli() {
   timeout 300 snap install aws-cli --classic || die "the AWS CLI snap did not install within 300 seconds"
 }
 
+# A directory only this script can read (mktemp -d, mode 700). The downloaded
+# signing key and the keyring made from it stay here until they are checked,
+# and so do the control plane's manifest and join command. Removed at the end.
+make_work_dir() {
+  WORK_DIR=$(mktemp -d)
+  trap 'rm -f "$WORK_DIR/release.key" "$WORK_DIR/keyring.gpg" "$WORK_DIR/calico.yaml" "$WORK_DIR/join-command"; rmdir "$WORK_DIR" || true' EXIT
+}
+
+# Makes the keyring $2 from the downloaded signing key $1, and refuses (one
+# line) unless that keyring holds exactly one primary key, the pinned one, and
+# the key has not expired. What is checked is the file that apt will trust, not
+# the file that was downloaded, and no second keyring is needed: the file is
+# either exactly the pinned key (with its own subkeys and signatures) or it is
+# never copied under /etc/apt. A listing of the first key only would let a file
+# with the pinned key and another one through, and dearmoring writes both.
+#
+# The expiry check is an early, clear line and nothing more: an expired key
+# still has its fingerprint, so the pin alone passes, and `apt-get update`
+# would then fail with apt's own signature error.
+make_the_pinned_keyring() {
+  local downloaded=$1
+  local keyring=$2
+  local listing keys fingerprint expiry
+  gpg --dearmor --yes --output "$keyring" "$downloaded" || die "could not read the package signing key"
+  listing=$(gpg --show-keys --with-colons "$keyring") || die "could not read the package signing key"
+  keys=$(awk -F: '$1 == "pub" { n++ } END { print n + 0 }' <<<"$listing")
+  [[ $keys == 1 ]] ||
+    die "the package signing key file holds $keys primary keys, not exactly one; refusing to trust it"
+  fingerprint=$(awk -F: '$1 == "fpr" { print $10; exit }' <<<"$listing")
+  [[ $fingerprint == "$KUBERNETES_APT_KEY_FINGERPRINT" ]] ||
+    die "the package signing key is not the pinned one (found '$fingerprint'); refusing to trust it"
+  # Field 7 of the pub line: seconds since the epoch, empty for a key that does
+  # not expire. Digits only before any arithmetic: the listing comes from a
+  # downloaded file.
+  expiry=$(awk -F: '$1 == "pub" { print $7 }' <<<"$listing")
+  [[ $expiry =~ ^[0-9]{0,15}$ ]] ||
+    die "the package signing key has an expiry date that is not a number of seconds; refusing to trust it"
+  if [[ -n $expiry ]] && ((10#$expiry <= $(printf '%(%s)T' -1))); then
+    die "the package signing key $fingerprint expired on $(printf '%(%Y-%m-%d)T' "$((10#$expiry))"): apt-get update would fail with its own signature error, so the pinned key has to be replaced"
+  fi
+}
+
 # containerd from the distribution, kubeadm, kubelet and kubectl from the
 # Kubernetes project's package repository for ONE minor version, whose signing
-# key must have the pinned fingerprint.
+# key must be the pinned one. Needs WORK_DIR (make_work_dir).
 install_node() {
   export DEBIAN_FRONTEND=noninteractive
   local keyring_dir="$BOOT_ROOT/etc/apt/keyrings"
-  local key_file="$keyring_dir/kubernetes-release.key"
   local keyring="/etc/apt/keyrings/kubernetes-apt-keyring.gpg"
   local config="$BOOT_ROOT/etc/containerd/config.toml"
-  local listing fingerprint
 
   log "enabling IPv4 forwarding"
   mkdir -p "$BOOT_ROOT/etc/sysctl.d"
@@ -91,14 +136,11 @@ install_node() {
   apt-get update
   apt-get install -y apt-transport-https ca-certificates curl gpg containerd
 
+  fetch "https://pkgs.k8s.io/core:/stable:/v$KUBERNETES_MINOR/deb/Release.key" "$WORK_DIR/release.key"
+  make_the_pinned_keyring "$WORK_DIR/release.key" "$WORK_DIR/keyring.gpg"
   mkdir -p "$keyring_dir" "$BOOT_ROOT/etc/apt/sources.list.d"
   chmod 755 "$keyring_dir"
-  fetch "https://pkgs.k8s.io/core:/stable:/v$KUBERNETES_MINOR/deb/Release.key" "$key_file"
-  listing=$(gpg --show-keys --with-colons "$key_file") || die "could not read the package signing key"
-  fingerprint=$(awk -F: '$1 == "fpr" { print $10; exit }' <<<"$listing")
-  [[ $fingerprint == "$KUBERNETES_APT_KEY_FINGERPRINT" ]] ||
-    die "the package signing key is not the pinned one (found '$fingerprint'); refusing to trust it"
-  gpg --dearmor --yes --output "$BOOT_ROOT$keyring" "$key_file"
+  cp "$WORK_DIR/keyring.gpg" "$BOOT_ROOT$keyring"
   chmod 644 "$BOOT_ROOT$keyring"
   printf 'deb [signed-by=%s] https://pkgs.k8s.io/core:/stable:/v%s/deb/ /\n' \
     "$keyring" "$KUBERNETES_MINOR" >"$BOOT_ROOT/etc/apt/sources.list.d/kubernetes.list"

@@ -4,15 +4,8 @@
 control-plane node and of a worker, and the text they share. Nothing here
 touches a cloud, a cluster or the machine's own configuration: each script is
 rendered with fixed inputs, linted, and run whole under bash against stand-in
-programs (``kubeadm``, ``aws``, ``curl``, ``gpg``, ``systemctl``, ``apt-get``
-and the others), each of which logs its arguments. The scripts' own variables
-(``BOOT_ROOT``, the number of tries, the seconds between two tries) are set
-through the environment, so no test waits.
-
-How the rendering is done: the templates use only ``${name}`` and the escaped
-``$${``, so ``render`` below does what Terraform's ``templatefile`` does with
-them, and one test (needs ``terraform``) holds the two renderings equal for the
-same inputs.
+programs, each of which logs its arguments. The fixed inputs, the rendering,
+the stand-ins and the runner are in ``awskubeadmsupport``.
 """
 
 import base64
@@ -22,295 +15,40 @@ import re
 import shutil
 import subprocess
 from collections.abc import Callable
-from dataclasses import dataclass
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
-from servicesupport import REPO_ROOT
-
-MODULE = REPO_ROOT / "infra" / "terraform" / "aws-kubeadm"
-TEMPLATES = MODULE / "templates"
-SEPARATOR = "\x1f"
-SECONDS = 60  # a cap on one script run, never a wait
-
-# ── fixed inputs ─────────────────────────────────────────────────────────────
-
-ADDRESS = "203.0.113.10"  # the documentation's own range
-OTHER_ADDRESS = "203.0.113.99"
-PORT = "6443"
-REGION = "eu-central-1"
-PARAMETER = "/meridian-aws-kubeadm/join-command"
-MINOR = "1.36"
-FINGERPRINT = "0123456789ABCDEF0123456789ABCDEF01234567"
-OTHER_FINGERPRINT = "7654321076543210765432107654321076543210"
-POD_CIDR = "192.168.0.0/16"
-CALICO_VERSION = "v3.32.2"
-MANIFEST = "kind: List\nitems: []\n"
-MANIFEST_SHA256 = hashlib.sha256(MANIFEST.encode()).hexdigest()
-BOOTSTRAP_ID = "aaaaaa.1111111111111111"
-CA_DIGEST = "2" * 64
-VALID = (
-    f"kubeadm join {ADDRESS}:{PORT} --token {BOOTSTRAP_ID} "
-    f"--discovery-token-ca-cert-hash sha256:{CA_DIGEST}"
+from awskubeadmsupport import (
+    ADDRESS,
+    BOOTSTRAP_ID,
+    CA_DIGEST,
+    CALICO_VERSION,
+    COMMON_VALUES,
+    CONTROL_PLANE_VALUES,
+    FINGERPRINT,
+    MANIFEST,
+    MANIFEST_SHA256,
+    MINOR,
+    OTHER_ADDRESS,
+    OTHER_FINGERPRINT,
+    PARAMETER,
+    PLACEHOLDER,
+    POD_CIDR,
+    PORT,
+    REGION,
+    ROLES,
+    SECONDS,
+    TEMPLATES,
+    VALID,
+    WORKER_VALUES,
+    code_of,
+    make_scratch,
+    one_error_line,
+    rendered,
+    run_script,
+    template_text,
 )
-CONTAINERD_CONFIG = (
-    "version = 3\n"
-    "[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runc.options]\n"
-    "  SystemdCgroup = false\n"
-)
-
-COMMON_VALUES = {
-    "kubernetes_minor": MINOR,
-    "kubernetes_apt_key_fingerprint": FINGERPRINT,
-}
-CONTROL_PLANE_VALUES = {
-    "region": REGION,
-    "public_address": ADDRESS,
-    "api_port": PORT,
-    "pod_network_cidr": POD_CIDR,
-    "join_parameter_name": PARAMETER,
-    "calico_version": CALICO_VERSION,
-    "calico_manifest_sha256": MANIFEST_SHA256,
-}
-WORKER_VALUES = {
-    "region": REGION,
-    "control_plane_address": ADDRESS,
-    "api_port": PORT,
-    "join_parameter_name": PARAMETER,
-}
-
-# ── rendering ────────────────────────────────────────────────────────────────
-
-PLACEHOLDER = re.compile(r"\$\$\{|\$\{(\w+)\}")
-
-
-def template_text(name: str) -> str:
-    return (TEMPLATES / f"{name}.sh.tftpl").read_text(encoding="utf-8")
-
-
-def render(template: str, values: dict[str, str]) -> str:
-    """What ``templatefile`` makes of a template that uses only ``${name}`` and
-    the escaped ``$${``. A name with no value is a KeyError; a template
-    directive (a percent sign and a brace) is not supported and is refused."""
-    assert "%{" not in template
-    return PLACEHOLDER.sub(
-        lambda m: "${" if m.group(0) == "$${" else values[m.group(1)], template
-    )
-
-
-def rendered(role: str) -> str:
-    common = render(template_text("node-common"), COMMON_VALUES)
-    values = CONTROL_PLANE_VALUES if role == "control-plane" else WORKER_VALUES
-    return render(template_text(role), {**values, "common": common})
-
-
-ROLES = ["control-plane", "worker"]
-
-
-def code_of(script: str) -> str:
-    """The script without its comment lines."""
-    return "\n".join(
-        line for line in script.splitlines() if not line.lstrip().startswith("#")
-    )
-
-
-# ── stand-in programs ────────────────────────────────────────────────────────
-
-LOG = 'printf \'%s\\x1f\' {name} "$@" >>"{scratch}/calls"; echo >>"{scratch}/calls"'
-
-# The answer number N of a series of files <prefix>.0, <prefix>.1 ... is the
-# one for the Nth call, and the last one answers every later call. The number of
-# files is in <prefix>.total.
-PICK = """
-pick() {{
-  local prefix="{scratch}/$1" n=0 total
-  [[ -f $prefix.count ]] && n=$(<"$prefix.count")
-  echo $((n + 1)) >"$prefix.count"
-  total=$(<"$prefix.total")
-  (( n >= total )) && n=$((total - 1))
-  [[ -e $prefix.$n.fail ]] && return 255
-  cat "$prefix.$n"
-}}
-"""
-
-STUBS = {
-    "curl": """
-url=""; out=""
-args=("$@")
-for ((i = 0; i < ${#args[@]}; i++)); do
-  case "${args[i]}" in
-    --output) out="${args[i + 1]}" ;;
-    http*) url="${args[i]}" ;;
-  esac
-done
-case "$url" in
-  */latest/api/token) printf 'session' ;;
-  */meta-data/public-ipv4)
-    value=$(pick imds) || exit 22
-    [[ -n $value ]] || exit 22
-    printf '%s' "$value" ;;
-  */Release.key) cp "{scratch}/release.key" "$out" ;;
-  */manifests/calico.yaml) cp "{scratch}/calico.yaml" "$out" ;;
-  *) echo "stub curl: unexpected $url" >&2; exit 99 ;;
-esac
-""",
-    "gpg": """
-case "$*" in
-  *--show-keys*)
-    printf 'pub:-:2048:1:AAAA:1:2::-:::scSC::::::23::0:\\n'
-    printf 'fpr:::::::::%s:\\n' "$(<"{scratch}/fingerprint")"
-    printf 'uid:-::::1::BBBB::stand-in <nobody@example.invalid>::::::::::0:\\n' ;;
-  *--dearmor*)
-    args=("$@")
-    for ((i = 0; i < ${#args[@]}; i++)); do
-      [[ ${args[i]} == --output ]] && : >"${args[i + 1]}"
-    done
-    exit 0 ;;
-  *) echo "stub gpg: unexpected $*" >&2; exit 99 ;;
-esac
-""",
-    "aws": """
-case "$1 $2" in
-  "ssm get-parameter") pick param ;;
-  "ssm put-parameter")
-    args=("$@")
-    for ((i = 0; i < ${#args[@]}; i++)); do
-      [[ ${args[i]} == --value ]] && source="${args[i + 1]#file://}"
-    done
-    n=0; [[ -f "{scratch}/put.count" ]] && n=$(<"{scratch}/put.count")
-    echo $((n + 1)) >"{scratch}/put.count"
-    cp "$source" "{scratch}/put.$n.value"
-    failures=0
-    [[ -f "{scratch}/put-failures" ]] && failures=$(<"{scratch}/put-failures")
-    (( n < failures )) && exit 255
-    exit 0 ;;
-  *) echo "stub aws: unexpected $*" >&2; exit 99 ;;
-esac
-""",
-    "kubeadm": """
-kubernetes="$BOOT_ROOT/etc/kubernetes"
-case "$1" in
-  init)
-    mkdir -p "$kubernetes"; : >"$kubernetes/admin.conf"
-    # The real init prints its bootstrap token unless it is told not to.
-    [[ " $* " == *" --skip-token-print "* ]] || cat "{scratch}/join-line" ;;
-  token) cat "{scratch}/join-line" ;;
-  join) mkdir -p "$kubernetes"; : >"$kubernetes/kubelet.conf" ;;
-  *) echo "stub kubeadm: unexpected $*" >&2; exit 99 ;;
-esac
-""",
-    "containerd": """
-if [[ "$*" != "config default" ]]; then
-  echo "stub containerd: unexpected $*" >&2; exit 99
-fi
-cat "{scratch}/containerd.toml"
-""",
-    "kubectl": "",
-    "sysctl": "",
-    "apt-get": "",
-    "apt-mark": "",
-    "systemctl": "",
-    "snap": "",
-}
-
-
-@dataclass
-class Scratch:
-    path: Path
-
-    def calls(self) -> list[list[str]]:
-        text = (self.path / "calls").read_text(encoding="utf-8")
-        return [line.split(SEPARATOR)[:-1] for line in text.splitlines() if line]
-
-    def called(self, command: str, *first: str) -> list[list[str]]:
-        """The calls to ``command`` whose first arguments are ``first``."""
-        return [
-            call
-            for call in self.calls()
-            if call[0] == command and call[1 : 1 + len(first)] == list(first)
-        ]
-
-    def series(self, prefix: str, answers: list[str]) -> None:
-        for number, answer in enumerate(answers):
-            (self.path / f"{prefix}.{number}").write_text(answer, encoding="utf-8")
-        (self.path / f"{prefix}.total").write_text(str(len(answers)), encoding="utf-8")
-
-    def put_values(self) -> list[str]:
-        return [
-            f.read_text(encoding="utf-8") for f in sorted(self.path.glob("put.*.value"))
-        ]
-
-    def count_file(self, name: str) -> int:
-        path = self.path / f"{name}.count"
-        return int(path.read_text(encoding="utf-8")) if path.exists() else 0
-
-
-def make_scratch(tmp_path: Path) -> Scratch:
-    """A scratch directory with every stand-in program written, and the answers
-    of a node that boots well: the address is the Elastic IP at once, the key
-    has the pinned fingerprint, the manifest is the pinned one, kubeadm prints a
-    join command, and the parameter holds one."""
-    scratch = Scratch(tmp_path)
-    for directory in ("bin", "root", "tmp"):
-        (tmp_path / directory).mkdir(exist_ok=True)
-    (tmp_path / "calls").touch()
-    for name, body in STUBS.items():
-        text = "#!/usr/bin/env bash\n"
-        text += PICK.format(scratch=tmp_path)
-        text += LOG.format(name=name, scratch=tmp_path) + "\n"
-        text += body.replace("{scratch}", str(tmp_path))
-        path = tmp_path / "bin" / name
-        path.write_text(text, encoding="utf-8")
-        path.chmod(0o755)
-    (tmp_path / "release.key").write_text("stand-in key\n", encoding="utf-8")
-    (tmp_path / "calico.yaml").write_text(MANIFEST, encoding="utf-8")
-    (tmp_path / "fingerprint").write_text(FINGERPRINT, encoding="utf-8")
-    (tmp_path / "join-line").write_text(VALID + "\n", encoding="utf-8")
-    (tmp_path / "containerd.toml").write_text(CONTAINERD_CONFIG, encoding="utf-8")
-    scratch.series("imds", [ADDRESS])
-    scratch.series("param", [VALID + "\n"])
-    return scratch
-
-
-def run_script(
-    scratch: Scratch, role: str, **settings: str
-) -> subprocess.CompletedProcess[str]:
-    """The rendered script of ``role`` under bash, with the stand-ins first on
-    PATH, its root prefix in the scratch directory and its waits at zero
-    seconds. ``settings`` override the scripts' own variables."""
-    script = scratch.path / f"{role}.sh"
-    script.write_text(rendered(role), encoding="utf-8")
-    env = {
-        "PATH": f"{scratch.path / 'bin'}:/usr/bin:/bin",
-        "HOME": str(scratch.path),
-        "TMPDIR": str(scratch.path / "tmp"),
-        "BOOT_ROOT": str(scratch.path / "root"),
-        "POLL_SECONDS": "0",
-        "ADDRESS_ATTEMPTS": "3",
-        "PUBLISH_ATTEMPTS": "3",
-        "JOIN_ATTEMPTS": "3",
-        **settings,
-    }
-    return subprocess.run(
-        ["bash", str(script)],
-        capture_output=True,
-        text=True,
-        env=env,
-        cwd=scratch.path,
-        check=False,
-        timeout=SECONDS,
-    )
-
-
-def one_error_line(done: subprocess.CompletedProcess[str], role: str) -> str:
-    """The single line a script gave up with: it is on the error stream, it is
-    the only thing there, and it names the role."""
-    lines = done.stderr.splitlines()
-    assert len(lines) == 1, done.stderr
-    assert lines[0].startswith(f"{role}: ERROR: ")
-    assert done.returncode == 1
-    return lines[0]
-
 
 # ── terraform's rendering and the renderer here are one ─────────────────────
 
@@ -490,9 +228,19 @@ def test_a_script_stops_at_the_first_failure_and_keeps_its_files_in_a_private_di
 
     assert script.splitlines()[0] == "#!/bin/bash"
     assert re.search(r"^set -euo pipefail$", code, re.MULTILINE)
-    # Only the control plane writes files of its own, and only in a mktemp -d
-    # directory (mode 700): the value of the parameter and the manifest.
-    assert ("mktemp -d" in code) == (role == "control-plane")
+    # Every file a script writes of its own (the signing key, and the control
+    # plane's manifest and join command) is in a mktemp -d directory (mode 700).
+    assert "mktemp -d" in code
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_a_script_pins_the_alphabet_of_its_patterns_beside_its_error_handling(
+    role: str,
+) -> None:
+    code = code_of(rendered(role))
+
+    lines = code.splitlines()
+    assert lines.index("export LC_ALL=C") == lines.index("set -euo pipefail") + 1
 
 
 # ── what the scripts do, against stand-ins ──────────────────────────────────
@@ -564,6 +312,25 @@ def test_the_control_plane_runs_kubeadm_init_once_with_the_expected_arguments(
     ]
 
 
+def test_the_join_command_comes_from_a_token_that_lives_one_hour(
+    tmp_path: Path,
+) -> None:
+    scratch = make_scratch(tmp_path)
+
+    done = run_script(scratch, "control-plane")
+
+    assert done.returncode == 0, done.stderr
+    (token,) = scratch.called("kubeadm", "token")
+    assert token == [
+        "kubeadm",
+        "token",
+        "create",
+        "--ttl",
+        "1h",
+        "--print-join-command",
+    ]
+
+
 def test_the_control_plane_does_things_in_order_and_publishes_last(
     tmp_path: Path,
 ) -> None:
@@ -595,7 +362,6 @@ def test_the_control_plane_applies_the_manifest_it_checked_by_its_digest(
         "https://raw.githubusercontent.com/projectcalico/calico/"
         f"{CALICO_VERSION}/manifests/calico.yaml"
     )
-    assert "--proto-redir" in fetch and "=https" in fetch
     (apply,) = scratch.called("kubectl")
     assert apply[1:4] == [
         "--kubeconfig",
@@ -603,6 +369,52 @@ def test_the_control_plane_applies_the_manifest_it_checked_by_its_digest(
         "apply",
     ]
     assert apply[4] == "--server-side"
+
+
+def test_the_control_plane_applies_the_local_file_it_checked_and_not_a_url(
+    tmp_path: Path,
+) -> None:
+    scratch = make_scratch(tmp_path)
+
+    done = run_script(scratch, "control-plane")
+
+    assert done.returncode == 0, done.stderr
+    (apply,) = scratch.called("kubectl")
+    assert apply[5] == "-f"
+    target = apply[6]
+    assert len(apply) == 7
+    assert "://" not in target
+    # The one file that was fetched (and digested) is the one that is applied:
+    # a directory under the script's TMPDIR, and its bytes are the pinned ones.
+    assert Path(target).name == "calico.yaml"
+    assert Path(target).parent.parent == tmp_path / "tmp"
+    assert (tmp_path / "applied").read_text(encoding="utf-8") == MANIFEST
+    assert len([c for c in scratch.called("curl") if "calico" in c[-1]]) == 1
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_every_download_is_https_only_tls12_failing_and_bounded_in_time(
+    tmp_path: Path, role: str
+) -> None:
+    scratch = make_scratch(tmp_path)
+
+    done = run_script(scratch, role)
+
+    assert done.returncode == 0, done.stderr
+    fetches = [c for c in scratch.called("curl") if c[-1].startswith("https://")]
+    expected = ["Release.key"] + (["calico.yaml"] if role == "control-plane" else [])
+    assert sorted(c[-1].rsplit("/", 1)[1] for c in fetches) == sorted(expected)
+    for call in fetches:
+        # The exact pairs, in order: a redirect flag does not stand in for the
+        # protocol flag.
+        pairs = list(pairwise(call))
+        assert ("--proto", "=https") in pairs, call
+        assert ("--proto-redir", "=https") in pairs, call
+        assert "--tlsv1.2" in call
+    for call in scratch.called("curl"):
+        assert "--fail" in call, call
+        assert "--max-time" in call, call
+        assert int(call[call.index("--max-time") + 1]) > 0
 
 
 def test_a_manifest_with_another_digest_is_refused_and_nothing_is_applied(
@@ -696,18 +508,46 @@ def test_a_parameter_that_fails_once_is_written_on_the_second_try(
     assert len(scratch.called("aws", "ssm", "put-parameter")) == 2
 
 
-def test_a_second_run_on_the_same_node_does_not_run_kubeadm_init_again(
-    tmp_path: Path,
+ONE_RUN_MARKER = {"control-plane": "admin.conf", "worker": "kubelet.conf"}
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_a_second_run_on_the_same_node_calls_nothing_and_says_why_it_stopped(
+    tmp_path: Path, role: str
 ) -> None:
     scratch = make_scratch(tmp_path)
-    first = run_script(scratch, "control-plane")
+    first = run_script(scratch, role)
+    calls_of_the_first_run = scratch.calls()
 
-    second = run_script(scratch, "control-plane")
+    second = run_script(scratch, role)
 
     assert first.returncode == 0, first.stderr
-    line = one_error_line(second, "control-plane")
+    line = one_error_line(second, role)  # one line, and the exit status 1
     assert "runs once per node" in line
-    assert len(scratch.called("kubeadm", "init")) == 1
+    assert ONE_RUN_MARKER[role] in line
+    # Not an apt-get, a snap, a systemctl restart or a kubeadm: not a call.
+    assert scratch.calls() == calls_of_the_first_run
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_a_node_with_the_mark_of_its_one_run_is_refused_before_it_is_touched(
+    tmp_path: Path, role: str
+) -> None:
+    scratch = make_scratch(tmp_path)
+    kubernetes = tmp_path / "root" / "etc" / "kubernetes"
+    kubernetes.mkdir(parents=True)
+    (kubernetes / ONE_RUN_MARKER[role]).touch()
+
+    done = run_script(scratch, role)
+
+    line = one_error_line(done, role)
+    assert "runs once per node" in line
+    assert scratch.calls() == []  # not even a read of the metadata service
+    assert list((tmp_path / "root").rglob("*")) == [
+        tmp_path / "root" / "etc",
+        kubernetes,
+        kubernetes / ONE_RUN_MARKER[role],
+    ]  # no sysctl file, no containerd configuration, no apt source
 
 
 @pytest.mark.parametrize("role", ROLES)
@@ -715,7 +555,7 @@ def test_a_signing_key_with_another_fingerprint_is_refused_before_any_package(
     tmp_path: Path, role: str
 ) -> None:
     scratch = make_scratch(tmp_path)
-    (tmp_path / "fingerprint").write_text(OTHER_FINGERPRINT, encoding="utf-8")
+    scratch.listing((OTHER_FINGERPRINT, ""))
 
     done = run_script(scratch, role)
 
@@ -725,6 +565,102 @@ def test_a_signing_key_with_another_fingerprint_is_refused_before_any_package(
     for install in scratch.called("apt-get", "install"):
         assert "kubeadm" not in install
     assert scratch.called("kubeadm") == []
+
+
+@pytest.mark.parametrize("role", ROLES)
+@pytest.mark.parametrize(
+    "keys",
+    [
+        [(FINGERPRINT, ""), (OTHER_FINGERPRINT, "")],
+        [(OTHER_FINGERPRINT, ""), (FINGERPRINT, "")],
+        [(FINGERPRINT, ""), (FINGERPRINT, "")],
+        [],
+    ],
+    ids=["the pinned key first", "the pinned key second", "the pinned twice", "none"],
+)
+def test_a_key_file_that_does_not_hold_exactly_one_primary_key_is_refused_unwritten(
+    tmp_path: Path, role: str, keys: list[tuple[str, str]]
+) -> None:
+    scratch = make_scratch(tmp_path)
+    scratch.listing(*keys)
+
+    done = run_script(scratch, role)
+
+    line = one_error_line(done, role)
+    assert "exactly one" in line
+    # Nothing is written under /etc/apt, no keyring is made and the repository is
+    # not added: the downloaded key stays in the script's private directory.
+    assert not (tmp_path / "root" / "etc" / "apt").exists()
+    assert (
+        scratch.called("apt-get", "install", "-y", "kubelet", "kubeadm", "kubectl")
+        == []
+    )
+    assert scratch.called("kubeadm") == []
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_the_key_that_is_trusted_is_the_one_that_was_listed_and_checked(
+    tmp_path: Path, role: str
+) -> None:
+    scratch = make_scratch(tmp_path)
+
+    done = run_script(scratch, role)
+
+    assert done.returncode == 0, done.stderr
+    keyring = tmp_path / "root" / "etc" / "apt" / "keyrings"
+    assert [p.name for p in keyring.iterdir()] == ["kubernetes-apt-keyring.gpg"]
+    assert (keyring / "kubernetes-apt-keyring.gpg").stat().st_mode & 0o777 == 0o644
+    listed = [c for c in scratch.called("gpg") if "--show-keys" in c]
+    (dearmor,) = [c for c in scratch.called("gpg") if "--dearmor" in c]
+    # The listing is of the file that dearmor made, not of the downloaded one.
+    assert listed[-1][-1] == dearmor[dearmor.index("--output") + 1]
+    assert listed[-1][-1] != dearmor[-1]
+
+
+@pytest.mark.parametrize("role", ROLES)
+@pytest.mark.parametrize("expiry", ["1", "1000000000"])
+def test_a_key_that_has_expired_is_refused_with_one_line_before_the_repository(
+    tmp_path: Path, role: str, expiry: str
+) -> None:
+    scratch = make_scratch(tmp_path)
+    scratch.listing((FINGERPRINT, expiry))
+
+    done = run_script(scratch, role)
+
+    line = one_error_line(done, role)
+    assert "expired" in line
+    assert FINGERPRINT in line
+    assert not (tmp_path / "root" / "etc" / "apt").exists()
+    assert scratch.called("kubeadm") == []
+
+
+@pytest.mark.parametrize("role", ROLES)
+@pytest.mark.parametrize("expiry", ["", "4102444800"])  # no expiry; the year 2100
+def test_a_key_with_no_expiry_or_one_in_the_future_is_accepted(
+    tmp_path: Path, role: str, expiry: str
+) -> None:
+    scratch = make_scratch(tmp_path)
+    scratch.listing((FINGERPRINT, expiry))
+
+    done = run_script(scratch, role)
+
+    assert done.returncode == 0, done.stderr
+
+
+@pytest.mark.parametrize("role", ROLES)
+@pytest.mark.parametrize("expiry", ["2026-12-29", "$(touch x)", "1e9", "-5"])
+def test_an_expiry_that_is_not_a_number_is_refused_and_never_evaluated(
+    tmp_path: Path, role: str, expiry: str
+) -> None:
+    scratch = make_scratch(tmp_path)
+    scratch.listing((FINGERPRINT, expiry))
+
+    done = run_script(scratch, role)
+
+    line = one_error_line(done, role)
+    assert "expiry" in line
+    assert not (tmp_path / "x").exists()
+    assert not (tmp_path / "root" / "etc" / "apt").exists()
 
 
 @pytest.mark.parametrize("role", ROLES)
@@ -956,6 +892,51 @@ HOSTILE: dict[str, Callable[[str], str]] = {
     "a variable in place of the token": lambda c: VALID.replace(
         BOOTSTRAP_ID, "$BOOTSTRAP"
     ),
+    "the flag that skips the CA check in place of the hash flag": lambda c: (
+        VALID.replace(
+            f"--discovery-token-ca-cert-hash sha256:{CA_DIGEST}",
+            "--discovery-token-unsafe-skip-ca-verification",
+        )
+    ),
+    "the flag that skips the CA check after the hash flag": lambda c: (
+        f"{VALID} --discovery-token-unsafe-skip-ca-verification"
+    ),
+    "a token that starts with a dash": lambda c: VALID.replace(
+        BOOTSTRAP_ID, "-aaaaa.1111111111111111"
+    ),
+    "a tab in place of the first space": lambda c: VALID.replace(" ", "\t", 1),
+    "a tab in place of the space before the token flag": lambda c: VALID.replace(
+        " --token", "\t--token"
+    ),
+    "a tab in place of the space before the hash flag": lambda c: VALID.replace(
+        " --discovery", "\t--discovery"
+    ),
+    "a carriage return and a newline at the end": lambda c: f"{VALID}\r\n",
+    "a carriage return at the end": lambda c: f"{VALID}\r",
+    "a port with a leading zero": lambda c: VALID.replace(":6443", ":06443"),
+    "an address with a leading zero in an octet": lambda c: VALID.replace(
+        ADDRESS, "203.0.113.010"
+    ),
+    "a SHA-512 prefix and a 128-digit hash": lambda c: VALID.replace(
+        f"sha256:{CA_DIGEST}", f"sha512:{'2' * 128}"
+    ),
+    "a SHA-512 prefix on a 64-digit hash": lambda c: VALID.replace(
+        "sha256:", "sha512:"
+    ),
+    "a hash with no prefix": lambda c: VALID.replace("sha256:", ""),
+    "the token flag with an equals sign": lambda c: VALID.replace(
+        "--token ", "--token="
+    ),
+    "the hash flag with an equals sign": lambda c: VALID.replace(
+        "--discovery-token-ca-cert-hash sha256", "--discovery-token-ca-cert-hash=sha256"
+    ),
+    "a duplicated token flag": lambda c: f"{VALID} --token bbbbbb.2222222222222222",
+    "a duplicated hash flag": lambda c: (
+        f"{VALID} --discovery-token-ca-cert-hash sha256:{'3' * 64}"
+    ),
+    "a value of 4 KB with no command in it": lambda c: "a" * 4096,
+    "a value of 4 KB after the command": lambda c: f"{VALID} {'a' * 4096}",
+    "a value of 4 KB in the token": lambda c: VALID.replace(BOOTSTRAP_ID, "a" * 4096),
 }
 
 
@@ -986,13 +967,83 @@ def test_a_value_that_is_not_exactly_a_join_command_joins_nothing_and_runs_nothi
         assert "touch" not in call and str(canary) not in " ".join(call)
 
 
-def test_a_worker_that_already_joined_does_not_join_again(tmp_path: Path) -> None:
+def test_a_join_that_fails_says_what_to_do_and_is_not_tried_again(
+    tmp_path: Path,
+) -> None:
     scratch = make_scratch(tmp_path)
-    first = run_script(scratch, "worker")
+    (tmp_path / "join-fails").touch()
 
-    second = run_script(scratch, "worker")
+    done = run_script(scratch, "worker")
 
-    assert first.returncode == 0, first.stderr
-    line = one_error_line(second, "worker")
-    assert "runs once per node" in line
-    assert len(scratch.called("kubeadm", "join")) == 1
+    line = one_error_line(done, "worker")
+    assert line == (
+        "worker: ERROR: kubeadm join failed. The join command in the parameter may "
+        "be older than the control plane (the control plane was replaced and the "
+        "parameter kept): remove this environment and apply it again."
+    )
+    assert len(scratch.called("kubeadm", "join")) == 1  # one shot, no retry
+    assert len(scratch.called("aws", "ssm", "get-parameter")) == 1
+
+
+# The three strings of the security review, each of which a pattern with the
+# alphabet of a UTF-8 locale accepts: fullwidth digits, accented letters and
+# Arabic-Indic digits.
+FULLWIDTH_ONE = chr(0xFF11)
+E_ACUTE = chr(0xE9)
+ARABIC_INDIC_TWO = chr(0x662)
+UNICODE_VALUES = {
+    "fullwidth digits in the token": VALID.replace(
+        BOOTSTRAP_ID, "aaaaaa." + FULLWIDTH_ONE * 16
+    ),
+    "accented letters in the token": VALID.replace(
+        BOOTSTRAP_ID, E_ACUTE * 5 + "1." + "1" * 16
+    ),
+    "Arabic-Indic digits in the hash": VALID.replace(CA_DIGEST, ARABIC_INDIC_TWO * 64),
+}
+
+
+def a_utf8_locale() -> str:
+    """The locale in which the old pattern, with no pinned alphabet, accepts the
+    strings above: en_US.UTF-8 when the machine has it (the review's finding was
+    made there), else C.UTF-8."""
+    done = subprocess.run(["locale", "-a"], capture_output=True, text=True, check=False)
+    names = {n.lower().replace("utf-8", "utf8") for n in done.stdout.split()}
+    return "en_US.UTF-8" if "en_us.utf8" in names else "C.UTF-8"
+
+
+@pytest.mark.parametrize("name", sorted(UNICODE_VALUES), ids=sorted(UNICODE_VALUES))
+def test_the_pattern_refuses_non_ascii_digits_and_letters_in_a_utf8_locale(
+    tmp_path: Path, name: str
+) -> None:
+    scratch = make_scratch(tmp_path)
+    scratch.series("param", [UNICODE_VALUES[name]])
+
+    done = run_script(scratch, "worker", LC_ALL=a_utf8_locale())
+
+    line = one_error_line(done, "worker")
+    assert "gave up after 3 tries" in line  # the pattern refused it, not kubeadm
+    assert scratch.called("kubeadm") == []
+
+
+NUL_VALUES = {
+    "a NUL after the command": VALID + "\x00",
+    "a NUL and a newline after the command": VALID + "\x00\n",
+    "a NUL inside the token": VALID.replace(
+        BOOTSTRAP_ID, "aaa\x00aaa.1111111111111111"
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(NUL_VALUES), ids=sorted(NUL_VALUES))
+def test_a_nul_byte_in_the_value_is_a_refusal_with_one_line_and_no_bash_warning(
+    tmp_path: Path, name: str
+) -> None:
+    scratch = make_scratch(tmp_path)
+    scratch.series("param", [NUL_VALUES[name].encode("utf-8")])
+
+    done = run_script(scratch, "worker")
+
+    line = one_error_line(done, "worker")  # nothing else on stderr: no warning
+    assert "gave up after 3 tries" in line
+    assert "null byte" not in done.stderr
+    assert scratch.called("kubeadm") == []

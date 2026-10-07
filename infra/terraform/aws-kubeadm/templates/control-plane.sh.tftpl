@@ -14,6 +14,8 @@
 # Terraform renders this file: every shell parameter expansion is written with
 # a doubled dollar sign, and no percent sign is followed by a brace.
 set -euo pipefail
+# The alphabet of the join pattern (node-common) is bytes: see the note there.
+export LC_ALL=C
 export PATH="$PATH:/snap/bin"
 
 ROLE='control-plane'
@@ -62,15 +64,28 @@ wait_for_the_elastic_ip() {
   die "gave up after $ADDRESS_ATTEMPTS tries: the public address never became the Elastic IP $PUBLIC_ADDRESS"
 }
 
-# Once per node. A bootstrap that failed is removed and applied again, not
+# Once per node, and the first thing the script does, before it installs or
+# restarts anything. A bootstrap that failed is removed and applied again, not
 # repaired by hand (the README says so), so a node that already has an admin
-# kubeconfig is refused.
-initialise_the_control_plane() {
+# kubeconfig is refused, and nothing on it is touched.
+refuse_a_second_run() {
   local admin_conf="$BOOT_ROOT/etc/kubernetes/admin.conf"
   [[ ! -e $admin_conf ]] || die "this node already has $admin_conf: kubeadm init runs once per node"
+}
+
+initialise_the_control_plane() {
+  local admin_conf="$BOOT_ROOT/etc/kubernetes/admin.conf"
   log "running kubeadm init"
   # --skip-token-print: init would print its own bootstrap token, and cloud-init
   # keeps this script's output in a log on the node for the node's life.
+  #
+  # Two tokens exist for the hour: init still creates its default one (unused,
+  # and not printed), and publish_the_join_command makes a second. The first is
+  # left because the workers' discovery reads the cluster-info ConfigMap, which
+  # init's bootstrap-token phase writes: skipping that phase would remove the
+  # ConfigMap along with the token. No page of kubeadm's documentation was read
+  # for this, and the module knows of no flag that drops only the token. Both
+  # tokens die at the end of the hour.
   kubeadm init \
     --control-plane-endpoint "$PUBLIC_ADDRESS:$API_PORT" \
     --apiserver-cert-extra-sans "$PUBLIC_ADDRESS" \
@@ -127,8 +142,8 @@ for setting in ADDRESS_ATTEMPTS PUBLISH_ATTEMPTS POLL_SECONDS; do
   require_number "$setting"
 done
 
-WORK_DIR=$(mktemp -d)
-trap 'rm -f "$WORK_DIR/calico.yaml" "$WORK_DIR/join-command"; rmdir "$WORK_DIR" || true' EXIT
+refuse_a_second_run
+make_work_dir
 
 wait_for_the_elastic_ip
 install_aws_cli
