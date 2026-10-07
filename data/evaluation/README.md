@@ -285,12 +285,12 @@ request, so the check for them is the free replay (`make eval`), which the
 session ran after each landing that touched them: "eval compare: passed"
 twice each time, and no recording was made. S070 split the redaction into six
 modules by a move a script proved, changed the phone matcher (the cut of an
-international number at a space, still pending its last round: the plan's
-section for S070), built the claimant's name pattern outside the claim's row
-lock, and added to the adjuster's pages. None of it changed one of the 27
-recorded requests, and nothing here is paid. The "not covered" bullet of the
-last section is unchanged: a name made of the words an exclusion turns on is
-still a backlog row (S070), asked of the owner.
+international number at a space, for the plain shape: the plan's section
+for S070 and T-73 say what it leaves), built the claimant's name pattern
+outside the claim's row lock, and added to the adjuster's pages. None of it
+changed one of the 27 recorded requests, and nothing here is paid. The "not
+covered" bullet of the last section is unchanged: a name made of the words
+an exclusion turns on is still a backlog row (S070), asked of the owner.
 
 ## Commands
 

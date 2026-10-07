@@ -546,7 +546,7 @@ both readings the same hour ("yes both are right, go on").
 | S067 | Triage rules and screening | The one step of these that changes the triage graph's rules: claims of one policy that are open at the same time count for `frequent_claims` (T-76); the injection screen reads the description as posted, before the claimant's name is replaced; the redaction knows Hungarian forms of names and identifiers; the stored wording is compared with the manifest after ingestion (T-27, T-57); a wording version missing from `wording.EXCLUSION_CLAUSES` fails with a message that names it (moved here from S060, which may not change how the triage routes a claim); golden-set cases on the fraud indicators' boundaries and for an unknown policy number; `make eval` passes, and a change that needs `make eval-record` waits for the owner's yes, since it costs money. Built as (2026-10-06; implemented and tested, none of it run on a cluster): the Claims API screens the description as posted and hands the run one boolean, `posted_text_addresses_the_model`, which the assessor reads as a hit of its own screen (CLM-1053 and CLM-1054 are stopped, 26 of 66 attacks); the redaction finds the Hungarian national phone, tax number, domestic account number and personal identification number on their own and the social security and tax identification numbers after their word, and the claimant's name is replaced with Hungarian endings after a capital letter; a wording pair the table has no count for fails the run with the fixed code `wording-version-unknown` where the rules would read it (the log line names the product and version only when both pass a closed check), not with a message that names it, and a claim that is not valid facts fails with `claim-not-valid` after a log of its fields; the golden set holds 47 claims, seven of them new, from a second random stream, and the model is not asked about them; claims that are still open count for `frequent_claims` by the strict date rule of a decided one, and a withdrawn claim never does (migration 0025, the owner's decision of 2026-10-06); `meridian knowledge verify` compares the stored clauses with the manifest-verified wordings and the ingestion Job runs it after its write (migration 0026). The free replay passed after each landing that could move a recorded answer, and no paid recording was made | done | S060, S061, S064 |
 | S068 | Database upkeep and retention | The owner names the retention periods for `audit.events` and `gateway.usage` first (open since S011; without them the step builds the mechanism and schedules nothing); an insert-only audit table has a way to expire rows; migration 0017's rewrite of a large audit table has a way through that is written down and tested; the static check on migrations says what it cannot see or sees it; `expire_ledger` works in batches; a holder of the upkeep credential cannot stall the gateway with an open transaction; a login that is a member of `claims_sweep` is confined or refused where the database is made; no role creates temporary tables it does not need | todo | S066 |
 | S069 | Runtime and gateway edges | Without a change to a prompt or a rule: a validation error in the triage's two answers logs the field; the tool-call limits can differ by agent, or the plan says why not; a failed resumed leg does not leave the first leg's value to be read as the answer; `drafted_by` is right for a completion the filter withheld and the provider billed; the runtime's client of the gateway is bounded per call; a resumed leg that outlived its lease cannot write over the leg that took the run; `service_url_problem` refuses what the HTTP client refuses; a shed tool call's audit row names its run where that can be checked; the refusal flood's count covers the caller check and the throttles; an embedding input is bounded in tokens; the health check watches the certificate the server loaded; the ingestion's data class has a tenant of its own (T-60, the owner's decision when the step opens). Cut in two on 2026-10-06 (the design in Part C): a first half with no lane, and a second half on the cluster, the server's certificate and the health check (R11) and the ingestion's tenant (R12, which the owner decides at S020). Built as, first half (2026-10-07; implemented and tested, none of it run on a cluster, no real provider called): the Claims API logs the failed fields of the runtime's answer, of the triage proposal and of the brief's output, and counts a stored proposal as stored; a leg ends its run only over the `updated_at` its own start or claim wrote, with no new column, and a late leg answers the stored status with no output; a resume that carries a value is refused with a 422; the runtime's call to the gateway has a deadline of 30 s as a whole, a timeout per phase, a reply cap of 1 MiB and `Accept-Encoding: identity`; a refused prompt and a withheld completion are told apart on the wire (`X-Meridian-Completion: withheld` and three headers naming the deployment) and the withheld one has its drafter on record; `service_url_problem` also asks the HTTP client; a shed tool call's row names its run where the run's own row can be read; every service writes the summary of a refusal flood's last window through one writer; a module that exits at import is a failed load; the access log's path is unquoted to a fixed point and loses a userinfo part; the scaffold names the host; the tool span names its step. Not built, each as a decision with its reason in the section: limits per agent (R2), an embedding bound in tokens (R10), a ceiling on the rate limits (B13), a breaker shared between processes (B14), one word for the two limits (B18), a holder column and the second host's scaffold | doing: the first half is done (2026-10-07); R11 waits for the cluster lane and R12 for the owner's decision at S020 | S064, S037 |
-| S070 | Claims intake and what the adjuster is told | The owner decides first whether uploads are built or stay out (T-38: the largest item here; if built it is a step of its own, split off when this one opens); a report dated as a recent loss is seen for what it is, or T-66 says why it cannot be; the adjuster's page marks a recommendation that rests on the model's answer, so a steered model's `approve` does not read as the rules'. Built as, first half (2026-10-07; implemented and tested against PostgreSQL and in the pages' own tests, none of it run on a cluster, nothing paid, no fingerprint moved): the adjuster's claim page says beside a recommendation whether it rests on a model's reading of the exclusion clauses or on the rules alone, and the queue marks it in a column, from one function over the stored fields (no new field, no migration); it reaches the 6 steered recommendations that wait for an adjuster and not the 28 automatic approvals, which no page lists; the page labels the loss date and the report date as not checked and shows two gaps in days, with no rule or bound, and T-66 says why; the claimant's name pattern is built from a read before the claim's row is locked and only for a request the claim can go on with, so a refused request pays no compile (a stale page and a documents post past the cap still do); the redaction is split into six modules by a proven move; the differential test classifies every lost run, its generator writes the forms it lacked and both date guards are pinned from both sides; the e-mail pass reads its placeholder from the mapping; and an international Hungarian phone number is cut at a space before a second number, in a form narrowed after a review (R3b) and narrowed again (R3c, pending). Not built, each with its reason in the section: uploads (the owner's decision is open), a bound on what a name may replace, a reorder of the assessor's checks, the wider cut of a dotted number with a `06` group and a third date guard (the owner's questions), and the fix of three known leaks of the phone matcher | doing: the first half is done once R3c and its review stand; the owner's decision on uploads and three more questions are open, and the second half holds what the owner decides | S067 |
+| S070 | Claims intake and what the adjuster is told | The owner decides first whether uploads are built or stay out (T-38: the largest item here; if built it is a step of its own, split off when this one opens); a report dated as a recent loss is seen for what it is, or T-66 says why it cannot be; the adjuster's page marks a recommendation that rests on the model's answer, so a steered model's `approve` does not read as the rules'. Built as, first half (2026-10-07; implemented and tested against PostgreSQL and in the pages' own tests, none of it run on a cluster, nothing paid, no fingerprint moved): the adjuster's claim page says beside a recommendation whether it rests on a model's reading of the exclusion clauses or on the rules alone, and the queue marks it in a column, from one function over the stored fields (no new field, no migration); it reaches the 6 steered recommendations that wait for an adjuster and not the 28 automatic approvals, which no page lists; the page labels the loss date and the report date as not checked and shows two gaps in days, with no rule or bound, and T-66 says why; the claimant's name pattern is built from a read before the claim's row is locked and only for a request the claim can go on with, so a refused request pays no compile (a stale page and a documents post past the cap still do); the redaction is split into six modules by a proven move; the differential test classifies every lost run, its generator writes the forms it lacked and both date guards are pinned from both sides; the e-mail pass reads its placeholder from the mapping; and an international Hungarian phone number is cut at a space before a second number, in a form narrowed after a review (R3b) and narrowed again after a second (R3c, 951b72c), so that it turns the plain shape and not every text the row quoted. Not built, each with its reason in the section: uploads (the owner's decision is open), a bound on what a name may replace, a reorder of the assessor's checks, the wider cut of a dotted number with a `06` group and a third date guard (the owner's questions), and the fix of three known leaks of the phone matcher | doing: the first half is done (R3c and its review stand; the whole suite is the main session's); the owner's decision on uploads and four more questions are open, and the second half holds what the owner decides | S067 |
 | S071 | Measurements that need a live model | Costs money (about fifty chat calls and some embedding calls; the owner says yes before any, and the amount is stated first): a real model's answers to the injection cases the screen lets through, recorded beside the golden recording; a model's refusal of a structured request seen from a real provider; retrieval measured with a real embedding, in the evaluation and in S038's one failing check; the judge compared with labels a person wrote for a sample; a held-out set for the injection screen, and a decision on what a false alarm may cost; CLM-0034's `unsure` settled by a prompt or recorded as the right answer; retrieval over a graph measured again only if the synthetic data gains something relational to find | todo | S067 |
 | S072 | The cluster outside `meridian`, second round | On kind: the Prometheus and CloudNativePG operators' reach into Secrets and ConfigMaps of every namespace is narrowed or recorded as accepted with its reason; DNS and the collector cannot carry data out unseen (T-84), or the residual is stated; writes to Prometheus and Loki pass a policy, and the three hops behind the collector are encrypted or the plan says why not; egress from `observability` and the admission webhooks' port are bounded; `cnpg-system` and `envoy-gateway-system` have Pod Security labels and a policy; the owner decides whether node-exporter stays off; Tempo mounts no API token | todo | S064, S066 |
 | S073 | Renewals, upgrades and what smoke cannot see | On kind: a renewal is seen for the collector's certificate and the database's, and something alerts before the database's end; the services do not all restart in the same minute at a renewal; approver-policy is restarted when it hangs, and a repaired policy does not wait an hour for cert-manager's retry; a first install that fails has a way back that was tried; the chart bounds its rollback history and `make images` says what to remove; the scripts' `kubectl` calls have a request timeout; a manual sweep Job does not hide a stopped schedule; the failure paths of smoke's newer lines are seen once on a cluster with something broken on purpose; the line that reads approver-policy's wording says so when it fails; probes that time out under load have a recorded answer for the machine the cluster runs on now | todo | S064, S066 |
@@ -889,11 +889,11 @@ that day; the rest stand as their step recorded them.
 | A true posted-text flag returns `injection-suspected` before the candidate clauses are screened, so a claimant who posts screened words hides the failure a poisoned clause would give (`wording-addresses-the-model`); a hit of the assessor's own screen did the same before S067 | S067 (security review, low) | closed by S070 as decided, in documents only: the order stays, because the claim goes to an adjuster either way and `meridian knowledge verify` compares the stored wording with its manifest without any claim; T-26 says so. The sentence in the assessor's docstring that the design promised is a code comment, which this step's documents contract could not write (the small ends row below) | S070 |
 | Forms of the claimant's name that the closed lists lack are not found (T-73): a name typed in lower case with a Hungarian ending (`kovácsnak`), the possessive on a name (`-om`, `-unk`), a part of under three letters, a consonant with an accent written without it, and a name whose first letter the text writes as another capital; a name that spells an ordinary word with an ending is replaced where it is capitalised ("Seat Leon" for a claimant named Leo). The pattern of the worst 200-character name is 12,141 characters (about 55 ms to compile, measured in F2r and pinned by a test), is compiled through `re._compiler`, a private function that fails closed if a Python release moves it, and in the claim moves is built while the claim's transaction is held (security review, low) | S067 (reviews) | closed by S070 in part: the pattern is built from a read before the claim's row is locked (A3), and only for a request the claim can go on with (A4), so the lock is not held for the compile and a refused request pays none (tested against PostgreSQL, with a second session's `FOR UPDATE NOWAIT` as the probe; not run on a cluster); a stale page and a documents post past the cap still pay one compile each (the ingress row below); `re._compiler` is named by a test that fails with a sentence if a release moves it; the pattern's size is unchanged; no form was added, by decision (taking every ending took seventeen golden words where the capital rule takes one), so the forms listed stay stated residuals in T-73 | S070 |
 | The redaction's residuals after S067 that are not the matcher's own fix (T-73): a Budapest number written `06-1x-YYYY-xx` with one separator reads as a date and is left in the clear (a named shape of the differential test; no other number can be written so, and no fix is planned); redaction is not idempotent where two numbers touch at a `+` or a `(`; a date followed by an amount shaped like a phone number (`Total 06 30 1250000 HUF`) is replaced; the rules cost about fifty times more per character on text made of the national prefix, still linear (the security review measured it, no test pins the factor); identity card, passport and licence numbers, vehicle plates, an account number without separators, and a social security or tax identification number after a word the list does not hold are not found. The matcher's own gaps have the four rows below, and every shape is pinned by `test_redaction_residuals.py` or held by `test_redaction_differential.py` | S067 (reviews) | open; the step's contract named none for these, and S069 holds the gateway's edges, the nearest | S069 |
-| The redaction cuts an international span at a dot or a slash and not at a space, so a national number after an international one and a plain space leaves its last seven digits (`+36 30 123 4567 06 20 765 4321` gives `[phone] 765 4321`; with slashes, `+36/83/701/902 00 36/73/48/9525` gives `[phone]/48/9525`, six digits). The fourth review's cut, prototyped and validated, is not built, because this matcher regressed twice on a fix made at the end of a round: in `_international_span`, cut at a space (the no-break and the other space characters too) followed by an optional opening parenthesis and `06` or `00`, only when the left part is a complete number by the numbering plan (`_phone_shape_holds`, 8 to 17 digits) and the right part is one the national rule accepts (`NATIONAL_PHONE` matches there and `_choose_national_phone_span` takes it), and otherwise as today, so `+36 1 060 1234`, `+36 30 0036 123` and `+36 1 234 5678 06 1` stay one number (a plain cut at a space leaves ten digits of `+36 1 060 1234`). Measured on the prototype: the differential's run-on hits fall from 62 to 3, no new shape, no count mismatch, and one test to change on purpose (the one that demands the run-on still loses); about 15 lines in a function that has regressed twice, so it needs pins of its own, written first | S067 (fourth review) | closed by S070 in part, pending R3c and its review (the section says why): built as the row describes, with its pins written and seen red first (22 cut rows and 23 not-cut rows, each with its reason), the left part checked by the numbering plan (country code 36 and `national_phone_holds`, not by shape alone), and narrowed twice after reviews so that the cut is not made where the second number runs through a group that begins a third; the run-on of the differential fell from 63 to R3C-PINS. Tested; not run on a cluster. What the cut leaves, old behaviour and no regression, goes with the known leaks in the row below; the claim that no text shows a digit the matcher before the cut hid was false for R3 and for R3b | S070 |
+| The redaction cuts an international span at a dot or a slash and not at a space, so a national number after an international one and a plain space leaves its last seven digits (`+36 30 123 4567 06 20 765 4321` gives `[phone] 765 4321`; with slashes, `+36/83/701/902 00 36/73/48/9525` gives `[phone]/48/9525`, six digits). The fourth review's cut, prototyped and validated, is not built, because this matcher regressed twice on a fix made at the end of a round: in `_international_span`, cut at a space (the no-break and the other space characters too) followed by an optional opening parenthesis and `06` or `00`, only when the left part is a complete number by the numbering plan (`_phone_shape_holds`, 8 to 17 digits) and the right part is one the national rule accepts (`NATIONAL_PHONE` matches there and `_choose_national_phone_span` takes it), and otherwise as today, so `+36 1 060 1234`, `+36 30 0036 123` and `+36 1 234 5678 06 1` stay one number (a plain cut at a space leaves ten digits of `+36 1 060 1234`). Measured on the prototype: the differential's run-on hits fall from 62 to 3, no new shape, no count mismatch, and one test to change on purpose (the one that demands the run-on still loses); about 15 lines in a function that has regressed twice, so it needs pins of its own, written first | S067 (fourth review) | closed by S070 in part (implemented and tested; not run on a cluster): what is closed is two numbers one after the other at a space where the first is a complete Hungarian number and the national rule takes the second (`+36 30 123 4567 06 20 765 4321` and `+36/83/701/902 00 36/73/48/9525` give two `[phone]`), built with its pins written and seen red first (22 cut rows and 23 not-cut rows, each with its reason), the left part checked by the numbering plan (country code 36 and `national_phone_holds`, not by shape alone), and narrowed twice after two reviews, so that the cut is not made where a prefix token inside the second number begins a national number that reaches beyond it (the national pass would hand the third number its prefix); the run-on of the differential fell from 63 to 11. Not closed: the row's own text (`Tel: +36.62.7320.12 00 36 69 0619 45/(00 36).92.803.020.` gives `Tel: [phone] [phone].92.803.020.` again, the output from before the cut, which the wider condition gives back and which is pinned as a known leak); a foreign first number or one with a digit too many; about 0.03 per cent of ordinary texts (91 of 300,000 in the review), a second number with an inner group that starts `06` or `00` followed by an amount, a date or another number, which fall back to the leak from before the cut (`+36 30 135 7400 06 1 065 3027 250 000 Ft` gives `[phone] 3027 250 000 Ft`; `+36 25.805.094 06-49 068 916 06 12 2026 14` gives `[phone] 916 06 12 2026 14`); and the three known leaks of the national pass (the row below). The session accepted the fall-back and did not refine the condition. The claim that no text shows a digit the matcher before the cut hid was false for R3 and for R3b; the review of R3c, over about 2.84 million texts of its own grammars, found none, and a seeded property test in the suite now holds it (the section) | S070 |
 | A dotted or slashed international number is not found when one of its groups begins `06` or `00` (`+36.30.123.0630`, `+36/30/123/0630` and `+36.30.123.0030` stay whole; `+36/30/123/4567/0630` gives `[phone]/0630`), because the cut before such a group leaves fewer than 8 digits; about 2 % of the groups of a number written so. Not a regression (the matcher before the separator change found none of them), and pinned by `test_redaction_residuals.py`. The reviewer's wider cut (the validated cut of the row above, taken at `/` and `.` with `PHONE_JOIN` neutralised) cost two failing tests, one new shape in the differential (`12 +36.36.0679.55(06/36)/7660/10/`) and one over-redaction (`+36 30 123 4567/06/22` gives `[phone]`), so it is a decision of its own and not the row above's | S067 (fourth review) | open; not built in S070 and asked of the owner, whose recommendation from the session is to leave it as it is (about 2 % of the groups of a number written so, not a regression, pinned) | S070 |
-| The redaction's differential test has gaps (`test_redaction_differential.py`): it files a lost run under its first lost digit only, so a new leak in a later number of a text that already holds a named shape is filed under the named one (the mutation that brings back the parenthesised second number hid behind `30.06.30.8336.687 +36 30 123 4567/(06) 20 765 4321`; over the whole corpus it still fails); `00.` and `00/` forms and a date of three groups are not generated (a mutation that lets `_after_date_tail(2)` take three groups moved the hit counts and passed, one that hides `00.` after a date's tail changed nothing); the two date-lead guards, `DATE_LEAD` and `DATE_MONTH_LEAD`, can be loosened (the year dropped, any four-digit year, any day) with no failure, and only a month of 13 to 31 is caught; and the reference is the matcher before the guard, so a leak that both have is invisible (12,147 of the 12,281 texts that leave a digit of an inserted number in the clear leave it in the reference too). Classify every lost run, add the forms and the date of three groups to the generator, and bring the two guards under a test that fails when they are loosened | S067 (fourth review) | closed by S070 (R2, with R2b's pins), tests only: every lost run is classified on its own and the sweep passes only when each is named (an exact list of two known runs beside five named shapes, a third fails it); the generator writes `00.36`, `00/36` and the date of three groups; the hit counts are pinned (176, 40, 152, 7 and the run-on's); the shared-leak counts are pinned, so that they cannot grow unseen (R3C-PINS, in place of the row's 12,281 and 12,147, which the changed generator no longer makes); and `test_redaction_date_guards.py` holds both date-lead guards from both sides (13 rows that stay whole, 24 that are replaced), with the mutation run on a scratch copy showing each loosening the row named, and the ones the old tests missed, now caught. The strengthened sweep found that the old first-digit rule had hidden a real leak on `main` (the first of three known leaks, in the known-leaks row below) | S070 |
+| The redaction's differential test has gaps (`test_redaction_differential.py`): it files a lost run under its first lost digit only, so a new leak in a later number of a text that already holds a named shape is filed under the named one (the mutation that brings back the parenthesised second number hid behind `30.06.30.8336.687 +36 30 123 4567/(06) 20 765 4321`; over the whole corpus it still fails); `00.` and `00/` forms and a date of three groups are not generated (a mutation that lets `_after_date_tail(2)` take three groups moved the hit counts and passed, one that hides `00.` after a date's tail changed nothing); the two date-lead guards, `DATE_LEAD` and `DATE_MONTH_LEAD`, can be loosened (the year dropped, any four-digit year, any day) with no failure, and only a month of 13 to 31 is caught; and the reference is the matcher before the guard, so a leak that both have is invisible (12,147 of the 12,281 texts that leave a digit of an inserted number in the clear leave it in the reference too). Classify every lost run, add the forms and the date of three groups to the generator, and bring the two guards under a test that fails when they are loosened | S067 (fourth review) | closed by S070 (R2, with R2b's pins), tests only: every lost run is classified on its own and the sweep passes only when each is named (an exact list of three known runs beside five named shapes, a fourth fails it: two of the mechanism R2 found, one of them the cut row's own text given back by R3c's narrowing, and one that is no regression); the generator writes `00.36`, `00/36` and the date of three groups; the hit counts are pinned (176, 40, 152, 7 and the run-on's 11); the shared-leak counts are pinned, so that they cannot grow unseen: 13,965 texts that leave an inserted digit and 13,829 of them that the reference leaves too, in place of the row's 12,281 and 12,147 (those were of the corpus before the generator learned the forms it lacked; the corpus has since grown by 2,000 seeded texts of a second number that ends in the next number's prefix, R3b, which is why the counts are larger); and `test_redaction_date_guards.py` holds both date-lead guards from both sides (13 rows that stay whole, 24 that are replaced), with the mutation run on a scratch copy showing each loosening the row named, and the ones the old tests missed, now caught. The strengthened sweep found that the old first-digit rule had hidden a real leak on `main` (the first of three known leaks, in the known-leaks row below) | S070 |
 | Two small ends of the redaction: `_replace_email` writes `EMAIL_PLACEHOLDER` directly, where `_replace_cards` now reads `PLACEHOLDERS["card"]`, so a test that swaps the mapping misses e-mail addresses; and a date whose day or month is `06` followed by eight or nine digits (`2026.10.06 12345678` gives `2026.10.[phone]`, `10.06 12345678` gives `10.[phone]`) is replaced, the date's own digits with it, though it is no number: over-redaction, which fails safe, and the matcher before the date guard replaced it too; pinned by `test_redaction_residuals.py` | S067 (fourth review, low) | closed by S070 in part: the e-mail pass reads `PLACEHOLDERS["email"]` as the card and phone passes do, with a test that swaps the mapping (R4); `claimant_name.py` still writes `EMAIL_PLACEHOLDER` directly (the small ends row below). The date half is not built and asked of the owner, whose recommendation from the session is to leave it (over-redaction fails safe, and a third date guard goes into a matcher whose date guard leaked twice) | S070 |
-| Three known leaks of the phone matcher leave digits of a phone number in the clear, each pinned by a test that says "A LEAK, open" with today's output, so nobody reads it as wanted behaviour (T-73). (i) A date-tail guard refuses a first number and the rescan's candidate inside it ends by taking the next number's prefix, so the rest of the second number stays visible: `2026/06/80/0624/98.(0036)/69/062/772/12` gives `2026/06/80/[phone]/69/062/772/12` (`test_a_known_leak_a_refused_date_tail_lets_the_next_number_be_cut_short`); on `main` today, where the old first-digit rule hid it from the differential test. (ii) The same mechanism one number later: `2.06.85.068.489/00 36.2050.641.88/06` gives `2.06.85.[phone].2050.641.88/06` (the first entry of `KNOWN_UNNAMED_RUNS`, held exact by `test_every_digit_the_old_matcher_hid_stays_hidden_but_in_the_named_shapes`). (iii) The national pass reads a number greedily through a last group that begins the next number: `06 20 765 43 06 20 123 4567` gives `[phone] 20 123 4567` on `main` with no international number (`test_a_known_leak_a_second_number_that_ends_in_a_06_group_takes_the_third_prefix`, whose last row is that text), found by the review of R3. Not fixed in S070, by the advisor's reading: a fix bounds a span at a following prefix, which is a new and fragile mechanism for a matcher that regressed twice on a fix made at the end of a round, and three behaviour changes of one matcher in one pull request is the shape that regressed it; "no rescan inside a refused candidate" would have been worse, since three of the five named shapes exist because the rescan starts inside a refused span. Also left, old behaviour and no regression, pinned: a foreign first number or one with a digit too many still runs on into the second (`+44 20 7946 0958 06 20 765 4321` and `+36 30 123 45678 06 20 765 4321` give `[phone] 765 4321`), and three texts that read as dates keep what the matcher before the cut kept (`+36 1 234 56 12 06 2026 12345` gives `[phone] 12345`, `+36 30 123 4567 06 12 2026 14` gives `[phone] 2026 14`, `+36 30 123 4567 06.12.2026` gives `[phone].2026`); the foreign first number is the likelier of these in a real claim (the review of R3). Two classes the narrowing of the cut did not see are R3c's, not this row's (the section) | S070 (the differential's sweep; the review of R3; the review of R3b) | open; home: S070's second half, which stays open while the owner's questions do, since it holds the redaction's files, its pins and its sweep, and S069's second half (the cluster, the server's certificate, the ingestion's tenant) has none of them; the owner decides first whether to build a bound at all, and if S070 closes without it the row needs another home | S070 |
+| Three known leaks of the phone matcher leave digits of a phone number in the clear, each pinned by a test that says "A LEAK, open" with today's output, so nobody reads it as wanted behaviour (T-73). (i) A date-tail guard refuses a first number and the rescan's candidate inside it ends by taking the next number's prefix, so the rest of the second number stays visible: `2026/06/80/0624/98.(0036)/69/062/772/12` gives `2026/06/80/[phone]/69/062/772/12` (`test_a_known_leak_a_refused_date_tail_lets_the_next_number_be_cut_short`); on `main` today, where the old first-digit rule hid it from the differential test. (ii) The same mechanism one number later: `2.06.85.068.489/00 36.2050.641.88/06` gives `2.06.85.[phone].2050.641.88/06` (the first entry of `KNOWN_UNNAMED_RUNS`, held exact by `test_every_digit_the_old_matcher_hid_stays_hidden_but_in_the_named_shapes`). (iii) The national pass reads a number greedily through a last group that begins the next number: `06 20 765 43 06 20 123 4567` gives `[phone] 20 123 4567` on `main` with no international number (`test_a_known_leak_a_second_number_that_ends_in_a_06_group_takes_the_third_prefix`, whose last row is that text), found by the review of R3. Not fixed in S070, by the advisor's reading: a fix bounds a span at a following prefix, which is a new and fragile mechanism for a matcher that regressed twice on a fix made at the end of a round, and three behaviour changes of one matcher in one pull request is the shape that regressed it; "no rescan inside a refused candidate" would have been worse, since three of the five named shapes exist because the rescan starts inside a refused span. Also left, old behaviour and no regression, pinned: a foreign first number or one with a digit too many still runs on into the second (`+44 20 7946 0958 06 20 765 4321` and `+36 30 123 45678 06 20 765 4321` give `[phone] 765 4321`), and three texts that read as dates keep what the matcher before the cut kept (`+36 1 234 56 12 06 2026 12345` gives `[phone] 12345`, `+36 30 123 4567 06 12 2026 14` gives `[phone] 2026 14`, `+36 30 123 4567 06.12.2026` gives `[phone].2026`); the foreign first number is the likelier of these in a real claim (the review of R3). One more is the cost of the cut's last narrowing (R3c): the cut is not made where any prefix token inside the second number begins a national number that reaches beyond it, so the text the cut row quoted, `Tel: +36.62.7320.12 00 36 69 0619 45/(00 36).92.803.020.`, gives `Tel: [phone] [phone].92.803.020.` again (the output from before the cut: the entry of `KNOWN_UNNAMED_RUNS` that the cut had removed is back, so the exact list holds three, and the row sits in `GREEDY_NATIONAL_READING` under "A LEAK, open"), and so do about 0.03 per cent of ordinary texts, which keep the leak from before the cut; it is no loss against the matcher before the cut (the session accepted it and did not refine the condition, since a refined condition is a new mechanism) | S070 (the differential's sweep; the review of R3; the review of R3b) | open; home: S070's second half, which stays open while the owner's questions do, since it holds the redaction's files, its pins and its sweep, and S069's second half (the cluster, the server's certificate, the ingestion's tenant) has none of them; the owner decides first whether to build a bound at all, and if S070 closes without it the row needs another home | S070 |
 | Small ends S070 left, all low and in code or comments that its documents contract could not write: `claimant_name.py` writes `EMAIL_PLACEHOLDER` directly where the e-mail pass now reads the mapping; the docstrings of `test_redaction_residuals.py` and `test_redaction_differential.py` speak of the international run-on in the terms from before the cut, and a comment of the differential (`_international_run_on`) may still say it is cut only at a slash or a dot; the comment "Every pattern below is linear" now stands above the e-mail patterns only (`redaction_email.py`) and one above `redact` still gives a size for `redaction.py` that is now wrong; the `ClaimView` docstring in `adjuster.py` says the facts are the submission's fields as text and never the name, and they now hold two derived gap rows, and its module docstring says nothing of the mark; `assess`'s docstring does not say why the posted-text flag and the instruction in the description are checked before the clauses (decision 3 of S070); `adjuster.py` is 795 lines, so its next edit crosses the soft ceiling; `moves._take_from_state` has seven parameters, `_could_take_documents` ignores two of its three, and the run input's shape is built in two places in `triaging.py` (`input_for_run` and `run_input_with_documents`), held equal by a byte test and a frozen golden file; `RESTS_ON_NOTES` and `RESTS_ON_MARKS` are plain `Final` dicts, and the header "Recommendation rests on" is typed in both templates | S070 (reports and reviews) | open; low | S074 |
 | What the adjuster's page looks like and what the demo script says of it, not seen: nobody rendered the claim page with its longer labels (the report date's is 68 characters, the first gap's 60; the list has no width rule, so nothing is cut, but no one looked); `infra/kind/demo.sh` prints "none (the rules decided; no model was called)" whenever `drafted_by` is null, which also covers an assessment `not_needed` with no recommendation and an `unavailable` assessment where no call was made, so it can disagree with the page's mark, which speaks of what a recommendation rests on; what `make smoke` reads of the queue page was not checked against the new column | S070 (A1, A4) | open; low | S073 |
 | The adjuster's page and queue, small ends of the mark and the dates (T-26, T-66): the queue reads `recommendation` and `assessment` from the stored JSON without validating the proposal, so a proposal that fails validation, which the claim page shows as "could not be read", can still carry a mark in the queue (a hand-written row only), and for a claim whose last triage failed it describes the latest stored proposal, as the Reason column does; the pairs the validator admits and the graph never writes (reject with none applies, approve with applies) are marked "model"; `received_at` must be aware and is not checked at run time; a form sent just before midnight in Vienna shows "1 day" for the second gap (the form stamps the day earlier than the API's `now()`), which is harmless; the first gap reads as a fact while it is two unchecked dates | S070 (reviews, A1, A4) | open; low | S070 |
@@ -13564,10 +13564,10 @@ says so.
 ### S070 — Claims intake and what the adjuster is told
 **Status:** doing · **Started:** 2026-10-07 · **Finished:** —
 **Left before it is done:** the owner's decision on uploads (the step
-started without it, and built nothing for them); R3c, the last narrowing of
-the international cut, and its review (below); and four more questions of
-the owner's (For the owner). The first half is written here as it stands;
-the second half takes what the owner decides.
+started without it, and built nothing for them); and four more questions of
+the owner's (For the owner). The first half is written here as it stands
+(R3c and its review are in; the whole suite is the main session's); the
+second half takes what the owner decides.
 **Goal:** the adjuster's page says whether a recommendation rests on a
 model's reading or on the rules alone and shows the claim's dates for what
 they are, the Claims API no longer builds the claimant's name pattern while
@@ -13579,7 +13579,8 @@ without a payment. Uploads are not built.
 
 **What the step is not:** it builds nothing for uploads, it sets no bound on
 what a name may replace, it does not reorder the assessor's checks, and it
-does not fix three leaks of the phone matcher that it found and pinned.
+does not fix three leaks of the phone matcher that it found and pinned (and
+the cut it built gives one of the row's own texts back to the leak, below).
 Nothing of it ran on a cluster.
 
 **The owner's word, and why the step started without it.** The plan's row
@@ -13670,11 +13671,28 @@ what each ended as):
   stack files whole) ran after each landing that touched the redaction, the
   name or the assessor, with the rule that a changed recorded request stops
   the contract (it would need a paid recording). None did.
-- **The exit for the cut.** If the review of R3c finds a third class of text
-  in which the cut shows a digit that the matcher before it hid, R3, R3b and
-  R3c are reverted together, the backlog's cut row stays open with what three
-  rounds learned, and the pull request changes no output of the redaction at
-  all (R1's move, R2's tests and R4's mapping read stay).
+- **The exit for the cut, and that it was not taken.** If the review of R3c
+  found a third class of text in which the cut shows a digit that the matcher
+  before it hid, R3, R3b and R3c were to be reverted together, the backlog's
+  cut row left open with what three rounds learned, and the pull request to
+  change no output of the redaction at all (R1's move, R2's tests and R4's
+  mapping read stay). The review found no third class, so the exit was not
+  taken.
+- **R3c's stop, and the fall-back the session accepted (08:36 UTC).** With
+  the reviewer's wider condition one CUT row failed: the text the backlog's
+  cut row quoted (`Tel: +36.62.7320.12 00 36 69 0619 45/(00 36).92.803.020.`)
+  is no longer cut, because a token inside the second number (`0619 45/(00
+  36)`) reads as a Budapest number that reaches beyond the number's end and
+  the condition cannot tell that overlapping reading from a third number. It
+  gets the output from before the cut, and the known leak that R2 pinned
+  returns to the exact list. The session accepted this without a further
+  consultation (the advisor's reading of 08:02 had settled the case: a
+  condition that is too broad gives the old output) and did not refine the
+  condition, since a refinement is a new mechanism in a matcher that has
+  regressed three times; it is not the third class (no digit is lost against
+  the matcher before the cut). What it means, plainly: the cut turns the
+  plain shape, two numbers one after the other at a space, and no longer the
+  very text the row quoted.
 
 **Advisor:** four consultations by the main session.
 
@@ -13701,23 +13719,27 @@ what each ended as):
   leaks with a count, a backlog row and a clause in T-73.
 - **08:02 UTC, at a surprise: the review of R3 found a third number left
   visible.** The advisor confirmed the narrowing (R3b) and gave the property
-  that answers both worries: after it, every text gets either R3's cut or the
-  old output exactly, so a too-broad narrowing gives the old output and a
-  too-narrow one keeps R3's regression, and neither opens anything. It
+  that answers both worries: after it, every international number gets
+  either R3's cut or the old output exactly (per international number, not
+  per text: the review of R3c found that a text with two international
+  numbers can be a mix of the two, none of them losing a digit), so a
+  too-broad narrowing gives the old output and a too-narrow one keeps R3's
+  regression, and neither opens anything. It
   changed: pins first with the OLD output as the expectation, one definition
   of "taken" reused, a generator form, "never fewer" shown per character, the
   same reviewer once more, the replay after it.
 - **08:30 UTC, at a surprise: the review of R3b found two classes the
   narrowing misses.** The advisor chose R3c over taking R3 and R3b out, with
   the evidence changed: the reviewer saw over 1.5 million texts that every
-  output is the cut or the output before it even where R3b failed, so the
-  failures were the condition not firing and never a third output, and a
+  output is the cut or the output before it (per international number, as
+  above) even where R3b failed, so the failures were the condition not
+  firing and never a third output, and a
   wider condition can only move texts from "cut" to "old". It changed: the
   implementer does not claim "never fewer" from its own corpus a third time
   (the evidence is the reviewer's fuzz rerun on R3c and a test in the suite,
   the matcher before the cut frozen beside the differential's reference, red
   on R3b and green on R3c); the exit is one round (the exit above); and the
-  shared-leak numbers wait in the documents until R3c lands.
+  shared-leak numbers waited in the documents until R3c landed.
 - The reviews' disagreement of 07:03 (the refused request's compile) was
   decided by the session without a consultation, as A4.
 - **Before the pull request:** none so far; the main session records here
@@ -13776,6 +13798,15 @@ what each ended as):
   is R3c's gate: a seeded property test in the suite against the matcher
   before the cut, shown red on the commit under review, and the reviewer's
   own fuzz rerun on the new commit; without that test R3c is a third report.
+  R3c's review then found no digit lost over about 2.84 million texts.
+- **The first narrowing saw only one form, and the contract had named it.**
+  R3b's condition looked at a last group of exactly `06` or `00`, because the
+  session's contract for it described exactly that form (the review of R3
+  had shown that one text). A second number can end in `0036`, `00 36`,
+  `(0036)` and other spellings of the prefix, or hold the prefix as an inner
+  group, and the narrowing saw none of them; the generator written for it
+  wrote only `06` and `00`. The review of R3b found both classes, and R3c
+  replaced the form with a condition over every prefix token.
 - **The row's measurement did not carry.** The backlog row said the cut
   brings the run-on's hits from 62 to 3 and named `_phone_shape_holds` as
   "complete by the numbering plan"; that function checks shape and digit
@@ -13818,12 +13849,16 @@ redaction, the name or the assessor):
 - **R4**, `ebe4c9a`: the e-mail pass reads `PLACEHOLDERS["email"]`, a test
   swaps the mapping, and `redact`'s docstring says which national number
   after an international one is still left.
-- **R3c, pending.** The reviewer's generalised narrowing (no cut where any
-  prefix token inside the second number starts a national number that
-  reaches beyond its end), pins for the `0036` forms and the class B example,
-  a generator form, and the property as a seeded test in the suite against the
-  frozen matcher before the cut, red on R3b and green on R3c; then the same
-  reviewer once more. Its result goes in the lines below.
+- **R3c**, `951b72c`: the reviewer's wider condition (no cut where any
+  prefix token inside the second number begins a national number that reaches
+  beyond its end), ten pins in the third table with the output before the cut
+  as the expectation (the `0036` forms and the class B examples, each red on
+  R3b), a second adversarial case, and the property as a seeded test in the
+  suite, `test_redaction_never_fewer.py`, against the matcher before the cut
+  frozen as `tests/meridian/redaction_phone_before_the_cut.py`. It stopped
+  once (the text the cut row quoted fell back to the old output) and the
+  session accepted that (the decisions above). Its result and its review are
+  in the lines below.
 - **The reviews:** security and Python on A1 and A3 together (no critical or
   high finding; one medium and four low from security, four medium and a
   list of low from Python); Python on R1 and on R3 alone; Python on R3b alone.
@@ -13838,7 +13873,8 @@ redaction, the name or the assessor):
   guardrails, the three name test files and the import contracts; `1551
   passed` before it); R2 `1631 passed in 17.45s`; R3 `1682 passed in 16.23s`
   and, with a database, `1205 passed in 54.64s`; R3b `1699 passed in
-  16.30s`; R4 `1700 passed in 16.01s`. `ruff`, the format check and
+  16.30s`; R4 `1700 passed in 16.01s`; R3c `1716 passed in 15.76s` (the
+  guardrails). `ruff`, the format check and
   `lint-imports` (six contracts kept) were clean in each report. Several
   implementers could not read an exit status in the same shell and say so.
 - **The recording did not move.** The two stack files of the evaluation and
@@ -13847,12 +13883,20 @@ redaction, the name or the assessor):
   session recorded them; the free replay is what proves the redaction and the
   name left every recorded request as it was, since neither is in a
   fingerprint (`data/evaluation/README.md`). No baseline was regenerated.
-- **The redaction's numbers after S070.** The five named shapes hold 176,
-  40, 152 and 7 lost runs for the first four and R3C-PINS for the run-on
-  (63 before the cut, on the reseeded corpus); the shared-leak pins are
-  R3C-PINS; the exact list of unnamed runs holds 2 entries. These are
-  per lost run and over a reseeded corpus, so they do not continue the
-  per-text counts of S067 (252, 64, 48, 5 and 62).
+- **The redaction's numbers after S070** (from R3c's report; the review
+  agrees where it speaks of them). The five named shapes hold 176, 40, 152
+  and 7 lost runs for the first four and 11 for the run-on (63 when the step
+  began, on the reseeded corpus; the narrowings never moved the 11). The
+  shared-leak pins are 13,965 texts that leave an inserted digit and 13,829
+  of them that the reference leaves too; they are larger than the 12,084 and
+  11,911 of R2 because the corpus grew by 2,000 seeded texts in R3b (a second
+  number that ends in the next number's prefix), and the first of them is one
+  more than R3b's 13,964 because the text of the cut row went back to the
+  leak. The exact list of unnamed runs holds three entries: two known leaks
+  of the mechanism R2 found, of which one is the cut row's own text given
+  back by the narrowing, and the one that is no regression (digits glued to
+  an `x`). These are per lost run and over a reseeded corpus, so they do not
+  continue the per-text counts of S067 (252, 64, 48, 5 and 62).
 - **The cut's evidence, in the order it arrived.** R3: 125 of the 24,000
   texts changed output, in none of them did the new output keep more digits
   (its report; the review of R3 showed a shape the corpus did not write).
@@ -13861,7 +13905,8 @@ redaction, the name or the assessor):
   it did not write).
 - **The review of R3b (what held, what failed).** Held: over 1.5 million
   texts of four grammars, every output is R3's cut or the output before the
-  cut, exactly, and R3b's own table and pins are sound (15 of 15 rows equal
+  cut, exactly (per international number, as the review of R3c then showed),
+  and R3b's own table and pins are sound (15 of 15 rows equal
   the old output, 14 red on `9433c49`). Failed: the claim. Class A, high: a
   second number that ends in a group `0036` or `00 36` (also in parentheses)
   that begins a third (`+36 30 123 4567 06 20 765 0036 1 234 5678` gave
@@ -13874,10 +13919,67 @@ redaction, the name or the assessor):
   had waved them off. A generalised narrowing, run as a scratch patch, lost
   no digit over 1.15 million texts and fell back to the old output in 0.03 to
   0.1 per cent of them; R3c is that patch with its test.
-- **R3c's result and its review.**
+- **R3c's result (`951b72c`, implemented and tested, not run on a cluster).**
+  The reviewer's wider condition: no cut where any prefix token inside the
+  second number begins a national number that reaches beyond the number's
+  end (`_national_span` is the one definition of "taken"). The matcher from
+  before the cut is frozen as a test reference, and a seeded property test of
+  4,000 texts (fixed seed, no clock; the nine spellings of the shared prefix
+  token and the inner-group form, about half with an international number in
+  front, the five space characters; 3,979 replayed, 21 skipped because an
+  earlier pass changed the text) asserts that no digit the matcher before
+  the cut hid is visible now. It was red against R3b (863 of 4,000 texts
+  showed a digit hidden before the cut; none in the `06`, `(06)` and `00`
+  forms) and is green now; it runs in about a second.
+- **What R3c cost, said plainly.** The wider condition gives back the very
+  text the backlog row quoted: `Tel: +36.62.7320.12 00 36 69 0619 45/(00
+  36).92.803.020.` gives `Tel: [phone] [phone].92.803.020.` (the output from
+  before the cut, `(00 36).92.803.020` visible), because a token inside the
+  second number reads as a number that reaches beyond it and the condition
+  cannot tell that overlapping reading from a third number. It is pinned as a
+  known leak again, in the third table and in the exact list. The session
+  accepted that fall-back and did not refine the condition. More generally,
+  about 0.03 per cent of ordinary texts (91 of 300,000 realistic texts) fall
+  back to the leak from before the cut: a second number with an inner group
+  that starts `06` or `00`, followed by an amount, a date or another number
+  (`+36 30 135 7400 06 1 065 3027 250 000 Ft` gives `[phone] 3027 250 000
+  Ft`, where R3b gave `[phone] [phone] 250 000 Ft`; `+36 25.805.094 06-49 068
+  916 06 12 2026 14` gives `[phone] 916 06 12 2026 14`, where R3b gave
+  `[phone] [phone] 06 12 2026 14`). In all 91 the output equals the output
+  before the cut, so nothing is lost against it, though against R3b the
+  review counts fewer digits hidden in 49 of them and more in 58 (a different
+  few digits, not a loss).
+- **The review of R3c (the same reviewer, alone; no critical or high
+  finding, no third class, so the exit was not taken).** Digits that the
+  matcher before the cut hid and the cut shows, over about 2.84 million texts
+  of its own grammars, replayed per character, were 0 in every run:
 
-R3C-RESULT
+  | Grammar | Texts | Digits lost |
+  |---|---|---|
+  | wild, two seeds | 2 × 150,000 | 0 |
+  | realistic, two seeds | 2 × 300,000 | 0 |
+  | chain, two seeds | 2 × 200,000 | 0 |
+  | shared-prefix, two seeds | 2 × 200,000 | 0 |
+  | shared-prefix, one spelling at a time (eight spellings) | 8 × 30,000 | 0 each |
+  | token soup (random prefix tokens, numbers, separators) | 400,000 | 0 |
+  | pieces (whole small numbers, truncated, extended, glued), two seeds | 2 × 400,000 | 0 |
 
+  The review's own limits, which this section carries. (a) "Every output is
+  the output before the cut or the cut's" holds per international number and
+  not per text: a text with two international numbers can be a mix, one
+  number cut and the other not. The review found 24 such outputs, one in the
+  wild grammar's 300,000 texts and 23 in the 800,000 of the two "pieces"
+  runs (the contract that sent this section said 24 in 800,000 of one
+  grammar; the review's table is the source and gives 1, 14 and 9), none of
+  them losing a digit. (b) The 0.03 per cent above. The property test cannot
+  generate two international numbers, a slash or a dot inside the second
+  number, or a first number that is not a complete Hungarian number (where no
+  cut is made anyway); it passes on "at most one international number" by
+  construction, so it holds the claim per international number. The
+  reviewer's wide fuzz is not in the suite. The cost in time is about four
+  times from 20,000 to 80,000 characters on ten shapes, as before the cut,
+  and up to about 2.6 times the matcher before the cut in absolute time on
+  the densest shape; the new adversarial case probably pins little.
 - **The whole suite on the final tree:**
 
 FINAL-SUITE-RESULT
@@ -13901,9 +14003,12 @@ FINAL-SUITE-RESULT
 - **The lock probe on a cold, loaded database.** A second session's
   `FOR UPDATE NOWAIT` shows the row unlocked while the pattern is built, in
   tests only.
-- **Wide fuzzing of the cut by the implementers.** It was done by the
-  reviewer, in scratch scripts that the suite does not hold; R3c puts the
-  property in the suite.
+- **Wide fuzzing of the cut.** It was done by the reviewer, in scratch
+  scripts that the suite does not hold; R3c puts the property in the suite
+  for one international number per text. Not generated by the suite's test: a
+  text with two international numbers (where the output can be a mix of the
+  cut and the output before it, per international number), and a slash or a
+  dot inside the second number. A follow-up in the known-leaks row's home.
 - **A model's behaviour.** The injection numbers are the scripted model's;
   what `gpt-4o` does with an injection it is shown is not measured (S071).
 
@@ -13923,8 +14028,11 @@ rows are in Part B):
 - The name's lacking forms, the pattern's size, `re._compiler` and the
   compile under the transaction: closed in part (A3, A4); no form was added,
   by decision.
-- The cut of an international span at a space: closed in part, pending R3c
-  (R3, R3b), with what it leaves in the known-leaks row.
+- The cut of an international span at a space: closed in part (R3, R3b,
+  R3c): two numbers one after the other at a space, where the first is a
+  complete Hungarian number, are both replaced; not closed: the row's own
+  text, a foreign first number, the 0.03 per cent that fall back, and the
+  three known leaks of the national pass, all in the known-leaks row.
 - The dotted or slashed number with a `06` or `00` group: stays, not built,
   asked of the owner with the recommendation to leave it.
 - The differential test's gaps: closed (R2, with R2b).
@@ -13961,15 +14069,19 @@ that nothing is built):
 - **(d) The wider cut of a dotted number with a `06` or `00` group, and a
   third date guard.** Each trades a new over-redaction for a residual in a
   matcher that regressed twice; the recommendation is to leave both.
-- **(e) Where the three known leaks go.** The recommendation is S070's second
-  half, and a fix only with the owner's word, since it is a new mechanism; or
-  the owner may leave them pinned and named. If S070 closes without them,
-  they need another home.
+- **(e) Where the three known leaks go, and the cut's fall-back.** The
+  recommendation is S070's second half, and a fix only with the owner's word,
+  since it is a new mechanism; or the owner may leave them pinned and named.
+  The fall-back (the row's own text and about 0.03 per cent of ordinary texts
+  keep the leak from before the cut) is in the same row. If S070 closes
+  without them, they need another home.
 
 **Follow-ups:**
 
 - In the backlog, each with its step: the three known leaks and what the cut
-  leaves (S070); the small ends in code and comments (S074); the page's look,
+  leaves, with the property test's two missing generator forms (two
+  international numbers; a slash or a dot inside the second number) (S070);
+  the small ends in code and comments (S074); the page's look,
   the demo script's line and what a cluster run would show (S073); the
   adjuster's page and queue ends (S070); the same-tenant timing (S021); a
   refused request's compile and the ingress limit (S020).
@@ -14561,19 +14673,22 @@ that nothing is built):
   threat changed. Seven backlog rows closed and three closed in part, three
   changed and waiting for a measurement, one re-homed in part, nine new, and
   three questions for the owner.
-- **PLAN-VERSION, 2026-10-07:** S070, first half, as it stands before R3c's
-  review: the adjuster's claim page and queue say whether a recommendation
-  rests on a model's reading or on the rules alone (one function over the
-  stored fields, no migration; an automatic approval never waits for an
+- **PLAN-VERSION, 2026-10-07:** S070, first half: the adjuster's claim page
+  and queue say whether a recommendation rests on a model's reading or on
+  the rules alone (one function over the stored fields, no migration; an
+  automatic approval never waits for an
   adjuster, so the mark does not reach it) and the page labels the loss date
   and the report date as not checked, with two gaps in days; the claimant's
   name pattern is built before the claim's row is locked and only for a
   request the claim can go on with; the redaction is split into six modules
   by a proven move, its differential test classifies every lost run, and an
   international Hungarian number is cut at a space before a second number
-  (narrowed once after a review and narrowed again by R3c, pending; the claim
-  that no text loses a hidden digit was false twice, from the implementer's
-  own corpus). Implemented and tested, none of it run on a cluster, nothing
+  (narrowed twice after two reviews; the claim that no text loses a hidden
+  digit was false twice, from the implementer's own corpus, and a seeded test
+  in the suite now holds it per international number; the last narrowing
+  gives one of the row's own texts and about 0.03 per cent of ordinary texts
+  back to the leak from before the cut, and the review found no third
+  class). Implemented and tested, none of it run on a cluster, nothing
   paid, no fingerprint moved. The step stays open: the owner's decision on
   uploads and four more questions. T-02, T-26, T-38, T-66, T-73 and T-76
   brought to the code, T-73 with three known leaks of the phone matcher
