@@ -249,7 +249,7 @@ def test_a_denied_request_is_a_pass_that_names_the_reason_and_is_deleted_after_t
     assert run.temporary_files == []
 
 
-def test_the_request_is_one_the_meridian_policy_would_approve_in_meridian_but_not_here(
+def test_the_request_is_in_a_namespace_the_services_policy_does_not_select(
     tmp_path: Path,
 ) -> None:
     run = run_check(tmp_path)
@@ -282,10 +282,17 @@ def test_the_request_is_one_the_meridian_policy_would_approve_in_meridian_but_no
     assert spec["duration"] == "1h0m0s"
     assert not spec.get("isCA")
     assert base64.b64decode(spec["request"]).decode() == STUB_CSR + "\n"
-    assert fnmatch(constant("REFUSED_URI"), services["allowed"]["uris"]["values"][0])
-    # So only the namespace selector, not the request's shape, refuses it: the
-    # namespace is not one meridian-services selects, and the policy that
-    # denies selects the issuer from any namespace.
+    # Since S072 the policy lists the URIs the chart renders (no wildcard) and
+    # smoke's own URI is not one of them: the policy would deny this request in
+    # `meridian` too, so the namespace is no longer the only reason it is
+    # refused. Smoke's line still reads as the namespace check it was; making
+    # that true again means a listed URI in smoke.sh (not this test's change).
+    assert not any(
+        fnmatch(constant("REFUSED_URI"), pattern)
+        for pattern in services["allowed"]["uris"]["values"]
+    )
+    # The policy that denies selects the issuer from any namespace, and the
+    # services' policy does not select this namespace.
     assert NAMESPACE not in services["selector"]["namespace"]["matchNames"]
     denying = policies["meridian-deny-unlisted"]["spec"]["selector"]
     assert "namespace" not in denying

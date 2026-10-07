@@ -308,8 +308,10 @@ collector's), and approver-policy may act for no other signer
 ([`values/approver-policy.yaml`](values/approver-policy.yaml)):
 
 - `meridian-services` permits a request for the `meridian-services` issuer
-  only from the `meridian` namespace, with a URI under
-  `spiffe://meridian.kind/ns/meridian/sa/`, a `*.meridian.svc` DNS name, the
+  only from the `meridian` namespace, with a URI and DNS names out of the
+  lists of what the chart renders (no wildcard; a test holds them equal to the
+  chart's Certificates; it stops a request for a new name, not a second
+  Certificate for a listed one), the
   three usages the services use (digital signature, client auth, server auth)
   and at most 90 days; a CA, a common name or any other field is not allowed.
 - `meridian-services-ca` permits the CA certificate's own request (issuer
