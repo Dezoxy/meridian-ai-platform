@@ -67,14 +67,25 @@ one.
 the tree and expects the linter to say so, and fails when a new package under
 `src/meridian/platform/` is missing from the third contract's list.
 
-### What this page is not
+### Inside one container: the Agent Runtime
 
-It is not a component view. Which responsibilities sit inside one container
-(the Agent Runtime's two hosts, its model client, its tool client, its
-checkpoints) is a view of the Structurizr model, and none exists yet: that is
-**designed**, and waits for the packages to be split by service.
+The import rules say what a package may reach. What sits inside one running
+service is a view of the model. One exists, of the Agent Runtime, where the
+layering is a decision
+([ADR 2](../decisions/0002-langgraph-behind-a-framework-agnostic-contract.md),
+[ADR 9](../decisions/0009-run-a-second-agent-framework-behind-the-same-host-protocol.md)):
+two hosts behind one protocol, and one client each for the model and the
+tools. **Implemented**, and read from the code, not run. The other containers
+have no component view.
+
+![Component view: the responsibilities inside the Agent Runtime and the containers each one reaches](embed:RuntimeComponents)
+
+A component is a responsibility of the running service, not a file. The view
+register in the architecture README says which parts of the package are left
+out and why.
 
 **Update trigger:** a contract in `pyproject.toml` is added, removed or
-changed. The plan's step S082 adds a contract per service and moves the
-workloads' graphs into a package of their own, which changes both the diagram
-and the table.
+changed, or a module of the runtime gains or loses a responsibility. The
+plan's step S082 adds a contract per service and moves the workloads' graphs
+into a package of their own, which changes the diagram, the table and the
+view.
