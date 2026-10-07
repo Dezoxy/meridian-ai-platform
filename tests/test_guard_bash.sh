@@ -786,9 +786,10 @@ else
 fi
 ask_for "360 opt-in assignments set to 0 ask, the loop reads sixteen" ask "$paid_env_shape"
 
-# The paid call itself (S071, G2): az rest and the Azure identity library's
-# credentials in an interpreter line ask, and the message says that the
-# gateway's targets are the only door. MAKEFLAGS asks with the paid message.
+# The paid call itself and the additions of S071 (G2, G4). The asks say that the
+# command reaches a live model without the gateway and that the gateway's
+# targets are the only door; a paid target found by co-occurrence and one given
+# through MAKEFLAGS say what the other paid asks say.
 for command_text in 'az rest --url https://x' 'python3 -c "import azure.identity"'; do
   reason="$(reason_of "$command_text")"
   case "$reason" in
@@ -799,11 +800,30 @@ for command_text in 'az rest --url https://x' 'python3 -c "import azure.identity
       ;;
   esac
 done
-reason="$(reason_of 'MAKEFLAGS="-- eval-record" make')"
+# shellcheck disable=SC2016  # the commands are samples for the hook, not for this shell
+for command_text in 'MAKEFLAGS="-- eval-record" make' 'T=eval-record; make $T' 'make -C $(cd x; pwd) gateway-live'; do
+  reason="$(reason_of "$command_text")"
+  case "$reason" in
+    *"live model"*"spend money"*"owner's yes"*"stated cost"*) echo "ok   the ask for ${command_text} says it calls a live model and spends money" ;;
+    *)
+      echo "FAIL the ask for ${command_text} does not say it calls a live model and spends money: $reason"
+      fail=1
+      ;;
+  esac
+done
+reason="$(reason_of 'make -m "aws-destroy"')"
 case "$reason" in
-  *"live model"*"spend money"*"owner's yes"*"stated cost"*) echo "ok   the ask for a paid target given through MAKEFLAGS says it calls a live model and spends money" ;;
+  *"owner's"*"terminal"*"no session holds the credentials"*) echo "ok   the deny for a quoted removal target behind a make option says it is the owner's, in a terminal" ;;
   *)
-    echo "FAIL the ask for a paid target given through MAKEFLAGS does not say it calls a live model and spends money: $reason"
+    echo "FAIL the deny for a quoted removal target behind a make option does not say it is the owner's, in a terminal: $reason"
+    fail=1
+    ;;
+esac
+reason="$(reason_of 'make -m "aws-apply"')"
+case "$reason" in
+  *"COST MONEY"*"owner"*"no session holds the credentials"*) echo "ok   the ask for a quoted apply target behind a make option says it costs money and who runs it" ;;
+  *)
+    echo "FAIL the ask for a quoted apply target behind a make option does not say it costs money and who runs it: $reason"
     fail=1
     ;;
 esac
@@ -821,16 +841,17 @@ else
 fi
 ask_for "2000 repetitions of az before rest ask" ask "$(for _ in $(seq 2000); do printf 'az '; done)rest"
 
-# The prose pass (S071, G3, C1). It reads every message option (-m, -am, --body,
-# --title, --notes, --message) and, since G2, asked for each whether make stood
-# earlier in the segment by scanning the segment for its quoted pieces again: a
-# line of unmatched escaped quotes and then 700 flags took 56 s of CPU against a
-# hook timeout of 10 s (a hook past its timeout does not block). The quoted
-# pieces are masked once per call now. Each shape stays under the one CPU bound
-# (they take 0.3 to 0.7 s here); the first four are the review's, the worst
-# first, the rest are the next-worst shapes found by trying every flag the pass
-# reads, a make in the segment, nested quotes, long runs of separators and the
-# AWS and Azure reads of the same copy.
+# The passes S071 adds (G4): a copy of the command with the separators inside
+# quoted pieces blanked, a pass of its own that empties message values, and the
+# pass that finds a quoted AWS target behind a make option. G2's pass over the
+# older copy ran 14 to 56 s on a line of unmatched escaped quotes and message
+# flags (the hook's timeout is 10 s, and a hook past it does not block); the new
+# passes mask the quoted pieces once and scan the text a few times. Each shape
+# stays under the one CPU bound (they take 0.1 to 1.4 s here). The first four
+# are the first review's, the worst first; the rest are the next-worst shapes
+# found by trying every flag the passes read, a make in the segment, nested
+# quotes, long runs of separators and every trigger word of the passes at once
+# (the second review's worst, which starts four Python passes).
 repeat() { # $1=text $2=count: the text, that many times
   local i out=""
   for ((i = 0; i < $2; i++)); do out+="$1"; done
@@ -858,8 +879,12 @@ cpu_shape "make, 1500 escaped quotes and 700 empty -m values" "git make $(repeat
 cpu_shape "aws, 1500 escaped quotes and 400 make -m values" "aws $(repeat "$esc_quote" 1500)$(repeat " make -m 'x'" 400)"
 cpu_shape "a long run of quoted values after -m" "git -m $(repeat "'x'" 2500)"
 cpu_shape "3000 separators and 800 empty -m values" "git $(repeat ';' 3000)$(repeat " -m ''" 800)"
-# A line that reaches the pass with padding is still read to its end: the denied
-# part after the padding is denied, not skipped.
-ask_for "the review's worst shape followed by a denied part is denied" deny \
+cpu_shape "every trigger word, 3900 escaped quotes and 300 separators" \
+  "git aws rest record azure- credential MERIDIAN_ python3 $(repeat "$esc_quote" 3900)$(repeat '&' 300)"
+# A line that reaches the passes with padding is still read to its end: the
+# denied part after the padding is denied, not skipped.
+ask_for "the first review's worst shape followed by a denied part is denied" deny \
   "git $(repeat "$esc_quote" 1500)$(repeat " -m ''" 700); git push --force"
+ask_for "every trigger word and padding followed by a denied part is denied" deny \
+  "git aws rest record azure- credential MERIDIAN_ python3 $(repeat "$esc_quote" 3900)$(repeat '&' 100); git push --force"
 exit "$fail"
