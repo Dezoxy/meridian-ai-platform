@@ -1,7 +1,19 @@
 #!/usr/bin/env bash
 # Regression test for .claude/hooks/guard-bash.sh. Each line of
 # guard-bash-cases.jsonl carries a sample command and the expected decision
-# (deny, ask or none). Run: bash tests/test_guard_bash.sh
+# (deny, ask or none), and may carry the working directory the harness passes
+# in its input ("cwd"; a line without one is as before) and a "note" that the
+# runner does not read. Run: bash tests/test_guard_bash.sh
+#
+# The rows whose note says "false alarm by design" are searches (grep, rg and
+# the like with a quoted word) and a pseudo-terminal word near the wrapper's
+# name that the guard denies or asks about though they do not use what they
+# name: the guard reads a quoted word as a use of it (a search, an echo, a
+# commit message is the exception that is blanked). Search with the Grep tool.
+# A try at emptying a search's quoted pattern (S036 T3b) was taken out because
+# it hid a command substitution, a fake grep inside a literal and a file operand
+# after -e or -f; the rows marked "finding N" hold those and the other cases the
+# second security pass found.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 hook="$here/../.claude/hooks/guard-bash.sh"
@@ -11,7 +23,7 @@ while IFS= read -r line; do
   [ -z "$line" ] && continue
   n=$((n + 1))
   expect="$(jq -r '.expect' <<<"$line")"
-  got="$(jq -c '{tool_input:{command:.command}}' <<<"$line" | bash "$hook" \
+  got="$(jq -c '{cwd:(.cwd // null),tool_input:{command:.command}}' <<<"$line" | bash "$hook" \
     | jq -r '.hookSpecificOutput.permissionDecision // "none"')"
   [ -z "$got" ] && got=none
   if [ "$got" != "$expect" ]; then
@@ -145,6 +157,17 @@ esac
 # limit is far above that and far below a ten-second timeout.
 big_input="$(mktemp)"
 trap 'rm -f "$big_input"' EXIT
+# One bound for every CPU check below: 3 s of CPU, whatever the shape. The
+# shapes take 0.05 to 0.85 s of CPU on the development machine, and one of the
+# older bounds (1.5 s for the worst shape under the byte bound) took 1.736 s on
+# the hosted CI runner once, where the same shape took 0.74 s here: a machine
+# can be twice as slow, and a fixed small bound then fails for the machine and
+# not for the hook. A hook that has come to cost more than the bytes it reads
+# should (a pattern gone quadratic) lands near 10 s, so 3 s still catches it.
+# The watchdog (5 of the hook's 10 s) carries the protection; these are
+# regression guards. A ratio against a baseline shape was the other form and
+# is not used: its baseline is itself a measurement of the loaded machine.
+cpu_bound=3
 # The command is nine thousand segments, not a heredoc: a heredoc written to a
 # file is stripped before any pattern, and cheap to read even without the bound.
 jq -nc --arg c "$(for _ in $(seq 9000); do printf 'echo a; '; done)" \
@@ -152,10 +175,10 @@ jq -nc --arg c "$(for _ in $(seq 9000); do printf 'echo a; '; done)" \
 TIMEFORMAT='%U %S'
 cpu="$( { time bash "$hook" < "$big_input" > /dev/null; } 2>&1 )"
 cpu_seconds="$(awk '{ print $1 + $2 }' <<<"$cpu")"
-if awk -v s="$cpu_seconds" 'BEGIN { exit !(s < 0.5) }'; then
-  echo "ok   a 70 KB command takes ${cpu_seconds} s of CPU, under 0.5"
+if awk -v s="$cpu_seconds" -v b="$cpu_bound" 'BEGIN { exit !(s < b) }'; then
+  echo "ok   a 70 KB command takes ${cpu_seconds} s of CPU, under ${cpu_bound}"
 else
-  echo "FAIL a 70 KB command takes ${cpu_seconds} s of CPU, not under 0.5"
+  echo "FAIL a 70 KB command takes ${cpu_seconds} s of CPU, not under ${cpu_bound}"
   fail=1
 fi
 # The worst shape under the byte bound: 8192 one-word segments are 16384 bytes
@@ -163,10 +186,10 @@ fi
 jq -nc --arg c "$(segments 8192 a)" '{tool_input:{command:$c}}' > "$big_input"
 cpu="$( { time bash "$hook" < "$big_input" > /dev/null; } 2>&1 )"
 cpu_seconds="$(awk '{ print $1 + $2 }' <<<"$cpu")"
-if awk -v s="$cpu_seconds" 'BEGIN { exit !(s < 0.5) }'; then
-  echo "ok   16384 bytes of one-word segments take ${cpu_seconds} s of CPU, under 0.5"
+if awk -v s="$cpu_seconds" -v b="$cpu_bound" 'BEGIN { exit !(s < b) }'; then
+  echo "ok   16384 bytes of one-word segments take ${cpu_seconds} s of CPU, under ${cpu_bound}"
 else
-  echo "FAIL 16384 bytes of one-word segments take ${cpu_seconds} s of CPU, not under 0.5"
+  echo "FAIL 16384 bytes of one-word segments take ${cpu_seconds} s of CPU, not under ${cpu_bound}"
   fail=1
 fi
 
@@ -218,15 +241,10 @@ amp_command="$(amp_shape "$bound")"
 jq -nc --arg c "$amp_command" '{tool_input:{command:$c}}' > "$big_input"
 cpu="$( { time bash "$hook" < "$big_input" > /dev/null; } 2>&1 )"
 cpu_seconds="$(awk '{ print $1 + $2 }' <<<"$cpu")"
-# 3 s, not 1.5: the hosted runner took 1.736, 1.746 and 1.745 s for this shape
-# with nothing changed in the hook (pull requests 108 and 109), where the
-# development machine takes about 0.8 s. The bound is there to catch a pattern
-# that grows faster again, not the runner's speed; the watchdog, not this
-# number, is what answers a hook that runs long.
-if awk -v s="$cpu_seconds" 'BEGIN { exit !(s < 3) }'; then
-  echo "ok   the worst shape under the byte bound takes ${cpu_seconds} s of CPU, under 3"
+if awk -v s="$cpu_seconds" -v b="$cpu_bound" 'BEGIN { exit !(s < b) }'; then
+  echo "ok   the worst shape under the byte bound takes ${cpu_seconds} s of CPU, under ${cpu_bound}"
 else
-  echo "FAIL the worst shape under the byte bound takes ${cpu_seconds} s of CPU, not under 3"
+  echo "FAIL the worst shape under the byte bound takes ${cpu_seconds} s of CPU, not under ${cpu_bound}"
   fail=1
 fi
 ask_for "the worst shape followed by a denied segment is denied, not skipped" deny \
@@ -398,10 +416,10 @@ rmdir "$stand_in/bin" "$stand_in"
 jq -nc --arg c "tee <<EOF .$(padding 16000 .)" '{tool_input:{command:$c}}' > "$big_input"
 cpu="$( { time bash "$hook" < "$big_input" > /dev/null; } 2>&1 )"
 cpu_seconds="$(awk '{ print $1 + $2 }' <<<"$cpu")"
-if awk -v s="$cpu_seconds" 'BEGIN { exit !(s < 0.5) }'; then
-  echo "ok   16 KB of dots after a heredoc marker take ${cpu_seconds} s of CPU, under 0.5"
+if awk -v s="$cpu_seconds" -v b="$cpu_bound" 'BEGIN { exit !(s < b) }'; then
+  echo "ok   16 KB of dots after a heredoc marker take ${cpu_seconds} s of CPU, under ${cpu_bound}"
 else
-  echo "FAIL 16 KB of dots after a heredoc marker take ${cpu_seconds} s of CPU, not under 0.5"
+  echo "FAIL 16 KB of dots after a heredoc marker take ${cpu_seconds} s of CPU, not under ${cpu_bound}"
   fail=1
 fi
 
@@ -420,10 +438,165 @@ jq -nc --arg c "$(for _ in $(seq 2000); do printf 'aws '; done)secretsmanager ge
   '{tool_input:{command:$c}}' > "$big_input"
 cpu="$( { time bash "$hook" < "$big_input" > /dev/null; } 2>&1 )"
 cpu_seconds="$(awk '{ print $1 + $2 }' <<<"$cpu")"
-if awk -v s="$cpu_seconds" 'BEGIN { exit !(s < 2) }'; then
-  echo "ok   2000 repetitions of a tool name before its verb take ${cpu_seconds} s of CPU, under 2"
+if awk -v s="$cpu_seconds" -v b="$cpu_bound" 'BEGIN { exit !(s < b) }'; then
+  echo "ok   2000 repetitions of a tool name before its verb take ${cpu_seconds} s of CPU, under ${cpu_bound}"
 else
-  echo "FAIL 2000 repetitions of a tool name before its verb take ${cpu_seconds} s of CPU, not under 2"
+  echo "FAIL 2000 repetitions of a tool name before its verb take ${cpu_seconds} s of CPU, not under ${cpu_bound}"
   fail=1
 fi
+
+# The AWS rules (S036). The worst shape of them: a command that is nothing but
+# `aws ` and then a read, so that it reaches the loop over aws calls with
+# nothing denied before it (0.3 s measured on 2026-10-06 at 8 KB, load about 3),
+# and one that is `make ` and then the plan target, which reaches the rules of
+# the make targets last. Both are asked, not skipped.
+aws_shape="$(for _ in $(seq 1950); do printf 'aws '; done)ec2 describe-instances"
+jq -nc --arg c "$aws_shape" '{tool_input:{command:$c}}' > "$big_input"
+cpu="$( { time bash "$hook" < "$big_input" > /dev/null; } 2>&1 )"
+cpu_seconds="$(awk '{ print $1 + $2 }' <<<"$cpu")"
+if awk -v s="$cpu_seconds" -v b="$cpu_bound" 'BEGIN { exit !(s < b) }'; then
+  echo "ok   2000 repetitions of aws before a read take ${cpu_seconds} s of CPU, under ${cpu_bound}"
+else
+  echo "FAIL 2000 repetitions of aws before a read take ${cpu_seconds} s of CPU, not under ${cpu_bound}"
+  fail=1
+fi
+make_shape="$(for _ in $(seq 1550); do printf 'make '; done)aws-plan"
+jq -nc --arg c "$make_shape" '{tool_input:{command:$c}}' > "$big_input"
+cpu="$( { time bash "$hook" < "$big_input" > /dev/null; } 2>&1 )"
+cpu_seconds="$(awk '{ print $1 + $2 }' <<<"$cpu")"
+if awk -v s="$cpu_seconds" -v b="$cpu_bound" 'BEGIN { exit !(s < b) }'; then
+  echo "ok   1600 repetitions of make before aws-plan take ${cpu_seconds} s of CPU, under ${cpu_bound}"
+else
+  echo "FAIL 1600 repetitions of make before aws-plan take ${cpu_seconds} s of CPU, not under ${cpu_bound}"
+  fail=1
+fi
+# The security pass found two shapes slower than these: `make ` 1550 times and
+# then a target that only starts like the one the rules look for (0.5 s), and a
+# run of `>` and then a dot-directory name that only starts like the AWS one
+# (0.5 s). Neither matches, so both are read to the end.
+near_miss_shape="$(for _ in $(seq 1550); do printf 'make '; done)aws-valid"
+jq -nc --arg c "$near_miss_shape" '{tool_input:{command:$c}}' > "$big_input"
+cpu="$( { time bash "$hook" < "$big_input" > /dev/null; } 2>&1 )"
+cpu_seconds="$(awk '{ print $1 + $2 }' <<<"$cpu")"
+if awk -v s="$cpu_seconds" -v b="$cpu_bound" 'BEGIN { exit !(s < b) }'; then
+  echo "ok   1550 repetitions of make before a near-miss target take ${cpu_seconds} s of CPU, under ${cpu_bound}"
+else
+  echo "FAIL 1550 repetitions of make before a near-miss target take ${cpu_seconds} s of CPU, not under ${cpu_bound}"
+  fail=1
+fi
+redirect_shape="echo $(padding 7900 '>').awsX"
+jq -nc --arg c "$redirect_shape" '{tool_input:{command:$c}}' > "$big_input"
+cpu="$( { time bash "$hook" < "$big_input" > /dev/null; } 2>&1 )"
+cpu_seconds="$(awk '{ print $1 + $2 }' <<<"$cpu")"
+if awk -v s="$cpu_seconds" -v b="$cpu_bound" 'BEGIN { exit !(s < b) }'; then
+  echo "ok   a run of > before a near-miss dot-directory takes ${cpu_seconds} s of CPU, under ${cpu_bound}"
+else
+  echo "FAIL a run of > before a near-miss dot-directory takes ${cpu_seconds} s of CPU, not under ${cpu_bound}"
+  fail=1
+fi
+ask_for "a command of 1950 aws words before a read asks and is read" ask "$aws_shape"
+ask_for "the same, with a deletion in another part, is denied and not skipped" deny \
+  "$(for _ in $(seq 1700); do printf 'aws '; done)ec2 describe-instances; aws eks delete-cluster --name stand-in"
+
+# What the user reads (S036): the apply says it costs money and that the owner
+# runs it where no session holds credentials, and the removal says it is the
+# owner's.
+reason="$(reason_of 'make aws-apply')"
+case "$reason" in
+  *"COST MONEY"*"owner"*"no session holds the credentials"*) echo "ok   the ask for make aws-apply says it costs money and who runs it" ;;
+  *)
+    echo "FAIL the ask for make aws-apply does not say it costs money, that the owner runs it and where: $reason"
+    fail=1
+    ;;
+esac
+reason="$(reason_of 'make aws-destroy')"
+case "$reason" in
+  *"owner's"*"terminal"*"no session holds the credentials"*) echo "ok   the deny for make aws-destroy says it is the owner's, in a terminal" ;;
+  *)
+    echo "FAIL the deny for make aws-destroy does not say it is the owner's, in a terminal: $reason"
+    fail=1
+    ;;
+esac
+
+# The settings (S036): a hook decision comes first, and the settings are what a
+# session meets when it uses a tool the hook does not read. The lists are held
+# here so that an edit that drops one fails: Read, Edit and Write are denied
+# for what the AWS wrapper keeps closed, git's and Terraform's configuration in
+# the caller's home is not written, plan reaches Terraform only where the
+# module is not (the settings cannot see the directory a `cd` chose, so the
+# bare `terraform plan` asks), and make aws-plan and aws-apply ask. make * stays
+# allowed for aws-validate and aws-scan, which cost nothing.
+settings_file="$here/../.claude/settings.json"
+in_list() { # $1=allow, ask or deny  $2=the entry
+  jq -e --arg e "$2" --arg l "$1" '.permissions[$l] | index($e) != null' "$settings_file" > /dev/null
+}
+for entry in 'Bash(make *)' 'Bash(terraform -chdir=* plan*)' 'Bash(terraform -chdir=* validate*)'; do
+  if in_list allow "$entry"; then
+    echo "ok   allow keeps ${entry}"
+  else
+    echo "FAIL allow lost ${entry}"
+    fail=1
+  fi
+done
+if in_list allow 'Bash(terraform plan*)'; then
+  echo "FAIL allow still holds the bare terraform plan"
+  fail=1
+else
+  echo "ok   allow no longer holds the bare terraform plan"
+fi
+for entry in 'Bash(terraform plan*)' 'Bash(terraform -chdir=*aws* plan*)' 'Bash(make aws-plan*)' 'Bash(make aws-apply*)' \
+  'Bash(terraform apply*)' 'Bash(terraform -chdir=* apply*)'; do
+  if in_list ask "$entry"; then
+    echo "ok   ask holds ${entry}"
+  else
+    echo "FAIL ask lacks ${entry}"
+    fail=1
+  fi
+done
+# shellcheck disable=SC2088  # the entries are the literal text of the settings
+closed_paths=(
+  './**/local.env*' './**/*.tfstate*' './**/*.tfplan*' './**/*.tfvars.json' './**/*.auto.tfvars*'
+  './infra/terraform/aws/.*tfvars*' './**/terraform.tfstate.d/**' './**/*override*.tf' './**/.terraform/**'
+  '~/.local/state/meridian-aws/**' '~/.aws/**' '~/.terraformrc' '~/.terraform.d/**'
+)
+for path in "${closed_paths[@]}"; do
+  for tool in Read Edit Write; do
+    if in_list deny "${tool}(${path})"; then
+      echo "ok   deny holds ${tool}(${path})"
+    else
+      echo "FAIL deny lacks ${tool}(${path})"
+      fail=1
+    fi
+  done
+done
+# shellcheck disable=SC2088  # the entries are the literal text of the settings
+for path in '~/.gitconfig' '~/.config/git/**'; do
+  for tool in Edit Write; do
+    if in_list deny "${tool}(${path})"; then
+      echo "ok   deny holds ${tool}(${path})"
+    else
+      echo "FAIL deny lacks ${tool}(${path})"
+      fail=1
+    fi
+  done
+done
+# The old denies stay.
+# The removal has a second layer (the hook is the first): a hook that timed out
+# or crashed would let make aws-destroy through, as Bash(make *) is allowed.
+for entry in 'Bash(make aws-destroy*)' 'Bash(infra/terraform/aws.sh destroy*)' 'Bash(./infra/terraform/aws.sh destroy*)'; do
+  if in_list deny "$entry"; then
+    echo "ok   deny holds ${entry}"
+  else
+    echo "FAIL deny lacks ${entry}"
+    fail=1
+  fi
+done
+for entry in 'Read(./**/*.tfvars)' 'Read(./**/.env)' 'Edit(./**/.env)' 'Bash(terraform destroy*)' 'Bash(terraform -chdir=* destroy*)'; do
+  if in_list deny "$entry"; then
+    echo "ok   deny keeps ${entry}"
+  else
+    echo "FAIL deny lost ${entry}"
+    fail=1
+  fi
+done
 exit "$fail"

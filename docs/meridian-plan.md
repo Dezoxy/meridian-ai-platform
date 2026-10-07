@@ -291,7 +291,11 @@ request's body says so:
   chart's appVersion differ, and their tags still arrive as updates.
 - `base images`: `make deploy` on the branch, by that session. No job
   builds the image.
-- `terraform`: `make azure-plan`, and the plan read.
+- `terraform`: `make azure-plan`, and the plan read; for the AWS module
+  `make aws-validate` and `make aws-scan`, which need no account (S036).
+- The Trivy image of `make aws-scan` (`TRIVY_IMAGE` in the `Makefile`, no
+  group of its own): `make aws-scan` on the branch, since CI does not run it
+  and a newer image carries newer checks that can turn it red.
 - `tooling`: the result of `Docs / Architecture PDF`, the one job that
   runs Pandoc and Mermaid. It is not a required check.
 - `agent framework`: never merged on green checks alone. Read the note on
@@ -574,7 +578,7 @@ Kubernetes" above).
 
 | ID | Step | Done when | Status | Depends |
 |---|---|---|---|---|
-| S036 | AWS Terraform, applied once | ~~The module passes `terraform validate` and a policy scan; it is never applied~~ Changed by the owner on 2026-10-06 ("add the aws template too and we will test it in a real aws enviroment"). Two halves. Without an account and without cost: the module for what S025 maps (network, cluster, registry, database with pgvector, workload identity to a secret store) in an EU region passes `terraform validate` and a policy scan, and one command each creates and removes it. With the owner, in the owner's AWS account, after the cost of an hour of it is stated and the owner says yes: it is applied once, what came up is recorded, it is removed, and the run's cost is logged. ADR 1 ("design AWS") gets a dated successor or note that says so. Since the owner's decision on managed and self-managed Kubernetes the same day, the apply of this managed cluster is asked at the paid stop of S079 and may be answered no; the first half is unchanged | todo | S025 |
+| S036 | AWS Terraform, applied once | ~~The module passes `terraform validate` and a policy scan; it is never applied~~ Changed by the owner on 2026-10-06 ("add the aws template too and we will test it in a real aws enviroment"). Two halves. Without an account and without cost: the module for what S025 maps (network, cluster, registry, database with pgvector, workload identity to a secret store) in an EU region passes `terraform validate` and a policy scan, and one command each creates and removes it. With the owner, in the owner's AWS account, after the cost of an hour of it is stated and the owner says yes: it is applied once, what came up is recorded, it is removed, and the run's cost is logged. ADR 1 ("design AWS") gets a dated successor or note that says so. Since the owner's decision on managed and self-managed Kubernetes the same day, the apply of this managed cluster is asked at the paid stop of S079 and may be answered no; the first half is unchanged. First half built as (2026-10-07; implemented as code, checked without an account, never applied; nothing ran in AWS): `infra/terraform/aws/` is a module for a VPC of two public subnets with no NAT gateway, an EKS cluster at Kubernetes 1.36 with one managed node group of two `t3.large` and the Pod Identity and EBS CSI add-ons, one ECR repository, an RDS for PostgreSQL 17 instance on `db.t4g.small` whose password RDS keeps in Secrets Manager, one empty secret with a role that one named service account may assume, and a USD 25 monthly budget, in an EU Region (a validated variable, `eu-central-1` by default) with a local state under the owner's home and the provider pinned to one account; `infra/terraform/aws.sh` and five `make aws-*` targets validate, scan, plan, apply a saved plan and remove, and the scan is Trivy's from an image pinned by digest with three accepted findings, each with its reason; the command guard and the settings know the commands (T-100), and ADR 1 has a dated note. Not built in the first half: the `vector` extension (it needs a connection to the database), the Meridian chart and its controllers on the cluster, and the module in CI (S022) | doing: the first half is done (2026-10-07); the second half, one apply in the owner's account, waits for the owner's yes at S079's paid stop and may be answered no | S025 |
 | S078 | GCP Terraform, ~~applied once~~ a scaffold only | As S036, for Google Cloud (the owner, 2026-10-06: "like aws too"). ~~Two halves.~~ Without a project and without cost: the module for what S077 maps (network, cluster, registry, database with pgvector, workload identity to a secret store) in an EU region passes `terraform validate` and a policy scan, and one command each creates and removes it. ~~With the owner, in the owner's Google Cloud project, after the cost of an hour of it is stated and the owner says yes: it is applied once, what came up is recorded, it is removed, and the run's cost is logged.~~ Changed by the owner on 2026-10-06 ("gcp just scafold"): the module is never applied; whether a scaffold carries commands that create and remove it at all, or a README that says how the owner would, is its design's to say. The successor or note to ADR 1 that S036 writes names this cloud too | todo | S077 |
 | S079 | Self-managed Kubernetes: applied once on AWS, a scaffold on Google Cloud | The owner, 2026-10-06 ("we will build it on aws, gcp just scafold"). A cluster whose control plane the owner's account runs itself, on the cloud's virtual machines, beside the managed cluster of S036 and S078. Two halves. Without an account and without cost: a Terraform module for AWS beside S036's, with a small network of its own, that reuses S036's wrapper script, scan and the lessons of its reviews, and brings up the control plane and the workers with an installer the step's design chooses and says why (its threat note first: the cluster's certificates, its join token and its etcd are then the owner's to keep); its twin for Google Cloud; both pass `terraform validate` and a policy scan, and for AWS one command each creates and removes it. ADR 6, ADR 7 and the Azure platform document each gain the comparison of a managed and a self-managed cluster on that cloud: who runs and upgrades the control plane, where etcd and its backup live, how a pod gets a cloud identity, how a load balancer and a volume are made, what an hour costs, and why the platform's default stays managed. With the owner, in the owner's AWS account, after the cost of an hour of it is stated and the owner says yes: the owner applies it once from where no agent session holds credentials, what came up is recorded, it is removed, and the run's cost is logged; whether S036's managed cluster is applied as well is asked then. The Google Cloud twin is never applied | todo | S036, S078 |
 | S037 | Second-framework workload | A small workload in Microsoft Agent Framework on the same platform contract. Built as: a second host behind the Agent Runtime's `Host` protocol, picked for each agent by the registry's `host` field, with a PostgreSQL checkpoint store of its own, and a second workload, `claim-brief`, that calls tools, pauses for an adjuster and is started by the Claims API; implemented, tested, and seen on kind once under replay (ADR 9, the second applied service acceptance) | done | S005, S018 |
@@ -851,7 +855,7 @@ that day; the rest stand as their step recorded them.
 | A log line's `exception` field holds frames and class names and no message, so an operator does not read what the exception said; its source lines are redacted by pattern only; a username in an absolute-form request target and an address encoded twice stay in the path | S064 (security review, second review) | closed in part by S069 (E1, E1b, F1): the path is unquoted until it stops changing (three rounds at most, else the word `[encoded]`) and loses a userinfo part from any `//` or `\\`, so an address encoded twice and a user name in an absolute-form target are gone (T-03; its residuals are listed there). Open: an exception's message stays out of the line, as the owner may overturn (an allowlist by exception class is the shape if so); the access log's path is not the route template (a row below) | S069 |
 | Counting, from S064's second review, all low: a leg is counted nowhere if settling it raises something other than a database error; a resume that cannot read its run is not counted; the tool server counts any exit without a result as `cancelled`; a response that fails validation after the proposal is stored counts a failed triage; the line that says metrics are not exported is asserted for two services of four; smoke's line for the sweep's findings can be met by an earlier pass; a record's `stack_info` is dropped without a sign | S064 (second review) | closed in part by S069 (E2, E3, E5): a leg is counted whatever ends its settling (`failed`, `unexpected`), a resume that cannot read its run is counted `not-started` (under its tenant when the registry holds it, with no agent label), a tool server's exit with no result is `unexpected` unless it was a cancellation, and a stored proposal is counted `stored` once. Open: the "not exported" line is asserted for two services of four, `stack_info` is dropped without a sign, and smoke's line for the sweep's findings can be met by an earlier pass (the last needs the cluster, so it is the second half of this step's) | S069 |
 | The registry derives a deployment's residency label from Azure SKU names, its provider kind is a closed list and its region check knows Azure's names: on Bedrock the label would come from the model ID's prefix and the Region called, on Google Cloud from the model and the location together. Designed in the two mapping ADRs, changed nowhere | S025, S077 | open; a second provider kind is the first to need it | S023 |
-| The threat model's rows on the edge's firewall, residency, egress and provider-side retention (T-02, T-12, T-19, T-20, T-43) speak of Azure alone; the mapping ADR says what each would mean on AWS, where the chosen edge has no managed firewall in front | S025 | open; they are corrected when a module is applied, not from documentation | S036 |
+| The threat model's rows on the edge's firewall, residency, egress and provider-side retention (T-02, T-12, T-19, T-20, T-43) speak of Azure alone; the mapping ADR says what each would mean on AWS, where the chosen edge has no managed firewall in front | S025 | open; they are corrected when a module is applied, not from documentation. S036's first half applied nothing, so none is corrected: it added T-100 and gave T-12, T-15, T-36, T-37 and T-42 an AWS clause, each as code and not applied, and the edge's firewall has still no AWS counterpart (the module makes no edge) | S036 |
 | The Ingress container's technology string in the model names Azure's Application Gateway WAF for the Azure design, while the AWS and Google Cloud mappings keep Envoy Gateway behind the cloud's load balancer; the Azure edge is not decided against that | S025 | open | S020 |
 | The threat model's rows on the edge's firewall, the budget, egress and provider-side retention (T-02, T-15, T-19, T-20) speak of Azure alone; the mapping ADR says what each would mean on Google Cloud, where a budget pauses model spend at most, the chosen edge has no managed firewall in front, and flagged prompts may be logged for up to 90 days on the online terms | S077 | open; ~~they are corrected when a module is applied, not from documentation~~ no module is applied on Google Cloud (the owner, 2026-10-06), so S078 closes this row by saying in each threat row that its Google Cloud reading is from documentation alone | S078 |
 | The second host's checkpoint rows carry no release stamp: a release that changes the claim brief's steps, edges or state fields ends every brief that waits (`workflow-changed`, `checkpoint-refused`), and in a rolling update an old pod reads rows a new pod wrote and ends the run for good; two tests pin the shapes (T-98); neither case was seen on a cluster | S037 (security review, third pass) | open | S069 (the nearest: it holds the runtime's edges) |
@@ -875,8 +879,8 @@ that day; the rest stand as their step recorded them.
 | The injection import test's walker cannot see what its docstring lists (a non-literal argument of `import_module`, `__import__` or `getattr`, `builtins.__import__`, `sys.modules[...]`, an alias made by unpacking or stored on an object, a name reached by a string through `vars()`, `__dict__` or `setattr`, `global`, `nonlocal`, `eval`, `exec`), and it reports a few names that are not private uses (an alias rebound at module level, a `match` capture, a walrus inside a comprehension); it is a tripwire, not a proof | S076 (report of F2; second review) | open; low | S074 |
 | A merge of `main` into a step's branch was pushed after the cheap gates only and left `test_workload_new_note.py` red (S076, 842b977: S037's `claim-brief` changed a list the test pinned); Part A says the later session runs the gates again and not which, so a contract's gate does not yet say that the directories its change reaches are run after a merge | S076 (C10) | closed by S075: Part A now says that after a merge of `main` the whole suite runs on the merged tree before the branch is pushed, and that a contract's gates name every directory its change reaches | S075 |
 | On 2026-10-06 `make deploy` failed twice, a minute apart, at the ingest Job on a cluster that had been up for hours (the Model Gateway answered 503 to the embedding call: "the model gateway refused the embedding call (model gateway answered 503)"); the session's script then deleted the cluster before anyone had read the audit row's reason or the gateway's log, and a fresh cluster deployed the same commit (`make up` 299 s, `make deploy` 97 s, the Job passed). Two failures a minute apart and a pass on a fresh cluster point at the cluster's state, not at load. Candidates, none shown: the rate store not answering inside its 0.25 s read timeout or 1 s connect timeout, with no retry (`gateway/rate_store.py`; the gateway refuses, by design); the ledger's close failing (`gateway/walk.py`: a failed close answers 503; the database's pod had restarted that evening); and the ingestion not retrying a 503 (`knowledge_mcp/ingest.py` waits out a 429 and ends on any other status). The three logs of the commands are the only evidence left | S075 (the incident) | open; not explained | S073 |
-| The guard's local reader list and what its last review left: a mounted Secret or an `.env` read by `grep`, `awk`, `jq`, `cp`, `docker cp` or a glob is read by no rule (`reader_pre` and the pod's reader list name the plain readers); the pod rule for `env`, `printenv` and `set` tests only the last ` -- `; a fourth level of nested `sh -c`; secret-shaped variable names the `printenv` list does not match (`REDIS_PW`); a heredoc read by quote parity and a list of interpreters, not parsed; a hook file overwritten by a redirect; `-v=8` and `crictl inspect` read from documentation, run against no cluster. The hook's header and the runbook's section list each; S036's contract for the cloud rules edits the guard next, so it is the nearest step | S075 (third security review; F3b's and F4g's reports) | open; listed, not built | S036 |
-| The next rule to the command guard goes into the development base first: the base's copy is level with Meridian's since its pull request 51 (merged 2026-10-06, the guard's rounds two and three), and S036's guard rules for the AWS wrapper are the next ones | S075 | open | S036 |
+| The guard's local reader list and what its last review left: a mounted Secret or an `.env` read by `grep`, `awk`, `jq`, `cp`, `docker cp` or a glob is read by no rule (`reader_pre` and the pod's reader list name the plain readers); the pod rule for `env`, `printenv` and `set` tests only the last ` -- `; a fourth level of nested `sh -c`; secret-shaped variable names the `printenv` list does not match (`REDIS_PW`); a heredoc read by quote parity and a list of interpreters, not parsed; a hook file overwritten by a redirect; `-v=8` and `crictl inspect` read from documentation, run against no cluster. The hook's header and the runbook's section list each; S036's cloud rules edited the guard (2026-10-07) and closed none of these (they read the AWS module's names and add no reader for a mounted Secret), and S079, which reuses the wrapper and brings a second AWS module, edits it next, so it is the nearest step | S075 (third security review; F3b's and F4g's reports) | open; listed, not built; re-homed from S036, whose rules did not touch them | S079 |
+| The next rule to the command guard goes into the development base first: the base's copy is level with Meridian's since its pull request 51 (merged 2026-10-06, the guard's rounds two and three), and S036's guard rules for the AWS wrapper are the next ones, so they are now owed to the base (built here first, 2026-10-07; not yet sent). The neutral ones: the `aws` CLI's deny and ask rules with their read list, the ask for `boto3`, `botocore` and `awscli` and for `-auto-approve`, the deny of `TF_*` and `AWS_ENDPOINT_URL*` assignments before a tool, the readers of a state, a plan, `.tfvars.json`, `~/.aws`, `~/.terraformrc` and `~/.terraform.d`, the writers of `~/.terraformrc`, `~/.gitconfig`, `~/.config/git` and `~/.aws`, and the deny of tracing and start-up variables, with the fixes of the two later rounds (`-cm`, a quoted token, the backtick, the cut-out of `workspace select default`). Meridian's own stay out: whatever names `aws.sh`, a `make aws-*` target, `local.env`, `meridian-aws`, `TRIVY_IMAGE` or `PROMTOOL_IMAGE` | S075 | open; owed to the base before S079 changes the guard | S036 |
 | Not seen on a cluster after S075: `TAKE_CLUSTER=1`, a record left `changing` by a run that failed (the refusal that names it), `make up` on an existing cluster, and `make down` refused for a record at `changing`; tests with stand-in binaries hold each. Seen: the record through a deploy, a deploy refused while another runs, and `make down` refused with the record at `ok` (S075's section) | S075 | open | S073 |
 | Limits of S075's three small checks and two unverified Renovate rules. The split-table check misses rows in block quotes and rows without a closing pipe, and flags a row inside an HTML comment, a four-space-indented row and a lone header-like line; the lane check counts `--` and `n/a` in "Out now" as running, and a session in a fresh worktree has no board; the shell-edit hook is inert until the owner sets `bashEditDiffEnabled` in `~/.claude/settings.json` and may name files that `make` targets regenerate (baselines, Mermaid blocks) once it is on; Renovate has not run the new rules, so whether Docker Hub gives the Envoy chart a push date (else the chart waits indefinitely), whether the `terraform` block's `description` key is accepted and whether the `agent-framework` label is made are unseen | S075 | open | S074 |
 | A claimant can choose a name made of the words an exclusion turns on, and every such word in the description becomes `[name]` before the model reads it (since S047, for any name part of three letters or more); the posted-text boolean covers screened phrases and not this, so it is one more way to the automatic approval of a small claim, which the injection suite already measures as open (QA-09). A bound on how much of a description a name may replace, and what the adjuster is told when it is hit, is a decision of its own (T-26) | S067 (security review) | open | S070 |
@@ -910,6 +914,17 @@ that day; the rest stand as their step recorded them.
 | The knowledge service's embedding client (`knowledge_mcp/embedding_client.py`) posts with a buffered call, so the whole reply of the gateway, 2xx or not, is held in memory before the client reads it, and nothing caps its size (the timeout is per read); the runtime's client got a streamed read with a cap in this step, and the same change is owed here | S073 (its contract K6 stopped on it, 2026-10-07) | open; low: the gateway is a peer behind mutual TLS | S069 |
 | No real withheld completion and no real refusal of a structured request has been seen from a real provider, so `drafted_by` for a withheld completion rests on a mocked transport and a scripted provider, and the evaluation baseline's `model_asked` has not moved (no recorded or scripted case is one); the measurement costs money and the owner says yes first (T-67) | S069 (E6, boundary review) | open; S071's done-when already names the refusal of a structured request, and this adds the withheld completion | S071 |
 | Not seen on a cluster after S069's first half: any of its code. A kind run would show the 400's four headers on a withheld completion, the 422 for a resume that carries a value, one `suppressed` row from each service after a flood and from a tool server after a shed call with its run named, a takeover of a run left `Running` past the lease (`stale-running`) with the late leg's end matching nothing, the access log's path of a request with an encoded address, and the metric `not-started` of a resume that could not read its run | S069 (the step's evidence) | open; the second half of S069 holds the cluster and deploys this code | S069 |
+| What an apply of the AWS module would settle, none of it seen: whether `db.t4g.small` and a PostgreSQL 17 minor are offered in the Region (ADR 6, not verified); whether `CREATE EXTENSION vector` works on the instance; whether the secret RDS manages waits out a recovery window and keeps its name (ADR 6, not verified); whether ECR removes a repository that holds an image without the module's `force_delete` (ADR 6, not verified); whether a budget can be written in EUR (the module uses USD); the CPU-credit charges of burstable nodes (ADR 6, not verified); whether the Free plan withholds EKS, RDS or `t3.large`, and the quotas; the add-on defaults for Kubernetes 1.36; whether the Pod Identity trust conditions, the `eks-cluster-name` one in particular, let the EBS CSI driver and the workload get credentials, and whether the nodes join; whether an Identity Center principal is accepted as the access entry; how `allowed_account_ids` fed from a sensitive variable and the lookups of managed policies by name behave at plan; the real times of an apply and a removal; and what the whole costs against the sketch (about USD 0.35 an hour from ADR 6's prices, not from a bill). The module's README holds the list as its checklist | S036 (reports of T1, T2b and T2d; the infrastructure review) | open; only an apply settles them, and the apply is asked at S079's paid stop | S079 |
+| `aws.sh` never ran against a real `aws` CLI or a real Terraform with credentials, and its tests use stand-in programs: what a real plan prints for a sensitive variable (`(sensitive value)` is the documentation's word), whether the redaction meets a shape it does not know (a VPC, subnet or instance identifier, an IPv6 address, a host written with dashes, a `db-` identifier, the cluster's CA, the sign-in's start URL are not covered, and a four-part version number is hidden as an address), the plan file's real mode, `stat -f` and bash 3.2 on macOS, and a differently cased variable file on a case-insensitive file system; the last words of the removal's prompt show only after the answer is typed, because the filter holds a partial line and `sed -u` is GNU-only | S036 (reports of T2, T2c and T2d; the second and third reviews) | open | S079 |
+| What `aws.sh` does not close, each stated in the module's README and none built: `terraform`, `aws`, `git` and `sha256sum` come from the caller's `PATH`; `~/.terraformrc` (a credentials helper, `dev_overrides`), `~/.terraform.d`, a `credential_process` or sign-in helper in the AWS configuration, a shell start-up variable, an exported function and `LD_PRELOAD`; a clean filter in the repository's own `.git/config` runs during the status call; a changed `HOME` in the same checkout plans against an empty state without a stop (a count of the state's resources logged by `plan` is not built); a link at the plan's or the record's path is followed; a stray `terraform.tfstate` in the module's directory is not refused; a 777 parent directory of the local file is accepted; inherited file descriptors stay open | S036 (reviews 2 and 3; T2e) | open; listed, not built | S079 |
+| Small ends of the AWS script and module, all low: a "no" at the removal's question is reported as a failed removal; the empty-state sentence prints the state's path under home; `make aws-scan` without Docker prints the shell's error and no sentence; a sentence of `aws.sh`'s header is broken across two lines; `identity.tf`'s comments still say each role trusts one service account, which the README says is not observed until an apply; the comment above the EBS CSI add-on says more of a removal order than the module holds | S036 (reports of T2b, T2c and T2d) | open; low | S079 |
+| What the AWS module leaves to production, each named beside its test value in its README and none built: private subnets behind a NAT gateway, deletion protection and a final snapshot, retained backups, a second zone, customer-managed keys, control-plane logging, flow logs and RDS IAM authentication (the scan's nine MEDIUM and three LOW findings), a separate role for the VPC CNI, a launch template that pins the node metadata service, an ECR lifecycle policy, `rds.force_ssl` pinned in a parameter group, a network-level limit on which pods reach the database (its security group admits the whole cluster), lock hashes for `linux_arm64` and `windows_amd64`, a remote state bucket with locking, and a role per team in place of one cluster administrator. S079 reuses the module's script, scan and the lessons of its reviews, so it is the step that decides which of these its own module takes | S036 (reviews; README) | open; not built, by design | S079 |
+| The Meridian chart on the AWS cluster is not built: the controllers it needs (an edge, cert-manager), the eleven database roles and Secrets that CloudNativePG makes on kind and nothing makes on RDS, the chart's `automountServiceAccountToken: false` against the token volume Pod Identity injects, and a service that reads Secrets Manager (none does); a removal also gains an order once anything is installed (Kubernetes objects, then the cluster, then the network). The module is infrastructure only on purpose, and whether it is applied at all is asked at S079's stop | S036 (design; README) | open; no step runs the platform on a managed AWS cluster | S079 |
+| Where the AWS apply is run is the owner's choice and nothing checks it: a machine or an operating-system user where no session runs and no credential is readable by one (no `~/.aws` a session can read), with a sign-in of about an hour that is removed afterwards (`aws sso logout`); on a machine where a session runs and credentials exist, neither the script nor the guard stops a session that means to apply or remove (T-100). The cost, from fresh prices, and this are said to the owner before the yes | S036 (security reviews) | open; the owner's to choose | S079 |
+| The AWS rules of the command guard read text and list what they do not see, once in the secret-rotation runbook and once in the module's README: the two generic rules for the removal verb read the whole command, so a commit message or pull request body that names it is denied for `terraform` and `tofu` (write it to a file); the second tool's bare `state rm`, `import` and `force-unlock` are not asked; `gh … -b`, `-t` and `--subject` are not blanked as `--body` is; a working directory that reaches the module only through `..` or a link is not seen; wrappers before `aws` (`timeout`, `nice`, `watch`, `env -i`, `xargs`, `find -exec`, a brace group, a path prefix), the `hashicorp/terraform` image, `terragrunt` and `state replace-provider`; readers after a `cd` into a credentials directory or through `find`, a redirect or a glob; `git config --global` with a key that runs a program and `git add -f` of the local file; `printenv` of a credential; and S075's asks that stay asks (`sts get-session-token`, `assume-role`, `ecr get-login-password`, `eks get-token`, `configure export-credentials`), with `kms schedule-key-deletion` and `organizations close-account` asking and not denied. A try at emptying a search's quoted pattern, to spare a session's false alarms, was taken out because it hid a command (a quoted word is read as a use of what it names: search with the Grep tool) | S036 (T3b, T3d; the reviews of T3 and T3b) | open; listed, not built | S079 |
+| What the guard and the settings of S036 rest on was not verified in a live session: whether the harness's working directory follows a `cd` of an earlier call, whether an `ask` in the settings beats an `allow` (`Bash(terraform -chdir=*aws* plan*)` against `Bash(terraform -chdir=* plan*)`), whether the settings' `./` denies match a file reached by an absolute path from another checkout, and whether the bare `Grep` and `Glob` tools are held by the `Read` denies; Codex reads no settings file, so it has the hook's rules alone | S036 (reviews of T3 and T3b) | open; each needs a probe in a live session | S079 |
+| Nothing in CI runs `make aws-validate`, `make aws-scan` or a plan, and no pipeline identity exists for AWS: a bump of the provider or of the Trivy pin, or a change to the module, is checked by whoever merges it, by hand (Part A says so); S022 owns Terraform and the scan in the pipeline, for Azure first | S036 (README; the infrastructure review) | open | S022 |
+| What a Google Cloud scaffold should copy from S036 and what it should avoid. Copy: the provider's own pin of the account or project beside the script's (`allowed_account_ids` is the one pin that holds for a hand-typed command: find the counterpart in the provider's documentation); a local file that is read and never run, owner's and mode 600, with a name the guard's reader rule covers; an environment the script chose; a saved plan bound to its commit, its age and its hash; sensitive variables for an address and an e-mail; closed lists of instance types as a cost ceiling; managed policies and roles read by name, since two AWS pages disagreed on one ARN's path; trust conditions on the workload identity's tokens; a state outside the checkout, a default-workspace check and a removal that refuses over an empty state; a scan ignore file whose entries are one check ID with a reason above, held by tests (an inline `trivy:ignore` or `tfsec:ignore` and a YAML configuration refused); the scan offline from an image pinned by digest; a test that holds the script's exports to the module's variables; and a redaction written for Google Cloud's identifiers before a plan is read. Avoid: sourcing the local file; a variable that is not marked sensitive; `cidrhost` on an IPv6 range; a README sentence that says a control holds before a test has tried to break it (the second review found seven, the third one more); and a test parameter built from the clock | S036 (all six reviews) | open; for the scaffold's design | S078 |
 
 ## Part C — Step details
 
@@ -12676,6 +12691,415 @@ on 2026-10-06 side by side; E3 waited for E2 (both edit the runtime's
   own), a model's own refusal of a structured request marked withheld like a
   withheld completion (the provider adapter raises the same error for both),
   R12's timing at S020, and the homes chosen for the rows that no step fits.
+### S036 — AWS Terraform
+**Status:** doing · **Started:** 2026-10-06 · **Finished:** —
+**Goal:** an AWS Terraform module for what S025 maps (a network, a managed
+cluster, an image repository, a database with pgvector, workload identity to
+a secret store) in an EU region, with one command each to check, plan, apply
+and remove it, written and checked without an account; and, with the owner,
+one apply in the owner's account once the cost is stated. This record is the
+first half, the pull request that carries it: the module, its script, the
+policy scan and the command guard's rules, implemented as code, checked
+without an account and never applied.
+
+**Decisions** (the main session's unless marked; the owner may overturn any;
+the design, with its threat note, was written before the first contract):
+
+- **Two halves; this pull request is the first, and the row says `doing`**
+  (S066's convention for a step with a half open). The owner changed the row
+  on 2026-10-06 ("add the aws template too and we will test it in a real aws
+  enviroment"), and the owner's decision on managed and self-managed
+  Kubernetes the same day moved the apply of this managed cluster to the
+  paid stop of S079, where it may be answered no. So the step does not close
+  with this pull request. If the owner answers no, this section closes the
+  step as done with its second half not built, and says so, as S075's row
+  does for what it left. Nothing here ran in AWS: no account exists for the
+  session and no credential is on the machine. Every capability below is
+  implemented as code, checked without an account, or designed.
+- **The module holds infrastructure only.** A root module under
+  `infra/terraform/aws/`: a VPC, an EKS cluster with one managed node group,
+  one ECR repository, one RDS for PostgreSQL instance, one Secrets Manager
+  secret with a role that one named service account may assume, and a
+  budget. It installs nothing into the cluster, no Helm release and no
+  Kubernetes provider: what a controller creates is what makes a removal
+  fragile (ADR 6), and the row does not ask for the chart on EKS.
+- **Two zones, public subnets, no NAT gateway.** The cheapest shape ADR 6
+  lists, and the one that leaves nothing that bills by the hour behind when
+  a removal stops half way. The nodes have public addresses and the security
+  groups admit nothing from the internet to them. The cluster's API endpoint
+  has the private and the public access both on, and only the public side is
+  limited, to one /32 the owner gives (a sensitive variable with no
+  default). Production uses private subnets behind a NAT gateway.
+- **EKS 1.36 and two `t3.large`, from closed lists.** The Kubernetes version
+  is a variable that accepts only versions in standard support (extended
+  support costs six times as much), and the cluster's support type is
+  `STANDARD`; 1.36 and not 1.37, which was five days old with add-on
+  defaults nobody had read. The node and database sizes come from closed
+  lists, a cost ceiling that a stray variable cannot raise. The Pod Identity
+  Agent and the EBS CSI driver are add-ons, the applying principal has an
+  access entry, and the creator is not made administrator implicitly.
+- **RDS for PostgreSQL 17 on `db.t4g.small`, one zone, reachable from the
+  cluster's security group alone,** with encrypted storage and no public
+  address. Deletion protection is off and there is no final snapshot,
+  because the environment is made to be removed; each sits beside its
+  production value in the README. RDS makes and keeps the master password in
+  Secrets Manager, so none is in a variable or in the repository. The
+  `vector` extension is created by a role once the instance is up, which the
+  module cannot do without a connection: the second half records whether it
+  works.
+- **One empty secret and a role for one service account.** The secret has no
+  value and a recovery window of zero. Each Pod Identity role has a trust
+  policy of its own with three conditions on the session tags (namespace,
+  service account, cluster name); the cluster-name condition is this
+  module's addition to AWS's example and the first line to take out if the
+  driver gets no credentials.
+- **The Region is a variable, `eu-central-1` by default,** validated against
+  the Regions of the EU member states ADR 6 lists (hard rule 3), with the
+  two opt-in ones named in the error text. IAM and Budgets are global, and
+  the README says that their metadata is homed outside the Region.
+- **The state is local, by design, and not in a checkout.** A module that is
+  applied once and removed needs no bucket (rejected: an S3 backend, a
+  bucket that must exist first and one more thing left behind). The first
+  review moved the file out of the worktree, because this repository's
+  sessions work in worktrees that are deleted and a state lost with its
+  checkout leaves a cluster billing: it is a file under the owner's home, in
+  a directory of mode 700, which the script gives to `init`. It is
+  unencrypted and has one copy (T-37). The README names a remote bucket as
+  the production value.
+- **A budget in the module:** USD 25 a month by default (a variable, above 0
+  and at most 500; USD because the provider's page does not settle EUR),
+  with alerts at 50, 80 and 100 percent of actual spend to the address in the
+  local file. It covers the whole account, it detects spend and does not
+  stop it, and AWS updates it up to three times a day.
+- **One wrapper script and five `make aws-*` targets.** `aws-validate` and
+  `aws-scan` need no account and are the session's; `aws-plan`, `aws-apply`
+  and `aws-destroy` need the owner's sign-in. `infra/terraform/aws.sh` pins
+  the account twice (the provider carries `allowed_account_ids`, and the
+  script checks the caller's account before Terraform starts; neither number
+  is printed), reads the git-ignored local file as data and never runs it
+  (`infra/terraform/local.env-aws`, with a hyphen on purpose, so that the
+  guard's reader rule covers it), gives Terraform and the `aws` CLI an
+  environment of its own, refuses a variable or an override file and any
+  workspace but the default, applies only a saved plan whose SHA-256, commit
+  and age match its record and that was made from an unchanged directory, and
+  removes only from a terminal and only over a state that holds something.
+  Its output passes through a redaction that knows AWS's shapes. The row asks
+  that one command each creates and removes the environment, and the
+  foundation's rule is that the owner runs a removal by hand: `make
+  aws-destroy` exists and is the owner's, in a terminal.
+- **The guard's rules: removal and by-hand state changes denied, plan and
+  apply asked, and the settings' ask list.** The hook denies `make
+  aws-destroy` and the wrapper's `destroy` in the runner forms the Azure
+  rules read, a pseudo-terminal tool or a trace beside the wrapper, `TF_*`
+  and `AWS_ENDPOINT_URL*` assignments before a tool, `terraform` and `tofu`
+  by hand against the module (`apply`, `plan -out`, `import`, `state` writes,
+  `workspace` changes), the `aws` CLI's deletes and credential printers, the
+  readers of the local file, the state, the plan and `~/.aws`, and the
+  writers of the files that steer a tool. It asks before `make aws-plan` and
+  `make aws-apply` (the text says the apply costs money), before `terraform`
+  or `tofu` `plan`, `show`, `output`, `console` and `state` reads against the
+  module, and before any `aws` call that is not a read. The settings deny
+  Read, Edit and Write on the same files, deny the removal to Bash a second
+  time, and move the bare `terraform plan` from the allow list to the ask
+  list. These rules are a habit-stopper and not the barrier (the guard's own
+  header says so, T-87, T-100): the barrier is where the credentials are,
+  and the owner runs the apply from a machine or an operating-system user
+  where no session runs and no credential is readable by one.
+- **The policy scan is Trivy's configuration scan,** from an image pinned by
+  tag and digest in the `Makefile` (Renovate reads it). It runs with no
+  network, against the checks compiled into the pinned image
+  (`--skip-check-update`; with the network off and no flag Trivy tries a
+  newer bundle, logs that it falls back, and scans anyway), so a check
+  changes only with the pin. It fails on HIGH and CRITICAL. Three findings
+  are accepted, each with its reason on the line above it in `.trivyignore`:
+  the public endpoint (`AWS-0040`, limited to one address, and `kubectl`
+  needs it), no customer-managed key for secret encryption (`AWS-0039`; EKS
+  encrypts with an AWS-owned key by default) and public addresses on the
+  subnets (`AWS-0164`; no NAT gateway on purpose). They are the session's
+  decisions of 2026-10-06, which the owner may overturn. Tests hold the
+  file's form: an entry is one `AWS-` and four digits, no expiry, no
+  wildcard, a reason of five words above it, no inline `trivy:ignore` or
+  `tfsec:ignore`, no Trivy configuration file, and one cluster and one subnet
+  block (an entry covers every resource of the directory).
+- **No Terraform in CI.** S022 owns the pipeline's Terraform and scan; the
+  gates are local, and the Renovate note on the `terraform` group names
+  `make aws-validate` and `make aws-scan`.
+- **ADR 1 keeps its note of 2026-10-06 and gets no new one.** Nothing was
+  applied, and its sentence that the module will be applied, not only
+  validated, rests on the owner's yes, which the second half asks for. Its
+  successor or second note comes with the second half, with C-05 and the
+  scope document, which stay true until then. ADR 6 has no row the module
+  falsified: the node role's third policy (`AmazonEKS_CNI_Policy`), the
+  missing load balancer and NAT gateway and the two secrets are choices the
+  ADR lists as cheaper ways, and the cost it sketched is restated in the
+  README as about USD 0.35 an hour from its prices.
+
+**Advisor:** two consultations are recorded in the handoff files.
+
+- **2026-10-06, about 14:38 UTC, before the first contract (the design).** It
+  changed four things. Decision 2 as written would have kept the nodes from
+  joining: with the private endpoint off and the public one open to the
+  owner's address alone, nodes in public subnets reach the API server through
+  the public endpoint and are refused, so both accesses are on and only the
+  public side is limited (`validate` cannot see this). Trivy without a
+  network was unverified, so T2's first item found out from the pinned
+  image's own help and a run with the network off (above). Two facts the
+  second half would meet were to be pinned from the provider's documentation
+  now: whether RDS removes the secret it manages with the instance (it does,
+  the RDS page says; whether a recovery window applies it does not say) and
+  how ECR is removed (the provider page says only what `force_delete` does,
+  so it is on, with the reason in the file). And ADR 1's note went to T2,
+  which tests its script against a stand-in module directory with stub
+  programs, as the kind scripts are tested, while the main session runs
+  `make aws-validate` on the two contracts together.
+- **2026-10-07, before T3d, at a result that contradicted what was expected
+  (a second security pass found that T3b had opened new holes).** It
+  decided that the code that emptied a quoted search pattern was TAKEN OUT,
+  not repaired: the false alarms it relieved hit a session's shell searches
+  only, never the owner in a terminal, and a session searches with the Grep
+  tool; a text guard that fails closed on a quoted word is honest, and one
+  that a quoted `grep` can talk past is not. It also asked for a check that
+  stands in for a third review: the whole cases file was run against the
+  hooks of the two earlier commits (bd83bf2 and 5127633) and the new one, and
+  104 rows differ, each for a named reason from a closed list and none for
+  another. It changed the contract from "repair" to "remove", and added the
+  differential to its gates.
+
+No other consultation is recorded.
+
+**Work log:**
+
+- **A read-only map of the repository and ADR 6** (`mapping.md`), which found
+  that the guard knew nothing of AWS (`make aws-apply`, the wrapper's
+  removal and every `aws` call passed unasked), that `terraform validate`
+  needs the provider, which `init` downloads, that no policy scanner was
+  installed or pinned, that the redaction knew Azure's shapes only, and that
+  the foundation's rule "the owner runs the removal by hand" meets the row's
+  "one command removes it".
+- **Ten contracts to the `implementer`**, each in a worktree of its own,
+  carried onto the step's branch with git:
+  - **T1, the module** (b09e6de): all the `.tf` files and the lock file,
+    with the provider's hashes for two platforms; `fmt`, `init`, `validate`.
+  - **T2, the commands** (4bb5b6f), beside T1: `aws.sh`, the `make aws-*`
+    targets, the redaction's AWS shapes with tests, the ignore rule for the
+    local file, the Trivy pin and the ignore file's tests, the README and
+    ADR 1's note, tested against a stand-in module with stub programs.
+  - **T2b, the two meeting** (d2e6610): T1 and T2 had been written beside
+    each other, and the script exported `TF_VAR_api_allowed_cidr` where the
+    module declared `api_access_cidr`. Only the joint `make aws-validate`
+    could show it; a test now holds the script's exports to the module's
+    variables. The three accepted findings and their reasons; the README
+    rewritten against the `.tf` files, with three false sentences corrected.
+  - **T2c, the first two reviews' findings** (022a92e): sixteen items. Managed
+    policies read by name, the provider pins the account, sensitive variables,
+    closed lists of sizes, a trust policy of its own per Pod Identity role, the
+    local file parsed and not run, an environment allowlist, a record of the
+    saved plan, the state under home with a removal that refuses over an empty
+    state, the scan's skip list and the ignore file's tests.
+  - **T2d, the second review's findings** (bb724b2): twelve items. A hidden or
+    differently cased variable file, `tfsec` inline ignores, the pinned set of
+    accepted findings, a workspace made by hand, `-reconfigure`, the plan
+    bound to its file by hash, the record's time read in base ten, `git`
+    without a program-running configuration, a validated Region and a length
+    bound, a failed removal that says so, a leading zero in the address, and
+    seven README sentences made true.
+  - **T3, the guard's rules and the settings** (bd83bf2), after S075 merged:
+    eight deny families, the asks, the settings' denies and ask list, 326
+    new cases and the runbook's section.
+  - **T3b, the first guard review's findings** (5127633): `plan` asks and the
+    hook reads its input's working directory, the `-cm` regression, a quoted
+    token in the call parser, a search pattern's emptying and the
+    pseudo-terminal words' anchoring (both later taken out), `workspace
+    select default`, a settings deny for the removal, and one absolute CPU
+    bound of 3 seconds.
+  - **T3c, a test's parameter from the clock** (3f6d910), one commit: the
+    lesson below.
+  - **T3d, the emptying comes out** (ff34984): T3b's emptying and the
+    pseudo-terminal re-anchoring taken out; quoted forms of two S075 rules
+    ask; `workspace select default` is cut out only when `default` ends the
+    word; a backtick ends a target; the differential above.
+  - **T2e, the third review's script items** (37689ca): seven items, two
+    medium and five low. An
+    ignore file of the caller's cannot hide a `.tf`; the script refuses a git
+    older than 2.32 and the README says what its git settings do not cover; the
+    plan is checked after the sign-in; the hash is read from standard input;
+    the workspace file is compared whole; the scan's tests read a bare block
+    label; the README's list of what the script does not close is completed.
+- **Six reviews,** each read by the main session and answered by a contract
+  (below).
+- **This section and the documents** (D1): the plan's rows and section, the
+  threat model's T-100 and five rows with an AWS clause, the root README, and
+  the sentences the branch made false elsewhere.
+
+**Reviews:**
+
+1. **The infrastructure review of the module (a narrow BLOCK).** One
+   attachment would probably stop an apply with the cluster and the database
+   already billing: the EBS CSI policy's ARN, whose path two AWS pages give
+   differently. Also the script cleared `TF_CLI_ARGS*` before it read the
+   local file, "none is printed" was false for a plan, "a session cannot run
+   it" overclaimed (any pseudo-terminal passes the terminal check), the state
+   sat in a worktree, a size had no cost ceiling, the pin lived only in the
+   script, and the Pod Identity trust had no conditions. Closed by T2b and
+   T2c.
+2. **The first security review (three critical findings, once credentials
+   exist).** Apply needs no owner step, the terminal check is not a barrier,
+   and the `aws` CLI is open; seven high findings (the file was sourced as
+   code, tracing printed all four values, the state and the plan were
+   readable, the umask, and others). Its verdict for the owner: today nothing
+   here can spend money, and the barrier for the second half is where the
+   credentials are. The three critical findings stay open, as stated (T-100):
+   no rule or script closes them for a machine where credentials exist. The
+   high findings were closed in the script and the module by T2c, and the
+   guard and the settings gained their rules in T3.
+3. **The second review of the script (no critical finding, two high).** A
+   hidden `.auto.tfvars` reached a plan unseen, and the scan's test did not
+   catch `tfsec:ignore`; seven medium findings. Closed by T2d.
+4. **The security review of T3 (not yet, two high).** `plan` had no ask where
+   the module is named, and the hook ignored the working directory its input
+   carries. **T3 introduced a hole here:** the trigger words it added made
+   the hook's blanking of a message reach `bash -cm '…'`, so a deny that
+   had held became none. Closed by T3b.
+5. **The review of T3b (not as it is).** T3b closed six of the seven
+   findings and **opened others:** the emptying of a quoted search pattern
+   hid a command substitution and a real command behind a fake `grep` inside
+   a literal, ate a file operand after `-e` or `-f`, and the new anchoring of
+   the pseudo-terminal words missed a wrapper with an option; two smaller
+   regressions and an older gap rode with them. **T3d took them out** rather
+   than repairing them (the second consultation), and closed the three small
+   ones.
+6. **The third review of the script (no critical or high finding, two
+   medium).** A caller's own ignore file hid an untracked `.tf` from the
+   clean-tree check, and **a README sentence was false:** it said a line in
+   the repository's own git configuration cannot run a program for the
+   script, and a clean filter configured there does run during the status
+   call. T2e narrows that sentence and adds the filter to the list of what
+   the script does not close; the hole itself stays open and is a backlog
+   row.
+
+**Result / verification:**
+
+- **Nothing was planned or applied.** No account exists for the session, no
+  credential is on the machine, and no `aws` command, plan, apply, removal or
+  import ran. The only real Terraform calls were `fmt`, `init`, `validate`,
+  `providers lock`, `console` on a scratch copy of the variables, and `state
+  list` on a scratch module with no provider. The module is **implemented as
+  code and checked without an account**; the policy scan is **implemented and
+  run offline**; the guard's rules are **implemented and tested against a
+  case file**; the apply is **designed**.
+- **T4, beside the reviews (bee6b57):** the documents check read a threat ID
+  of two digits only, so no citation of T-100, the row this step adds, was
+  checked by anything; it reads two or three digits now (a test failed first
+  on a three-digit ID that no row defines), and `make docs` finds every
+  three-digit citation defined. The script's canonical copy is the development
+  base's: the same line is owed there, with the guard's neutral rules.
+- **The whole suite on the final tree, with `main` merged in, run by the main
+  session:** `16514 passed, 8 skipped, 8 warnings in 195.87s` at six workers
+  beside the cluster and nothing else, on 01d56d6 (`main` with S069 merged
+  in), 2026-10-07 05:44 to 05:47 UTC. A run of the same tree twenty minutes
+  earlier, with another step's loop of stack tests beside it, ended with 15
+  failures on a machine that was swapping (load 190) and is no result: the
+  session's fault.
+- **T2e's gates, run by the main session on the tree that carries its items:**
+  on 01d56d6, `make test` (`Ran 343 tests`, OK), `make docs` (14 checks) and
+  `make lint` ended 0; the AWS script's, the scan's, the redaction's and the
+  documents check's tests printed `772 passed, 47 subtests passed in 10.22s`.
+  `make aws-validate` and `make aws-scan` were run by T2e's implementer and
+  not again by the main session.
+- **The guard's case file on the final tree, run by the main session:**
+  `tests/test_guard_bash.sh` ended 0 with 2,074 ok and 0 FAIL on 01d56d6; the
+  worst shape under the byte bound took 0.747 s of CPU against the bound of 3.
+- **What the implementers reported (claims, not the main session's runs):**
+  the guard's runner ended at 2,074 ok and 0 FAIL on T3d's tree, and the
+  three AWS test files with the Renovate test passed 567 tests (T3d);
+  `make aws-validate` printed "Success! The configuration is valid." and
+  `make aws-scan` found 0 misconfigurations in six targets with the three
+  accepted identifiers (T2d); the redaction's tests and the Azure ones
+  passed (T2c).
+- **What an apply would show that nothing here does.** The module is written
+  from documentation and validated offline, so an apply may fail on what
+  `validate` cannot see. ADR 6 marks these "not verified", and only an apply
+  settles them: whether `db.t4g.small` and a PostgreSQL 17 minor are offered
+  in the Region (ADR 6, the PostgreSQL row), the CPU-credit charges of
+  burstable nodes (the cost sketch), whether the secret RDS manages waits out
+  a recovery window and keeps its name (the removal list), and whether ECR
+  removes a repository that holds an image without a force flag (the same
+  list). The module's own README lists the rest: `CREATE EXTENSION vector`,
+  the quotas and the Free plan's limits, the add-on defaults for 1.36,
+  whether the three trust conditions let the EBS CSI driver and the
+  workload get credentials, whether the nodes join, an Identity Center
+  principal as the access entry, how `allowed_account_ids` fed from a
+  sensitive variable and the lookups by name behave at plan, the real times
+  of an apply and a removal, and the cost against a bill. They are one
+  backlog row for S079.
+- **The cost,** about USD 0.35 an hour (2.79 for eight hours) in
+  `eu-central-1`, is summed from ADR 6's prices of 2026-10-06, not from a
+  bill, and is read again from the price files before any apply.
+
+**Lesson, for Part A's readers.** A parameter of a test built from the
+clock when the file is imported (an octal form of the current time, in T2d's
+test) made pytest-xdist's workers collect different test IDs whenever they
+imported the file in different seconds, and the whole suite stopped at
+collection after the merge of `main` (2026-10-07, 03:34 UTC). The whole run
+that had passed on 2026-10-06 (14,496 tests) passed because the workers
+happened to import the file in the same second: that was luck, not a pass.
+No parameter or ID of a test comes from the clock, a random source, the
+process or a path; the value is built inside the test (T3c).
+
+**Not done, by decision or left open:**
+
+- **The second half:** one apply in the owner's account, what came up
+  recorded, a removal, and the run's cost logged. It is asked at S079's paid
+  stop and may be answered no.
+- **Not built:** the `vector` extension, the Meridian chart and its
+  controllers on the cluster, the module in CI (S022), and everything the
+  backlog rows below list as left to production.
+- **The guard and the script leave gaps,** listed once in the runbook's
+  section and in the module's README, and in two backlog rows: the guard is
+  a habit-stopper, and a session that holds credentials is not stopped by
+  either.
+
+**What the owner should know** (the pull request body repeats it):
+
+- **`.claude/settings.json` and the guard's hook change in this pull
+  request.** The settings now ask before a bare `terraform plan` and one with
+  `-chdir` into the AWS module (the bare plan was allowed), ask before `make
+  aws-plan` and `make aws-apply`, deny `make aws-destroy` and the wrapper's
+  `destroy` as a second layer, and deny Read, Edit and Write on the local
+  file, the state, the plan, variable and override files, `~/.aws` and
+  `~/.terraformrc`. The hook gains the rules above. A plan with `-chdir` into
+  any other module still passes. The settings hold in Claude Code only: Codex
+  runs the same hook and reads no settings file.
+- **Three decisions to overturn, if the owner wants:** the scan's three
+  accepted findings (above), the budget's USD 25 limit, and the Region
+  (`eu-central-1`, as ADR 6 chose).
+- **For the paid stop,** said with the cost and before the yes: the apply is
+  run by the owner from a machine or an operating-system user where no session
+  runs and no credential is readable by one, with a sign-in of about an hour;
+  the owner checks which plan the AWS account is on, since whether EKS, RDS
+  and `t3.large` are available on a Free plan is not verified; and S079 asks
+  whether this cluster is applied at all.
+- **One edit beside the contract:** the Trivy image's entry in
+  `tests/test_renovate_config.py`'s list of images that have no chart
+  (T3), because that test failed when the pin met S075's.
+- **A dependency to decide:** S079's row depends on S036, which stays `doing`
+  until the owner answers at the paid stop; what S079 takes from S036 (the
+  script, the scan and the reviews' lessons) is in this pull request.
+
+**Follow-ups:**
+
+- In the backlog, each with its step: what an apply would settle, what the
+  script never ran against, what it does not close, its small ends, what the
+  module leaves to production, the chart on the cluster, where the apply is
+  run, the guard's listed gaps and what the settings rest on without a probe
+  (S079); CI for the module (S022); what a Google Cloud scaffold copies and
+  avoids (S078); the neutral guard rules owed to the development base
+  (S036).
+- Rows changed: the guard's reader list is re-homed from S036 to S079, whose
+  module edits the guard next; the base's copy stays with S036 and says its
+  rules are the next ones owed; the threat model's Azure-only rows stay open
+  at S036, with nothing applied.
+- For the owner: the decisions above, and the three accepted findings.
 
 ## Part D — Open questions
 
@@ -13224,3 +13648,22 @@ on 2026-10-06 side by side; E3 waited for E2 (both edit the runtime's
   lane) and the ingestion's tenant (the owner, at S020). T-03, T-10, T-14,
   T-31, T-40, T-49, T-67, T-93 and T-98 changed, no new threat; ADR 9 gains a
   note. Twelve backlog rows closed, five closed in part, seventeen new.
+- **v0.68, 2026-10-07:** S036, first half: an AWS Terraform module
+  (a VPC of two public subnets, an EKS cluster with one node group, one ECR
+  repository, an RDS for PostgreSQL 17 instance whose password RDS keeps in
+  Secrets Manager, one secret with a Pod Identity role and a budget, in an
+  EU Region, with a local state under the owner's home), a wrapper script
+  with five `make aws-*` targets that pins the account, applies only a saved
+  plan and removes only from a terminal, Trivy's configuration scan from a
+  pinned image, and rules for the command guard and the settings that deny
+  the removal and by-hand state changes and ask before a plan or an apply.
+  Implemented as code and checked without an account; nothing was planned or
+  applied, and no account or credential exists for a session. Six reviews: T3
+  introduced a hole that T3b closed, and T3b opened others that T3d took out
+  rather than repaired; the third pass of the script showed a README sentence
+  to be false. The step stays open for its second half, one apply in the
+  owner's account, asked at S079's paid stop and possibly answered no. T-100
+  new (100 threats) and T-12, T-15, T-36, T-37 and T-42 each gain an AWS
+  clause; Part A's Renovate list gains the AWS commands and the Trivy pin.
+  Eleven backlog rows new, three changed (the guard's reader list re-homed to
+  S079, the base's copy owed, the Azure-only threat rows still open).
