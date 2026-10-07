@@ -21,6 +21,7 @@ from meridian.platform.gateway.response_schema import response_schema_errors
 from meridian.runtime.failures import GraphFailure
 from meridian.runtime.model_client import (
     ChatResult,
+    Drafter,
     ModelCallError,
     ModelCallFilteredError,
     ModelClient,
@@ -809,6 +810,45 @@ def test_a_filtered_call_is_unavailable_with_no_drafter_and_logs_one_word(
     )
     assert _word_of(caplog) == ["exclusion assessment unavailable: filtered"]
     assert CANARY not in caplog.text
+
+
+def test_a_withheld_completion_is_unavailable_with_its_drafter_and_logs_one_word(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    stub = StubModel(
+        ModelCallFilteredError(
+            withheld=True, drafter=Drafter("eu-chat", "azure-openai", "live")
+        )
+    )
+    claim = make_claim(f"{CANARY} the car was hit")
+
+    with caplog.at_level(logging.DEBUG, logger=LOGGER):
+        result = assess(as_client(stub), claim, "motor", "2026.1", CANDIDATES)
+
+    assert len(stub.calls) == 1
+    assert result == Assessed(
+        assessment=Assessment("unavailable"),
+        rationale=None,
+        drafted_by=DraftedBy(
+            deployment="eu-chat",
+            provider="azure-openai",
+            mode="live",
+            prompt=PROMPT_VERSION,
+        ),
+        unavailable_because="filtered",
+    )
+    assert _word_of(caplog) == ["exclusion assessment unavailable: filtered"]
+    assert CANARY not in caplog.text
+
+
+def test_a_withheld_completion_whose_deployment_was_not_named_has_no_drafter() -> None:
+    stub = StubModel(ModelCallFilteredError(withheld=True))
+
+    result = assess(as_client(stub), make_claim(), "motor", "2026.1", CANDIDATES)
+
+    assert result.assessment == Assessment("unavailable")
+    assert result.unavailable_because == "filtered"
+    assert result.drafted_by is None
 
 
 def test_a_model_error_that_is_not_the_filter_still_propagates() -> None:

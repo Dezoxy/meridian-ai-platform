@@ -17,6 +17,7 @@ import httpx
 from opentelemetry import propagate
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from meridian.platform.common.http import BoundedEntityId
 from meridian.platform.registry.models import DataClass
 
 CHAT_PATH = "/v1/chat"
@@ -27,6 +28,17 @@ DATA_CLASS_HEADER = "X-Meridian-Data-Class"
 # refusal by the provider's filter.
 REFUSAL_HEADER = "X-Meridian-Refusal"
 REFUSAL_CONTENT_FILTER = "content-filter"
+# A second header beside the refusal mark, for a completion withheld after the
+# provider ran (billed: the filter withheld it, or the model's own refusal of a
+# structured request), and the three headers that then name the deployment.
+# Copies too. The refusal header keeps its one value, so a runtime that knows
+# only that header still reads a withheld completion as a filtered call; a value
+# of this header other than the fixed one is ignored.
+COMPLETION_HEADER = "X-Meridian-Completion"
+COMPLETION_WITHHELD = "withheld"
+DEPLOYMENT_HEADER = "X-Meridian-Deployment"
+PROVIDER_HEADER = "X-Meridian-Provider"
+MODE_HEADER = "X-Meridian-Mode"
 # How a call to the gateway ended, for the runtime's metric: the closed set of
 # words a call's reason comes from. ``unreachable`` is no answer at all (a
 # transport error that is not a timeout), ``refused`` a 429 or a 403,
@@ -84,13 +96,32 @@ class ModelCallTimeoutError(ModelCallError):
         self.args = ("model gateway did not answer in time",)
 
 
+@dataclass(frozen=True, slots=True)
+class Drafter:
+    """The deployment that drafted a completion the filter withheld, as the
+    gateway named it in headers; each part passed its pattern."""
+
+    deployment: str
+    provider: str
+    mode: str
+
+
 class ModelCallFilteredError(ModelCallError):
     """The provider's content filter refused the request or withheld the
     completion: the gateway answers 400 with the ``X-Meridian-Refusal`` header
-    for that. A 400 without it is a plain ``ModelCallError``."""
+    for that. A 400 without it is a plain ``ModelCallError``.
 
-    def __init__(self) -> None:
+    ``withheld`` is true when the gateway said the provider ran and its
+    completion was withheld (it was billed); ``drafter`` then holds the
+    deployment it named, or none when a header was missing or outside its
+    pattern. A refused prompt has neither. The message is fixed text."""
+
+    def __init__(
+        self, *, withheld: bool = False, drafter: Drafter | None = None
+    ) -> None:
         super().__init__(HTTPStatus.BAD_REQUEST)
+        self.withheld = withheld
+        self.drafter = drafter
 
 
 class ModelCallLimitError(ModelCallError):
@@ -155,14 +186,42 @@ class _ReplyTooLarge(Exception):
     """The reply outgrew ``MAX_REPLY_BYTES``. Private and message-less."""
 
 
+class _Provenance(BaseModel):
+    """The deployment headers of a withheld completion, held to the patterns of
+    the registry's IDs and the three modes: all three or none is kept."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    deployment: BoundedEntityId
+    provider: BoundedEntityId
+    mode: Literal["replay", "recorded", "live"]
+
+
+def _drafter_of(headers: httpx.Headers) -> Drafter | None:
+    try:
+        named = _Provenance.model_validate(
+            {
+                "deployment": headers.get(DEPLOYMENT_HEADER),
+                "provider": headers.get(PROVIDER_HEADER),
+                "mode": headers.get(MODE_HEADER),
+            }
+        )
+    except ValidationError:
+        return None  # a value outside its pattern is dropped, never carried
+    return Drafter(named.deployment, named.provider, named.mode)
+
+
 @dataclass(frozen=True, slots=True)
 class _Answer:
-    """What the gateway said: the status, whether it marked a filtered 400, and
-    the body of a 2xx only (the body of any other status is never read)."""
+    """What the gateway said: the status, whether it marked a filtered 400 (and
+    whether the completion was withheld, with the deployment named), and the
+    body of a 2xx only (the body of any other status is never read)."""
 
     status_code: int
     filtered: bool
     payload: bytes
+    withheld: bool = False
+    drafter: Drafter | None = None
 
 
 class ModelClient:
@@ -242,7 +301,9 @@ class ModelClient:
         answer = self._exchange(body, headers)
         if answer.filtered:
             self._observe("failed", "filtered")
-            raise ModelCallFilteredError from None
+            raise ModelCallFilteredError(
+                withheld=answer.withheld, drafter=answer.drafter
+            ) from None
         if not 200 <= answer.status_code < 300:
             refused = answer.status_code in REFUSED_STATUSES
             self._observe("failed", "refused" if refused else "error")
@@ -282,6 +343,11 @@ class ModelClient:
                     status == HTTPStatus.BAD_REQUEST
                     and response.headers.get(REFUSAL_HEADER) == REFUSAL_CONTENT_FILTER
                 )
+                withheld = (
+                    filtered
+                    and response.headers.get(COMPLETION_HEADER) == COMPLETION_WITHHELD
+                )
+                drafter = _drafter_of(response.headers) if withheld else None
                 chunks: list[bytes] = []
                 size = 0
                 if 200 <= status < 300:
@@ -291,7 +357,7 @@ class ModelClient:
                             raise _ReplyTooLarge
                         chunks.append(chunk)
                         self._check_deadline(started)
-            return _Answer(status, filtered, b"".join(chunks))
+            return _Answer(status, filtered, b"".join(chunks), withheld, drafter)
         except _ReplyTooLarge:
             # Counted on the decoded bytes, as they come; nothing of the body
             # is kept or named, and the response is closed on the way out.

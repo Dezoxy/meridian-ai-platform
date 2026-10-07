@@ -40,7 +40,12 @@ from meridian.platform.common.metrics import make_meter_provider
 from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.platform.gateway import redaction as redaction_module
 from meridian.platform.gateway.app import (
+    COMPLETION_HEADER,
+    COMPLETION_WITHHELD,
+    DEPLOYMENT_HEADER,
+    MODE_HEADER,
     PROVIDER_FILTERED,
+    PROVIDER_HEADER,
     REFUSAL_CONTENT_FILTER,
     REFUSAL_HEADER,
     create_app,
@@ -745,6 +750,90 @@ def test_a_filtered_first_attempt_is_a_400_with_no_second_attempt(
     assert parent.attributes["error.type"] == "filtered"
 
 
+PROVENANCE_HEADERS = (DEPLOYMENT_HEADER, PROVIDER_HEADER, MODE_HEADER)
+WITHHELD_MARKS = (COMPLETION_HEADER, *PROVENANCE_HEADERS)
+
+
+@pytest.mark.parametrize("path", [CHAT, EMBEDDINGS])
+def test_a_refused_prompt_names_no_deployment_and_a_withheld_completion_names_it(
+    registry_with: Callable[..., Path],
+    build: Callable[[Path], Gateway],
+    path: str,
+) -> None:
+    gateway = build(registry_with(FIRST, SECOND))
+    served = FIRST if path == CHAT else EMBEDDING
+    gateway.provider.outcomes[served] = filtered(400)
+    refused, _ = gateway.post(path)
+    gateway.provider.outcomes[served] = filtered(None)
+
+    withheld, run_id = gateway.post(path)
+
+    assert refused.status_code == withheld.status_code == 400
+    assert refused.headers[REFUSAL_HEADER] == REFUSAL_CONTENT_FILTER
+    assert all(name not in refused.headers for name in WITHHELD_MARKS)
+    assert withheld.headers[REFUSAL_HEADER] == REFUSAL_CONTENT_FILTER
+    assert withheld.headers[COMPLETION_HEADER] == COMPLETION_WITHHELD
+    assert withheld.headers[DEPLOYMENT_HEADER] == served
+    assert withheld.headers[PROVIDER_HEADER] == "azure-openai"
+    assert withheld.headers[MODE_HEADER] == "live"
+    assert withheld.json() == refused.json() == {"detail": PROVIDER_FILTERED}
+    (row,) = gateway.rows(run_id)
+    assert (row["outcome"], row["reason"]) == ("failed", "filtered")
+    assert gateway.calls_counted() == {("failed", "filtered"): 2}
+
+
+def test_the_ledger_still_releases_a_refused_prompt_and_keeps_a_withheld_one(
+    two: Gateway,
+) -> None:
+    two.provider.outcomes[FIRST] = filtered(400)
+    two.post()
+    two.provider.outcomes[FIRST] = filtered(None)
+
+    two.post()
+
+    assert [(u["deployment"], u["state"]) for u in two.usage()] == [
+        (FIRST, "released"),
+        (FIRST, "kept"),
+    ]
+
+
+def test_a_withheld_completion_names_the_last_deployment_that_was_called(
+    two: Gateway,
+) -> None:
+    two.provider.outcomes[FIRST] = Outcome(ProviderError("timeout"))
+    two.provider.outcomes[SECOND] = filtered(None)
+
+    response, _ = two.post()
+
+    assert two.provider.called == [FIRST, SECOND]
+    assert response.headers[REFUSAL_HEADER] == REFUSAL_CONTENT_FILTER
+    assert response.headers[COMPLETION_HEADER] == COMPLETION_WITHHELD
+    assert response.headers[DEPLOYMENT_HEADER] == SECOND
+
+
+def test_a_refused_prompt_after_a_failed_attempt_names_no_deployment(
+    two: Gateway,
+) -> None:
+    two.provider.outcomes[FIRST] = Outcome(ProviderError("timeout"))
+    two.provider.outcomes[SECOND] = filtered(400)
+
+    response, _ = two.post()
+
+    assert response.headers[REFUSAL_HEADER] == REFUSAL_CONTENT_FILTER
+    assert all(name not in response.headers for name in WITHHELD_MARKS)
+
+
+def test_a_withheld_completion_carries_no_word_of_the_provider(
+    two: Gateway,
+) -> None:
+    two.provider.outcomes[FIRST] = filtered(None)
+
+    response, _ = two.post(CHAT, {"messages": [{"role": "user", "content": CANARY}]})
+
+    assert CANARY not in str(dict(response.headers))
+    assert CANARY not in response.text
+
+
 def test_a_filtered_call_leaves_the_circuit_closed(two: Gateway) -> None:
     two.provider.outcomes[FIRST] = filtered()
     for _ in range(FAILURE_THRESHOLD + 1):
@@ -880,9 +969,17 @@ def test_both_routes_list_400_for_the_content_filter(two: Gateway, path: str) ->
     assert responses["400"]["content"]["application/json"]["schema"]["$ref"].endswith(
         "/ErrorBody"
     )
-    header = responses["400"]["headers"][REFUSAL_HEADER]
-    assert header["schema"] == {"type": "string", "enum": [REFUSAL_CONTENT_FILTER]}
-    assert header["description"]
+    headers = responses["400"]["headers"]
+    assert headers[REFUSAL_HEADER]["schema"] == {
+        "type": "string",
+        "enum": [REFUSAL_CONTENT_FILTER],
+    }
+    assert headers[COMPLETION_HEADER]["schema"] == {
+        "type": "string",
+        "enum": [COMPLETION_WITHHELD],
+    }
+    assert all(headers[name]["description"] for name in headers)
+    assert set(headers) == {REFUSAL_HEADER, *WITHHELD_MARKS}
 
 
 def test_a_header_value_is_listed_as_an_optional_header_of_both_routes(

@@ -29,7 +29,12 @@ Not this runbook:
 
 - 400 with the header `X-Meridian-Refusal: content-filter` is one
   request's content. The run does not fail; the rules send the claim to a
-  person.
+  person. The same 400 also carries `X-Meridian-Completion: withheld`
+  when the provider ran and its completion was withheld, whether by the
+  filter or as the model's own refusal of a structured request: billed
+  either way. The headers `X-Meridian-Deployment`, `X-Meridian-Provider`
+  and `X-Meridian-Mode` then name the deployment. A refused prompt
+  carries none of the four and was not billed.
 - 429 from the gateway is a tenant's limit:
   [budget exhaustion](budget-exhaustion.md). Upstream it reads the same,
   because the runtime answers 502 for any gateway refusal; the reason on

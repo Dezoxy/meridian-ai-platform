@@ -21,7 +21,8 @@ called (QA-12). A candidate whose circuit is open, or that the deadline leaves
 no time for, is skipped; a deployment's own failure moves the walk to the next
 candidate; a rejected request ends it, and so does a request the provider's
 content filter refuses, which the gateway answers 400 with the
-``X-Meridian-Refusal`` header (T-67); a reservation the
+``X-Meridian-Refusal`` header (T-67), with a second header and the deployment
+named when the completion was withheld after the provider ran; a reservation the
 tenant's budget refuses ends it too (429, or the earlier attempt's answer).
 Every candidate touched leaves one audit row, except that a refusal, whether
 policy's 403 or a tenant limit's 429 or 413, leaves at most one row per tenant
@@ -162,9 +163,23 @@ SERVICE_NAME = "model-gateway"
 HTTP_BAD_REQUEST = 400
 # The mark of the gateway's own 400: FastAPI answers 400 too, for a body it
 # cannot decode, and the runtime must not read that as a content-filter refusal.
-# ``runtime/model_client.py`` keeps a copy of both (a test compares them).
+# ``runtime/model_client.py`` keeps a copy of every constant of this block (a
+# test compares them). ``X-Meridian-Refusal: content-filter`` is on every
+# filtered answer: the provider's filter refused the prompt, or the provider ran
+# and its completion was withheld. A withheld one, billed with the reservation
+# kept (the filter withheld the completion, or the model's own refusal of a
+# structured request: billed either way), carries a second header of its own,
+# ``X-Meridian-Completion: withheld``, and names the deployment in three more,
+# each a registry ID or a closed word and never a provider's text (S069). A
+# refused prompt carries none of the four. A runtime that knows only the refusal
+# header still reads a withheld completion as a filtered call.
 REFUSAL_HEADER = "X-Meridian-Refusal"
 REFUSAL_CONTENT_FILTER = "content-filter"
+COMPLETION_HEADER = "X-Meridian-Completion"
+COMPLETION_WITHHELD = "withheld"
+DEPLOYMENT_HEADER = "X-Meridian-Deployment"
+PROVIDER_HEADER = "X-Meridian-Provider"
+MODE_HEADER = "X-Meridian-Mode"
 HTTP_BAD_GATEWAY = 502
 HTTP_SERVICE_UNAVAILABLE = 503
 HTTP_GATEWAY_TIMEOUT = 504
@@ -205,7 +220,23 @@ RunHeader = Annotated[uuid.UUID, Header(alias="X-Meridian-Run")]
 DataClassHeader = Annotated[DataClass | None, Header(alias="X-Meridian-Data-Class")]
 
 
-def _unanswered(result: Unanswered) -> NoReturn:
+def _filtered_headers(result: Unanswered, mode: str) -> dict[str, str]:
+    """The headers of the content filter's 400: the refusal mark always; for a
+    withheld completion also its own mark and the deployment that drafted it:
+    its registry ID, its provider's registry ID and the gateway's mode."""
+    deployment = result.withheld_by
+    if deployment is None:
+        return {REFUSAL_HEADER: REFUSAL_CONTENT_FILTER}
+    return {
+        REFUSAL_HEADER: REFUSAL_CONTENT_FILTER,
+        COMPLETION_HEADER: COMPLETION_WITHHELD,
+        DEPLOYMENT_HEADER: deployment.id,
+        PROVIDER_HEADER: deployment.provider,
+        MODE_HEADER: mode,
+    }
+
+
+def _unanswered(result: Unanswered, mode: str) -> NoReturn:
     """The status when no candidate answered: the last attempt's kind (400 for a
     content filter, 504 for a timeout, 502 for the rest), or 503 when none was
     called. Never a word of the provider's (T-18)."""
@@ -217,7 +248,7 @@ def _unanswered(result: Unanswered) -> NoReturn:
         raise HTTPException(  # the one 400 the gateway gives, marked by its header
             status_code=HTTP_BAD_REQUEST,
             detail=PROVIDER_FILTERED,
-            headers={REFUSAL_HEADER: REFUSAL_CONTENT_FILTER},
+            headers=_filtered_headers(result, mode),
         )
     if result.last_attempt_kind == "not-recorded":
         raise HTTPException(status_code=HTTP_BAD_GATEWAY, detail=NOT_RECORDED)
@@ -486,10 +517,45 @@ def create_app(
                 REFUSAL_HEADER: {
                     "description": (
                         "Marks this 400 as the content filter's refusal; a 400 "
-                        "without it is not."
+                        "without it is not. The one value, on every filtered "
+                        "answer, whether the prompt was refused or a "
+                        "completion was withheld."
                     ),
                     "schema": {"type": "string", "enum": [REFUSAL_CONTENT_FILTER]},
-                }
+                },
+                COMPLETION_HEADER: {
+                    "description": (
+                        "Beside the refusal header, only when the provider ran "
+                        "and the completion was withheld, billed either way: "
+                        "a completion the filter withheld, or the model's own "
+                        "refusal of a structured request. A refused prompt "
+                        "(nothing billed) does not carry it."
+                    ),
+                    "schema": {"type": "string", "enum": [COMPLETION_WITHHELD]},
+                },
+                DEPLOYMENT_HEADER: {
+                    "description": (
+                        "With the completion header only: the registry ID of "
+                        "the deployment that drafted the completion."
+                    ),
+                    "schema": {"type": "string"},
+                },
+                PROVIDER_HEADER: {
+                    "description": (
+                        "With the completion header only: the registry ID of "
+                        "that deployment's provider."
+                    ),
+                    "schema": {"type": "string"},
+                },
+                MODE_HEADER: {
+                    "description": (
+                        "With the completion header only: the gateway's mode."
+                    ),
+                    "schema": {
+                        "type": "string",
+                        "enum": ["replay", "recorded", "live"],
+                    },
+                },
             },
         }
         return responses
@@ -681,7 +747,7 @@ def create_app(
             # The reason is the last attempt's kind, a fixed word and never the
             # provider's text; no candidate called is "unavailable".
             record.end("failed", result.last_attempt_kind or NOT_CALLED_REASON)
-            _unanswered(result)
+            _unanswered(result, settings.mode)
         return result
 
     return app
