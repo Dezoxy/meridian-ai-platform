@@ -8,10 +8,10 @@ evaluation hands the runtime a second gateway over the same database
 laptop one in ``live`` mode whose Azure provider is wrapped in a
 ``RecordingProvider``. The judge calls the second gateway too.
 
-``run_evaluation`` posts the 40 golden claims, judges every proposal that has a
-rationale, and reads from the ledger and from the tool client what each case
-cost and called. Nothing here prints a prompt, an endpoint, a tenant ID or a
-header.
+``run_evaluation`` posts every golden claim (each entry of ``claims.json``, the
+count its manifest gives), judges every proposal that has a rationale, and reads
+from the ledger and from the tool client what each case cost and called. Nothing
+here prints a prompt, an endpoint, a tenant ID or a header.
 """
 
 import hashlib
@@ -463,7 +463,7 @@ def run_evaluation(
     kind: Kind,
     pace: Callable[[float], None],
 ) -> Evaluation:
-    """Post the 40 golden claims to ``stack`` (whose runtime calls ``second``),
+    """Post every golden claim to ``stack`` (whose runtime calls ``second``),
     judge the proposals through ``second``, and read the ledger and the tool
     calls.
 
