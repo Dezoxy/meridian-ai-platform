@@ -113,6 +113,8 @@ def start_smoke(tmp_path: Path, *, hold: bool, first_delete_fails: bool) -> Smok
         directory.mkdir(parents=True)
     for name in ("smoke.sh", "common.sh", "pins.env"):
         shutil.copy(KIND_DIR / name, kind_dir / name)
+    if (KIND_DIR / "smoke.d").is_dir():  # the parts smoke.sh sources (S074)
+        shutil.copytree(KIND_DIR / "smoke.d", kind_dir / "smoke.d")
     (kind_dir / "kubeconfig").write_text("stub\n", encoding="utf-8")
     (state / "deployment.json").write_text(DEPLOYMENT, encoding="utf-8")
     never, held = state / "never", state / "held"
