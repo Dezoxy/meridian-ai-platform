@@ -12,10 +12,11 @@
 #
 # Pod Security Admission: warn and audit, never enforce, on every namespace
 # below. These two never refuse a pod; they make the API server warn about, and
-# audit, a pod that does not meet the level. A server-side dry run of enforce=restricted on `meridian` reported
-# no violation among the pods of 2026-10-04, the database's included, but a
-# first `make up` under enforce (CloudNativePG's init Job) was not tried, so
-# enforce waits (the plan's backlog). The level is the strictest the namespace's
+# audit, a pod that does not meet the level. A server-side dry run of
+# enforce=restricted on `meridian` reported no violation among the pods of
+# 2026-10-04, the database's included, but a first `make up` under enforce
+# (CloudNativePG's init Job) was not tried, so enforce waits (the plan's
+# backlog). The level is the strictest the namespace's
 # pods meet as `helm template` renders them with infra/kind/values (S063, read on
 # 2026-10-06, tested without a cluster; the server-side dry run is the main
 # session's):

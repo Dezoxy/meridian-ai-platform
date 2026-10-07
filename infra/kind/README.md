@@ -336,9 +336,10 @@ binding is. cert-manager's account may `use` the four policies that allow
 through a Role and RoleBinding in one namespace each, and the one that denies
 through a ClusterRoleBinding, so a request from another namespace meets only
 the policy that denies. What is left: whoever can create a `Certificate` in
-`meridian` has any service's identity issued (the policy checks the namespace
-and the URI prefix, not which service), and whoever can change a policy or its
-binding undoes the limit; on kind that is the cluster's administrator.
+`meridian` has any listed service's identity issued (the policy checks the
+namespace and the names, eight URIs and six DNS names, each listed, not which
+service), and whoever can change a policy or its binding undoes the limit; on
+kind that is the cluster's administrator.
 
 `make up` installs approver-policy and applies the policies before the CA,
 waits for the five to be Ready, and then waits for the issuer to be Ready
@@ -981,13 +982,15 @@ node image, Kubernetes components and the platform).
     brings it. The fourth line is the one request smoke makes on purpose, and
     one that the issuer must refuse (S062): a `CertificateRequest` named
     `meridian-smoke-refused-<pid>-<random>` in the namespace `default`, for the
-    issuer `meridian-services`, with a URI under the Meridian prefix and a
-    duration that policy allows, so that only its namespace refuses it: the
-    namespace selector of `meridian-services` does not list `default`, and
-    `meridian-deny-unlisted`, which selects the issuer from every namespace,
-    permits nothing. It passes when the request is Denied and the approver's
-    whole message, judged before it is cut, names `meridian-deny-unlisted` as a
-    policy that evaluated the request and does not name `meridian-services` as
+    issuer `meridian-services`, with a URI that policy lists (the Claims API's;
+    since S072 the policy lists each URI, so an unlisted one would be refused
+    in `meridian` too) and a duration and usages it allows, so that only its
+    namespace refuses it: the namespace selector of `meridian-services` does
+    not list `default`, and `meridian-deny-unlisted`, which selects the issuer
+    from every namespace, permits nothing. It passes when the request is
+    Denied and the approver's whole message, judged before it is cut, names
+    `meridian-deny-unlisted` as a policy that evaluated the request and does
+    not name `meridian-services` as
     one (the line says the reason, cut to 60 characters, and the message, cut
     to 120). The form it matches is the one approver-policy v0.28.0 wrote on
     the cluster, `No policy approved this request: [meridian-deny-unlisted:
@@ -2081,17 +2084,18 @@ container, about a minute in which a one-replica service does not answer; if
 cert-manager has not renewed it, the service stays healthy until the
 certificate ends and is unhealthy from then on, but two alerts fire long
 before (21 days left; not Ready); a renewed CA still reaches a service only
-when it restarts; no certificate is revoked; nothing limits which service's name a
-request in `meridian` asks for (approver-policy lets the `meridian-services`
-issuer sign only a request from `meridian` with a URI under the Meridian
-prefix, so a request from another namespace is denied, but whoever can create
-a `Certificate` in `meridian`, or change a policy or its binding, can still
-mint any service's identity); the CA's private key is readable by the
-operators that hold a cluster-wide read of Secrets (cert-manager, cainjector,
-CloudNativePG), though by no Meridian pod; and the telemetry from the services
-to the collector is TLS only by the second authority above (S063, tested without
-a cluster), while the collector's own hops to Tempo, Prometheus and Loki are
-still plain.
+when it restarts; no certificate is revoked; nothing limits which listed
+service's name a request in `meridian` asks for (approver-policy lets the
+`meridian-services` issuer sign only a request from `meridian` with one of
+eight listed URIs and, where it names one, one of six listed DNS names, so a
+request from another namespace, or for a name not listed, is denied, but
+whoever can create a `Certificate` in `meridian`, or change a policy or its
+binding, can still mint any listed service's identity); the CA's private key
+is readable by the operators that hold a cluster-wide read of Secrets
+(cert-manager, cainjector, CloudNativePG), though by no Meridian pod; and the
+telemetry from the services to the collector is TLS only by the second
+authority above (S063, tested without a cluster), while the collector's own
+hops to Tempo, Prometheus and Loki are still plain.
 
 A cluster whose services were first applied as raw manifests (before S019)
 keeps them: Helm adopted the objects in place (`--take-ownership`) and no

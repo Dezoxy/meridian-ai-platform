@@ -913,6 +913,11 @@ tests:
       - eval_time: 8m
         alertname: MeridianRateStoreRestartLoop
         exp_alerts: []
+      # Both restarts (minutes 4 and 10) are inside this window: a threshold of
+      # 2 would fire here; the evaluations at 8m and 25m see one each.
+      - eval_time: 12m
+        alertname: MeridianRateStoreRestartLoop
+        exp_alerts: []
       - eval_time: 25m
         alertname: MeridianRateStoreRestartLoop
         exp_alerts: []
@@ -926,10 +931,31 @@ tests:
       - series: 'kube_pod_container_status_restarts_total{namespace="meridian", pod="rate-store-7d9c5b6f4-abcde", container="rate-store"}'
         values: "0x5 1x11 2x11 3x10"
     alert_rule_test:
+      # Two restarts (minutes 6 and 18) are inside this window: a threshold of 2
+      # would fire here; the evaluations after it see one each.
+      - eval_time: 18m
+        alertname: MeridianRateStoreRestartLoop
+        exp_alerts: []
       - eval_time: 27m
         alertname: MeridianRateStoreRestartLoop
         exp_alerts: []
       - eval_time: 35m
+        alertname: MeridianRateStoreRestartLoop
+        exp_alerts: []
+
+  # Per pod, not summed: a rollout replaces the pod, and the old pod's two
+  # restarts (minutes 2 and 4, the designed two) and the new pod's one (minute
+  # 10) are three in one window, but never three of one pod. A sum over the pods
+  # would count them as a loop.
+  - name: two restarts of an old pod and one of its replacement inside one window do not fire the rate store restart alert
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="meridian", pod="rate-store-7d9c5b6f4-abcde", container="rate-store"}'
+        values: "0 0 1 1 2 2 2"
+      - series: 'kube_pod_container_status_restarts_total{namespace="meridian", pod="rate-store-6c8d4f7b5-fghij", container="rate-store"}'
+        values: "_x7 0 0 1x10"
+    alert_rule_test:
+      - eval_time: 12m
         alertname: MeridianRateStoreRestartLoop
         exp_alerts: []
 
