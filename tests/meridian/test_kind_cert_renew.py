@@ -131,7 +131,10 @@ def run_cert_renew(
     (tmp_path / "certificates.json").write_text(certificates, encoding="utf-8")
     calls = tmp_path / "calls"
     calls.touch()
-    log = f'printf \'%s{SEPARATOR}\' {{name}} "$@" >>"{calls}"; echo >>"{calls}"'
+    # One write for one call: two stubs of a pipe (`create --dry-run | apply`)
+    # append at the same time, and a line written in two parts can be cut in
+    # two by the other's (seen once under load: three changes read as two).
+    log = f'printf \'%s\\n\' "$(printf \'%s{SEPARATOR}\' {{name}} "$@")" >>"{calls}"'
     list_answer = (
         "echo \"error: the server doesn't have a resource type "
         '\\"certificates\\"" >&2; exit 1'

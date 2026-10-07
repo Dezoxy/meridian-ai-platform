@@ -321,11 +321,11 @@ app.kubernetes.io/name=rate-store`) say which:
   before the restart count: a count that climbs is not by itself a script.
 
 One more is a clock that stepped back by more than the gap between the
-certificate's write and the process's start (a virtual machine that resumed and
-then set its clock): the liveness rule then sees a certificate newer than the
-server and restarts it until the clock catches up, at most every five minutes
-(the kubelet's back-off). It is accepted: no small fix exists without writable
-state, and it is stated in the template's header.
+certificate's write and the process's start, and two seconds (a virtual machine
+that resumed and then set its clock): the liveness rule then sees a certificate
+newer than the server and restarts it until the clock catches up, at most every
+five minutes (the kubelet's back-off). It is accepted: no small fix exists
+without writable state, and it is stated in the template's header.
 
 No alert fires on a store that restarts in a loop while few calls come (see
 "What you see"): `MeridianRateStoreRefusing` needs at least two refused calls

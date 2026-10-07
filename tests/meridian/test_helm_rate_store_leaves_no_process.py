@@ -36,6 +36,7 @@ MAKEFILE = Path(__file__).resolve().parents[2] / "Makefile"
 # Test containers are named with this prefix and unique, so that parallel
 # workers never share one and a leftover is plain to see.
 CONTAINER_PREFIX = "s073k7-probe-"
+TLS_FILE = f"{TLS_DIRECTORY}/tls.crt"
 READY_LINE = "Ready to accept connections"
 START_SECONDS = 60
 # The ACL `make up` writes for the probe user, and one that lacks `+ping`, so
@@ -184,6 +185,22 @@ def run_probe(name: str, probe: str) -> subprocess.CompletedProcess[str]:
     return docker("exec", name, *probe_command(probe))
 
 
+def computed_start(name: str) -> int:
+    """The server's start second as the liveness probe computes it: the probe's
+    own three lines (``boot=``, ``ticks=`` and ``started=``), run in the
+    container, and the value they leave in ``started``."""
+    script = probe_command("livenessProbe")[2]
+    lines = [
+        line
+        for line in script.splitlines()
+        if line.startswith(("boot=", "ticks=", "started="))
+    ]
+    assert len(lines) == 3, lines
+    done = docker("exec", name, "sh", "-c", "\n".join(lines) + '\necho "$started"')
+    assert done.returncode == 0, done.stderr
+    return int(done.stdout)
+
+
 @pytest.fixture(scope="module")
 def pinned_store_possible() -> None:
     if not docker_ready():
@@ -206,8 +223,37 @@ def test_a_probe_run_many_times_leaves_no_process_in_the_store_container(
         results = [run_probe(name, probe) for _ in range(case.runs)]
         after = processes(name)
 
+    # A failure prints what the probe said (each distinct standard error), so a
+    # run in CI shows the probe's own words and not only a set of statuses.
+    said = sorted({r.stderr.strip() for r in results})
     assert before == []
-    assert {r.returncode for r in results} == {case.status}
-    assert all(case.message in r.stderr for r in results)
+    assert {r.returncode for r in results} == {case.status}, said
+    assert all(case.message in r.stderr for r in results), said
     # Defunct and alive alike: nothing the probe started is left.
     assert after == []
+
+
+def test_the_liveness_probe_in_the_real_image_allows_two_seconds_and_no_more(
+    tmp_path: Path, pinned_store_possible: None
+) -> None:
+    with store(tmp_path, PROBE_ACL) as name:
+        start = computed_start(name)
+        certificate = tmp_path / "tls" / "tls.crt"
+        outcomes = []
+        for offset in (2, 3):
+            # The host's time on the file the container mounts, set to the
+            # computed start plus the offset: the offsets are the rule's slack for
+            # its own measurement, not a file older or newer in the world.
+            os.utime(certificate, (start + offset, start + offset))
+            seen = docker("exec", name, "stat", "-L", "-c", "%Y", TLS_FILE)
+            done = run_probe(name, "livenessProbe")
+            outcomes.append((offset, seen.stdout.strip(), done.returncode, done.stderr))
+
+    assert [(o, seen) for o, seen, _, _ in outcomes] == [
+        (2, str(start + 2)),
+        (3, str(start + 3)),
+    ], "the mounted file's time did not follow os.utime on the host"
+    (_, _, healthy, quiet), (_, _, unhealthy, said) = outcomes
+    assert (healthy, quiet) == (0, "")
+    assert unhealthy == 1
+    assert "newer than the server" in said

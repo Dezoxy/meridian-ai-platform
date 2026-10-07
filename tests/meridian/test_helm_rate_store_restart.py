@@ -328,23 +328,35 @@ def test_a_certificate_written_before_the_server_started_is_healthy(
     ]
 
 
-def test_a_certificate_written_in_the_second_the_server_started_is_healthy(
-    tmp_path: Path, probe
+# The offsets below are the rule's slack for its own measurement, not "older" and
+# "newer" in the world. process_start() reads the numbers the script reads (the
+# boot time in /proc/stat, field 22 of PID 1's stat, cut to the second), so it IS
+# the start the probe computes, which lies up to about two seconds before the
+# process's real start (the boot second's fraction is dropped, then the start is
+# cut to a tick and to a second). A file written before the real start can
+# therefore have a second up to SLACK later than the computed one, and the rule
+# must call that healthy, on every probe, because neither number changes.
+SLACK = 2
+
+
+@pytest.mark.parametrize("offset", [0, 1, SLACK], ids=["+0", "+1", "+2"])
+def test_a_certificate_written_up_to_the_slack_after_the_computed_start_is_healthy(
+    tmp_path: Path, probe, offset: int
 ) -> None:
     # The kubelet writes the volume before it starts the container, so a file
     # no newer than the process is how every start looks; a false alarm here
     # would restart a healthy store at its first probe, once, and then be quiet.
-    write_secret_volume(tmp_path / "tls", "2026_a", process_start())
+    write_secret_volume(tmp_path / "tls", "2026_a", process_start() + offset)
 
-    status, _, _ = probe()
+    status, _, stderr = probe()
 
-    assert status == 0
+    assert (status, "newer" in stderr) == (0, False), stderr
 
 
-def test_a_certificate_written_after_the_server_started_is_unhealthy(
+def test_a_certificate_written_past_the_slack_after_the_computed_start_is_unhealthy(
     tmp_path: Path, probe
 ) -> None:
-    write_secret_volume(tmp_path / "tls", "2026_a", process_start() + 1)
+    write_secret_volume(tmp_path / "tls", "2026_a", process_start() + SLACK + 1)
 
     status, _, stderr = probe()
 

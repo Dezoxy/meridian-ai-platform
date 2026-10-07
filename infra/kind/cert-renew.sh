@@ -36,9 +36,13 @@
 #      cert-manager clears them when the issuance succeeds
 # CERT=rate-store costs a restart: the store reads its certificate once, at its
 # start, and its liveness check restarts the server when the file on the volume
-# is newer than the server. The script says so (one line, before the write):
-# every model call answers 503 for one to three minutes and the tenants' rate
-# windows are lost. The six services do not restart on a renewal by hand.
+# is more than two seconds newer than the server. The script says so (one line,
+# before the write): every model call answers 503 for one to three minutes and
+# the tenants' rate windows are lost. The one case it does not restart is a
+# renewal typed within two seconds after the store started: the store then keeps
+# the certificate it loaded until the next renewal or restart (the template's
+# comment on the rule says what that costs). The six services do not restart on
+# a renewal by hand.
 # No Secret is read, and nothing but the one status is written. Exit code 0 when
 # the condition was written or was already True; 1 otherwise.
 # Tested against a stub kubectl. Seen on kind on 2026-10-07: a refusal for each
