@@ -58,17 +58,22 @@ OTHER_SERIES = {
     # namespace; its value is the creation time.
     "kube_cronjob_created",
     # cert-manager v1.21.2's controller, read on the cluster (S056): both carry
-    # the labels name, namespace and issuer_*; the second one adds `condition`.
+    # the labels name, namespace and issuer_*; the second one adds `condition`;
+    # the third (S073) is the time a renewal is due, listed on the cluster's
+    # controller and read by no rule before.
     "certmanager_certificate_expiration_timestamp_seconds",
     "certmanager_certificate_ready_status",
+    "certmanager_certificate_renewal_timestamp_seconds",
 }
 EXPIRY_SERIES = "certmanager_certificate_expiration_timestamp_seconds"
 READY_SERIES = "certmanager_certificate_ready_status"
+RENEWAL_SERIES = "certmanager_certificate_renewal_timestamp_seconds"
 CERTIFICATE_ALERTS = (
     "MeridianCertificateNotRenewed",
     "MeridianCertificateNotReady",
     "MeridianCertificateMetricsMissing",
     "MeridianCertificateApproverDown",
+    "MeridianCertificateRenewalOverdue",
 )
 # Where Meridian's certificates are: the chart's, in the namespace it installs
 # into, the services' CA's, in cert-manager's (manifests/service-ca.yaml), and
@@ -204,7 +209,7 @@ def test_the_manifest_is_one_prometheus_rule_the_stack_selects() -> None:
 def test_every_alert_has_its_labels_annotations_and_a_runbook_that_exists() -> None:
     found = alerts()
 
-    assert len(found) == 18
+    assert len(found) == 19
     for alert in found:
         name = alert["alert"]
         assert alert["labels"]["severity"] in {"critical", "warning"}, name
@@ -228,7 +233,7 @@ def test_every_slo_label_names_an_objective_the_document_defines() -> None:
         a["alert"]: a["labels"]["slo"] for a in alerts() if "slo" in a["labels"]
     }
 
-    assert len(labelled) == 10
+    assert len(labelled) == 11
     assert set(labelled.values()) <= objectives, labelled
 
 
@@ -467,7 +472,7 @@ def certificate_rules() -> dict[str, dict]:
     return {rule["alert"]: rule for rule in groups()["meridian.certificates"]}
 
 
-def test_the_certificate_group_holds_the_four_alerts_with_their_thresholds() -> None:
+def test_the_certificate_group_holds_the_five_alerts_with_their_thresholds() -> None:
     rules = certificate_rules()
 
     assert tuple(rules) == CERTIFICATE_ALERTS
@@ -503,6 +508,16 @@ def test_the_certificate_group_holds_the_four_alerts_with_their_thresholds() -> 
         'deployment=~"cert-manager|cert-manager-approver-policy"} == 0'
     )
     assert down["for"] == "15m"
+    # A renewal that is due and has waited an hour, whatever the cause. The
+    # series is 0 for a Certificate with no renewal time (one never issued; that
+    # one is MeridianCertificateNotReady's), so only a series above 0 counts, as
+    # in the first alert; the value is the seconds the renewal is overdue.
+    overdue = rules["MeridianCertificateRenewalOverdue"]
+    assert overdue["expr"].strip() == (
+        f"time() - ({RENEWAL_SERIES}"
+        '{namespace=~"meridian|cert-manager|observability"} > 0) > 0'
+    )
+    assert overdue["for"] == "1h"
     for name, rule in rules.items():
         assert rule["labels"]["severity"] == "warning", name
         assert rule["labels"]["slo"] == "certificate-validity", name
@@ -528,6 +543,9 @@ def test_the_certificate_alerts_read_the_series_cert_manager_and_the_stack_serve
     assert series_named(rules["MeridianCertificateApproverDown"]["expr"]) == {
         "kube_deployment_status_replicas_available"
     }
+    assert series_named(rules["MeridianCertificateRenewalOverdue"]["expr"]) == {
+        RENEWAL_SERIES
+    }
 
 
 def service_ca_certificate() -> dict:
@@ -552,7 +570,11 @@ def test_the_certificate_alerts_name_only_the_three_certificate_namespaces() -> 
             else:
                 # One: the series of the CA, or of cert-manager's Deployments.
                 assert value == "cert-manager", name
-    for name in ("MeridianCertificateNotRenewed", "MeridianCertificateNotReady"):
+    for name in (
+        "MeridianCertificateNotRenewed",
+        "MeridianCertificateNotReady",
+        "MeridianCertificateRenewalOverdue",
+    ):
         regex = re.findall(r'namespace\s*=~\s*"', certificate_rules()[name]["expr"])
         assert len(regex) == 1, name
     # The CA's certificate is in cert-manager's namespace; the chart's in the

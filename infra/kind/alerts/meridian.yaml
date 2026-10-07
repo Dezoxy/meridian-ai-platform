@@ -427,6 +427,49 @@ spec:
               approver-policy nothing is approved, so no certificate is renewed.
             runbook_url: https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/certificate-expiry.md
 
+        # What the four above do not see (S073): a renewal that waits for ANY
+        # reason, as it happens. approver-policy hung with its HTTP still
+        # answering (no replica is missing, so ApproverDown stays quiet, and no
+        # liveness probe can see a stuck reconciler), a request that was denied,
+        # an issuer that is down: each leaves the Certificate Ready until its
+        # end, so the first alert was NotRenewed, at 21 days left, about nine
+        # days after the renewal was due. cert-manager reports the time a
+        # renewal is due, and `time()` past it means the renewal has not
+        # happened, whatever the cause. An ordinary renewal on kind takes
+        # seconds (the new time is set at issuance, months ahead), so an hour
+        # never trips on one; the one-hour certificates of the runbook's watch
+        # renew 30 minutes before their end and are never overdue. It restarts
+        # nothing and names no cause: the runbook's part "the renewal is
+        # overdue" says where to look. Only a series above 0: cert-manager
+        # reports 0 for a Certificate that has no renewal time (the expiry
+        # series does so for one never issued, and the renewal series is
+        # expected to), and time() - 0 is above any threshold; that Certificate
+        # is MeridianCertificateNotReady's. The series absent (cert-manager's
+        # controller down, the scrape gone) fires nothing here:
+        # MeridianCertificateMetricsMissing is that case's alert. NOT
+        # established: how the series behaves while a renewal is pending
+        # (expected: it stays in the past until issuance sets the next time),
+        # and that Prometheus stores it at all; not seen on a cluster. Like
+        # every threshold in this file, the hour is a proposal nobody measured.
+        - alert: MeridianCertificateRenewalOverdue
+          expr: |
+            time() - (certmanager_certificate_renewal_timestamp_seconds{namespace=~"meridian|cert-manager|observability"} > 0) > 0
+          for: 1h
+          labels:
+            severity: warning
+            platform: meridian
+            slo: certificate-validity
+          annotations:
+            summary: A certificate's renewal is overdue.
+            description: >-
+              Certificate {{ $labels.name }} in {{ $labels.namespace }} was due
+              for renewal {{ $value | humanizeDuration }} ago and has not been
+              renewed; it has waited for an hour (proposed threshold). A request
+              that waits for an approval or was denied, an approver-policy that
+              hangs, or an issuer that is down is the usual cause; the
+              Certificate stays Ready until its end.
+            runbook_url: https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/certificate-expiry.md
+
     # Rules that notice a series that is not there (S064, T-86). Every rule
     # above reads a rate or a count, and a service whose metrics stop arriving
     # reads as one with nothing to report: nothing fires. Each hop now counts
