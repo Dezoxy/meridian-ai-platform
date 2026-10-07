@@ -33,6 +33,7 @@ from servicesupport import (
     owner_rows,
 )
 
+from meridian.platform.common import db as db_module
 from meridian.platform.common.db import connect
 from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.workloads.claims_triage import uploads
@@ -42,12 +43,14 @@ from meridian.workloads.claims_triage.uploads import (
     CLAIM_LOCK_CLASS,
     DEFAULT_CEILING_BYTES,
     DEFAULT_CEILING_ROWS,
+    DEFAULT_RATE_PER_MINUTE,
     FILE_KINDS,
     MAX_CLAIM_BYTES,
     MAX_FILE_BYTES,
     MAX_FILES_PER_CLAIM,
     MIN_CEILING_BYTES,
     MIN_CEILING_ROWS,
+    MIN_RATE_PER_MINUTE,
     STORE_LOCK_CLASS,
     UPLOAD_BODY_LIMIT_BYTES,
     file_content,
@@ -150,6 +153,7 @@ def make_client(
     enabled: bool = True,
     ceiling: int = DEFAULT_CEILING_BYTES,
     rows: int = DEFAULT_CEILING_ROWS,
+    rate: int = DEFAULT_RATE_PER_MINUTE,
     exporter: InMemorySpanExporter | None = None,
     runtime: NoRuntime | None = None,
 ) -> TestClient:
@@ -165,6 +169,7 @@ def make_client(
             uploads_enabled=enabled,
             uploads_ceiling_bytes=ceiling,
             uploads_ceiling_rows=rows,
+            uploads_rate_per_minute=rate,
         ),
         tracer_provider=make_tracer_provider("claims-api", exporter),
         http_client=(runtime or NoRuntime()).client,
@@ -981,6 +986,156 @@ def test_an_upload_waits_for_the_one_before_it_and_is_refused_at_the_ceiling(
     assert response.status_code == 507
     assert file_count(db) == 3
     assert audit_rows(db) == []  # the holder wrote its rows by hand
+
+
+# mutation: the claim lock removed (the store's lock stays)
+def test_an_upload_to_a_claim_waits_for_the_one_before_it_on_that_claim(
+    fresh_database: DatabaseHandle,
+) -> None:
+    """The first connection holds the claim's lock with five files of the claim
+    inserted and not committed; a second upload to the SAME claim must wait and
+    then read five files. Without the claim's lock (the store's lock is not held
+    here) it reads none, and is stored as a sixth."""
+    db = fresh_database
+    put_claim(db)
+    holder = connect(db.dsn("claims_api"), "test-holder")
+    try:
+        holder.execute(
+            "SELECT pg_advisory_xact_lock(%s::int, hashtext(%s))",
+            (CLAIM_LOCK_CLASS, CLAIM),
+        )
+        for n in range(MAX_FILES_PER_CLAIM):
+            content = blob(10, n)
+            holder.execute(
+                "INSERT INTO claims.claim_files (file_id, claim_id, kind, "
+                "media_type, size_bytes, sha256, content) "
+                "VALUES (%s, %s, 'other', 'application/pdf', %s, %s, %s)",
+                (uuid.uuid4(), CLAIM, 10, hashlib.sha256(content).digest(), content),
+            )
+        client = make_client(db)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            second = pool.submit(upload, client, blob(20, 77))
+            give_up = time.monotonic() + 10
+            while waiting_on_a_lock(db) < 1:
+                assert time.monotonic() < give_up, "the upload did not wait"
+                time.sleep(0.02)
+            holder.commit()
+            response = second.result(timeout=30)
+    finally:
+        holder.close()
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "the claim already holds five files"}
+    assert file_count(db) == MAX_FILES_PER_CLAIM
+
+
+# ── a lock wait that times out is "busy", not a database that is down ───────
+@pytest.mark.parametrize("which", ["the claim's lock", "the store's lock"])
+def test_a_lock_wait_that_times_out_is_503_busy_with_a_wait_and_stores_nothing(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    which: str,
+) -> None:
+    db = fresh_database
+    put_claim(db)
+    holder = connect(db.dsn("claims_api"), "test-holder")
+    try:
+        if which == "the claim's lock":
+            holder.execute(
+                "SELECT pg_advisory_xact_lock(%s::int, hashtext(%s))",
+                (CLAIM_LOCK_CLASS, CLAIM),
+            )
+        else:
+            holder.execute(
+                "SELECT pg_advisory_xact_lock(%s::int, 0)", (STORE_LOCK_CLASS,)
+            )
+        # The statement timeout the app's connections carry, made short: the
+        # waiting statement is cancelled by it, as it is by the real 10 s.
+        monkeypatch.setattr(db_module, "STATEMENT_TIMEOUT_MS", 300)
+        client = make_client(db)
+
+        with caplog.at_level(logging.DEBUG):
+            response = upload(client, blob(20, 5), filename=CANARY_NAME)
+        holder.commit()
+    finally:
+        holder.close()
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": uploads.LOCK_BUSY_DETAIL, "claim_id": CLAIM}
+    assert response.headers["Retry-After"] == "5"
+    assert "QueryCanceled" in caplog.text
+    assert "57014" in caplog.text
+    assert CANARY_NAME not in caplog.text + response.text
+    assert file_count(db) == 0
+    assert audit_rows(db) == []
+
+
+# ── the app's own rate limit: a second ceiling, for the whole store ─────────
+# mutation: the rate check removed
+def test_the_app_refuses_an_upload_at_the_rate_and_counts_only_the_last_minute(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    put_claim(db)
+    put_claim(db, OTHER_CLAIM)
+    client = make_client(db, rate=MIN_RATE_PER_MINUTE)  # 6 a minute
+    stored = [upload(client, blob(10, n)) for n in range(MAX_FILES_PER_CLAIM)]
+    stored.append(upload(client, blob(10, 50), claim_id=OTHER_CLAIM))
+    assert [r.status_code for r in stored] == [201] * MIN_RATE_PER_MINUTE
+
+    over = upload(client, blob(10, 51), claim_id=OTHER_CLAIM)
+
+    assert over.status_code == 429
+    assert over.json() == {"detail": uploads.RATE_DETAIL}
+    assert over.headers["Retry-After"] == "60"
+    assert file_count(db) == MIN_RATE_PER_MINUTE
+    assert len(audit_rows(db)) == MIN_RATE_PER_MINUTE
+    # One file older than a minute no longer counts: the count is five, under 6.
+    owner_execute(
+        db,
+        "UPDATE claims.claim_files SET received_at = received_at - interval "
+        "'2 minutes' WHERE file_id = (SELECT file_id FROM claims.claim_files "
+        "ORDER BY received_at LIMIT 1)",
+    )
+    again = upload(client, blob(10, 52), claim_id=OTHER_CLAIM)
+    assert again.status_code == 201
+    assert upload(client, blob(10, 53), claim_id=OTHER_CLAIM).status_code == 429
+
+
+def test_the_rate_is_for_the_whole_store_not_for_a_claim_or_a_caller(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    ids = [f"CLM-93{n:02d}" for n in range(MIN_RATE_PER_MINUTE)]
+    for claim_id in ids:
+        put_claim(db, claim_id)
+    client = make_client(db, rate=MIN_RATE_PER_MINUTE)
+
+    # One file to each of six claims, as six callers would: the store's count.
+    stored = [upload(client, blob(10, n), claim_id=c) for n, c in enumerate(ids)]
+    over = upload(client, blob(10, 99), claim_id=ids[0])
+
+    assert [r.status_code for r in stored] == [201] * MIN_RATE_PER_MINUTE
+    assert over.status_code == 429
+
+
+def test_the_rate_check_comes_after_the_ceilings_and_a_full_claim_is_409_first(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    put_claim(db)
+    client = make_client(db, rate=MIN_RATE_PER_MINUTE)
+    for n in range(MAX_FILES_PER_CLAIM):
+        assert upload(client, blob(10, n)).status_code == 201
+    assert upload(client, blob(10, 60), claim_id=CLAIM).status_code == 409
+    put_claim(db, OTHER_CLAIM)
+    assert upload(client, blob(10, 61), claim_id=OTHER_CLAIM).status_code == 201
+
+    # Six in the minute: the rate is reached; the claim's own 409 still comes
+    # first for a claim that is full, and the 429 for one that is not.
+    assert upload(client, blob(10, 62), claim_id=CLAIM).status_code == 409
+    assert upload(client, blob(10, 63), claim_id=OTHER_CLAIM).status_code == 429
 
 
 # ── a database error's text is never kept or told ───────────────────────────

@@ -34,11 +34,13 @@ locks before it reads them: under READ COMMITTED an unlocked sum lets N
 uploads at the same moment overshoot a ceiling by N-1 files.
 """
 
+import asyncio
 import hashlib
 import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
+from http import HTTPStatus
 from typing import Literal, get_args
 
 import psycopg
@@ -76,6 +78,7 @@ from meridian.workloads.claims_triage.triaging import answer, claim_database_fai
 UPLOADS_ENABLED_ENV = "MERIDIAN_CLAIMS_UPLOADS"
 UPLOADS_CEILING_ENV = "MERIDIAN_UPLOADS_CEILING_BYTES"
 UPLOADS_ROWS_ENV = "MERIDIAN_UPLOADS_CEILING_ROWS"
+UPLOADS_RATE_ENV = "MERIDIAN_UPLOADS_RATE_PER_MINUTE"
 
 MIB = 1024 * 1024
 # The most one file is: the table's CHECK holds the same number.
@@ -99,6 +102,33 @@ MAX_CEILING_BYTES = 256 * MIB
 DEFAULT_CEILING_ROWS = 2_000
 MIN_CEILING_ROWS = MAX_FILES_PER_CLAIM
 MAX_CEILING_ROWS = 100_000
+# The app's own rate limit: the files stored in the last minute, in the whole
+# store, may not reach this. It is a second ceiling and not a per-caller limit
+# (no caller has an identity before S021): the edge's is 6 a minute for the
+# route as one bucket per proxy pod, and the app's must not depend on which edge
+# route served the path or whether its policy attached. So the default is five
+# times the edge's allowance (room for several proxy pods and for a burst the
+# edge lets through), 30 a minute, which still takes 67 minutes to fill 2,000
+# rows where an unbraked caller fills them in seconds. The floor is the edge's 6
+# (a lower app limit would refuse what the edge allows); the cap is 600, ten a
+# second, where it stops being a brake (the 2,000 rows go in about 3 minutes).
+DEFAULT_RATE_PER_MINUTE = 30
+MIN_RATE_PER_MINUTE = 6
+MAX_RATE_PER_MINUTE = 600
+RATE_WINDOW_SECONDS = 60
+# How many uploads the route reads and stores at once. The pod has 192 Mi, of
+# which the Claims API itself takes about 66 MB (measured), leaving about 126 MB.
+# One upload peaks at about 2.1 MiB in the form parser and 3 to 4 MiB through to
+# the database (measured, the security review). Four at once is at most 16 MiB,
+# an eighth of that room, which leaves the rest to the other routes' triages and
+# to the interpreter's own growth; the review's 35 stalled uploads that take the
+# pod down is nine times four. An upload past the four is refused at once,
+# before a byte of its body is read, so a slow body cannot queue anything.
+MAX_CONCURRENT_UPLOADS = 4
+# What a refused caller is told to wait, in seconds (``Retry-After``): a permit
+# or a lock is free in moments; the rate's window is a minute.
+BUSY_RETRY_SECONDS = 5
+RATE_RETRY_SECONDS = RATE_WINDOW_SECONDS
 # The first number of each advisory lock's key (the second is the claim's hash,
 # or zero for the store): two lock spaces that cannot meet. A claim's lock is
 # always taken before the store's, so two uploads cannot wait on each other.
@@ -152,6 +182,13 @@ CLAIM_FULL_DETAIL = "the claim already holds five files"
 CLAIM_BYTES_DETAIL = "the claim would hold more than 3 MiB of files"
 DUPLICATE_DETAIL = "the claim already holds this file"
 STORE_FULL_DETAIL = "uploads are stopped: the store is full"
+RATE_DETAIL = "too many uploads in the last minute; try again shortly"
+SATURATED_DETAIL = "uploads are busy: too many at once; try again shortly"
+LOCK_BUSY_DETAIL = (
+    "uploads are busy: the claim or the store is locked; try again shortly"
+)
+# The two ways a database statement ends that are not a database that is down.
+QUERY_CANCELED_SQLSTATE = "57014"
 
 # The table's constraint (migration 0032): one file per claim and hash.
 DUPLICATE_CONSTRAINT = "claim_files_one_per_claim_and_hash"
@@ -168,9 +205,18 @@ CLAIM_FILES_SQL = (
 DUPLICATE_SQL = (
     "SELECT file_id FROM claims.claim_files WHERE claim_id = %s AND sha256 = %s"
 )
-# The bytes and the rows in one statement, so the two ceilings see one state.
+# The rows, the bytes and the files of the last minute in one statement, so the
+# ceilings and the rate see one state. The plan is a sequential scan of the table:
+# no index of migration 0032 leads with ``received_at`` (they are the key, the
+# unique ``(claim_id, sha256)`` and ``(claim_id, received_at)``), and none is
+# needed, since the scan reads at most the row ceiling's rows of the heap (the
+# content is stored out of line) and the statement already read every row for the
+# sum. At the row cap of 100,000 it is still milliseconds, under the 10 s bound.
 STORE_TOTALS_SQL = (
-    "SELECT count(*), COALESCE(sum(size_bytes), 0)::bigint FROM claims.claim_files"
+    "SELECT count(*), COALESCE(sum(size_bytes), 0)::bigint, "
+    "count(*) FILTER (WHERE received_at >= "
+    "clock_timestamp() - make_interval(secs => %s)) "
+    "FROM claims.claim_files"
 )
 # ``received_at`` is taken after the claim's lock, not when the transaction
 # began, so the arrival order is the order the locks were taken in.
@@ -234,6 +280,21 @@ def ceiling_rows_of(raw: str | None) -> int:
     raise SettingsError(
         f"{UPLOADS_ROWS_ENV} must be a whole number of rows "
         f"from {MIN_CEILING_ROWS} to {MAX_CEILING_ROWS}"
+    )
+
+
+def rate_per_minute_of(raw: str | None) -> int:
+    """The app's rate limit from the variable's value, as ``ceiling_bytes_of``:
+    the default when unset, else whole ASCII digits from the floor to the cap."""
+    if raw is None:
+        return DEFAULT_RATE_PER_MINUTE
+    if re.fullmatch(r"[0-9]{1,5}", raw):
+        value = int(raw)
+        if MIN_RATE_PER_MINUTE <= value <= MAX_RATE_PER_MINUTE:
+            return value
+    raise SettingsError(
+        f"{UPLOADS_RATE_ENV} must be a whole number of uploads a minute "
+        f"from {MIN_RATE_PER_MINUTE} to {MAX_RATE_PER_MINUTE}"
     )
 
 
@@ -352,6 +413,16 @@ async def read_upload(request: Request) -> tuple[str, bytes]:
         await form.close()
 
 
+@dataclass(frozen=True, slots=True)
+class StoreLimits:
+    """What bounds the store as a whole, the same for every caller: the bytes and
+    the rows it may hold, and how many files it takes in a minute."""
+
+    ceiling_bytes: int
+    ceiling_rows: int
+    rate_per_minute: int
+
+
 # ── the transaction ─────────────────────────────────────────────────────────
 def store_file(
     dsn: str,
@@ -359,8 +430,7 @@ def store_file(
     claim_id: str,
     kind: str,
     content: bytes,
-    ceiling_bytes: int,
-    ceiling_rows: int,
+    limits: StoreLimits,
 ) -> StoredFile:
     """Check, then store the file and its one audit row in one transaction.
 
@@ -398,9 +468,19 @@ def store_file(
         if conn.execute(DUPLICATE_SQL, (claim_id, digest.digest())).fetchone():
             raise HTTPException(409, DUPLICATE_DETAIL)
         conn.execute(LOCK_STORE_SQL, (STORE_LOCK_CLASS,))
-        ((rows, stored_bytes),) = conn.execute(STORE_TOTALS_SQL).fetchall()
-        if stored_bytes + size > ceiling_bytes or rows + 1 > ceiling_rows:
+        ((rows, stored_bytes, recent),) = conn.execute(
+            STORE_TOTALS_SQL, (RATE_WINDOW_SECONDS,)
+        ).fetchall()
+        if stored_bytes + size > limits.ceiling_bytes or rows + 1 > limits.ceiling_rows:
             raise HTTPException(507, STORE_FULL_DETAIL)
+        # The rate, a second ceiling on the store as a whole (never a caller's
+        # own: there is no caller identity), read under the store's lock so that
+        # uploads at the same moment count each other. After the ceilings: a full
+        # store says so rather than "slow down".
+        if recent >= limits.rate_per_minute:
+            raise HTTPException(
+                429, RATE_DETAIL, headers={"Retry-After": str(RATE_RETRY_SECONDS)}
+            )
         file_id = uuid.uuid4()
         try:
             conn.execute(
@@ -478,17 +558,69 @@ CROSS_SITE_RESPONSE = {
 }
 
 
+def refuse_encoded_path(request: Request) -> None:
+    """A request whose RAW path holds a ``%`` is the 404 of a path that is no
+    route, before a byte of its body is read. uvicorn decodes the path before the
+    router sees it, so ``/claims/CLM-0001/%66iles`` reaches this route; but the
+    edge's second route matches the raw path, so the same request may be served
+    by the first, which has no rate limit. The app's brakes must not depend on
+    which route served the path, and a client has no use for an encoded path
+    here: every character of a valid one is plain. The query is not the path."""
+    raw = request.scope.get("raw_path")
+    path = raw if raw is not None else request.scope["path"].encode()
+    if b"%" in path.partition(b"?")[0]:
+        raise HTTPException(404, HTTPStatus.NOT_FOUND.phrase)
+
+
+RETRY_AFTER = {
+    "Retry-After": {
+        "description": "Seconds to wait before trying again.",
+        "schema": {"type": "integer"},
+    }
+}
+REFUSALS = (
+    CROSS_SITE_RESPONSE
+    | {
+        429: {
+            "model": ErrorBody,
+            "description": "The store took too many files in the last minute.",
+            "headers": RETRY_AFTER,
+        }
+    }
+    | error_responses(404, 409, 413, 415, 507)
+    | error_responses(500, 503, model=ClaimErrorBody)
+)
+# The 503 is also the busy answer (too many uploads at once, or a lock that did
+# not come in time), which asks the caller to wait.
+REFUSALS[503] = REFUSALS[503] | {"headers": RETRY_AFTER}
+
+
+def busy(detail: str, claim_id: str) -> JSONResponse:
+    """The 503 that is not a database that is down: say what, and for how long
+    to wait."""
+    response = answer(503, detail, claim_id)
+    response.headers["Retry-After"] = str(BUSY_RETRY_SECONDS)
+    return response
+
+
 def add_upload_routes(
     app: FastAPI,
     *,
     dsn: str,
     tenant: str,
     tracer: Tracer,
-    ceiling_bytes: int,
-    ceiling_rows: int,
+    limits: StoreLimits,
 ) -> None:
     """Add ``POST /claims/{claim_id}/files``. Called only when the switch is on:
-    with it off the route does not exist, and its path keeps the app's limit."""
+    with it off the route does not exist, and its path keeps the app's limit.
+
+    The route's own brakes, none of which depends on the edge: a raw path with a
+    ``%`` is refused, at most ``MAX_CONCURRENT_UPLOADS`` uploads are read and
+    stored at once (the rest are told so at once, before a byte of their body is
+    read), and the store takes at most ``limits.rate_per_minute`` files a minute."""
+    # One per app, never waited for: the event loop is one thread, so ``locked``
+    # and the acquire after it are not separated by anything that could run.
+    permits = asyncio.Semaphore(MAX_CONCURRENT_UPLOADS)
 
     @app.post(
         UPLOAD_PATH,
@@ -496,31 +628,33 @@ def add_upload_routes(
         response_model=StoredFile,
         tags=["claims"],
         summary="Store a claimant's file (a PDF, a JPEG or a PNG) with the claim.",
-        dependencies=[Depends(refuse_cross_site)],
+        dependencies=[Depends(refuse_cross_site), Depends(refuse_encoded_path)],
         openapi_extra=REQUEST_BODY,
-        responses=CROSS_SITE_RESPONSE
-        | error_responses(404, 409, 413, 415, 507)
-        | error_responses(500, 503, model=ClaimErrorBody),
+        responses=REFUSALS,
     )
     async def upload_file(
         claim_id: ClaimId, request: Request
     ) -> StoredFile | JSONResponse:
-        kind, content = await read_upload(request)
-        with start_span(tracer, "claims.upload") as span:
-            set_span_attributes(
-                span, {"meridian.claim_id": claim_id, "meridian.tenant": tenant}
-            )
-            try:
-                return await run_in_threadpool(
-                    store_file,
-                    dsn,
-                    tenant,
-                    claim_id,
-                    kind,
-                    content,
-                    ceiling_bytes,
-                    ceiling_rows,
+        if permits.locked():
+            return busy(SATURATED_DETAIL, claim_id)
+        # Released on every exit: a refusal, an exception, a client that goes
+        # away (the task is cancelled; the store's thread, which the cancel
+        # waits for, has finished by then).
+        async with permits:
+            kind, content = await read_upload(request)
+            with start_span(tracer, "claims.upload") as span:
+                set_span_attributes(
+                    span, {"meridian.claim_id": claim_id, "meridian.tenant": tenant}
                 )
-            except psycopg.Error as exc:
-                mark_error(span, exc)
-                return answer(*claim_database_failure(exc, claim_id), claim_id)
+                try:
+                    return await run_in_threadpool(
+                        store_file, dsn, tenant, claim_id, kind, content, limits
+                    )
+                except psycopg.Error as exc:
+                    mark_error(span, exc)
+                    status, detail = claim_database_failure(exc, claim_id)
+                    # A statement cancelled by the 10 s bound is a wait for a
+                    # lock that did not end, not a database that is down.
+                    if exc.sqlstate == QUERY_CANCELED_SQLSTATE:
+                        return busy(LOCK_BUSY_DETAIL, claim_id)
+                    return answer(status, detail, claim_id)

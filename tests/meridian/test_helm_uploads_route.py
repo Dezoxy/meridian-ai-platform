@@ -145,12 +145,17 @@ def test_the_second_route_matches_post_to_the_two_files_paths_and_nothing_else()
         assert not any(p.fullmatch(path) for p in patterns), path
 
 
-def test_the_first_route_has_no_match_so_the_more_specific_second_one_wins() -> None:
-    # No `matches` is the Gateway API's default: PathPrefix "/", which every
-    # upload path also satisfies. Envoy Gateway is understood to order path
-    # matches Exact, then RegularExpression, then PathPrefix, so the regular
-    # expressions of the second route should win over the prefix "/" of the
-    # first; only a cluster shows it.
+def test_the_render_shape_is_a_first_route_with_no_match_and_a_second_of_regexes() -> (
+    None
+):
+    # This shows the render's SHAPE and nothing about which route serves a
+    # request: precedence is a cluster's to show. No `matches` is the Gateway
+    # API's default, PathPrefix "/", which every upload path also satisfies.
+    # Envoy Gateway is understood to order path matches Exact, then
+    # RegularExpression, then PathPrefix, so the regular expressions of the
+    # second route should win over the prefix "/" of the first; the kind run
+    # reads it (a post to the upload path is counted by the second route's
+    # rate limit), and no test here can.
     routes = of_kind(uploads_on(), "HTTPRoute")
     (first,) = routes[FIRST]["spec"]["rules"]
     (second,) = routes[SECOND]["spec"]["rules"]

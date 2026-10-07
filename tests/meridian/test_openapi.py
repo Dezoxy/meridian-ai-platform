@@ -173,6 +173,7 @@ ERRORS = {
         "413",
         "415",
         "422",
+        "429",
         "500",
         "503",
         "507",
@@ -547,11 +548,21 @@ def test_the_upload_route_answers_201_with_a_stored_file_and_names_its_errors() 
     spec = SPECS["claims-uploads"]
 
     assert schema_ref(spec, UPLOAD, "post", "201").endswith("/StoredFile")
-    for status in ("403", "404", "409", "413", "415", "507"):
+    for status in ("403", "404", "409", "413", "415", "429", "507"):
         assert schema_ref(spec, UPLOAD, "post", status).endswith("/ErrorBody")
     for status in ("500", "503"):
         assert schema_ref(spec, UPLOAD, "post", status).endswith("/ClaimErrorBody")
     assert spec["paths"][UPLOAD]["post"]["tags"] == ["claims"]
+
+
+def test_the_upload_routes_429_and_busy_503_say_how_long_to_wait() -> None:
+    responses = SPECS["claims-uploads"]["paths"][UPLOAD]["post"]["responses"]
+
+    for status in ("429", "503"):
+        header = responses[status]["headers"]["Retry-After"]
+        assert header["schema"] == {"type": "integer"}
+    # No other answer of the route carries one.
+    assert {s for s, r in responses.items() if "headers" in r} == {"429", "503"}
 
 
 def test_the_upload_route_takes_one_kind_and_one_file_as_multipart_form_data() -> None:

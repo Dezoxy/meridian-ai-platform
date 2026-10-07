@@ -19,15 +19,20 @@ from meridian.workloads.claims_triage.lifecycle import (
 from meridian.workloads.claims_triage.uploads import (
     DEFAULT_CEILING_BYTES,
     DEFAULT_CEILING_ROWS,
+    DEFAULT_RATE_PER_MINUTE,
     MAX_CEILING_BYTES,
     MAX_CEILING_ROWS,
+    MAX_RATE_PER_MINUTE,
     MIN_CEILING_BYTES,
     MIN_CEILING_ROWS,
+    MIN_RATE_PER_MINUTE,
     UPLOADS_CEILING_ENV,
     UPLOADS_ENABLED_ENV,
+    UPLOADS_RATE_ENV,
     UPLOADS_ROWS_ENV,
     ceiling_bytes_of,
     ceiling_rows_of,
+    rate_per_minute_of,
     uploads_enabled_of,
 )
 
@@ -65,6 +70,10 @@ class ClaimsSettings(BaseModel):
     uploads_ceiling_rows: int = Field(
         DEFAULT_CEILING_ROWS, ge=MIN_CEILING_ROWS, le=MAX_CEILING_ROWS
     )
+    # The files the whole store takes in a minute: a second ceiling, not a caller's.
+    uploads_rate_per_minute: int = Field(
+        DEFAULT_RATE_PER_MINUTE, ge=MIN_RATE_PER_MINUTE, le=MAX_RATE_PER_MINUTE
+    )
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] = os.environ) -> Self:
@@ -80,4 +89,5 @@ class ClaimsSettings(BaseModel):
             uploads_enabled=uploads_enabled_of(environ.get(UPLOADS_ENABLED_ENV)),
             uploads_ceiling_bytes=ceiling_bytes_of(environ.get(UPLOADS_CEILING_ENV)),
             uploads_ceiling_rows=ceiling_rows_of(environ.get(UPLOADS_ROWS_ENV)),
+            uploads_rate_per_minute=rate_per_minute_of(environ.get(UPLOADS_RATE_ENV)),
         )

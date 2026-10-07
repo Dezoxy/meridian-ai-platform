@@ -117,6 +117,7 @@ from meridian.workloads.claims_triage.triaging import (
 from meridian.workloads.claims_triage.uploads import (
     UPLOAD_BODY_LIMIT_BYTES,
     UPLOAD_PATH,
+    StoreLimits,
     add_upload_routes,
 )
 
@@ -456,8 +457,11 @@ def create_app(
             dsn=dsn,
             tenant=tenant,
             tracer=tracer,
-            ceiling_bytes=settings.uploads_ceiling_bytes,
-            ceiling_rows=settings.uploads_ceiling_rows,
+            limits=StoreLimits(
+                ceiling_bytes=settings.uploads_ceiling_bytes,
+                ceiling_rows=settings.uploads_ceiling_rows,
+                rate_per_minute=settings.uploads_rate_per_minute,
+            ),
         )
     add_brief_routes(app, dsn=dsn, tenant=tenant, http=http, tracer=tracer)
     add_adjuster_pages(
