@@ -719,11 +719,25 @@ node image, Kubernetes components and the platform).
    finished Job of all was made by hand the line says so, with its name and
    time, and that a by-hand run is not a run of the schedule: a recent by-hand
    success beside a schedule that stopped is the stopped verdict, and a by-hand
-   failure beside a healthy schedule is a PASS. Someone who edits a Job's
-   annotations can pass for the schedule, and the alert `MeridianSweepStale`
-   reads the CronJob's last successful time, which a by-hand success is
-   believed to set too (not read). Tested with stand-ins, not yet seen on a
-   cluster.
+   failure beside a healthy schedule is a PASS. Seen on kind on 2026-10-07: the
+   CronJob kept ONE successful Job, so a by-hand success evicted the schedule's
+   own, and the verdict, resting on the failed scheduled Job of the evening
+   before, failed a healthy schedule for four minutes. The chart now keeps
+   three (`successfulJobsHistoryLimit: 3`), and the verdict has a third case
+   for a history that still lacks the schedule's newest run (its newest
+   finished Job finished before the CronJob's `lastScheduleTime` and a by-hand
+   Job finished after it): that Job is not judged, and `lastScheduleTime`
+   decides. Older than 15 minutes is the stopped verdict (FAIL); within it,
+   with a Job of the schedule running or not, the line is a SKIP that says the
+   schedule fired at that time, its Job is no longer in the history and its
+   outcome was not read: run smoke again after the next scheduled run. After a
+   by-hand run, then, the sweep lines may print two SKIP in place of two PASS
+   (the findings line follows the first) until the schedule's next run. The fix
+   is tested with stand-ins, not yet seen on a cluster. Someone who edits a
+   Job's annotations can pass for the schedule, and the alert
+   `MeridianSweepStale` reads the CronJob's last successful time, which a
+   by-hand success moves too (seen on kind on 2026-10-07): a by-hand run can
+   hide a stopped schedule from the alert for one staleness window.
    The second line (S064) asks Prometheus, through Grafana's datasource proxy
    as check 5 does, whether the six findings of the pass have arrived: the
    gauge `meridian_sweep_last_pass` for job `claims-sweep`, each of
@@ -2065,10 +2079,13 @@ cluster.
 pass is skipped while another is running. A Job made by hand (below) runs
 beside a scheduled one, which is why the role may hold 4 connections. A pass
 is cut off after 120 seconds and is not retried (`backoffLimit: 0`): the next
-run, five minutes later, is the retry. The CronJob keeps one succeeded and
+run, five minutes later, is the retry. The CronJob keeps three succeeded and
 three failed Jobs, and a by-hand Job counts toward those limits because the
-CronJob owns it. A succeeded Job is removed when the next one finishes, about
-five minutes later. Kubernetes removes any Job a day after it finishes
+CronJob owns it. With one succeeded Job kept, a by-hand success evicted the
+schedule's own (seen on kind on 2026-10-07), so it keeps three: a by-hand run
+or two leave the schedule's last success in the history. The oldest succeeded
+Job is removed when a fourth finishes, about fifteen minutes later.
+Kubernetes removes any Job a day after it finishes
 (`ttlSecondsAfterFinished`), and that day is what keeps a failure to read in
 the morning, and the last success of a suspended CronJob. A pod has no
 service-account token, no extra privilege and a read-only root filesystem,
@@ -2097,7 +2114,12 @@ kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meridian \
 `make smoke` does not take the by-hand Job for the schedule's: it carries the
 annotation `cronjob.kubernetes.io/instantiate: manual`, so the seventh line
 leaves it out of its verdict and says, when it is the newest Job of all, that
-it was made by hand (tested with stand-ins, not yet seen on a cluster). To
+it was made by hand. Seen on kind on 2026-10-07: with one success kept, a
+by-hand success evicted the schedule's, and the line failed a healthy schedule
+for one period; the history limit of three and the verdict's third case (a
+SKIP that says the schedule's newest run is not in the history, a FAIL when
+the schedule's last time is older than the bound) are the fix, tested with
+stand-ins, not yet seen on a cluster. To
 stop the schedule, patch `suspend` to `true` on the CronJob; `make smoke` then
 prints SKIP for the sweep until it is `false` again.
 

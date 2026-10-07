@@ -260,13 +260,26 @@
 #                 a by-hand one, the line says so, by name and time, and that
 #                 a by-hand run is not a run of the schedule: a by-hand success
 #                 beside a schedule that stopped is the stopped verdict, and a
-#                 by-hand failure beside a healthy schedule is a PASS. What it
-#                 does not see: a Job made by hand with the annotation removed,
-#                 or with the scheduled one added by hand (a person who edits a
-#                 Job's annotations can pass for the schedule), and the alert
-#                 MeridianSweepStale, which reads the CronJob's last successful
-#                 time, which a by-hand success is believed to set too (the
-#                 controller counts the Jobs the CronJob owns: not read).
+#                 by-hand failure beside a healthy schedule is a PASS. Seen on
+#                 kind on 2026-10-07: with ONE success kept (the chart now
+#                 keeps three), a by-hand success evicted the schedule's own,
+#                 and the verdict, resting on the failed scheduled Job of the
+#                 evening before, failed a healthy schedule. So when the newest
+#                 finished Job the schedule made finished before the CronJob's
+#                 lastScheduleTime and a by-hand Job finished after it, that
+#                 old Job is not judged and lastScheduleTime alone decides:
+#                 older than the bound, the stopped FAIL; within it, a SKIP
+#                 that says a Job of the schedule is running, or that the
+#                 schedule fired at that time, its Job is no longer in the
+#                 history and its outcome was not read (run smoke again after
+#                 the next scheduled run; the findings line then skips too, so
+#                 a by-hand run turns two PASS into two SKIP until the next
+#                 run). What it does not see: a Job made by hand with the
+#                 annotation removed, or with the scheduled one added by hand
+#                 (a person who edits a Job's annotations can pass for the
+#                 schedule), and the alert MeridianSweepStale, which reads the
+#                 CronJob's last successful time, which a by-hand success moves
+#                 too (seen on kind on 2026-10-07).
 #                 The second line (S064, C3) asks Prometheus, through the same
 #                 Grafana forward as check 5, whether the pass that line passed
 #                 sent its findings: the gauge meridian_sweep_last_pass for job
@@ -2310,11 +2323,25 @@ sweep_period() {
 #                                      than three periods before NOW, nothing
 #                                      running: the schedule stopped
 #   stopped||SCHEDULED_AT|SECONDS      the same with no Job of the CronJob left
-#                                      (the sweep keeps one success and the
+#                                      (the sweep keeps three successes and the
 #                                      cluster removes a Job a day after it
 #                                      finished): last scheduled more than
 #                                      three periods before NOW, nothing
 #                                      running
+#   The next three are for a history that no longer holds the schedule's
+#   newest run: the newest finished Job the schedule made finished BEFORE the
+#   CronJob's lastScheduleTime and a Job made by hand finished after it (seen
+#   on kind: with one success kept, a by-hand success evicted the schedule's
+#   own, and the verdict then rested on an old failed Job). That Job is not
+#   judged; lastScheduleTime against the bound decides:
+#   stoppedhand|SCHEDULED_AT|SECONDS|JOB  older than three periods, nothing
+#                                      running: the schedule stopped
+#   busy|SCHEDULED_AT                  within the bound, a Job is running
+#   unread|SCHEDULED_AT|JOB            within the bound, nothing running: the
+#                                      outcome of the run at SCHEDULED_AT is not
+#                                      in the history, so it was not read (JOB
+#                                      is the older Job the verdict would have
+#                                      rested on)
 #   young|SECONDS|JOB|FINISHED_AT      the same, but the CronJob was created
 #                                      less than one period before NOW: that Job
 #                                      is an earlier CronJob's, not overdue
@@ -2349,12 +2376,18 @@ sweep_verdict() {
     | ([$finished[] | select(.mark != "manual")] | sort_by([.at, .name]) | last) as $newest
     | "note:\(if $latest.mark == "manual" then " [the newest finished Job of all, \($latest.name), finished at \($latest.at) and was made by hand (create job --from=cronjob/\($cronjob)): a by-hand run is not a run of the schedule, so this line does not judge it]" else "" end)\(if $newest.mark == "unmarked" then " [the Job this rests on carries neither batch.kubernetes.io/cronjob-scheduled-timestamp nor cronjob.kubernetes.io/instantiate: the annotation was absent, as on an older cluster, so it is counted as a scheduled Job]" else "" end)" as $note
     | ($now - ($cj.metadata.creationTimestamp | epoch)) as $age
+    | ($scheduled != null and $newest != null and ($newest.at | epoch) < ($scheduled | epoch)
+        and any($finished[]; .mark == "manual" and .at != "" and (.at | epoch) > ($scheduled | epoch))) as $evicted
     | (if $scheduled == null and $age > $tolerance then "never|\($age)"
       elif $newest == null then
         if $active > 0 then "running"
         elif $scheduled == null then "unscheduled|\($age)|\($cj.metadata.creationTimestamp)"
         elif ($now - ($scheduled | epoch)) > $tolerance then "stopped||\($scheduled)|\($now - ($scheduled | epoch))"
         else "none|\($scheduled)" end
+      elif $evicted then
+        if $active > 0 then "busy|\($scheduled)"
+        elif ($now - ($scheduled | epoch)) > $tolerance then "stoppedhand|\($scheduled)|\($now - ($scheduled | epoch))|\($newest.name)"
+        else "unread|\($scheduled)|\($newest.name)" end
       elif $scheduled != null and $active == 0 and (($scheduled | epoch) - ($newest.at | epoch)) > $tolerance then
         "stale|\($scheduled)|\($newest.at)"
       elif $newest.type == "Complete" and $active == 0 and ($now - ($newest.at | epoch)) > $tolerance then
@@ -2363,6 +2396,24 @@ sweep_verdict() {
       elif $newest.type == "Complete" then "succeeded|\($newest.name)|\($newest.at)"
       else "failed|\($newest.name)|\($newest.at)|\($newest.reason)" end) + "\n" + $note
   '
+}
+
+# report_sweep_unjudged KIND FIRST SECOND THIRD PERIOD NOTE: the line for the three
+# verdicts of a history that no longer holds the schedule's newest run
+# (stoppedhand, busy, unread: see sweep_verdict), from report_sweep's fields.
+report_sweep_unjudged() {
+  local bound=$(($5 * SWEEP_STALE_PERIODS))
+  case "$1" in
+    stoppedhand)
+      fail "sweep: the schedule stopped: cronjob/${SWEEP_CRONJOB} was last scheduled at ${2}, ${3} s before the database's clock now, more than the ${bound} s (three periods of ${5} s) allowed, and no Job is running; the newest finished Job it made, ${4}, finished before that, and a Job made by hand after that time is not a run of the schedule${6}"
+      ;;
+    busy)
+      skip "sweep: cronjob/${SWEEP_CRONJOB} was last scheduled at ${2} and a Job of it is running; the newest finished Job it made is older than that, so the outcome of this run is not read yet${6}"
+      ;;
+    unread)
+      skip "sweep: cronjob/${SWEEP_CRONJOB} fired at ${2}, within the ${bound} s it allows, and its Job is no longer in the history (a by-hand Job took its place, or the history's limit did): the newest finished Job it made, ${3}, is older than that, so the outcome of that run was not read; run smoke again after the next scheduled run${6}"
+      ;;
+  esac
 }
 
 # report_sweep VERDICT PERIOD [NOTE]: the line for a verdict of sweep_verdict,
@@ -2394,6 +2445,9 @@ report_sweep() {
       else
         fail "sweep: the schedule stopped: the newest finished Job of cronjob/${SWEEP_CRONJOB}, ${first}, succeeded at ${second}, ${third} s before the database's clock now, more than the ${bound} s (three periods of ${2} s) allowed, and no Job is running${note}"
       fi
+      ;;
+    stoppedhand | busy | unread)
+      report_sweep_unjudged "${kind}" "${first}" "${second}" "${third}" "$2" "${note}"
       ;;
     young)
       skip "sweep: cronjob/${SWEEP_CRONJOB} was deployed ${first} s ago by the database's clock, less than one period (${2} s); its newest finished Job, ${second}, finished at ${third}, which is an earlier CronJob's, so it is not judged yet${note}"
