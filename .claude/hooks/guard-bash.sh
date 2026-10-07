@@ -340,6 +340,15 @@ DOUBLE = r"\"(?:[^\"\\]|\\.)*\""
 QUOTED = "(?:" + SINGLE + "|" + DOUBLE + ")"
 ATOM = re.compile(PROSE + "(" + QUOTED + "+)|" + QUOTED)
 PIECE = re.compile(QUOTED)
+# make takes no argument after -m (GNU make ignores it), so a quoted word after
+# it is a target, not a message: in a segment (cut at ; & | and newlines) that
+# already holds the word make, the value is read, not emptied (S071, G2, A-8:
+# make -m "aws-apply" and git status; make -sm "aws-destroy" were read as prose).
+SEGMENT_CUT = re.compile(r"[;&|\n]")
+MAKE_WORD = re.compile(r"(?<![\w.-])(?:g|gnu)?make(?![\w-])", re.I)
+def after_make(text, pos):
+    before = SEGMENT_CUT.split(text[:pos])[-1]
+    return MAKE_WORD.search(PIECE.sub("\"\"", before)) is not None
 def value_of(m):
     value = m.group(3)
     executes = any(
@@ -353,6 +362,8 @@ def value_of(m):
 def read(text):
     def atom(m):
         if m.group(3) is not None:
+            if after_make(text, m.start()):
+                return m.group(1) + (m.group(2) or "") + read(m.group(3))
             return value_of(m)
         quoted = m.group(0)
         return quoted[0] + read(quoted[1:-1]) + quoted[-1]
@@ -1019,7 +1030,10 @@ foundation_apply_re="${runner}${script_path}foundation\.sh[[:space:]]+[\"${sq}]?
 # rules do: quoted text is read as a use, so an echo, a search or a message on
 # the command line that names a target asks (a commit message goes in with
 # -F file: the file is no command line, but a heredoc on -F - stays in the text
-# and asks). They ask and never deny, so the owner can say yes.
+# and asks). They ask and never deny, so the owner can say yes. Decided in S071
+# (G2, the security review's question 3): they go on reading cmd, because
+# hook_cmd empties the quoted value after -m and so would let make -m "<target>"
+# next to any trigger word through (git status; make -m "eval-record").
 #   - the make rule is azure_make_re with the three targets, `gmake` too, a
 #     quote, a bracket or a backtick after the word make ($(command -v make)
 #     eval-record, ${MAKE} eval-record, 'make' eval-record) and an end that also
@@ -1039,8 +1053,13 @@ paid_end="([[:space:]]|\$|[;&|)<>\"${sq}\`])"
 paid_target="(eval-record|eval-injection-record|gateway-live)"
 paid_make_re="(^|[^[:alnum:]_.-])(g|gnu)?make[\"${sq})}\`]*[[:space:]]+([^;&|${nl}]*[[:space:]])?[\"${sq}]?${paid_target}${paid_end}"
 paid_script_re="foundation\.sh[\"${sq}]?[[:space:]]+[\"${sq}]?${paid_target}${paid_end}"
+# S071, G2 (A-3): GNU make 4.4.1 reads a target given after -- from MAKEFLAGS and
+# from GNUMAKEFLAGS (measured on a scratch Makefile with harmless targets), so
+# MAKEFLAGS="-- eval-record" make runs the paid target with no target on the
+# line: an assignment to either name that holds a paid target asks.
+paid_flags_re="(MAKEFLAGS|GNUMAKEFLAGS)[:+]?=[^;&|${nl}]*[[:space:]\"${sq}]${paid_target}${paid_end}"
 if [[ "$cmd" == *record* || "$cmd" == *gateway-live* ]]; then
-  [[ "$cmd" =~ $paid_make_re || "$cmd" =~ $paid_script_re ]] && \
+  [[ "$cmd" =~ $paid_make_re || "$cmd" =~ $paid_script_re || "$cmd" =~ $paid_flags_re ]] && \
     decide ask "make eval-record, make eval-injection-record, make gateway-live and the foundation.sh sub-commands behind them call a live model and spend money: the owner's yes to a stated cost comes first (make azure-smoke, three calls under a cent, and make eval, which replays the recording, do not ask)."
 fi
 paid_env_re="(^|[^[:alnum:]_])(MERIDIAN_LIVE_AZURE|MERIDIAN_EVAL_RECORD|MERIDIAN_EVAL_INJECTION_RECORD)[:+]?="
@@ -1054,6 +1073,30 @@ if [[ "$cmd" == *MERIDIAN_* ]]; then
     paid_env_text="${paid_env_text#*"${BASH_REMATCH[0]}"}"
     [[ "$paid_env_text" =~ $paid_env_off_re ]] || decide ask "$paid_env_ask"
   done
+fi
+# S071, G2 (A-2): the paid call itself, not only its three targets. With the
+# owner signed in to Azure on this machine, `az rest` (any method: a POST to a
+# deployment is a paid call, and a GET with a token is nothing a session needs)
+# and a Python line that builds a credential from the Azure identity library
+# reach the models without a target, and without the gateway's ceiling, route
+# and audit. Both ask, and both are decided by the command word, as the az rules
+# above are: a search for the words in the source tree (grep, rg, git grep, cat)
+# is a read and stays free, because it names no az and no interpreter. The
+# interpreter is python (any version), ipython, uv run or uvx, and a heredoc fed
+# to one keeps its body in the text. What this does not read: a script written
+# to a file and run by name (the header's file-then-run gap), and a library
+# that the repository's own code calls (the text of that call is not on the line).
+az_rest_re="${cloud_cli}az[[:space:]]+([^;&|${nl}]*[[:space:]])?[\"${sq}]?rest[\"${sq}]?${paid_end}"
+azure_id_re="azure[.]identity|(Default|AzureCli|AzureDeveloperCli|AzurePowerShell|ManagedIdentity|ClientSecret|ClientCertificate|Environment|ChainedToken|Chained|InteractiveBrowser|DeviceCode|Workload|VisualStudioCode|UsernamePassword|SharedTokenCache)(Azure)?Credential|get_bearer_token_provider|azure_cli_token_provider"
+azure_py_re="(^|[^[:alnum:]_.-])(i?python[0-9.]*|uv[[:space:]]+run|uvx)([^[:alnum:]_.-]|\$)"
+paid_door="a session may not build its own path to a live model: the gateway's targets (make eval-record, make eval-injection-record, make gateway-live) are the only door, and the owner's yes to a stated cost comes first."
+if [[ "$cmd" == *rest* ]]; then
+  [[ "$cmd" =~ $az_rest_re ]] && \
+    decide ask "az rest calls an Azure endpoint with the owner's token, and a request to a model deployment is a live call that spends money without the gateway's ceiling, route and audit: ${paid_door}"
+fi
+if [[ "$cmd" == *credential* || "$cmd" == *azure?identity* || "$cmd" == *token_provider* ]]; then
+  [[ "$cmd" =~ $azure_id_re && "$cmd" =~ $azure_py_re ]] && \
+    decide ask "A Python line that names the Azure identity library's credential classes mints the token a direct call to a model needs, a live call that spends money without the gateway's ceiling, route and audit: ${paid_door}"
 fi
 # The asks for the AWS environment (S036); the denies are above, with the
 # reasoning. `make aws-validate` and `make aws-scan` change nothing in AWS and

@@ -596,7 +596,7 @@ else
 fi
 for entry in 'Bash(terraform plan*)' 'Bash(terraform -chdir=*aws* plan*)' 'Bash(make aws-plan*)' 'Bash(make aws-apply*)' \
   'Bash(make aws-kubeadm-plan*)' 'Bash(make aws-kubeadm-apply*)' \
-  'Bash(make eval-record*)' 'Bash(make eval-injection-record*)' 'Bash(make gateway-live*)' \
+  'Bash(make eval-record*)' 'Bash(make eval-injection-record*)' 'Bash(make gateway-live*)' 'Bash(az rest*)' \
   'Bash(terraform apply*)' 'Bash(terraform -chdir=* apply*)'; do
   if in_list ask "$entry"; then
     echo "ok   ask holds ${entry}"
@@ -785,4 +785,39 @@ else
   fail=1
 fi
 ask_for "360 opt-in assignments set to 0 ask, the loop reads sixteen" ask "$paid_env_shape"
+
+# The paid call itself (S071, G2): az rest and the Azure identity library's
+# credentials in an interpreter line ask, and the message says that the
+# gateway's targets are the only door. MAKEFLAGS asks with the paid message.
+for command_text in 'az rest --url https://x' 'python3 -c "import azure.identity"'; do
+  reason="$(reason_of "$command_text")"
+  case "$reason" in
+    *"live"*"spends money"*"gateway's ceiling"*"only door"*"stated cost"*) echo "ok   the ask for ${command_text} says it reaches a live model without the gateway and that the gateway's targets are the only door" ;;
+    *)
+      echo "FAIL the ask for ${command_text} does not say it reaches a live model without the gateway and that its targets are the only door: $reason"
+      fail=1
+      ;;
+  esac
+done
+reason="$(reason_of 'MAKEFLAGS="-- eval-record" make')"
+case "$reason" in
+  *"live model"*"spend money"*"owner's yes"*"stated cost"*) echo "ok   the ask for a paid target given through MAKEFLAGS says it calls a live model and spends money" ;;
+  *)
+    echo "FAIL the ask for a paid target given through MAKEFLAGS does not say it calls a live model and spends money: $reason"
+    fail=1
+    ;;
+esac
+# The worst shape of the az rule (it backtracks over every blank, like the make
+# rule): `az ` repeated and then a word that only starts like rest.
+az_shape="$(for _ in $(seq 2000); do printf 'az '; done)restx"
+jq -nc --arg c "$az_shape" '{tool_input:{command:$c}}' > "$big_input"
+cpu="$( { time bash "$hook" < "$big_input" > /dev/null; } 2>&1 )"
+cpu_seconds="$(awk '{ print $1 + $2 }' <<<"$cpu")"
+if awk -v s="$cpu_seconds" -v b="$cpu_bound" 'BEGIN { exit !(s < b) }'; then
+  echo "ok   2000 repetitions of az before a near-miss word take ${cpu_seconds} s of CPU, under ${cpu_bound}"
+else
+  echo "FAIL 2000 repetitions of az before a near-miss word take ${cpu_seconds} s of CPU, not under ${cpu_bound}"
+  fail=1
+fi
+ask_for "2000 repetitions of az before rest ask" ask "$(for _ in $(seq 2000); do printf 'az '; done)rest"
 exit "$fail"

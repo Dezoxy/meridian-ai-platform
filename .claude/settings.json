@@ -95,6 +95,7 @@
       "Bash(make eval-record*)",
       "Bash(make eval-injection-record*)",
       "Bash(make gateway-live*)",
+      "Bash(az rest*)",
       "Bash(docker push*)",
       "Bash(helm upgrade*)",
       "Bash(helm install*)",
