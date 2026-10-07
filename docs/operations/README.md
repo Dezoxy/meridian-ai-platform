@@ -331,7 +331,9 @@ applied to one. The session that owns the cluster checks, on `main`:
    alert table, nothing. `make smoke` reads that Grafana serves it under
    that uid with the file's queries and that every query runs in
    Prometheus; whether a panel shows data stays by hand.
-7. `make smoke` passes, 45 of 45 lines (S055 added three, for service
+7. `make smoke` passes, 46 of 46 lines (S073 one, for the database's own
+   certificates, which fails when the earliest ends within 84 hours: tested
+   with a stand-in and not yet seen on kind; S055 added three, for service
    identity; S056 two more for it and three for the certificate policy; S062
    three for the stores of the `meridian` database, four for the rules and
    the health dashboard, three for the network policy and one for a request
@@ -349,12 +351,12 @@ applied to one. The session that owns the cluster checks, on `main`:
    in the third run (the first two runs had 41 lines); S066 one for the rate
    store, which only the Model Gateway's pods may reach, which passed on kind
    on 2026-10-06 in S066's third run (S064's third run had 44 lines, before it):
-   the 35 below are S062's count); 32 after `make up` alone, with
+   the 35 below are S062's count); 33 after `make up` alone, with
    SKIP lines for
    what `make deploy` brings (counted from the script's own skip lines, and
    seen on 2026-10-06 before S063: 24 lines, 17 PASS and 7 SKIP, no FAIL). The
-   32 is edge 1, database 4, tools 1, telemetry 9, cost panel 4, adjuster
-   pages 1, sweep 2, network policy 1, service identity 1, certificate policy 4
+   33 is edge 1, database 4, tools 1, telemetry 9, cost panel 4, adjuster
+   pages 1, sweep 2, network policy 1, service identity 1, certificate policy 5
    and alert rules 4. Items 3, 5 and 6 above are what the eleventh check reads,
    so they need no hand check now that the session that owns the cluster
    has seen it pass (35 PASS on 2026-10-06, 44 PASS in S064's third run, and 45

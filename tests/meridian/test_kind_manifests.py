@@ -4594,7 +4594,7 @@ def test_the_readme_describes_what_s056_added_to_deploy_and_smoke_and_the_restar
     # the eleventh the alert rules (test_smoke_alert_rules.py).
     assert "`make smoke` checks eleven things" in readme
     assert "`make smoke` checks nine things" not in readme
-    assert "**Certificate policy.** Four lines" in readme
+    assert "**Certificate policy.** Five lines" in readme
     # The ninth check's description no longer counts three statuses.
     assert "`make smoke`'s ninth check proves 200, 401 and 403" not in readme
     # `make deploy` refuses without the policies and the add-on, too.

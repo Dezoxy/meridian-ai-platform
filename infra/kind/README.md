@@ -944,7 +944,7 @@ node image, Kubernetes components and the platform).
    the CA and its DNS name; a traceback (a name that does not resolve, a
    certificate that does not verify, a refused connection) is a FAIL, never a
    refusal. Before `make deploy` this check prints SKIP.
-10. **Certificate policy.** Four lines, never SKIP, the first three read-only:
+10. **Certificate policy.** Five lines, never SKIP, the first three read-only:
     the objects exist after `make up`, so a missing one is a FAIL. The three
     `CertificateRequestPolicy` objects are Ready. The Deployment
     `cert-manager-approver-policy` in `cert-manager` has an available replica.
@@ -1014,7 +1014,27 @@ node image, Kubernetes components and the platform).
     smoke's label was left in `default`. The three other lines passed too. The
     FAIL forms (a request Approved, a message in neither form, a request left
     undecided, a delete that fails) were tested without a cluster and not seen
-    there.
+    there. The fifth line (S073) is read-only and for kind only: on Azure the
+    database and its certificates are the provider's. CloudNativePG signs the
+    database's server and replication client certificates with an authority of
+    its own (cert-manager does not issue them, and Prometheus holds no series
+    for them), and writes their three expirations into the status of the
+    Cluster `platform-db`, as text in Go's default time format
+    (`2027-01-04 18:05:31 +0000 UTC`, not RFC 3339). The line reads that
+    status once and judges the earliest: it passes, naming the certificate
+    and the days left, while more than 84 hours remain (half of the operator's
+    renewal threshold, `EXPIRING_CHECK_THRESHOLD`, 7 days by default, in whole
+    days, as the pinned operator's documentation says), and fails when less
+    remains, when a certificate has ended, when the status holds no
+    expiration at all, and when a date is not in exactly that form with a
+    `+0000 UTC` zone ("cannot tell", and the line names which certificate
+    without repeating the text). The lifetime, `CERTIFICATE_DURATION`, is in
+    whole days too (default 90), so the shortest is one day and a renewal
+    cannot be seen inside one cluster run; smoke does not shorten it. Tested
+    with a stand-in and the real jq; on kind it has been seen to pass only once
+    this contract's run is made (the main session's): NOT YET SEEN. It tells
+    nothing between two runs of smoke: no alert rule watches these dates (see
+    [the certificate expiry runbook](../../docs/operations/runbooks/certificate-expiry.md)).
 11. **Alert rules and health dashboard.** Four lines, read-only, run last.
     The first three read Prometheus' `/api/v1/rules` through Grafana's
     datasource proxy, for the `PrometheusRule` `meridian` that `make up`

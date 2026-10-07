@@ -547,7 +547,7 @@
 #                 second before it sends, so a gateway slower than that to end
 #                 the connection turns a refusal into this FAIL; it fails
 #                 closed, and a run again tells.
-#  10. certificate policy: four lines (S056, S062), run after the first
+#  10. certificate policy: five lines (S056, S062, S073), run after the first
 #                 nine and never skipped: its objects exist after `make up`, so
 #                 a missing one is a FAIL. The first three lines read only: the
 #                 five CertificateRequestPolicies
@@ -626,7 +626,30 @@
 #                 those by hand); and a request for an issuer that is not
 #                 Meridian's, which no policy answers, is not made. It adds
 #                 a second or two when the approver is up, 30 s when it does
-#                 not answer.
+#                 not answer. The fifth line (S073, K5) is read-only and
+#                 kind only (on Azure the database and its certificates are the
+#                 provider's): CloudNativePG signs the database's server and
+#                 replication client certificates with an authority of its
+#                 own, cert-manager does not, and Prometheus holds no series
+#                 for them, so nothing else says that a renewal did not
+#                 happen. It reads the Cluster platform-db once and judges the
+#                 earliest of the three expirations of
+#                 .status.certificates.expirations, text in Go's default time
+#                 format ("2027-01-04 18:05:31 +0000 UTC"): it passes with that
+#                 date and the days left when more than half of the
+#                 operator's renewal threshold remains (7 days by default, so
+#                 84 hours), and fails when less remains, naming the
+#                 certificate and the days, when one has ended, when the
+#                 status holds no expiration (an operator that changed its
+#                 status must not make it a pass), and when a date is not in
+#                 exactly that form with a +0000 UTC zone (it cannot tell, and
+#                 says so without repeating the text). The operator renews 7
+#                 days before the end and its lifetime is in whole days, so a
+#                 renewal cannot be seen inside one cluster run. What it does
+#                 not prove: nothing alerts between two runs of smoke; it
+#                 reads the operator's record of the dates, not the
+#                 certificate files the instances serve; and it has been
+#                 tested with a stand-in and the real jq, NOT YET SEEN on kind.
 #  11. alert rules and health dashboard: four lines, read-only (S062), run
 #                 last. Three lines read Prometheus' /api/v1/rules through
 #                 Grafana's datasource proxy (the port-forward of check 4) for
@@ -940,6 +963,20 @@ readonly POLICY_ADDON=cert-manager-approver-policy
 readonly POLICY_CONTROLLER=cert-manager
 readonly POLICY_BUILTIN_ROLE=cert-manager-controller-approve:cert-manager-io
 readonly POLICY_BUILTIN_OFF_ARG=--controllers=-certificaterequests-approver
+# The database's own certificates (check 10's fifth line, S073). CloudNativePG
+# signs the server's and the replication client's, with an authority of its own,
+# and writes the three expirations into the Cluster's status as text in Go's
+# default time format ("2027-01-04 18:05:31 +0000 UTC", not RFC 3339). The
+# operator renews a certificate when it is closer to its end than
+# EXPIRING_CHECK_THRESHOLD, in whole days, default 7 (the operator's
+# documentation, "Operator configuration" and "Certificates", at the pinned
+# version 1.30.1; the operator's ConfigMap on kind has no keys, so it is the
+# default). The line fails inside half of that, so it stays silent while the
+# operator still has time and is red when the operator has plainly missed.
+# CERTIFICATE_DURATION, the lifetime (default 90), is in whole days too: the
+# shortest is one day, so a renewal cannot be seen inside one cluster run.
+readonly DATABASE_CERTIFICATE_RENEWAL_DAYS=7
+readonly DATABASE_CERTIFICATE_MARGIN_SECONDS=$((DATABASE_CERTIFICATE_RENEWAL_DAYS * 86400 / 2))
 # The request the issuer must refuse (check 10's fourth line): a
 # CertificateRequest in REFUSED_NAMESPACE for the issuer REFUSED_ISSUER, with a
 # URI that meridian-services allows in `meridian` and a duration it allows, so
@@ -3421,11 +3458,78 @@ check_refused_request() {
   refused_err_file=""
 }
 
+# database_certificates_verdict CLUSTER_JSON NOW: one line, fields separated by
+# "|", from the Cluster's answer and the clock (NOW, epoch seconds; the caller
+# gives it, nothing here reads a clock). The cluster's answer goes in as a file
+# (a process substitution), never as an argument. Every expiration of
+# .status.certificates.expirations must be exactly "YYYY-MM-DD hh:mm:ss +0000
+# UTC" (Go's default format for a UTC instant); the seconds are then read as
+# UTC from the first 19 characters. The earliest of them is judged.
+#   none                              no expiration in the status
+#   shape|NAME                        NAME's expiration is not in that form
+#                                     (another zone, RFC 3339, a fraction, not
+#                                     text): nothing is judged
+#   ended|NAME|DAYS|DATE|COUNT        the earliest ended DAYS whole days ago
+#   close|NAME|DAYS|DATE|COUNT        DAYS whole days left, margin or less
+#   far|NAME|DAYS|DATE|COUNT          more than the margin left
+database_certificates_verdict() {
+  jq -nr --slurpfile status <(printf '%s' "$1") --argjson now "$2" \
+    --argjson margin "${DATABASE_CERTIFICATE_MARGIN_SECONDS}" '
+    def shaped: type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} \\+0000 UTC$");
+    def epoch: .[0:19] | strptime("%Y-%m-%d %H:%M:%S") | mktime;
+    (try $status[0].status.certificates.expirations catch null) as $raw
+    | (if ($raw | type) == "object" then $raw | to_entries else [] end) as $found
+    | if ($found | length) == 0 then "none"
+      elif any($found[]; (.value | shaped) | not) then
+        "shape|\(first($found[] | select((.value | shaped) | not)).key)"
+      else
+        ($found | map({name: .key, date: .value, at: (.value | epoch)}) | sort_by([.at, .name]) | first) as $first
+        | ($first.at - $now) as $left
+        | (if $left <= 0 then "ended|\($first.name)|\((0 - $left) / 86400 | floor)"
+           else "\(if $left <= $margin then "close" else "far" end)|\($first.name)|\($left / 86400 | floor)" end)
+          + "|\($first.date)|\($found | length)"
+      end'
+}
+
+# check_database_certificates [NOW]: the fifth line of check 10, kind only (on
+# Azure the database and its certificates are the provider's). It reads the
+# Cluster platform-db once and fails when the earliest of the operator's three
+# expirations is DATABASE_CERTIFICATE_MARGIN_SECONDS or less away, when one
+# cannot be read as a UTC date and when there is none: an operator that changed
+# its status must not turn the line into a pass. NOW defaults to this machine's
+# clock (kind's node shares it, and the margin is days); a test gives its own.
+# What it does not do: it tells nothing between two runs of smoke.
+check_database_certificates() {
+  local now="${1:-$(date +%s)}" cluster_status verdict
+  local what result name days ends_at unit count
+  what="certificate policy: the database's certificates (CloudNativePG's own)"
+  if ! cluster_status="$(kctl -n meridian get clusters.postgresql.cnpg.io platform-db -o json 2>/dev/null)"; then
+    fail "${what}: could not read the Cluster platform-db (kubectl failed)"
+    return
+  fi
+  if ! verdict="$(database_certificates_verdict "${cluster_status}" "${now}" 2>/dev/null)"; then
+    fail "${what}: could not read the Cluster platform-db's answer as JSON"
+    return
+  fi
+  IFS='|' read -r result name days ends_at count <<<"$(clean_lines "${verdict}")"
+  unit=days
+  if [[ "${days}" == 1 ]]; then unit=day; fi
+  case "${result}" in
+    far) pass "${what}: the earliest of ${count} is ${name}, with ${days} ${unit} left (ends ${ends_at}); the operator renews at ${DATABASE_CERTIFICATE_RENEWAL_DAYS} days, this line fails inside $((DATABASE_CERTIFICATE_MARGIN_SECONDS / 3600)) hours" ;;
+    close) fail "${what}: ${name} has ${days} ${unit} left (ends ${ends_at}), inside the margin of $((DATABASE_CERTIFICATE_MARGIN_SECONDS / 3600)) hours: the operator renews at ${DATABASE_CERTIFICATE_RENEWAL_DAYS} days and has not; read its log in cnpg-system" ;;
+    ended) fail "${what}: ${name} has ended ${days} ${unit} ago (${ends_at}) and was not renewed; read the operator's log in cnpg-system" ;;
+    none) fail "${what}: the status of the Cluster platform-db holds no expiration (.status.certificates.expirations), so nothing is judged: the operator may have changed its status" ;;
+    shape) fail "${what}: cannot tell when ${name} ends: its expiration is not in the form 'YYYY-MM-DD hh:mm:ss +0000 UTC' (another zone or another shape), so nothing is judged: has the operator changed its status?" ;;
+    *) fail "${what}: cannot tell: the verdict was not in a form this line reads" ;;
+  esac
+}
+
 check_certificate_policy() {
   check_policies_ready
   check_approver_addon
   check_builtin_approver_off
   check_refused_request
+  check_database_certificates
 }
 
 # ── 11. alert rules and health dashboard ─────────────────────────────────────

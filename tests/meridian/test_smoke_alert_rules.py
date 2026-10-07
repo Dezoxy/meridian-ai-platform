@@ -65,8 +65,10 @@ RULE_COUNT = 20
 # shape, before the Claims API's line) and the streams Loki must not hold (after
 # it). S066 added the sixth line of the network policy check (a pod that is not
 # the Model Gateway's cannot reach the rate store): 40 before S064 and S066, 44
-# with S064's four, 45 with both.
-SMOKE_LINES_AFTER_DEPLOY = 45
+# with S064's four, 45 with both. S073 (K5) added the fifth line of the
+# certificate policy check (the database's own certificates are not close to
+# their end): 46.
+SMOKE_LINES_AFTER_DEPLOY = 46
 # Counted from the checks' own skip lines, not measured: edge 1, database 3 and
 # one SKIP for its stores, tools 1 SKIP, telemetry 7, cost panel 3 and one SKIP
 # for the series, adjuster pages 1 SKIP, sweep 2 SKIP (the Job's line and the
@@ -85,8 +87,10 @@ SMOKE_LINES_AFTER_DEPLOY = 45
 # SKIP (no pass of the sweep has finished). G1's two make it 32: the agent's
 # DaemonSet exists after `make up`, so its shape is read and passes, and the
 # streams line is a SKIP (the Claims API's line above it did not pass, so an
-# empty answer would prove nothing).
-SMOKE_LINES_AFTER_UP = 32
+# empty answer would prove nothing). S073's certificate line makes it 33: the
+# Cluster platform-db exists after `make up` alone, and its certificates are
+# the operator's, made with it.
+SMOKE_LINES_AFTER_UP = 33
 
 
 def tree_groups() -> list[dict]:
@@ -768,7 +772,7 @@ def test_the_header_numbers_the_eleventh_check_and_says_what_it_does_not_prove()
     eleventh = header.split("11. alert rules and health dashboard: four lines")[1]
     flat = " ".join(line.removeprefix("#").strip() for line in eleventh.splitlines())
 
-    assert "10. certificate policy: four lines" in header
+    assert "10. certificate policy: five lines" in header
     assert "What it does not prove" in flat
     assert "series" in flat and "by hand" in flat
     assert "every query" in flat and "No query is left out" in flat

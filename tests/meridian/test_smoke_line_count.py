@@ -36,6 +36,7 @@ from test_kind_manifests import (
     sweep_job,
 )
 from test_smoke_alert_rules import SMOKE_LINES_AFTER_DEPLOY, run_alert_rules
+from test_smoke_database_certificates import healthy_certificate_lines
 from test_smoke_log_agent import healthy_log_agent_lines
 from test_smoke_log_agent_shape import (
     healthy_log_agent_pod_lines,
@@ -123,8 +124,11 @@ def printed(tmp_path_factory: pytest.TempPathFactory) -> dict[str, int]:
         "check_service_identity": all_pass(
             lines_of(lambda path: run_identity_check(path, answers=GOOD))
         ),
+        # Three read-only lines, the refused request's and, since S073, the
+        # database's own certificates': their harnesses are apart.
         "check_certificate_policy": all_pass(lines_of(run_policy_check))
-        + all_pass(run_refused_request_check(fresh()).lines),
+        + all_pass(run_refused_request_check(fresh()).lines)
+        + all_pass(healthy_certificate_lines(fresh())),
         "check_alert_rules": all_pass(run_alert_rules(fresh())),
     }
 

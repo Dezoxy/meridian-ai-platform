@@ -246,6 +246,7 @@ ANSWER_VARIABLES = {
     "before",
     "body",
     "count",
+    "cluster_status",
     "cronjob",
     "encoded",
     "final",
@@ -280,6 +281,7 @@ INDIRECT = {"poll_result", "served", "targets", "file_exprs", "served_exprs"}
 # sweep's CronJob and Jobs, which are answers, go in by --slurpfile.
 SMALL_POSITIONALS = {
     ("clear_text_job_spec", "name"): "$1",
+    ("database_certificates_verdict", "now"): "$2",
     ("sweep_verdict", "now"): "$3",
     ("sweep_verdict", "period"): "$4",
     ("sweep_verdict", "tolerance"): "$(($4 * SWEEP_STALE_PERIODS))",

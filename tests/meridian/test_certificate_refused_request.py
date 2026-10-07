@@ -780,8 +780,9 @@ def test_the_fourth_line_of_check_ten_is_the_request_and_smoke_needs_openssl() -
         "check_approver_addon",
         "check_builtin_approver_off",
         "check_refused_request",
+        "check_database_certificates",
     ]
-    assert "10. certificate policy: four lines" in SMOKE_SH
+    assert "10. certificate policy: five lines" in SMOKE_SH
     assert "10. certificate policy: three lines" not in SMOKE_SH
     assert "openssl" in SMOKE_SH.split("need_tools ")[1].splitlines()[0].split()
 
@@ -792,7 +793,7 @@ def test_the_header_says_what_check_ten_creates_removes_and_does_not_prove() -> 
         for line in SMOKE_SH.split("set -euo pipefail")[0].splitlines()
     )
     opening = header.split("1. edge")[0]
-    tenth = header.split("10. certificate policy: four lines")[1].split(
+    tenth = header.split("10. certificate policy: five lines")[1].split(
         "11. alert rules"
     )[0]
 

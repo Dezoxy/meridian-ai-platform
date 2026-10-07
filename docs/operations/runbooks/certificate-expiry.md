@@ -251,6 +251,15 @@ documentation says it renews a certificate seven days before the end. A
 cluster made again starts the ninety days again, and `make down` and `make up`
 do that.
 
+On kind CloudNativePG renews the database's certificates, and what says when
+it did not is the fifth line of check 10 of `make smoke` (S073), which reads
+the three dates above and fails when the earliest is less than 84 hours away,
+half of the operator's seven days; tested with a stand-in and the real `jq`,
+not yet seen on a cluster. Nothing alerts between two smoke runs: no series
+holds these dates, so no rule can read them, and that gap is open. On Azure
+the database and its certificates are the provider's, and the line is not
+there.
+
 What a renewal needs of the services, read from the code and not seen on a
 cluster: each service mounts the authority's public certificate as a file
 (`/etc/meridian/db-ca/ca.crt`, a directory mount the kubelet refreshes) and
