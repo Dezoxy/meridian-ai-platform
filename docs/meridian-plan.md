@@ -12504,8 +12504,7 @@ No other consultation is recorded.
     pseudo-terminal re-anchoring taken out; quoted forms of two S075 rules
     ask; `workspace select default` is cut out only when `default` ends the
     word; a backtick ends a target; the differential above.
-  - **T2e, the third review's script items** (beside the documents contract,
-    not in this section's tree): seven items, two medium and five low. An
+  - **T2e, the third review's script items** (37689ca): seven items, two medium and five low. An
     ignore file of the caller's cannot hide a `.tf`; the script refuses a git
     older than 2.32 and the README says what its git settings do not cover; the
     plan is checked after the sign-in; the hash is read from standard input;

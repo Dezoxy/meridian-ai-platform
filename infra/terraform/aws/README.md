@@ -6,9 +6,9 @@
 
 Status: **implemented as code**, checked without an account (`terraform
 validate` and a policy scan) and **NOT applied anywhere**. The second half of
-S036 applies it once in the owner's AWS account, after the cost of an hour of
-it is stated and the owner says yes; what that run shows is recorded in the
-plan, not here. The module serves the mapping of
+S036 would apply it once in the owner's AWS account: it is asked at the paid
+stop of S079, after the cost of an hour of it is stated, and the owner may say
+no; what such a run shows is recorded in the plan, not here. The module serves the mapping of
 [ADR 6](../../../docs/architecture/decisions/0006-map-the-azure-platform-to-aws.md);
 the Azure foundation it sits beside is [the Terraform README](../README.md).
 
