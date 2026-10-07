@@ -16221,6 +16221,240 @@ that nothing is built):
   sentence said "stays at 100" when it merged, written on a branch cut before
   S068, and was corrected by S072's pull request).
 
+**The second half so far (2026-10-07): what opened it.** Branch
+`s070-second-half`, cut from `main` at 828c380, the first half's merge. It
+opened on the rows homed at S070 that need no word of the owner: the
+property test's two missing generator forms (the first half's follow-up),
+the adjuster's page and queue small ends, a `ClaimResponse` that cannot be
+built after the proposal is stored, and `drafted_by`. Four contracts and one
+fix-up ran (G1, G2, G2b, G3, G4), each in a worktree of its own and carried
+to the branch by the session as one commit (five commits), then the Python
+review of G1 to G3, whose one high finding is the work of this record. G1
+touched one test file; G2 to G4 touched `adjuster.py`, `adjuster_queue.py`,
+`claim_dates.py`, `moves.py` and `triaging.py` under
+`src/meridian/workloads/claims_triage/` and their tests. No prompt, tool
+contract, screen, golden file or injection case changed, and neither the
+redaction's source nor the name's nor the assessor's, so no fingerprint
+moved; whether the free replay ran is the main session's line to fill. No
+migration, no new threat ID, nothing paid, nothing on a cluster.
+
+**Decisions of the second half** (the implementers' unless marked; the owner
+may overturn any):
+
+- **A chain family was added to the property test beyond the contract's two
+  forms** (G1). The first international number has a second number of its
+  own before the second international number begins; the plain form cannot
+  write the outputs that are neither matcher's for the whole text, and the
+  chain can. Assertion (b), that the output is the cut's or the matcher
+  before the cut's for the whole text, is not held for the chain; G4 put
+  back what that dropped, per character (below).
+- **The `00` spellings were not bent into showing a loss** (G1). The form as
+  the contract wrote it shows the loss only in the `+36` spelling; a test
+  pins which spellings show it, with a threshold (a quarter of a spelling's
+  texts) that is arbitrary, and the docstring says why was not looked into.
+- **The queue's cell says "could not be read"** (G2): the claim page's words
+  without "the stored proposal"; a row with no stored proposal, or the
+  walking skeleton's row, keeps an empty cell. A received time without a
+  zone raises `ValueError` (the error `lifecycle.py` raises for a
+  programming error before any SQL), with a message that holds no value.
+- **One page of the queue logs one line, with a count** (G2b): the per-row
+  judgment is silent when the queue calls it, the claim page logs as before,
+  and the warning of the claim page moved with the function from the logger
+  of `adjuster.py` to that of `adjuster_queue.py` (no test, alert, dashboard
+  or runbook names either).
+- **The claims route's 500 now carries `claim_id` and `run_id`** (G3). That
+  is the one observable change on that route: its declared `ClaimErrorBody`
+  already had both fields. The send-back, retry and claimant-form routes
+  share the handling and changed with it; the contract named only the
+  documents route. The owner may reverse it.
+- **`drafted_by` is not built** (the session's). Both of the row's parts are
+  decisions: what the triage does with an ID that names no deployment
+  changes what is stored when the gateway misbehaves, and what the
+  claimant's response shows of a drafter is the API's contract.
+
+**Advisor:** this record was written from the contracts and reports and
+records no consultation of the second half; the main session adds any it
+held.
+
+**Work log of the second half** (from `git log` of the branch; the counts are
+the reports'):
+
+- **G1**, `3ba3ccd` (tests only): the property test of the redaction writes
+  two international numbers one after the other at a space, a chain of them
+  and a slash or a dot inside the second number. The first 4,000 texts are
+  the same texts (a hash over text and form before and after, equal); 8,500
+  are generated, 8,414 replayed and 86 skipped (the allowance is 170); the
+  file's run time went from about 1 s to about 4 s.
+- **G2**, `b8fbc23`: the queue reads the whole stored proposal in the query it
+  already made and judges it with the claim page's function
+  (`_proposal_of`), so only a proposal that validates is marked; a received
+  time without a zone raises `ValueError` in `day_gaps`; two behaviours
+  pinned by tests named for what they hold (the latest stored proposal for a
+  claim whose last triage failed, and the two unwritten pairs marked
+  "model"). A page validates once per row that holds a proposal, at most 100.
+- **G2b**, `dca5b7b`: G2 had made the queue log one warning per unreadable
+  row at every load, up to 100 a page, which anyone who may open the queue
+  could multiply by reloading, and had left `adjuster.py` at 806 lines, six
+  over the ceiling. The judgment moved to `adjuster_queue.py` (`adjuster.py`
+  777 lines, the queue's module 139) and a page logs one line with the count.
+  The split-proof script ran on the move alone and had one expected failure
+  (the module's own logger in both files); it was not run again after the
+  log change.
+- **G3**, `4c864f3`: a `ValidationError` of the response model after the
+  proposal is stored is one shaped 500 on every route that triages (the
+  documents route marks it stored), with one error line and nothing counted
+  twice; a retry answers 409. Eight new tests (G4 removed one), four seen red
+  first.
+- **G4**, `b1fc545`: the review's findings (below): a `try` removed, the
+  error line names the fields, the chain's lost check put back, and four
+  small things (the page's log line reads right for a count of 1, `_joined`
+  has its return type, the property test's broken docstring sentence is
+  rewritten, `unbuildable` is `unbuildable_answer`).
+- **The review**, Python, of G1 to G3.
+- **D3**, this part and the documents.
+
+**What each found:**
+
+- **G1: today's matcher loses no digit in 4,500 new texts of three
+  families.** Replayed: 1,480 two-international texts, 1,461 chain texts and
+  1,494 slash-or-dot texts; with the cut's narrowing taken out they lose
+  digits in 145, 1,036 and 1,043 of them, so the forms can see the loss;
+  with today's matcher, in none. For a chain the output may be neither
+  matcher's for the whole text (one number cut and the other not, per
+  international number): 45 of the 1,461 are such, none loses a digit. Held
+  per character since G4: in all 1,461 chain texts the characters today's
+  matcher hides are within the union of what the matcher before the cut
+  hides and what the cut hides (1,238 within the first alone, 425 within the
+  second alone, none outside; the numbers are in G4's report). A second
+  number spelled with `00` directly after the first shows the cut's loss in 2
+  of 1,265 texts even with the narrowing taken out, where `+36` shows it in
+  143 of 215; why is not looked into (a new row).
+- **G2: the queue judged a stored proposal differently from its claim
+  page.** One stored proposal that fails validation (a recommendation to
+  approve with an exclusion) showed "model reading" in the queue and "could
+  not be read" on its claim page; both say "could not be read" now.
+- **G2b: G2 itself had made the queue log a warning per unreadable row at
+  every load, and one file six lines over the ceiling.** Both fixed in the
+  next commit.
+- **G3: the backlog row was wrong.** It said the claims route shaped the
+  failure and the documents route did not. Both gave the bare 500 of the
+  last middleware, `{"detail": "internal error"}`, with no claim and no run
+  and a log line without the claim. The map G3 wrote before building, read
+  from the code, is what showed it.
+- **G4: the review's findings, in code and tests** (below).
+
+**The review** (Python, G1 to G3; it ran the unbuildable path with stubs, the
+queue with 15 hostile stored values, the import orders and the property
+test's first 4,000 texts, and only read the rest). Verdict: yes after
+fixes; no critical finding, one high, two medium, seven low.
+
+- **High, documents:** the threat model's T-26 and two places of the plan said
+  the opposite of the code. This record fixes them (T-26, the backlog rows
+  and the first half's description of the queue's read).
+- **Medium 1:** `_move_answer`'s new `try` cannot fire from a valid
+  `ClaimResponse` (every field of `ClaimMoveResponse` has the same type or a
+  wider one, and an instance passes through unvalidated), fired only when the
+  test replaced the class, and marked no span. G4 removed it, its docstring
+  sentence and the one test that needed the stand-in; the two tests that
+  hold the documents route's shaped 500 and its `stored` mark do not pass
+  through it and stay. The row stays closed by the `try` in
+  `run_taken_triage`, which every route passes first.
+- **Medium 2:** the error line named no field, so an operator could not tell
+  which model refused what. G4 added the names and error types of the
+  refused fields, never a value; the test that no value of the stand-in is in
+  the line or the body stays.
+- **Low:** the queue now decodes the whole stored JSON (a row nested about
+  100,000 deep raises at the fetch; a new row); `adjuster.py` imports two
+  private names across modules and the page decides to log by comparing a
+  display text (a new row); the log line's plural, `_joined`'s annotation,
+  the broken docstring sentence and the name `unbuildable` (fixed by G4); the
+  chain family's skip rate, 39 of 1,500 against 0.5 per cent of the base
+  family, and the unexplained `00` figure (not changed); `adjuster.py` was
+  over the ceiling for one commit (history).
+- **Found sound:** the unbuildable path counts once and commits once on the
+  three call sites; the queue and the claim page share one judgment, and 15
+  hostile stored values gave "could not be read" without a raise; `day_gaps`
+  cannot raise for existing data (the column is `timestamptz NOT NULL`); the
+  first 4,000 texts of the property test are the same texts.
+
+**Result / verification of the second half so far:**
+
+- **Implemented and tested; none of it run on a cluster, nothing paid.** The
+  implementers' gates, as their reports print them: `tests/meridian/
+  workloads/claims_triage/` against PostgreSQL, `3539 passed in 74.17s` (G2
+  `3526 passed`, G2b `3531 passed`, G3 `3539 passed`); the guardrails' tests,
+  `1720 passed in 13.09s` (1,716 before G1 and 1,719 after it); `make lint`
+  ended `rc=0` in each. Several reports could not print an exit status in
+  the same shell, or piped a gate into `tail`, and say so; the pass there is
+  the printed last line. The whole suite is the main session's.
+- **The whole suite on the final tree:**
+
+The main session's run on the final tree, with `main` 8e2f4a1 merged in
+(S072's first part and S074's third; 6e04ff5): `make test` (372 tests),
+`make docs` (14 checks) and `make lint` ended 0; the whole suite at six
+workers beside the kind cluster and no other run with a database: 18,193
+passed, 8 skipped (3 min 29 s). An earlier run on the tree before S074's
+part was merged in (fe36a2a) had 18,097 passed, 8 skipped.
+
+- **Documents (D3), as run:** `make docs`, `make check` and `make test`, each
+  read by its exit status, are in the report of that contract.
+
+**Not seen, or not reached:**
+
+- **Anything on a cluster.** The queue's new words and the shaped 500 were
+  tested against PostgreSQL and never rendered or called on kind.
+- **The claimant's form route after an answer that cannot be built.** It was
+  read, not tested: the claim has moved on by then, so the claimant gets the
+  status page and not the "send again" notice, and no test holds it.
+- **A database-backed run by the reviewer.** The review ran no test that
+  needs PostgreSQL (the seven that skipped are presumably those); it read
+  the transaction order and the route handling and ran stubs.
+- **What G4's tests did not show red.** The error line's field names, the
+  count-of-1 line and the chain's subset assertion were edited with their
+  code and not seen failing first; for the subset assertion the argument is
+  arithmetic (without the cut's half, 223 chain texts fall outside).
+
+**Backlog rows, judged** (the rows are in Part B):
+
+- The adjuster's page and queue, small ends: closed in part by G2 (the two
+  built, the two pinned, the two left as they were).
+- A `ClaimResponse` that cannot be built after the proposal is stored:
+  closed by G3 and G4, with the row's own claim corrected.
+- The property test's two missing generator forms: closed by G1 (named in
+  the known-leaks row's home, and noted on that row and on the cut row).
+- A stored `drafted_by` is a well-formed ID: open, for the owner, with the
+  reason above.
+- A sentence of the small-ends row (`adjuster.py` is 795 lines) was brought
+  to 777.
+- New rows, each with its home: the `00` spelling's 2 of 1,265 (S070); a
+  stored proposal nested about 100,000 deep, which raises at the queue's
+  fetch (S070); the display-text comparison and the private names imported
+  across two modules (S074, one row).
+
+**For the owner** (none blocks the pull request; the default if unanswered is
+that nothing is built; the first half's (a) to (e) stand as written):
+
+- **Uploads (a), the bound on what a name may replace (c), and where the
+  three known phone leaks go (e).** Unchanged. The property test now writes
+  the forms it lacked and found no digit lost, which says nothing for or
+  against a fix of the three leaks: they are not losses against the matcher
+  before the cut.
+- **(f) `drafted_by`.** Not built. Two decisions: what the triage does with a
+  stored drafter ID that names no deployment, and what the claimant's
+  response shows of a drafter.
+- **(g) The claim brief's retention**, S068's third question (an age bound
+  for a brief nobody decides), which this half did not touch.
+
+**Follow-ups of the second half:**
+
+- In the backlog, each with its step: the `00` spelling's 2 of 1,265 and the
+  stored proposal nested about 100,000 deep (S070); the queue's display-text
+  comparison and its private names across two modules (S074).
+- **Rows changed in this half:** the adjuster's page and queue small ends,
+  the `ClaimResponse` row and the `drafted_by` row; the cut row, the
+  known-leaks row and the small-ends row carry a sentence each. T-26 and T-67
+  are brought to the code; no new threat ID.
+
 ### S072 — The cluster outside `meridian`, second round
 **Status:** doing · **Started:** 2026-10-07 · **Finished:** —
 **Goal:** on kind, what runs beside Meridian is held to what it needs, a
@@ -16629,239 +16863,6 @@ charts' render (S074).
   memory or disk is observed on kind). On AKS (S020) the operators' reach
   comes back with real stakes.
 
-**The second half so far (2026-10-07): what opened it.** Branch
-`s070-second-half`, cut from `main` at 828c380, the first half's merge. It
-opened on the rows homed at S070 that need no word of the owner: the
-property test's two missing generator forms (the first half's follow-up),
-the adjuster's page and queue small ends, a `ClaimResponse` that cannot be
-built after the proposal is stored, and `drafted_by`. Four contracts and one
-fix-up ran (G1, G2, G2b, G3, G4), each in a worktree of its own and carried
-to the branch by the session as one commit (five commits), then the Python
-review of G1 to G3, whose one high finding is the work of this record. G1
-touched one test file; G2 to G4 touched `adjuster.py`, `adjuster_queue.py`,
-`claim_dates.py`, `moves.py` and `triaging.py` under
-`src/meridian/workloads/claims_triage/` and their tests. No prompt, tool
-contract, screen, golden file or injection case changed, and neither the
-redaction's source nor the name's nor the assessor's, so no fingerprint
-moved; whether the free replay ran is the main session's line to fill. No
-migration, no new threat ID, nothing paid, nothing on a cluster.
-
-**Decisions of the second half** (the implementers' unless marked; the owner
-may overturn any):
-
-- **A chain family was added to the property test beyond the contract's two
-  forms** (G1). The first international number has a second number of its
-  own before the second international number begins; the plain form cannot
-  write the outputs that are neither matcher's for the whole text, and the
-  chain can. Assertion (b), that the output is the cut's or the matcher
-  before the cut's for the whole text, is not held for the chain; G4 put
-  back what that dropped, per character (below).
-- **The `00` spellings were not bent into showing a loss** (G1). The form as
-  the contract wrote it shows the loss only in the `+36` spelling; a test
-  pins which spellings show it, with a threshold (a quarter of a spelling's
-  texts) that is arbitrary, and the docstring says why was not looked into.
-- **The queue's cell says "could not be read"** (G2): the claim page's words
-  without "the stored proposal"; a row with no stored proposal, or the
-  walking skeleton's row, keeps an empty cell. A received time without a
-  zone raises `ValueError` (the error `lifecycle.py` raises for a
-  programming error before any SQL), with a message that holds no value.
-- **One page of the queue logs one line, with a count** (G2b): the per-row
-  judgment is silent when the queue calls it, the claim page logs as before,
-  and the warning of the claim page moved with the function from the logger
-  of `adjuster.py` to that of `adjuster_queue.py` (no test, alert, dashboard
-  or runbook names either).
-- **The claims route's 500 now carries `claim_id` and `run_id`** (G3). That
-  is the one observable change on that route: its declared `ClaimErrorBody`
-  already had both fields. The send-back, retry and claimant-form routes
-  share the handling and changed with it; the contract named only the
-  documents route. The owner may reverse it.
-- **`drafted_by` is not built** (the session's). Both of the row's parts are
-  decisions: what the triage does with an ID that names no deployment
-  changes what is stored when the gateway misbehaves, and what the
-  claimant's response shows of a drafter is the API's contract.
-
-**Advisor:** this record was written from the contracts and reports and
-records no consultation of the second half; the main session adds any it
-held.
-
-**Work log of the second half** (from `git log` of the branch; the counts are
-the reports'):
-
-- **G1**, `3ba3ccd` (tests only): the property test of the redaction writes
-  two international numbers one after the other at a space, a chain of them
-  and a slash or a dot inside the second number. The first 4,000 texts are
-  the same texts (a hash over text and form before and after, equal); 8,500
-  are generated, 8,414 replayed and 86 skipped (the allowance is 170); the
-  file's run time went from about 1 s to about 4 s.
-- **G2**, `b8fbc23`: the queue reads the whole stored proposal in the query it
-  already made and judges it with the claim page's function
-  (`_proposal_of`), so only a proposal that validates is marked; a received
-  time without a zone raises `ValueError` in `day_gaps`; two behaviours
-  pinned by tests named for what they hold (the latest stored proposal for a
-  claim whose last triage failed, and the two unwritten pairs marked
-  "model"). A page validates once per row that holds a proposal, at most 100.
-- **G2b**, `dca5b7b`: G2 had made the queue log one warning per unreadable
-  row at every load, up to 100 a page, which anyone who may open the queue
-  could multiply by reloading, and had left `adjuster.py` at 806 lines, six
-  over the ceiling. The judgment moved to `adjuster_queue.py` (`adjuster.py`
-  777 lines, the queue's module 139) and a page logs one line with the count.
-  The split-proof script ran on the move alone and had one expected failure
-  (the module's own logger in both files); it was not run again after the
-  log change.
-- **G3**, `4c864f3`: a `ValidationError` of the response model after the
-  proposal is stored is one shaped 500 on every route that triages (the
-  documents route marks it stored), with one error line and nothing counted
-  twice; a retry answers 409. Eight new tests (G4 removed one), four seen red
-  first.
-- **G4**, `b1fc545`: the review's findings (below): a `try` removed, the
-  error line names the fields, the chain's lost check put back, and four
-  small things (the page's log line reads right for a count of 1, `_joined`
-  has its return type, the property test's broken docstring sentence is
-  rewritten, `unbuildable` is `unbuildable_answer`).
-- **The review**, Python, of G1 to G3.
-- **D3**, this part and the documents.
-
-**What each found:**
-
-- **G1: today's matcher loses no digit in 4,500 new texts of three
-  families.** Replayed: 1,480 two-international texts, 1,461 chain texts and
-  1,494 slash-or-dot texts; with the cut's narrowing taken out they lose
-  digits in 145, 1,036 and 1,043 of them, so the forms can see the loss;
-  with today's matcher, in none. For a chain the output may be neither
-  matcher's for the whole text (one number cut and the other not, per
-  international number): 45 of the 1,461 are such, none loses a digit. Held
-  per character since G4: in all 1,461 chain texts the characters today's
-  matcher hides are within the union of what the matcher before the cut
-  hides and what the cut hides (1,238 within the first alone, 425 within the
-  second alone, none outside; the numbers are in G4's report). A second
-  number spelled with `00` directly after the first shows the cut's loss in 2
-  of 1,265 texts even with the narrowing taken out, where `+36` shows it in
-  143 of 215; why is not looked into (a new row).
-- **G2: the queue judged a stored proposal differently from its claim
-  page.** One stored proposal that fails validation (a recommendation to
-  approve with an exclusion) showed "model reading" in the queue and "could
-  not be read" on its claim page; both say "could not be read" now.
-- **G2b: G2 itself had made the queue log a warning per unreadable row at
-  every load, and one file six lines over the ceiling.** Both fixed in the
-  next commit.
-- **G3: the backlog row was wrong.** It said the claims route shaped the
-  failure and the documents route did not. Both gave the bare 500 of the
-  last middleware, `{"detail": "internal error"}`, with no claim and no run
-  and a log line without the claim. The map G3 wrote before building, read
-  from the code, is what showed it.
-- **G4: the review's findings, in code and tests** (below).
-
-**The review** (Python, G1 to G3; it ran the unbuildable path with stubs, the
-queue with 15 hostile stored values, the import orders and the property
-test's first 4,000 texts, and only read the rest). Verdict: yes after
-fixes; no critical finding, one high, two medium, seven low.
-
-- **High, documents:** the threat model's T-26 and two places of the plan said
-  the opposite of the code. This record fixes them (T-26, the backlog rows
-  and the first half's description of the queue's read).
-- **Medium 1:** `_move_answer`'s new `try` cannot fire from a valid
-  `ClaimResponse` (every field of `ClaimMoveResponse` has the same type or a
-  wider one, and an instance passes through unvalidated), fired only when the
-  test replaced the class, and marked no span. G4 removed it, its docstring
-  sentence and the one test that needed the stand-in; the two tests that
-  hold the documents route's shaped 500 and its `stored` mark do not pass
-  through it and stay. The row stays closed by the `try` in
-  `run_taken_triage`, which every route passes first.
-- **Medium 2:** the error line named no field, so an operator could not tell
-  which model refused what. G4 added the names and error types of the
-  refused fields, never a value; the test that no value of the stand-in is in
-  the line or the body stays.
-- **Low:** the queue now decodes the whole stored JSON (a row nested about
-  100,000 deep raises at the fetch; a new row); `adjuster.py` imports two
-  private names across modules and the page decides to log by comparing a
-  display text (a new row); the log line's plural, `_joined`'s annotation,
-  the broken docstring sentence and the name `unbuildable` (fixed by G4); the
-  chain family's skip rate, 39 of 1,500 against 0.5 per cent of the base
-  family, and the unexplained `00` figure (not changed); `adjuster.py` was
-  over the ceiling for one commit (history).
-- **Found sound:** the unbuildable path counts once and commits once on the
-  three call sites; the queue and the claim page share one judgment, and 15
-  hostile stored values gave "could not be read" without a raise; `day_gaps`
-  cannot raise for existing data (the column is `timestamptz NOT NULL`); the
-  first 4,000 texts of the property test are the same texts.
-
-**Result / verification of the second half so far:**
-
-- **Implemented and tested; none of it run on a cluster, nothing paid.** The
-  implementers' gates, as their reports print them: `tests/meridian/
-  workloads/claims_triage/` against PostgreSQL, `3539 passed in 74.17s` (G2
-  `3526 passed`, G2b `3531 passed`, G3 `3539 passed`); the guardrails' tests,
-  `1720 passed in 13.09s` (1,716 before G1 and 1,719 after it); `make lint`
-  ended `rc=0` in each. Several reports could not print an exit status in
-  the same shell, or piped a gate into `tail`, and say so; the pass there is
-  the printed last line. The whole suite is the main session's.
-- **The whole suite on the final tree:**
-
-The main session's run on the final tree, with `main` 8e2f4a1 merged in
-(S072's first part and S074's third; 6e04ff5): `make test` (372 tests),
-`make docs` (14 checks) and `make lint` ended 0; the whole suite at six
-workers beside the kind cluster and no other run with a database: 18,193
-passed, 8 skipped (3 min 29 s). An earlier run on the tree before S074's
-part was merged in (fe36a2a) had 18,097 passed, 8 skipped.
-
-- **Documents (D3), as run:** `make docs`, `make check` and `make test`, each
-  read by its exit status, are in the report of that contract.
-
-**Not seen, or not reached:**
-
-- **Anything on a cluster.** The queue's new words and the shaped 500 were
-  tested against PostgreSQL and never rendered or called on kind.
-- **The claimant's form route after an answer that cannot be built.** It was
-  read, not tested: the claim has moved on by then, so the claimant gets the
-  status page and not the "send again" notice, and no test holds it.
-- **A database-backed run by the reviewer.** The review ran no test that
-  needs PostgreSQL (the seven that skipped are presumably those); it read
-  the transaction order and the route handling and ran stubs.
-- **What G4's tests did not show red.** The error line's field names, the
-  count-of-1 line and the chain's subset assertion were edited with their
-  code and not seen failing first; for the subset assertion the argument is
-  arithmetic (without the cut's half, 223 chain texts fall outside).
-
-**Backlog rows, judged** (the rows are in Part B):
-
-- The adjuster's page and queue, small ends: closed in part by G2 (the two
-  built, the two pinned, the two left as they were).
-- A `ClaimResponse` that cannot be built after the proposal is stored:
-  closed by G3 and G4, with the row's own claim corrected.
-- The property test's two missing generator forms: closed by G1 (named in
-  the known-leaks row's home, and noted on that row and on the cut row).
-- A stored `drafted_by` is a well-formed ID: open, for the owner, with the
-  reason above.
-- A sentence of the small-ends row (`adjuster.py` is 795 lines) was brought
-  to 777.
-- New rows, each with its home: the `00` spelling's 2 of 1,265 (S070); a
-  stored proposal nested about 100,000 deep, which raises at the queue's
-  fetch (S070); the display-text comparison and the private names imported
-  across two modules (S074, one row).
-
-**For the owner** (none blocks the pull request; the default if unanswered is
-that nothing is built; the first half's (a) to (e) stand as written):
-
-- **Uploads (a), the bound on what a name may replace (c), and where the
-  three known phone leaks go (e).** Unchanged. The property test now writes
-  the forms it lacked and found no digit lost, which says nothing for or
-  against a fix of the three leaks: they are not losses against the matcher
-  before the cut.
-- **(f) `drafted_by`.** Not built. Two decisions: what the triage does with a
-  stored drafter ID that names no deployment, and what the claimant's
-  response shows of a drafter.
-- **(g) The claim brief's retention**, S068's third question (an age bound
-  for a brief nobody decides), which this half did not touch.
-
-**Follow-ups of the second half:**
-
-- In the backlog, each with its step: the `00` spelling's 2 of 1,265 and the
-  stored proposal nested about 100,000 deep (S070); the queue's display-text
-  comparison and its private names across two modules (S074).
-- **Rows changed in this half:** the adjuster's page and queue small ends,
-  the `ClaimResponse` row and the `drafted_by` row; the cut row, the
-  known-leaks row and the small-ends row carry a sentence each. T-26 and T-67
-  are brought to the code; no new threat ID.
 **The cluster batch (second part of this record, 2026-10-07).** Five
 contracts of files and tests, each in a worktree of its own and carried to
 the step's branch `s072-cluster-batch` by the main session: W, E, C, N and
