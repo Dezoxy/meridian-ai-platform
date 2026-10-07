@@ -10,10 +10,9 @@
 #                       the collector. A namespace of its own, see the levels.
 # meridian:             platform-db and, from S041, the Meridian applications.
 #
-# Pod Security Admission: warn and audit, never enforce, on the four
-# namespaces below that carry the platform's own pods. These two never refuse a
-# pod; they make the API server warn about, and audit, a pod that does not meet
-# the level. A server-side dry run of enforce=restricted on `meridian` reported
+# Pod Security Admission: warn and audit, never enforce, on every namespace
+# below. These two never refuse a pod; they make the API server warn about, and
+# audit, a pod that does not meet the level. A server-side dry run of enforce=restricted on `meridian` reported
 # no violation among the pods of 2026-10-04, the database's included, but a
 # first `make up` under enforce (CloudNativePG's init Job) was not tried, so
 # enforce waits (the plan's backlog). The level is the strictest the namespace's
@@ -74,6 +73,26 @@
 #                  statement, not a control, and a second pod added to `logging`
 #                  is not warned about. What bounds the pod is in the values
 #                  file and in logging-networkpolicy.yaml, not in this label.
+#   cnpg-system:   restricted. The one pod, the CloudNativePG operator's
+#                  (chart 0.29.1), meets it as rendered: non-root, seccomp
+#                  RuntimeDefault, no privilege escalation, every capability
+#                  dropped, no host namespace, hostPath or hostPort, and an
+#                  emptyDir and a Secret as its only volumes.
+#   envoy-gateway-system: restricted. The controller's pod and the certgen Job
+#                  (chart v1.9.2) meet it as rendered, by the same checks. The
+#                  proxy pods are not in that render: the controller makes them
+#                  at run time. Its source (v1.9.2) sets a restricted-compatible
+#                  container context on the proxy and the shutdown manager
+#                  (user 65532, non-root, no privilege escalation, every
+#                  capability dropped, seccomp RuntimeDefault) and no host
+#                  namespace, hostPath or hostPort: read, not seen.
+#                  These two levels rest on a render of both charts' pods on
+#                  2026-10-07, by a checker written by the render's author
+#                  (host namespaces, hostPath, hostPort, privileged,
+#                  capabilities, seccomp, non-root, privilege escalation,
+#                  volume types), and are not confirmed by the API server. The
+#                  server-side dry run, and a look at the namespace's warnings
+#                  after a `make up`, come with the cluster batch.
 #
 # What the two labels do on kind, and what has none. The label audit records
 # nothing on kind: no API server audit policy is configured (cluster.yaml sets
@@ -82,18 +101,24 @@
 # controller (a Deployment's ReplicaSet, the operators) is warned about in a
 # response no one reads, and the controller drops it. Nothing stops a
 # privileged pod or one on
-# the node's network. cnpg-system and envoy-gateway-system carry neither labels
-# nor a NetworkPolicy: the CloudNativePG operator, which holds the widest rights
-# on the cluster, and Envoy Gateway's controller and proxy are outside both.
+# the node's network. cnpg-system and envoy-gateway-system carry Pod Security
+# labels and no NetworkPolicy: the CloudNativePG operator, which holds the widest
+# rights on the cluster, and Envoy Gateway's controller and proxy are outside it.
 apiVersion: v1
 kind: Namespace
 metadata:
   name: envoy-gateway-system
+  labels:
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
 ---
 apiVersion: v1
 kind: Namespace
 metadata:
   name: cnpg-system
+  labels:
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
 ---
 apiVersion: v1
 kind: Namespace

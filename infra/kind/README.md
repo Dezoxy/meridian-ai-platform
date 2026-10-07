@@ -1501,7 +1501,7 @@ What the policies do not do:
   refuse one yet (below), and on kind `audit` records nothing (no API server
   audit policy is configured) and `warn` reaches only the client that creates
   a workload, never a controller's pod. `cnpg-system` and
-  `envoy-gateway-system` carry neither labels nor a NetworkPolicy.
+  `envoy-gateway-system` carry Pod Security labels and no NetworkPolicy.
 - The Model Gateway has no rule towards a provider: on kind it calls none.
   The rule for Azure OpenAI is S020's.
 
@@ -1644,6 +1644,8 @@ Pod Security labels (`warn` and `audit`, never `enforce`, as on `meridian`):
 | `meridian` | `restricted` | nothing |
 | `cert-manager` | `restricted` | nothing: its five pods meet it as rendered |
 | `observability` | `restricted` | nothing as rendered: `tempo` and `otel-collector` set no `allowPrivilegeEscalation: false`, no `capabilities.drop: [ALL]` and no `seccompProfile`, the collector no `runAsNonRoot` either, until their values files set them (S063, tested without a cluster; the server-side dry run is repeated after `make up`); node-exporter would have stopped `restricted` too, and is off |
+| `cnpg-system` | `restricted` | nothing as rendered (2026-10-07, not confirmed by the API server) |
+| `envoy-gateway-system` | `restricted` | nothing as rendered for the controller and its Job; the proxy pods are made at run time and were read in the source, not seen |
 | `logging` | `privileged` | `baseline` is stopped by the hostPath volume (`/var/log/pods`); `restricted` by that volume alone (it allows no hostPath): the pod runs as user 10001 with `runAsNonRoot` (S064, read as `helm template` renders it, 2026-10-06, and seen on kind the same day: a server-side dry run of `enforce=restricted` warned of "restricted volume types" alone; the label warns of nothing) |
 
 The Prometheus pods are the operator's, not rendered by Helm, and were not read:

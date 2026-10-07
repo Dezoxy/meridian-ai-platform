@@ -181,7 +181,7 @@ def test_the_database_policy_admits_the_meridian_pods_and_the_operator_only() ->
 PSA = "pod-security.kubernetes.io/"
 
 
-def test_meridian_cert_manager_observability_and_logging_never_enforce() -> None:
+def test_every_namespace_warns_and_audits_at_its_level_and_none_enforces() -> None:
     namespaces = {
         d["metadata"]["name"]: d
         for d in load_documents(KIND_DIR / "manifests" / "namespaces.yaml")
@@ -200,20 +200,22 @@ def test_meridian_cert_manager_observability_and_logging_never_enforce() -> None
     # that `restricted` asks for (test_kind_observability_security_context.py).
     # The log agent's pod (S064) mounts a host directory, which `restricted`
     # forbids, so `logging` is privileged (test_log_agent_network.py says why).
+    # The two operators' namespaces (S072) rest on a render of both charts'
+    # pods, not on the API server: the header of the file says so.
     levels = {
+        "envoy-gateway-system": "restricted",
+        "cnpg-system": "restricted",
         "meridian": "restricted",
         "cert-manager": "restricted",
         "observability": "restricted",
         "logging": "privileged",
     }
+    assert set(levels) == set(namespaces)
     for name, level in levels.items():
         labels = namespaces[name]["metadata"].get("labels", {})
         assert labels == {PSA + "warn": level, PSA + "audit": level}, name
         # `enforce` waits: a first `make up` under it was not tried.
         assert PSA + "enforce" not in labels, name
-    for name, namespace in namespaces.items():
-        if name not in levels:
-            assert "labels" not in namespace["metadata"], name
 
 
 def test_every_pod_the_chart_runs_may_reach_the_database_by_its_policy() -> None:
