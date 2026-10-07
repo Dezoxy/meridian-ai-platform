@@ -4,7 +4,10 @@
 shows what the foundation would create, `make azure-apply` creates it and
 `make azure-smoke` proves it works. Status: **implemented** (S007) and applied
 only after the owner has reviewed the plan and confirmed it. The ephemeral
-platform environment (AKS, PostgreSQL, ACR) is S020, not here. The AWS module,
+platform environment (AKS, PostgreSQL, ACR) is S020, not here: it is written in
+[azure/](azure/README.md), checked by `make azure-platform-validate` and
+`make azure-platform-scan` (through `aws.sh validate azure`) and never planned
+or applied, with no command that does either. The AWS module,
 checked and not applied, is described in [aws/README.md](aws/README.md). The
 Google Cloud module, checked and never planned or applied, with no command that
 does either, is described in [gcp/README.md](gcp/README.md). The AWS module for

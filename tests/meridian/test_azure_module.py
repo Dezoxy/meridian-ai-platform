@@ -31,7 +31,6 @@ from azuremodulesupport import (
     listed_in,
     local_string,
     module_text,
-    needs_terraform,
     quoted_list_in,
     raw_text,
     resources,
@@ -42,6 +41,7 @@ from azuremodulesupport import (
     variable_block,
     variable_blocks,
 )
+from terraformsupport import needs_terraform
 
 OPERATOR_CIDR = "203.0.113.7/32"
 
@@ -1017,3 +1017,37 @@ def test_the_console_says_a_sensitive_value_is_sensitive_and_prints_none() -> No
 
     assert OPERATOR_CIDR not in printed
     assert "sensitive" in printed
+
+
+def test_every_test_that_runs_the_console_carries_the_shared_terraform_marker() -> None:
+    """Under GITHUB_ACTIONS=true a missing Terraform must FAIL these tests, as it
+    does the other modules' (``terraformsupport``); a marker of this module's own
+    would skip them and a runner without Terraform would pass by proving nothing."""
+    import ast
+
+    import azuremodulesupport
+    import terraformsupport
+
+    assert needs_terraform is terraformsupport.needs_terraform
+    assert not hasattr(azuremodulesupport, "needs_terraform")
+    here = Path(__file__).parent
+    carriers = 0
+    for path in sorted(here.glob("test_azure_module*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            runs_console = any(
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Name)
+                and call.func.id == "evaluate"
+                for call in ast.walk(node)
+            )
+            if not runs_console:
+                continue
+            carriers += 1
+            marked = any(
+                isinstance(mark, ast.Name) and mark.id == "needs_terraform"
+                for mark in node.decorator_list
+            )
+            assert marked, f"{path.name}::{node.name} runs the console unmarked"
+    assert carriers >= 6  # the walk found the console tests: it is not vacuous

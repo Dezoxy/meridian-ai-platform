@@ -7,9 +7,9 @@ moved here because the module's contracts (Z1 to Z4) each add a test file that
 reads the same files: ``resources_in(file_name)`` is how a later file lists what
 it wrote.
 
-``needs_terraform`` skips a test where Terraform is not installed. It is local
-to this module on purpose: ``tests/meridian/terraformsupport.py`` arrives with
-S079, and the session swaps this marker for that one when S079 is on main.
+The tests that run ``terraform console`` carry ``terraformsupport.needs_terraform``,
+not a marker of this module's own: where Terraform is missing it skips the test
+on a development machine and fails it under ``GITHUB_ACTIONS=true``.
 """
 
 import os
@@ -18,16 +18,10 @@ import shutil
 import subprocess
 from pathlib import Path
 
-import pytest
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MODULE_DIR = REPO_ROOT / "infra" / "terraform" / "azure"
 FOUNDATION_DIR = REPO_ROOT / "infra" / "terraform" / "foundation"
 GCP_DIR = REPO_ROOT / "infra" / "terraform" / "gcp"
-
-needs_terraform = pytest.mark.skipif(
-    shutil.which("terraform") is None, reason="terraform is not installed"
-)
 
 REFUSED = "Invalid value for variable"
 
