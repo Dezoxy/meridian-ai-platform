@@ -324,13 +324,12 @@ guard_segments=$(( $(printf '%s\n' "$cmd" | sed -E 's/(&&|\|\||;|\|)/\n/g' | wc 
 # Without python3 the rules read the command as it is: prose that names a
 # flag is denied again, and a flag after prose with a separator in it is
 # missed again, as before this pass existed.
-hook_cmd="$cmd"
+# The pass is a function (S071, G3) so that the rules for the raw Azure request
+# and the identity library, which are not on the trigger list below, can read the
+# same copy: blank_prose "$text" prints the text with the values emptied, or the
+# text as it is when python3 is missing or fails.
 # shellcheck disable=SC2016  # the Python source below is meant to stay literal
-if [[ "$cmd" == *git* || "$cmd" == *secret* || "$cmd" == *psql* || "$cmd" == *pg_* \
-      || "$cmd" == *kubectl* || "$cmd" == *helm* || "$cmd" == *aws* || "$cmd" == *cnpg* \
-      || "$cmd" == *kind* || "$cmd" == *upkeep* || "$cmd" == *terraform* || "$cmd" == *tofu* ]] \
-   && command -v python3 >/dev/null 2>&1; then
-  hook_cmd="$(printf '%s' "$cmd" | python3 -I -c '
+prose_py='
 import re, sys
 # A bundle that holds c is not a message option: in bash -cm and sh -ecm the c
 # takes the quoted body as a command, which is read, not blanked.
@@ -341,14 +340,34 @@ QUOTED = "(?:" + SINGLE + "|" + DOUBLE + ")"
 ATOM = re.compile(PROSE + "(" + QUOTED + "+)|" + QUOTED)
 PIECE = re.compile(QUOTED)
 # make takes no argument after -m (GNU make ignores it), so a quoted word after
-# it is a target, not a message: in a segment (cut at ; & | and newlines) that
-# already holds the word make, the value is read, not emptied (S071, G2, A-8:
-# make -m "aws-apply" and git status; make -sm "aws-destroy" were read as prose).
-SEGMENT_CUT = re.compile(r"[;&|\n]")
-MAKE_WORD = re.compile(r"(?<![\w.-])(?:g|gnu)?make(?![\w-])", re.I)
-def after_make(text, pos):
-    before = SEGMENT_CUT.split(text[:pos])[-1]
-    return MAKE_WORD.search(PIECE.sub("\"\"", before)) is not None
+# it is a target, not a message: when make is the command word of the segment
+# (cut at ; & | and newlines, and after a bracket, a brace or a backtick, behind
+# assignments and the usual prefixes), the value is read, not emptied (S071, G2,
+# A-8: make -m "aws-apply" and git status; make -sm "aws-destroy" were read as
+# prose). G3: the value is read with its separators blanked, as the executes path
+# does, so a flag after it stays in its segment (git commit make -m "a; b" -n is
+# a deny again), and make must be the command word, not any word before the flag.
+# The quoted pieces are masked ONCE per call with a filler of the same length
+# (a quoted piece keeps its quotes and its length, its inside becomes x, so that
+# positions agree and no blank or separator is left inside a piece); the window
+# is found with rfind and matched once: the pass costs a few scans of the text,
+# not one scan of it for every flag (14 to 56 s on a crafted line in G2).
+SEGMENT_CUTS = ";&|\n(`{"
+ASSIGN = r"[A-Za-z_]\w*=\S*"
+PREFIX = (
+    r"(?:(?:env|time|nohup|command|exec|builtin|sudo|nice|timeout|xargs|setsid)\s+"
+    r"(?:(?:-\S+|\d+[smhd]?)\s+)*(?:" + ASSIGN + r"\s+)*)*"
+)
+COMMAND_WORD = re.compile(
+    r"\s*(?:(?:if|then|do|else|elif|while|until|!)\s+)*"
+    r"(?:" + ASSIGN + r"\s+)*" + PREFIX + r"(?:\S*/|\$\{?)?(?:g|gnu)?make(?![\w-])",
+    re.I,
+)
+def mask(text):
+    return PIECE.sub(lambda m: m.group(0)[0] + "x" * (len(m.group(0)) - 2) + m.group(0)[-1], text)
+def after_make(masked, pos):
+    start = max(masked.rfind(c, 0, pos) for c in SEGMENT_CUTS) + 1
+    return COMMAND_WORD.match(masked, start, pos) is not None
 def value_of(m):
     value = m.group(3)
     executes = any(
@@ -360,10 +379,11 @@ def value_of(m):
         value = "\"\""
     return m.group(1) + (m.group(2) or "") + value
 def read(text):
+    masked = mask(text)
     def atom(m):
         if m.group(3) is not None:
-            if after_make(text, m.start()):
-                return m.group(1) + (m.group(2) or "") + read(m.group(3))
+            if after_make(masked, m.start()):
+                return m.group(1) + (m.group(2) or "") + re.sub(r"[;&|]", " ", read(m.group(3)))
             return value_of(m)
         quoted = m.group(0)
         return quoted[0] + read(quoted[1:-1]) + quoted[-1]
@@ -371,7 +391,32 @@ def read(text):
 text = read(sys.stdin.read())
 text = re.sub(r"([\x27\"])(-[A-Za-z][A-Za-z-]*)\1", r"\2", text)
 sys.stdout.write(text)
-' 2>/dev/null || printf '%s' "$cmd")"
+'
+blank_prose() { # $1=the text
+  printf '%s' "$1" | python3 -I -c "$prose_py" 2>/dev/null || printf '%s' "$1"
+}
+# The pass that turns the separators INSIDE quoted pieces into blanks (S071, G3,
+# H1): the rules that look for a target after make cut on ; & | and a newline, a
+# quote-blind cut, so make -C "a;b" eval-record hid the target from them. They
+# read this copy as well as the text itself, never instead of it.
+unsep_py='
+import re, sys
+PIECE = re.compile(r"\x27[^\x27]*\x27|\"(?:[^\"\\]|\\.)*\"")
+sys.stdout.write(PIECE.sub(lambda m: re.sub(r"[;&|\n]", " ", m.group(0)), sys.stdin.read()))
+'
+unsep() { # $1=the text
+  if [[ "$1" == *[\;\&\|]* || "$1" == *$'\n'* ]] && [[ "$1" == *[\"\']* ]]; then
+    printf '%s' "$1" | python3 -I -c "$unsep_py" 2>/dev/null || printf '%s' "$1"
+  else
+    printf '%s' "$1"
+  fi
+}
+hook_cmd="$cmd"
+if [[ "$cmd" == *git* || "$cmd" == *secret* || "$cmd" == *psql* || "$cmd" == *pg_* \
+      || "$cmd" == *kubectl* || "$cmd" == *helm* || "$cmd" == *aws* || "$cmd" == *cnpg* \
+      || "$cmd" == *kind* || "$cmd" == *upkeep* || "$cmd" == *terraform* || "$cmd" == *tofu* ]] \
+   && command -v python3 >/dev/null 2>&1; then
+  hook_cmd="$(blank_prose "$cmd")"
   # Nothing back for a command that was not empty: the pass did not run, the
   # rules read the command as it is (see the heredoc pass above).
   [ -n "$hook_cmd" ] || hook_cmd="$cmd"
@@ -906,8 +951,13 @@ aws_steer_path="(\.terraformrc|\.gitconfig|\.config/git/|\.aws(/|[[:space:]\"${s
 aws_writer_re=">>?[[:space:]]*[\"${sq}]?[^[:space:]\"${sq};&|]*${aws_steer_path}"
 aws_writer_re+="|${reader_pre}(tee|cp|mv|install|ln|dd|rsync|truncate)[[:space:]].*${aws_steer_path}"
 aws_writer_re+="|${reader_pre}sed[[:space:]]+([^;&|${eol}]*[[:space:]])?-[a-zA-Z]*i[^;&|${eol}]*${aws_steer_path}"
+# The make rules of the family also read this copy (S071, G3, H1): the text with
+# the separators inside quoted pieces turned into blanks, so that make -f
+# "a&b.mk" aws-destroy is read as it runs.
+hook_cmd_q="$hook_cmd"
+[[ "$hook_cmd" == *aws* ]] && hook_cmd_q="$(unsep "$hook_cmd")"
 if [[ "$hook_cmd" == *aws* || -n "$aws_in_module" ]]; then
-  [[ "$hook_cmd" =~ $aws_destroy_re ]] && \
+  [[ "$hook_cmd" =~ $aws_destroy_re || "$hook_cmd_q" =~ $aws_destroy_re ]] && \
     decide deny "make aws-destroy, make aws-kubeadm-destroy and aws.sh destroy (the managed module or the self-managed one, aws-kubeadm) remove the AWS environment and are the owner's to run (hard rule 8): in a terminal, from a machine or user where no session holds the credentials (infra/terraform/aws/README.md or infra/terraform/aws-kubeadm/README.md, \"Removal\")."
   [[ "$hook_cmd" =~ $aws_pty_named_re && "$hook_cmd" =~ $aws_pty_re ]] && \
     decide deny "aws.sh and make aws-plan, aws-apply and aws-destroy (and aws-kubeadm-plan, aws-kubeadm-apply and aws-kubeadm-destroy) are not run under a pseudo-terminal tool (script, unbuffer, expect, socat, setsid, pty): the wrapper's terminal check is there to stop an accident, and this is how it is passed."
@@ -1007,7 +1057,13 @@ assignment="([A-Za-z_][A-Za-z0-9_]*=(\"[^\"]*\"|${sq}[^${sq}]*${sq}|[^[:space:]]
 runner="${cmd_start}${assignment}(env[[:space:]]+${assignment})?"
 script_end="([[:space:]]|\$|[;\&\|\)\"${sq}])"
 azure_make_re="(^|[^[:alnum:]_.-])make[[:space:]]+([^\;\&\|${nl}]*[[:space:]])?[\"${sq}]?azure-(state|apply)[\"${sq}]?${script_end}"
-[[ "$cmd" =~ $azure_make_re ]] && \
+# cmd_q is cmd with the separators inside quoted pieces turned into blanks (S071,
+# G3, H1): the make rules here and in the paid block read it as well as cmd.
+cmd_q="$cmd"
+if [[ "$cmd" == *azure-* || "$cmd" == *record* || "$cmd" == *gateway-live* ]]; then
+  cmd_q="$(unsep "$cmd")"
+fi
+[[ "$cmd" =~ $azure_make_re || "$cmd_q" =~ $azure_make_re ]] && \
   decide ask "make azure-state and make azure-apply create or change Azure resources; confirm the plan and subscription first."
 # An interpreter may be followed by flags and a bare script name (after a cd);
 # without an interpreter the script needs a path (infra/terraform/ or ./).
@@ -1059,7 +1115,8 @@ paid_script_re="foundation\.sh[\"${sq}]?[[:space:]]+[\"${sq}]?${paid_target}${pa
 # line: an assignment to either name that holds a paid target asks.
 paid_flags_re="(MAKEFLAGS|GNUMAKEFLAGS)[:+]?=[^;&|${nl}]*[[:space:]\"${sq}]${paid_target}${paid_end}"
 if [[ "$cmd" == *record* || "$cmd" == *gateway-live* ]]; then
-  [[ "$cmd" =~ $paid_make_re || "$cmd" =~ $paid_script_re || "$cmd" =~ $paid_flags_re ]] && \
+  [[ "$cmd" =~ $paid_make_re || "$cmd" =~ $paid_script_re || "$cmd" =~ $paid_flags_re \
+     || "$cmd_q" =~ $paid_make_re || "$cmd_q" =~ $paid_flags_re ]] && \
     decide ask "make eval-record, make eval-injection-record, make gateway-live and the foundation.sh sub-commands behind them call a live model and spend money: the owner's yes to a stated cost comes first (make azure-smoke, three calls under a cent, and make eval, which replays the recording, do not ask)."
 fi
 paid_env_re="(^|[^[:alnum:]_])(MERIDIAN_LIVE_AZURE|MERIDIAN_EVAL_RECORD|MERIDIAN_EVAL_INJECTION_RECORD)[:+]?="
@@ -1088,15 +1145,29 @@ fi
 # that the repository's own code calls (the text of that call is not on the line).
 az_rest_re="${cloud_cli}az[[:space:]]+([^;&|${nl}]*[[:space:]])?[\"${sq}]?rest[\"${sq}]?${paid_end}"
 azure_id_re="azure[.]identity|(Default|AzureCli|AzureDeveloperCli|AzurePowerShell|ManagedIdentity|ClientSecret|ClientCertificate|Environment|ChainedToken|Chained|InteractiveBrowser|DeviceCode|Workload|VisualStudioCode|UsernamePassword|SharedTokenCache)(Azure)?Credential|get_bearer_token_provider|azure_cli_token_provider"
-azure_py_re="(^|[^[:alnum:]_.-])(i?python[0-9.]*|uv[[:space:]]+run|uvx)([^[:alnum:]_.-]|\$)"
+azure_py_re="(^|[^[:alnum:]_.-])(i?python[0-9.]*|uv[[:space:]]+run[[:space:]]+([^;&|]*[[:space:]])?(i?python[0-9.]*|-|[^[:space:];&|]*\.py)|uvx[[:space:]]+([^;&|]*[[:space:]])?i?python[0-9.]*)([^[:alnum:]_.-]|\$)"
+# S071, G3 (M1, M2): both rules read a copy of the command in which the quoted
+# value of a prose option (a commit message, a pull request body) is emptied (the
+# same pass as hook_cmd, run here whatever the trigger words) and the separators
+# inside quoted pieces are blanks. The identity rule asks only when the
+# interpreter word and a credential name stand in the SAME segment (cut at ; & |
+# and newlines), except in a command with a heredoc, whose body is on other lines
+# of the same command and is read whole. `uv run` and `uvx` count as an
+# interpreter only when python, a script file (.py) or a heredoc dash follows:
+# uv run pytest -k "not DefaultAzureCredential" is a test run, not a token.
 paid_door="a session may not build its own path to a live model: the gateway's targets (make eval-record, make eval-injection-record, make gateway-live) are the only door, and the owner's yes to a stated cost comes first."
-if [[ "$cmd" == *rest* ]]; then
-  [[ "$cmd" =~ $az_rest_re ]] && \
+if [[ "$cmd" == *rest* || "$cmd" == *credential* || "$cmd" == *azure?identity* || "$cmd" == *token_provider* ]]; then
+  paid_text="$(unsep "$(blank_prose "$cmd")")"
+  [[ "$paid_text" =~ $az_rest_re ]] && \
     decide ask "az rest calls an Azure endpoint with the owner's token, and a request to a model deployment is a live call that spends money without the gateway's ceiling, route and audit: ${paid_door}"
-fi
-if [[ "$cmd" == *credential* || "$cmd" == *azure?identity* || "$cmd" == *token_provider* ]]; then
-  [[ "$cmd" =~ $azure_id_re && "$cmd" =~ $azure_py_re ]] && \
-    decide ask "A Python line that names the Azure identity library's credential classes mints the token a direct call to a model needs, a live call that spends money without the gateway's ceiling, route and audit: ${paid_door}"
+  paid_id_ask="A Python line that names the Azure identity library's credential classes mints the token a direct call to a model needs, a live call that spends money without the gateway's ceiling, route and audit: ${paid_door}"
+  if [[ "$paid_text" == *"<<"* ]]; then
+    [[ "$paid_text" =~ $azure_id_re && "$paid_text" =~ $azure_py_re ]] && decide ask "$paid_id_ask"
+  else
+    while IFS= read -r seg; do
+      [[ "$seg" =~ $azure_id_re && "$seg" =~ $azure_py_re ]] && decide ask "$paid_id_ask"
+    done < <(printf '%s\n' "$paid_text" | sed -E 's/(&&|\|\||;|\||&)/\n/g')
+  fi
 fi
 # The asks for the AWS environment (S036); the denies are above, with the
 # reasoning. `make aws-validate` and `make aws-scan` change nothing in AWS and
@@ -1193,9 +1264,9 @@ aws_call_listed() { # $1=the text after `aws`; succeeds when the call is on the 
   return 1
 }
 if [[ "$hook_cmd" == *aws* || "$hook_cmd" == *terraform* || "$hook_cmd" == *tofu* || "$hook_cmd" == *_IMAGE=* ]]; then
-  [[ "$hook_cmd" =~ $aws_apply_re ]] && \
+  [[ "$hook_cmd" =~ $aws_apply_re || "$hook_cmd_q" =~ $aws_apply_re ]] && \
     decide ask "make aws-apply, make aws-kubeadm-apply and aws.sh apply (the managed module or the self-managed one, aws-kubeadm) create the AWS environment (EKS, RDS, ECR, the network, a budget; or the self-managed module's instances, address and budget) and COST MONEY: it bills by the hour until make aws-destroy (aws.sh destroy aws-kubeadm). The owner runs it, after reading the plan, from a machine or user where no session holds the credentials (infra/terraform/aws/README.md or infra/terraform/aws-kubeadm/README.md); confirm only if that is where this runs."
-  [[ "$hook_cmd" =~ $aws_plan_re ]] && \
+  [[ "$hook_cmd" =~ $aws_plan_re || "$hook_cmd_q" =~ $aws_plan_re ]] && \
     decide ask "make aws-plan, make aws-kubeadm-plan and aws.sh plan (either module) sign in to AWS with the owner's credentials and read the account; they need those credentials, and no session should hold them (infra/terraform/aws/README.md or infra/terraform/aws-kubeadm/README.md). Confirm that this is the owner's own session."
   [[ "$hook_cmd" =~ $aws_image_re ]] && \
     decide ask "TRIVY_IMAGE= and PROMTOOL_IMAGE= replace an image the Makefile pins by digest; confirm the image and why the pin is not used."

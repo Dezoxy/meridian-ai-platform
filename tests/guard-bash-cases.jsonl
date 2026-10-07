@@ -2409,7 +2409,7 @@
 {"expect":"ask","command":"MAKEFLAGS+=\" -- eval-record\" make"}
 {"expect":"ask","command":"MAKEFLAGS=\"-- eval-baseline eval-record\" make"}
 {"expect":"ask","command":"bash -c 'MAKEFLAGS=\"-- gateway-live\" make'"}
-{"expect":"ask","command":"make MAKEFLAGS=\"-- eval-record\""}
+{"expect":"ask","note":"S071 G3: pinned, cannot fail on the MAKEFLAGS rule: a command-line variable is an argument of make and the make rule already read it before G2","command":"make MAKEFLAGS=\"-- eval-record\""}
 {"expect":"none","note":"S071 G2 (A-3): a MAKEFLAGS that names no paid target, or a target that only looks like one","command":"MAKEFLAGS=-j4 make eval-baseline"}
 {"expect":"none","command":"MAKEFLAGS=\"-- eval-baseline\" make"}
 {"expect":"none","command":"GNUMAKEFLAGS=--no-print-directory make test"}
@@ -2495,6 +2495,95 @@
 {"expect":"none","command":"git commit -m \"make docs\" -m \"make aws-apply\""}
 {"expect":"none","command":"git status; make -m \"aws-validate\""}
 {"expect":"none","command":"make -m \"aws-scan\""}
+{"expect":"deny","note":"S071 G3 (C2): make is read as the command word only; a make earlier in a segment is no reason to read a message with its separators, and the review's eight inputs are denied again","command":"git commit make -m \"a; b\" -n"}
+{"expect":"deny","command":"git commit --author=make -m \"a; b\" --no-verify"}
+{"expect":"deny","command":"git commit -a make.sh -m \"a; b\" -n"}
+{"expect":"deny","command":"git commit scripts/make -am \"a; b\" -n"}
+{"expect":"deny","command":"VER=$(make v) git commit -m \"x; y\" -n"}
+{"expect":"deny","command":"echo make git commit -m \"x; y\" -n"}
+{"expect":"deny","command":"git -c core.editor=make commit -m \"x; y\" -n"}
+{"expect":"deny","command":"git commit -F make -m \"x;y\" -n"}
+{"expect":"deny","note":"S071 G3 (C2): the plain forms, as they were","command":"git commit -m \"a; b\" -n"}
+{"expect":"deny","command":"git commit -m \"x; y\" --no-verify"}
+{"expect":"none","command":"git commit -m \"a; b\""}
+{"expect":"none","command":"make docs && git commit -m \"a; b\""}
+{"expect":"deny","note":"S071 G3 (C2): the separators of a value that is read are blanked, so a flag after it is still in its segment","command":"make -m \"a; b\" git commit -n"}
+{"expect":"ask","note":"S071 G3 (C2): make is the command word after assignments, env, time, nohup, command, exec, sudo, nice, a path, a keyword or a bracket, and the A-8 asks hold","command":"env VAR=1 make -m \"aws-apply\""}
+{"expect":"ask","command":"VAR=x make -m \"aws-apply\""}
+{"expect":"ask","command":"sudo make -m \"aws-apply\""}
+{"expect":"ask","command":"sudo -E make -m \"aws-apply\""}
+{"expect":"ask","command":"nohup make -m \"aws-apply\" &"}
+{"expect":"ask","command":"command make -m \"aws-apply\""}
+{"expect":"ask","command":"exec make -m \"aws-apply\""}
+{"expect":"ask","command":"nice -n 5 make -m \"aws-apply\""}
+{"expect":"ask","command":"timeout 60 make -m \"aws-kubeadm-plan\""}
+{"expect":"ask","command":"/usr/bin/make -m \"aws-apply\""}
+{"expect":"ask","command":"if true; then make -m \"aws-apply\"; fi"}
+{"expect":"ask","command":"(make -m \"aws-apply\")"}
+{"expect":"ask","command":"echo $(make -m \"aws-apply\")"}
+{"expect":"ask","command":"$MAKE -m \"aws-kubeadm-apply\""}
+{"expect":"deny","command":"sudo make -m \"aws-destroy\""}
+{"expect":"deny","command":"env X=1 make -sm \"aws-kubeadm-destroy\""}
+{"expect":"deny","command":"git status && sudo -E env X=1 make -k -m \"aws-destroy\""}
+{"expect":"ask","note":"S071 G3 (H1): a separator inside an earlier quoted argument no longer hides the target from the Azure, paid-model and AWS rules","command":"make -C \"a;b\" eval-record"}
+{"expect":"ask","command":"make FOO=\"x|y\" gateway-live"}
+{"expect":"ask","command":"make -C \"a;b\" -- eval-record"}
+{"expect":"ask","command":"make -C \"a&b\" eval-injection-record"}
+{"expect":"ask","command":"make -C 'a;b' gateway-live"}
+{"expect":"ask","command":"make -C \"a\nb\" eval-record"}
+{"expect":"ask","command":"make -C \"a;b\" azure-apply"}
+{"expect":"ask","command":"make -C 'a|b' azure-state"}
+{"expect":"ask","command":"make -C 'a;b' aws-apply"}
+{"expect":"ask","command":"make -C \"a|b\" aws-kubeadm-plan"}
+{"expect":"deny","command":"make -f \"a&b.mk\" aws-destroy"}
+{"expect":"deny","command":"make -f \"a&b.mk\" -m \"aws-destroy\""}
+{"expect":"deny","command":"make -C \"a;b\" aws-kubeadm-destroy"}
+{"expect":"ask","command":"MAKEFLAGS=\"-C a;b -- eval-record\" make"}
+{"expect":"ask","command":"echo \"a;b\" && MERIDIAN_LIVE_AZURE=1 pytest"}
+{"expect":"ask","command":"echo 'a|b' MERIDIAN_EVAL_RECORD=1 pytest"}
+{"expect":"none","note":"S071 G3 (H1): the same shapes with a free target, and a separator that is not inside quotes","command":"make -C \"a;b\" eval-baseline"}
+{"expect":"none","command":"make -C \"a;b\" aws-validate"}
+{"expect":"none","command":"make -C \"a;b\" azure-plan"}
+{"expect":"none","command":"make -C \"a;b\" eval-recorder"}
+{"expect":"none","command":"make -C \"a b\"; echo eval-record"}
+{"expect":"none","command":"make -C \"a;b\"; echo gateway-live"}
+{"expect":"none","note":"S071 G3: negative controls that reach the paid regexes (the word record or gateway-live is on the line) and still pass","command":"MAKEFLAGS=\"-j2 -- eval-baseline eval-record-notes\" make"}
+{"expect":"none","command":"MAKEFLAGS=-j4 make eval-recorder"}
+{"expect":"none","command":"MAKEFLAGS=\"-- eval-baseline\" make -C data/record"}
+{"expect":"none","note":"S071 G3 (M1): the interpreter word and a credential name in different segments, a message that names it, a search piped to python: none","command":"uv run pytest -q && git commit -m \"fix: azure_cli_token_provider asks for the scope\""}
+{"expect":"none","command":"uv run ruff check src && rg -n \"ManagedIdentityCredential\" src"}
+{"expect":"none","command":"git grep -n AzureCliCredential | python3 -c \"import sys\""}
+{"expect":"none","command":"rg DefaultAzureCredential | python3 -m json.tool"}
+{"expect":"none","command":"uv run pytest -k \"not DefaultAzureCredential\""}
+{"expect":"none","command":"python3 -c 'print(1)' && grep -rn DefaultAzureCredential src"}
+{"expect":"none","command":"git commit -m \"python3 DefaultAzureCredential\""}
+{"expect":"none","command":"git commit -am \"uv run python azure.identity\""}
+{"expect":"none","command":"gh pr create --title t --body \"python3 -c DefaultAzureCredential\""}
+{"expect":"none","command":"uv run pytest -q; git tag -m \"AzureCliCredential\" v1"}
+{"expect":"ask","note":"S071 G3 (M1): the real shapes keep asking: the same segment, a later segment, a heredoc, a separator inside the quoted program, upper and mixed case","command":"git commit -m \"x\" && python3 -c \"from azure.identity import AzureCliCredential\""}
+{"expect":"ask","command":"python3 -c \"import os; from azure.identity import AzureCliCredential; print(1)\""}
+{"expect":"ask","command":"python3 -c \"import os\nfrom azure.identity import AzureCliCredential\""}
+{"expect":"ask","command":"uv run python -c \"a=1 && b=2 | c\" ; uv run python -c \"import azure.identity\""}
+{"expect":"ask","command":"python3 - <<'EOF'\nimport os; import azure.identity\nEOF"}
+{"expect":"ask","command":"uv run scripts/probe.py DefaultAzureCredential"}
+{"expect":"ask","command":"uvx python -c \"import azure.identity\""}
+{"expect":"ask","command":"PYTHON3 -c \"from AZURE.IDENTITY import X\""}
+{"expect":"ask","command":"python3 -c \"DEFAULTAZURECREDENTIAL\""}
+{"expect":"ask","command":"Python3 -c \"defaultazurecredential\""}
+{"expect":"ask","command":"uv run python -c \"from azure.identity import DefaultAzureCredential\" | cat"}
+{"expect":"none","note":"S071 G3 (M2): a commit message or a PR body that names the raw request is none; the command itself asks with options before the sub-command, in a later segment, under sudo, by path, with an assignment in front","command":"git commit -m \"docs: az rest asks\""}
+{"expect":"none","command":"gh pr create --body \"az rest asks before a paid call\""}
+{"expect":"none","command":"gh pr comment 3 --body \"run az rest\""}
+{"expect":"none","command":"git commit -am \"az rest\""}
+{"expect":"none","command":"git tag -m \"az rest\" v1"}
+{"expect":"none","command":"gh pr create --title \"az rest\" --body x"}
+{"expect":"ask","command":"git commit -m \"x\" && az rest --url https://x"}
+{"expect":"ask","command":"git commit -m \"az rest\"; az rest --url https://x"}
+{"expect":"ask","command":"az --query \"a;b\" rest --url https://x"}
+{"expect":"ask","command":"AZ REST --url https://x"}
+{"expect":"ask","command":"Az Rest --url https://x"}
+{"expect":"ask","command":"AZURE_X=1 az rest --url https://x"}
+{"expect":"ask","command":"sudo -E /usr/bin/az --debug rest --url https://x"}
 {"expect":"none","note":"S071 G1: the loop reads sixteen assignments, all of them off: sixteen pass","command":"MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 pytest"}
 {"expect":"ask","note":"S071 G1: a seventeenth assignment is not read and asks, though all are off","command":"MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 pytest"}
 {"expect":"ask","command":"gh issue list\nmerge --admin aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}

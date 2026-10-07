@@ -820,4 +820,46 @@ else
   fail=1
 fi
 ask_for "2000 repetitions of az before rest ask" ask "$(for _ in $(seq 2000); do printf 'az '; done)rest"
+
+# The prose pass (S071, G3, C1). It reads every message option (-m, -am, --body,
+# --title, --notes, --message) and, since G2, asked for each whether make stood
+# earlier in the segment by scanning the segment for its quoted pieces again: a
+# line of unmatched escaped quotes and then 700 flags took 56 s of CPU against a
+# hook timeout of 10 s (a hook past its timeout does not block). The quoted
+# pieces are masked once per call now. Each shape stays under the one CPU bound
+# (they take 0.3 to 0.7 s here); the first four are the review's, the worst
+# first, the rest are the next-worst shapes found by trying every flag the pass
+# reads, a make in the segment, nested quotes, long runs of separators and the
+# AWS and Azure reads of the same copy.
+repeat() { # $1=text $2=count: the text, that many times
+  local i out=""
+  for ((i = 0; i < $2; i++)); do out+="$1"; done
+  printf '%s' "$out"
+}
+cpu_shape() { # $1=what the shape is $2=the command
+  jq -nc --arg c "$2" '{tool_input:{command:$c}}' > "$big_input"
+  cpu="$( { time bash "$hook" < "$big_input" > /dev/null; } 2>&1 )"
+  cpu_seconds="$(awk '{ print $1 + $2 }' <<<"$cpu")"
+  if awk -v s="$cpu_seconds" -v b="$cpu_bound" 'BEGIN { exit !(s < b) }'; then
+    echo "ok   ${1} takes ${cpu_seconds} s of CPU, under ${cpu_bound}"
+  else
+    echo "FAIL ${1} takes ${cpu_seconds} s of CPU, not under ${cpu_bound}"
+    fail=1
+  fi
+}
+esc_quote='\"'
+cpu_shape "1500 escaped quotes and 700 empty -m values" "git $(repeat "$esc_quote" 1500)$(repeat " -m ''" 700)"
+cpu_shape "2000 escaped quotes and 500 empty -m values" "git $(repeat "$esc_quote" 2000)$(repeat " -m ''" 500)"
+cpu_shape "500 escaped quotes and 1100 empty -m values" "git $(repeat "$esc_quote" 500)$(repeat " -m ''" 1100)"
+cpu_shape "3000 escaped quotes and 150 empty -m values" "git $(repeat "$esc_quote" 3000)$(repeat " -m ''" 150)"
+cpu_shape "1500 escaped quotes and 500 empty --body values" "git $(repeat "$esc_quote" 1500)$(repeat " --body ''" 500)"
+cpu_shape "1500 escaped quotes and 600 empty -am values" "git $(repeat "$esc_quote" 1500)$(repeat " -am ''" 600)"
+cpu_shape "make, 1500 escaped quotes and 700 empty -m values" "git make $(repeat "$esc_quote" 1500)$(repeat " -m ''" 700)"
+cpu_shape "aws, 1500 escaped quotes and 400 make -m values" "aws $(repeat "$esc_quote" 1500)$(repeat " make -m 'x'" 400)"
+cpu_shape "a long run of quoted values after -m" "git -m $(repeat "'x'" 2500)"
+cpu_shape "3000 separators and 800 empty -m values" "git $(repeat ';' 3000)$(repeat " -m ''" 800)"
+# A line that reaches the pass with padding is still read to its end: the denied
+# part after the padding is denied, not skipped.
+ask_for "the review's worst shape followed by a denied part is denied" deny \
+  "git $(repeat "$esc_quote" 1500)$(repeat " -m ''" 700); git push --force"
 exit "$fail"
