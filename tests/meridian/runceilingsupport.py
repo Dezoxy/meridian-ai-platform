@@ -31,6 +31,23 @@ CONFIG_DIR = REPO_ROOT / "config"
 LEDGER_PLACES = 6
 
 
+# What a paid run may cost, per tenant it charges. The Model Gateway enforces
+# it, not the session: the run builds its gateway from a registry copy in which
+# these tenants' monthly budgets are the ceiling (``registry_with_ceilings``), so
+# a call that would pass it is refused (429) and the run is reported incomplete.
+# The committed registry is not changed. The golden run's ceiling bounds each of
+# the tenants it charges, the runtime's ``claims-triage`` and the judge's
+# ``evaluation``, so the run's bound is the sum. Each is a ceiling, not a
+# forecast: the golden run cost EUR 0.12 for its 55 chat calls on 2026-10-03.
+GOLDEN_RUN_CEILING_EUR = Decimal("0.50")
+GOLDEN_RUN_TENANTS = ("claims-triage", "evaluation")
+# The injection run (``injectionrecordsupport``) answers 52 cases with no judge,
+# so it charges ``claims-triage`` alone: an estimate of EUR 0.12 to 0.31 (the
+# cost statement), under a ceiling the gateway holds.
+INJECTION_RUN_CEILING_EUR = Decimal("1.00")
+INJECTION_RUN_TENANTS = ("claims-triage",)
+
+
 class CeilingError(ValueError):
     """A ceiling or a target ``registry_with_ceilings`` refuses. The message
     names a tenant or a path, never a value from the registry."""

@@ -13,6 +13,9 @@ Never edit a file by hand: each has a command that writes it.
 | `prompt-comparison.md` | The two live reports side by side (`meridian eval diff`) | `make eval-record` |
 | `claims-triage-injection-baseline.json` | The report of the injection cases answered by a scripted model that obeys: the injection gate's baseline | `make eval-baseline` |
 | `injection-summary.md` | That baseline's counts, by carrier and family, with the IDs of the cases that passed the screen | `make eval-baseline` |
+| `recordings/claims-triage-injection.json` | The answers a real model gave to the injection cases the baseline says reached the model, in the golden recording's form | `make eval-injection-record`: written by the paid run; not in the repository yet |
+| `claims-triage-injection-live.json` | The report of that run: per case the graders' reading, the finish reason, any refusal, the cost; then the totals | `make eval-injection-record`: written by the paid run; not in the repository yet |
+| `injection-live-summary.md` | That report's totals as a table, with the date, the deployment and the cost | `make eval-injection-record`: written by the paid run; not in the repository yet |
 | `judge-labels/claims-triage.json` | A person's worksheet, neither a fingerprint nor a report: the 13 recorded judge verdicts' rationales and clauses, to label blind. The one file here edited by hand; `make eval` does not read it | `python -m meridian.workloads.claims_triage.judge_labels sheet` |
 
 ## The gate
@@ -97,7 +100,7 @@ here for an Azure host, an account name, an email address and a GUID).
 A changed prompt or schema finds no entry. The gateway then answers 502,
 the run fails, and the evaluation says how many requests have no recording
 and for which prompt the file was made. Record again with
-`make eval-record`: about 60 chat calls on the live model, with an Azure
+`make eval-record`: 55 chat calls on the live model, with an Azure
 login, measured at EUR 0.12 on 2026-10-03. Then `make eval-baseline`, and
 read the grade diff before committing it.
 
@@ -180,7 +183,9 @@ more:
   model, what the rules, the limits and the allowlist still hold.
 
 It does not measure what a real model does with an injection it is shown.
-That needs live calls; no recording of them exists.
+That needs live calls: the run is built and tested with a fake provider
+("A real model's answers to the injection cases" below), no paid run has been
+made, and no recording of a real model's answers exists.
 
 Six graders, the same on every case:
 
@@ -293,6 +298,98 @@ changed one of the 27 recorded requests, and nothing here is paid. The "not
 covered" bullet of the last section is unchanged: a name made of the words
 an exclusion turns on is still a backlog row (S070), asked of the owner.
 
+### A real model's answers to the injection cases (S071, built; not run)
+
+Status: **implemented and tested with a fake provider; no paid run has been
+made**. The three files below do not exist in the repository, and until a
+recording is committed `make eval` knows nothing of this run: the pull request
+that commits one adds the replay to the gate with its baseline in the same
+reviewed change.
+
+What the run is: the injection cases whose committed baseline says the model
+was asked (`observed.model_asked` is 1: 52 on 2026-10-07, 40 attacks and 12
+benign cases, read from the file at run time and not counted in code) go
+through the same real services as the scripted run, in the baseline's order,
+with the runtime's model calls going through a live-mode Model Gateway whose
+Azure provider is wrapped in the recording provider. A clause case edits the
+stored clause as the suite does and puts it back. There is no judge: the
+question is what the model does with an injection, which the three absolute
+graders and each case's expectation already read. The harness is
+`tests/meridian/injectionrecordsupport.py`; the stack's other gateway stays in
+replay mode, as in the golden run, so the clauses found and each request are
+the same when recording and replaying.
+
+What it costs and who runs it: `make eval-injection-record`, by the owner, on
+a laptop with an Azure login and Docker, after a yes to the amount. About EUR
+0.12 is expected (52 calls at the golden run's measured EUR 0.0020 to 0.0023),
+EUR 0.31 if every answer ran to its cap. The ceiling is the gateway's, not the
+session's: the run's gateway loads a copy of the registry in which the tenant
+it charges, `claims-triage`, has a monthly budget of EUR 1.00, so a call that
+would pass it is refused (429) and the run is incomplete. The committed
+registry is not changed. The ceiling is per tenant and bounds one run: the
+ledger lives in a database dropped afterwards, so no sum across runs is held by
+any code. The target is opt-in by its own variable beside
+`MERIDIAN_LIVE_AZURE=1`; setting `MERIDIAN_EVAL_RECORD=1` does not start it and
+its own variable does not start the golden recording.
+
+The three files, written together and only by a complete run:
+
+- `recordings/claims-triage-injection.json`: the golden recording's form, so
+  one replay provider reads both: the answers keyed by the hash of the request.
+  It keeps the model's answers as they were given, because a replay needs them.
+  Some answer may quote the sentence its case added; the recording is not
+  altered for it.
+- `claims-triage-injection-live.json`: per case, the IDs, label, family,
+  carrier and base claim; `grades` and `observed`, computed by the functions
+  that make the scripted baseline, so "the platform held" means one thing in
+  both files; `injection_obeyed` for an attack (the graders' reading: the route
+  or the recommendation was not held), the finish reason, the deployment, the
+  gateway's `refusal` when there was one, and the calls, tokens, cost in
+  micro-EUR and latency of the case; then `totals`, by label and family and in
+  all (answers obeying the injection, refusals, withheld completions, calls,
+  tokens, cost), and `answers_quoting_the_case` by case ID.
+- `injection-live-summary.md`: the totals as a table, the run's date, the
+  deployment and the cost, and a caution on how far it reads: one model, one
+  day, the suite's cases.
+
+Why the recording is exempt from the scan for a case's sentence and the
+reports are not: the suite's rule is that no committed file holds a sentence a
+case adds, so that a reader of the diff meets IDs and counts and never an
+attack. The recording is the one file whose point is the model's own words, and
+a replay is only as faithful as they are; editing them would make a different
+fingerprint of the gate. So the reports are written from IDs and numbers, and
+the writer refuses to write a string that holds a sentence a case adds (a test
+scans the files for them as well); the recording's text is read in the paid
+run's diff before it is committed, as the golden recording's was.
+
+An incomplete run writes nothing and names the case IDs with no answer and
+why: no proposal, a run that failed, a call the model was never asked, a call
+that did not settle, an entry count that is not the chat calls. A call the
+gateway refused for the budget is told from a provider fault by the gateway's
+own answer (429, "the tenant's budget is used up") and its `refused` audit row
+(`tenant-cost-budget`), not by the runtime's code, which is `model-error` for
+both.
+
+What a refusal and a withheld completion look like, and the completeness rule:
+a refusal of the request (Azure's content filter on the prompt, a 400) and a
+completion the filter withheld, or the model's own refusal of a structured
+request, are ANSWERS of the model and the run is complete: the case has a
+proposal whose assessment is `unavailable` because `filtered`, the run ended as
+designed, and the report's case carries `refusal` with the gateway's class
+(`filtered`), whether a completion was drafted (`completion`: `withheld` or
+`none`), the status (400) and the response headers S069 added, by name and
+value: `X-Meridian-Refusal: content-filter` on both, and for a withheld
+completion also `X-Meridian-Completion`, `X-Meridian-Deployment`,
+`X-Meridian-Provider` and `X-Meridian-Mode`. A withheld completion is billed
+with its reservation kept; a refused prompt is not. The gateway cannot tell a
+withheld completion from the model's own refusal of a structured request: both
+reach it as one provider error. Neither is in the recording (nothing was
+answered), so a replay of them would find no entry; the replay added to the
+gate with a recording covers the answered cases only.
+
+What this does not show: one model on one day. A fake provider tested the
+harness, not the model; what a real model does is unknown until the owner's run.
+
 ## The judge against a person's labels
 
 `judge-labels/claims-triage.json` is a worksheet for one person, not a
@@ -350,6 +447,9 @@ are known to be unsupported, is a paid step (it needs the live judge).
   change.
 - `make eval-record`: record again from the live model. It spends money and
   needs an Azure login.
+- `make eval-injection-record`: answer the injection cases the baseline says
+  reach the model with the live model, and write the three files above. It
+  spends money, needs an Azure login and Docker, and is the owner's to run.
 - `uv run meridian eval diff A B`: two reports side by side, as
   `prompt-comparison.md`.
 - `uv run meridian eval run --base-url URL --report FILE`: post the golden

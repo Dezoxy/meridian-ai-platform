@@ -15,7 +15,6 @@ read them fail with the instruction to record, not with an error from a parser.
 import json
 import os
 import re
-from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -44,7 +43,13 @@ from evalsupport import (
     run_evaluation,
     totals_line,
 )
-from runceilingsupport import registry_with_ceilings
+from runceilingsupport import (
+    GOLDEN_RUN_CEILING_EUR,
+    GOLDEN_RUN_TENANTS,
+    INJECTION_RUN_CEILING_EUR,
+    INJECTION_RUN_TENANTS,
+    registry_with_ceilings,
+)
 from servicesupport import REGISTRY_DIR, FakeClock, owner_rows
 from stacksupport import (
     CLAIMS,
@@ -88,21 +93,6 @@ OPT_IN = pytest.mark.skipif(
     os.environ.get(RECORD_ENV) != "1",
     reason=f"opt-in: set {RECORD_ENV}=1 (make eval-record)",
 )
-# What a paid run may cost, per tenant it charges. The Model Gateway enforces it,
-# not the session: the run builds its gateway from a registry copy in which
-# these tenants' monthly budgets are the ceiling (``runceilingsupport``), so a
-# call that would pass it is refused (429) and the run is reported incomplete.
-# The committed registry is not changed. The golden run's ceiling bounds the
-# tenants it charges, the runtime's ``claims-triage`` and the judge's
-# ``evaluation``. Each is a ceiling, not a forecast: the golden run cost EUR
-# 0.12 for its 55 chat calls on 2026-10-03.
-GOLDEN_RUN_CEILING_EUR = Decimal("0.50")
-GOLDEN_RUN_TENANTS = ("claims-triage", "evaluation")
-# The injection run (the next contract) answers 52 cases with no judge, so it
-# charges ``claims-triage`` alone: an estimate of EUR 0.12 to 0.31 (the cost
-# statement), under a ceiling the gateway holds.
-INJECTION_RUN_CEILING_EUR = Decimal("1.00")
-INJECTION_RUN_TENANTS = ("claims-triage",)
 
 
 def golden_run_registry(directory: Path) -> Path:
