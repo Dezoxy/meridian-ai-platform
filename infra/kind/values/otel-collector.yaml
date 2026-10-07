@@ -6,8 +6,10 @@
 #
 # The gRPC receiver (4317) is closed: nothing but smoke's telemetrygen used it,
 # and that now sends over HTTP too. The collector's own hops to Tempo, Prometheus
-# and Loki stay clear text: they are inside `observability`, and T-90 names the
-# hop from the services to the collector.
+# and Loki were clear text: they are inside `observability`, and T-90 names the
+# hop from the services to the collector. Since S072 (contract M2) the hop to
+# Tempo is TLS with the collector's client certificate; the other two stay clear
+# text until their contracts.
 #
 # The server certificate is the Secret otel-collector-tls, which cert-manager
 # makes from the Certificate in manifests/telemetry-ca.yaml (up.sh waits for it
@@ -82,10 +84,10 @@ serviceAccount:
 #
 # The second Secret, otel-collector-client-tls, is the collector's CLIENT
 # certificate (S072, contract M1; the Certificate is in manifests/telemetry-ca.yaml
-# and up.sh waits for it before this release). It is mounted and NOT USED: no
-# exporter below presents it and no `tls` block names its files, so the collector
-# behaves as it did. The next contracts make the exporters present it, store by
-# store, once the store asks for one.
+# and up.sh waits for it before this release). Since contract M2 ONE exporter
+# presents it, the one to Tempo; the exporters to Prometheus and Loki do not yet
+# (the next contracts make them present it, store by store, once the store asks
+# for one). Its ca.crt is also what verifies Tempo.
 extraVolumes:
   - name: tls
     secret:
@@ -128,8 +130,18 @@ config:
     debug: null
     otlp_grpc/tempo:
       endpoint: tempo.observability.svc.cluster.local:4317
+      # TLS with a client certificate (S072, contract M2): Tempo's receiver
+      # serves a certificate of the telemetry authority and asks for one. The
+      # authority verifies Tempo, from the ca.crt of the client Secret (which a
+      # CA Issuer of cert-manager writes there: expected, seen only on the
+      # cluster), and the pair is the collector's client certificate. The same
+      # reload interval and floor as the receiver above.
       tls:
-        insecure: true
+        ca_file: /etc/otel-collector/client-tls/ca.crt
+        cert_file: /etc/otel-collector/client-tls/tls.crt
+        key_file: /etc/otel-collector/client-tls/tls.key
+        reload_interval: 5m
+        min_version: "1.3"
     # otlp_http appends /v1/metrics and /v1/logs to the endpoint.
     otlp_http/prometheus:
       endpoint: http://kube-prometheus-stack-prometheus.observability.svc.cluster.local:9090/api/v1/otlp

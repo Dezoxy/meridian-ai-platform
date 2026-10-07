@@ -26,6 +26,8 @@ DENY_POLICY = "meridian-deny-unlisted"
 AUTHORITY_POLICY = "telemetry-ca"
 COLLECTOR_POLICY = "otel-collector"
 COLLECTOR_CLIENT_POLICY = "otel-collector-client"
+# Tempo's receiver's server certificate (S072, contract M2), same authority.
+TEMPO_RECEIVER_POLICY = "tempo-receiver"
 POLICY_NAMES = {
     SERVICES_POLICY,
     CA_POLICY,
@@ -33,6 +35,7 @@ POLICY_NAMES = {
     AUTHORITY_POLICY,
     COLLECTOR_POLICY,
     COLLECTOR_CLIENT_POLICY,
+    TEMPO_RECEIVER_POLICY,
 }
 
 

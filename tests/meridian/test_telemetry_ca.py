@@ -30,6 +30,7 @@ from certpolicysupport import (
     DENY_POLICY,
     KIND_DIR,
     POLICY_NAMES,
+    TEMPO_RECEIVER_POLICY,
     allows,
     hours,
     request_of,
@@ -67,6 +68,12 @@ COLLECTOR_CLIENT_TLS_NAME = "otel-collector-client-tls"
 # One name, made to say what it is and to resolve nowhere: no Service, no pod and
 # no cluster domain has it (`.meridian` is not the cluster's `.cluster.local`).
 COLLECTOR_CLIENT_NAMES = ["otel-collector.client.observability.meridian"]
+TEMPO = "tempo-receiver"
+TEMPO_TLS_NAME = "tempo-receiver-tls"
+TEMPO_NAMES = [
+    "tempo.observability.svc",
+    "tempo.observability.svc.cluster.local",
+]
 CLIENT_USAGES = ["client auth", "digital signature"]
 SERVER_USAGES = ["digital signature", "server auth"]
 NINETY_DAYS = "2160h"
@@ -162,7 +169,7 @@ def decision(request: dict) -> str:
 # ── the manifest ─────────────────────────────────────────────────────────────
 
 
-def test_the_manifest_holds_two_issuers_and_three_certificates_in_observability() -> (
+def test_the_manifest_holds_two_issuers_and_four_certificates_in_observability() -> (
     None
 ):
     kinds = [(d["kind"], d["metadata"]["name"]) for d in documents(MANIFEST)]
@@ -173,6 +180,7 @@ def test_the_manifest_holds_two_issuers_and_three_certificates_in_observability(
         ("Issuer", AUTHORITY),
         ("Certificate", COLLECTOR),
         ("Certificate", COLLECTOR_CLIENT),
+        ("Certificate", TEMPO),
     ]
     # Namespaced, so that only a request in `observability` can name them.
     assert {d["metadata"]["namespace"] for d in documents(MANIFEST)} == {NAMESPACE}
@@ -189,7 +197,7 @@ def test_the_selfsigned_issuer_signs_the_authority_which_signs_the_collector() -
         "kind": "Issuer",
         "group": "cert-manager.io",
     }
-    for leaf in (COLLECTOR, COLLECTOR_CLIENT):
+    for leaf in (COLLECTOR, COLLECTOR_CLIENT, TEMPO):
         assert certificate(leaf)["spec"]["issuerRef"] == {
             "name": AUTHORITY,
             "kind": "Issuer",
@@ -284,12 +292,15 @@ def test_approver_policy_also_approves_for_the_manifests_two_issuers() -> None:
 # ── the policies against the evaluator ───────────────────────────────────────
 
 
-def test_the_policy_file_holds_the_three_policies_of_the_authority() -> None:
-    assert {AUTHORITY_POLICY, COLLECTOR_POLICY, COLLECTOR_CLIENT_POLICY} <= set(
-        policies()
-    )
+def test_the_policy_file_holds_the_four_policies_of_the_authority() -> None:
+    assert {
+        AUTHORITY_POLICY,
+        COLLECTOR_POLICY,
+        COLLECTOR_CLIENT_POLICY,
+        TEMPO_RECEIVER_POLICY,
+    } <= set(policies())
     assert set(policies()) == POLICY_NAMES
-    assert len(policies()) == 6
+    assert len(policies()) == 7
 
 
 @pytest.mark.parametrize(
@@ -298,6 +309,7 @@ def test_the_policy_file_holds_the_three_policies_of_the_authority() -> None:
         (AUTHORITY_POLICY, SELF_SIGNED),
         (COLLECTOR_POLICY, AUTHORITY),
         (COLLECTOR_CLIENT_POLICY, AUTHORITY),
+        (TEMPO_RECEIVER_POLICY, AUTHORITY),
     ],
 )
 def test_each_new_policy_selects_one_namespaced_issuer_by_name_kind_and_namespace(
@@ -372,6 +384,7 @@ def test_the_collectors_server_policy_is_as_s063_made_it() -> None:
         ("the server certificate's names", {"dnsNames": COLLECTOR_NAMES}),
         ("the server certificate's short name", {"dnsNames": COLLECTOR_NAMES[:1]}),
         ("the server certificate's long name", {"dnsNames": COLLECTOR_NAMES[1:]}),
+        ("Tempo's server names", {"dnsNames": TEMPO_NAMES}),
         (
             "a name of a Service",
             {"dnsNames": ["otel-collector-client.observability.svc"]},
@@ -518,7 +531,7 @@ def test_a_request_aimed_at_the_other_new_issuer_is_denied() -> None:
     assert decision(request_of(leaf_for_ca_issuer)) == "denied"
 
 
-@pytest.mark.parametrize("subject", [COLLECTOR, COLLECTOR_CLIENT, AUTHORITY])
+@pytest.mark.parametrize("subject", [COLLECTOR, COLLECTOR_CLIENT, TEMPO, AUTHORITY])
 def test_a_request_in_observability_for_the_meridian_services_issuer_is_denied(
     subject: str,
 ) -> None:
@@ -534,11 +547,12 @@ def test_a_request_in_observability_for_the_meridian_services_issuer_is_denied(
     assert selects(policies()[DENY_POLICY], request)
     assert not selects(policies()[COLLECTOR_POLICY], request)
     assert not selects(policies()[COLLECTOR_CLIENT_POLICY], request)
+    assert not selects(policies()[TEMPO_RECEIVER_POLICY], request)
     assert not selects(policies()[AUTHORITY_POLICY], request)
     assert decision(request) == "denied"
 
 
-@pytest.mark.parametrize("subject", [COLLECTOR, COLLECTOR_CLIENT, AUTHORITY])
+@pytest.mark.parametrize("subject", [COLLECTOR, COLLECTOR_CLIENT, TEMPO, AUTHORITY])
 @pytest.mark.parametrize("issuer", [AUTHORITY, SELF_SIGNED])
 @pytest.mark.parametrize("namespace", ["meridian", "cert-manager", "default"])
 def test_a_request_in_another_namespace_cannot_name_the_namespaced_issuers_at_all(
@@ -566,6 +580,7 @@ def test_a_request_in_another_namespace_cannot_name_the_namespaced_issuers_at_al
     assert (NAMESPACE, issuer) in defined
     assert not selects(policies()[COLLECTOR_POLICY], request)
     assert not selects(policies()[COLLECTOR_CLIENT_POLICY], request)
+    assert not selects(policies()[TEMPO_RECEIVER_POLICY], request)
     assert not selects(policies()[AUTHORITY_POLICY], request)
     assert not selects(policies()[DENY_POLICY], request)
     assert decision(request) == "left waiting"
@@ -589,7 +604,13 @@ def test_the_deny_policys_selector_does_not_reach_the_namespaced_issuers() -> No
 
 
 @pytest.mark.parametrize(
-    "name", [AUTHORITY_POLICY, COLLECTOR_POLICY, COLLECTOR_CLIENT_POLICY]
+    "name",
+    [
+        AUTHORITY_POLICY,
+        COLLECTOR_POLICY,
+        COLLECTOR_CLIENT_POLICY,
+        TEMPO_RECEIVER_POLICY,
+    ],
 )
 def test_each_new_policy_is_bound_in_observability_and_nowhere_else(name: str) -> None:
     assert may_use(name, NAMESPACE)
@@ -600,7 +621,7 @@ def test_each_new_policy_is_bound_in_observability_and_nowhere_else(name: str) -
         for d in documents(POLICY_FILE)
         if d["kind"] == "RoleBinding" and d["metadata"]["namespace"] == NAMESPACE
     ]
-    assert len(bindings) == 3
+    assert len(bindings) == 4
     for binding in bindings:
         assert binding["subjects"] == [REQUESTER]
         assert binding["roleRef"]["kind"] == "Role"
@@ -609,7 +630,7 @@ def test_each_new_policy_is_bound_in_observability_and_nowhere_else(name: str) -
 def test_every_use_rule_of_the_file_grants_one_policy_and_nothing_else() -> None:
     roles = [d for d in documents(POLICY_FILE) if d["kind"] in ("Role", "ClusterRole")]
 
-    assert len(roles) == 6
+    assert len(roles) == 7
     for role in roles:
         (rule,) = role["rules"]
         assert rule["apiGroups"] == ["policy.cert-manager.io"]
@@ -630,6 +651,7 @@ def test_the_new_roles_are_named_after_the_policies_they_grant() -> None:
         f"{AUTHORITY_POLICY}-use-policy": [AUTHORITY_POLICY],
         f"{COLLECTOR_POLICY}-use-policy": [COLLECTOR_POLICY],
         f"{COLLECTOR_CLIENT_POLICY}-use-policy": [COLLECTOR_CLIENT_POLICY],
+        f"{TEMPO_RECEIVER_POLICY}-use-policy": [TEMPO_RECEIVER_POLICY],
     }
 
 
@@ -641,6 +663,7 @@ def test_the_hours_of_the_policies_caps_are_the_certificates_lifetimes() -> None
     assert cap(COLLECTOR_CLIENT_POLICY) == hours(
         certificate(COLLECTOR_CLIENT)["spec"]["duration"]
     )
+    assert cap(TEMPO_RECEIVER_POLICY) == hours(certificate(TEMPO)["spec"]["duration"])
     assert cap(AUTHORITY_POLICY) == hours(certificate(AUTHORITY)["spec"]["duration"])
 
 
@@ -718,8 +741,8 @@ def test_the_collector_mounts_both_secrets_read_only_in_directories_of_their_own
 ):
     values = collector_values()
 
-    # The client certificate is present and unused (S072, contract M1): a second
-    # volume and mount beside the server certificate's, and nothing else.
+    # The client certificate (S072, contract M1): a second volume and mount beside
+    # the server certificate's, and nothing else.
     assert [v["name"] for v in values["extraVolumes"]] == ["tls", "client-tls"]
     assert [m["name"] for m in values["extraVolumeMounts"]] == ["tls", "client-tls"]
     volume = {v["name"]: v for v in values["extraVolumes"]}["client-tls"]
@@ -736,18 +759,21 @@ def test_the_collector_mounts_both_secrets_read_only_in_directories_of_their_own
     assert not any(a.startswith(b + "/") for a in paths for b in paths)
 
 
-def test_nothing_in_the_collectors_configuration_uses_the_client_certificate_yet() -> (
-    None
-):
+def test_only_the_tempo_exporter_of_the_collector_uses_the_client_certificate() -> None:
     config = collector_values()["config"]
-    text = json.dumps(config)
+    exporters = config["exporters"]
 
-    # Present and unused: no path of the mount, and no file name of a client
-    # pair, appears in the configuration; the receiver's tls block is the four
+    # S072, contract M2: the client mount is used by one exporter, Tempo's (the
+    # next stores' contracts add the others). The receiver's tls block is the four
     # keys it had, and only Tempo's exporter has a tls block at all.
-    assert "client-tls" not in text
-    assert "client_ca_file" not in text
-    assert "client_ca_file_reload" not in text
+    assert "client-tls" in json.dumps(exporters["otlp_grpc/tempo"])
+    for other in ("otlp_http/prometheus", "otlp_http/loki"):
+        assert "client-tls" not in json.dumps(exporters[other]), other
+        assert "tls" not in exporters[other], other
+    assert "client-tls" not in json.dumps(config["receivers"])
+    assert "client-tls" not in json.dumps(config["service"])
+    assert "client_ca_file" not in json.dumps(config)
+    assert "client_ca_file_reload" not in json.dumps(config)
     assert set(config["receivers"]["otlp"]["protocols"]["http"]["tls"]) == {
         "cert_file",
         "key_file",
@@ -786,12 +812,43 @@ def test_the_collector_reads_the_certificate_again_so_a_renewal_needs_no_restart
     assert 0 < hours(tls["reload_interval"]) <= 1
 
 
-def test_the_collectors_hops_to_tempo_prometheus_and_loki_stay_as_they_are() -> None:
+def test_the_collectors_hops_to_prometheus_and_loki_stay_as_they_are() -> None:
+    # Split from the test that held all three hops (S072, contract M2): Tempo's is
+    # TLS now, below. These two stay clear text with their strings unchanged
+    # until the contracts for their stores.
     exporters = collector_values()["config"]["exporters"]
 
-    assert exporters["otlp_grpc/tempo"]["tls"] == {"insecure": True}
-    assert exporters["otlp_http/prometheus"]["endpoint"].startswith("http://")
-    assert exporters["otlp_http/loki"]["endpoint"].startswith("http://")
+    assert exporters["otlp_http/prometheus"] == {
+        "endpoint": "http://kube-prometheus-stack-prometheus.observability.svc."
+        "cluster.local:9090/api/v1/otlp"
+    }
+    assert exporters["otlp_http/loki"] == {
+        "endpoint": "http://loki.observability.svc.cluster.local:3100/otlp"
+    }
+
+
+def test_the_collectors_hop_to_tempo_is_tls_with_the_client_certificate() -> None:
+    exporter = collector_values()["config"]["exporters"]["otlp_grpc/tempo"]
+    receiver_tls = collector_values()["config"]["receivers"]["otlp"]["protocols"][
+        "http"
+    ]["tls"]
+
+    assert exporter["endpoint"] == "tempo.observability.svc.cluster.local:4317"
+    # Not insecure, in no form: the key is gone, not set false.
+    assert "insecure" not in exporter["tls"]
+    assert "insecure_skip_verify" not in exporter["tls"]
+    # The authority verifies Tempo (ca.crt of the client Secret: the same
+    # authority, written there by cert-manager's CA Issuer), and the pair is the
+    # collector's client certificate from the mount of contract M1.
+    assert exporter["tls"] == {
+        "ca_file": "/etc/otel-collector/client-tls/ca.crt",
+        "cert_file": "/etc/otel-collector/client-tls/tls.crt",
+        "key_file": "/etc/otel-collector/client-tls/tls.key",
+        "reload_interval": receiver_tls["reload_interval"],
+        "min_version": "1.3",  # the floor of the collector's own receiver
+    }
+    assert exporter["tls"]["min_version"] == receiver_tls["min_version"]
+    assert 0 < hours(exporter["tls"]["reload_interval"]) <= 1
 
 
 # ── up.sh ────────────────────────────────────────────────────────────────────
@@ -829,33 +886,41 @@ def test_up_s_wait_for_the_collectors_certificate_has_a_bound_and_a_remedy() -> 
     assert AUTHORITY_POLICY in message
 
 
-def test_the_other_waits_for_the_policies_name_all_six_in_their_remedy_line() -> None:
+def test_the_policy_wait_names_all_seven_policies() -> None:
     line = script_lines()[line_containing("certificaterequestpolicy")]
 
-    assert line.count("certificaterequestpolicy/") == 6
+    assert line.count("certificaterequestpolicy/") == 7
 
 
-def test_up_waits_for_both_certificates_of_the_collector_before_its_release() -> None:
+def test_up_waits_for_the_three_leaf_certificates_before_the_stores() -> None:
     lines = script_lines()
     waited = line_index("kctl -n observability wait --for=condition=Ready certificate/")
+    tempo = line_index("install_release tempo ")
     collector = line_index("install_release otel-collector ")
 
-    # A Secret that does not exist leaves the pod in ContainerCreating and stops
-    # `make up` at the release: the client certificate is waited for as the
-    # server certificate is, in the same bounded wait.
-    assert waited < collector
-    assert f"certificate/{COLLECTOR} " in lines[waited]
-    assert f"certificate/{COLLECTOR_CLIENT} " in lines[waited]
-    assert lines[waited].count("certificate/") == 2
+    # A Secret that does not exist leaves a pod in ContainerCreating and stops
+    # `make up` at the release that mounts it: the client certificate (the
+    # collector's release) and Tempo's receiver certificate (Tempo's release,
+    # S072 contract M2) are waited for as the server certificate is, in the same
+    # bounded wait, before the first store is installed.
+    assert waited < tempo < collector
+    for name in (COLLECTOR, COLLECTOR_CLIENT, TEMPO):
+        assert f"certificate/{name} " in lines[waited]
+    assert lines[waited].count("certificate/") == 3
     assert "--timeout=5m" in lines[waited]
     _, message = wait_and_die_message(
         "kctl -n observability wait --for=condition=Ready certificate/"
     )
-    assert COLLECTOR_CLIENT in message
-    assert COLLECTOR_CLIENT_POLICY in message
+    for name in (
+        COLLECTOR_CLIENT,
+        COLLECTOR_CLIENT_POLICY,
+        TEMPO,
+        TEMPO_RECEIVER_POLICY,
+    ):
+        assert name in message
 
 
-def test_the_six_policy_names_are_the_same_in_the_four_places_that_list_them() -> None:
+def test_the_seven_policy_names_are_the_same_in_the_four_places() -> None:
     lines = script_lines()
     in_manifest = set(policies())
     in_up = re.findall(
@@ -873,12 +938,12 @@ def test_the_six_policy_names_are_the_same_in_the_four_places_that_list_them() -
         re.M,
     )
 
-    assert len(in_manifest) == 6
+    assert len(in_manifest) == 7
     # Each place lists each name once, and the lists are equal to the manifest's.
     for listed in (in_up, in_deploy.split(), in_smoke.split(), list(POLICIES)):
-        assert len(listed) == 6
+        assert len(listed) == 7
         assert set(listed) == in_manifest == POLICY_NAMES
-    assert COLLECTOR_CLIENT_POLICY in in_manifest
+    assert {COLLECTOR_CLIENT_POLICY, TEMPO_RECEIVER_POLICY} <= in_manifest
 
 
 def run_publish(

@@ -14,8 +14,9 @@
 #   telemetry-ca          the CA certificate (ECDSA P-256, one year), and the
 #                         Issuer of the same name that signs with its key
 #   otel-collector        the collector's server certificate (90 days)
-#   otel-collector-client the collector's client certificate (90 days; S072, the
-#                         last document of this file)
+#   otel-collector-client the collector's client certificate (90 days; S072)
+#   tempo-receiver        the server certificate of Tempo's OTLP receiver (90
+#                         days; S072, the last document of this file)
 #
 # Why an authority of its own and not the `meridian-services` issuer: S056 made
 # "that issuer signs only for the `meridian` namespace and its URI prefix" the
@@ -120,8 +121,9 @@ spec:
 ---
 # The collector's CLIENT certificate (S072, contract M1): what the collector will
 # present to the telemetry stores that write-protect their ports. It is issued
-# and mounted (values/otel-collector.yaml) and NOTHING uses it yet: no exporter
-# presents it and no store asks for it, so this changes no behaviour.
+# and mounted (values/otel-collector.yaml). Contract M1 changed no behaviour;
+# since contract M2 the exporter to Tempo presents it (Tempo's receiver asks for
+# it, the Certificate below), and the exporters to Loki and Prometheus do not yet.
 #
 # Its own Certificate and its own policy (otel-collector-client in
 # certificate-policy.yaml), not the usage `client auth` added to the server
@@ -148,6 +150,42 @@ spec:
     - client auth
   dnsNames:
     - otel-collector.client.observability.meridian
+  issuerRef:
+    name: telemetry-ca
+    kind: Issuer
+    group: cert-manager.io
+---
+# The SERVER certificate of Tempo's OTLP receiver (S072, contract M2): what the
+# collector's exporter verifies on its hop to Tempo (port 4317), now TLS with a
+# client certificate required. Tempo mounts the Secret (values/tempo.yaml) and
+# uses its ca.crt, the telemetry authority, as the client CA, so only a sender
+# whose certificate this authority signed is heard. up.sh waits for the
+# Certificate before Tempo's release. Its own policy (tempo-receiver in
+# certificate-policy.yaml) allows exactly these two names and the two server
+# usages: the collector's client certificate is not allowed to name Tempo, and
+# this one is not allowed `client auth`. The names are the host the collector's
+# exporter dials (tempo.observability.svc.cluster.local, values/otel-collector.yaml)
+# and its short form, as the collector's own certificate has both. Lifetime and
+# key as its neighbours: 90 days, a new ECDSA P-256 key at every renewal. Whether
+# Tempo reads a renewed certificate without a restart is not established.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: tempo-receiver
+  namespace: observability
+spec:
+  secretName: tempo-receiver-tls
+  duration: 2160h # 90 days, named: the policy caps it and cannot read a missing one
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always # a new key at every renewal
+  usages:
+    - digital signature
+    - server auth
+  dnsNames:
+    - tempo.observability.svc
+    - tempo.observability.svc.cluster.local
   issuerRef:
     name: telemetry-ca
     kind: Issuer

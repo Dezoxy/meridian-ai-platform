@@ -447,7 +447,8 @@ kctl wait --for=condition=Ready certificaterequestpolicy/meridian-services \
   certificaterequestpolicy/meridian-deny-unlisted \
   certificaterequestpolicy/telemetry-ca \
   certificaterequestpolicy/otel-collector \
-  certificaterequestpolicy/otel-collector-client --timeout=2m >/dev/null ||
+  certificaterequestpolicy/otel-collector-client \
+  certificaterequestpolicy/tempo-receiver --timeout=2m >/dev/null ||
   die "the certificate policies were not Ready in 2m: read the Ready condition of each (kubectl get certificaterequestpolicy -o yaml) and approver-policy's pod (kubectl -n cert-manager get pods; logs deploy/cert-manager-approver-policy)"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/service-ca.yaml" >/dev/null
 # Helm returns when cert-manager runs (its startupapicheck hook has proved the
@@ -461,14 +462,15 @@ kctl wait --for=condition=Ready clusterissuer/meridian-services \
 # observability, so no policy for the services' issuer changes. The collector's
 # Certificate being Ready means the authority's was issued before it. The
 # release of the collector, further on, mounts the Secrets they make: the server
-# certificate's and, since S072 (contract M1), the client certificate's, so both
-# are waited for here (a Secret that does not exist leaves the pod in
-# ContainerCreating and stops `make up` at that release).
+# certificate's and, since S072 (contract M1), the client certificate's; Tempo's
+# release mounts the receiver certificate's (contract M2). All three are waited
+# for here, before the first store is installed (a Secret that does not exist
+# leaves the pod in ContainerCreating and stops `make up` at that release).
 log "telemetry: the CA for the collector's certificate, in observability"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/telemetry-ca.yaml" >/dev/null
 kctl -n observability wait --for=condition=Ready certificate/otel-collector \
-  certificate/otel-collector-client --timeout=5m >/dev/null ||
-  die "the Certificate otel-collector or otel-collector-client in observability was not Ready in 5m: read the CertificateRequests of the Certificates telemetry-ca, otel-collector and otel-collector-client (kubectl -n observability get certificaterequest; describe each) for their Approved or Denied condition, the Ready condition of the policies telemetry-ca, otel-collector and otel-collector-client (the add-on's pod logs say why one was not applied), and the Certificates' events"
+  certificate/otel-collector-client certificate/tempo-receiver --timeout=5m >/dev/null ||
+  die "the Certificate otel-collector, otel-collector-client or tempo-receiver in observability was not Ready in 5m: read the CertificateRequests of the Certificates telemetry-ca, otel-collector, otel-collector-client and tempo-receiver (kubectl -n observability get certificaterequest; describe each) for their Approved or Denied condition, the Ready condition of the policies telemetry-ca, otel-collector, otel-collector-client and tempo-receiver (the add-on's pod logs say why one was not applied), and the Certificates' events"
 publish_telemetry_ca
 
 # The operator runs in `meridian`, with the chart's `config.clusterWide=false`
@@ -548,6 +550,12 @@ apply_alert_rules
 log "observability: Prometheus scrapes cert-manager's metrics"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/cert-manager-metrics.yaml" >/dev/null
 log "observability: Tempo"
+# Tempo's receiver asks the sender for a client certificate (S072, contract M2),
+# and its Secret was waited for above. On a WARM cluster this release asks for a
+# certificate about a minute before the collector's new release presents one
+# (the collector is installed last), so the traces of that minute are refused and
+# dropped; smoke's read-backs wait for the collector's release. On a first
+# install no sender exists yet.
 install_release tempo observability "${TEMPO_CHART}" "${TEMPO_VERSION}" \
   "${GRAFANA_COMMUNITY_REPO}" tempo.yaml \
   --set "tempo.tag=${TEMPO_IMAGE_TAG}@${TEMPO_IMAGE_DIGEST}"
