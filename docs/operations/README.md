@@ -7,15 +7,16 @@ dashboards are applied to the kind cluster, and `make smoke` loads and reads
 them on every run (its eleventh check). One alert was seen pending, firing
 and resolved there, in the renewal watch of the certificate-expiry runbook,
 the one runbook procedure that was run. The other runbooks were written from
-the code and not exercised. S022 exercises the rollback, S027 measures the
-thresholds and S028 runs the game day.
+the code and not exercised, but for single commands that runs of S066 and S073
+ran on kind (the table below says which). S022 exercises the rollback, S027
+measures the thresholds and S028 runs the game day.
 
 | What | Where | Status |
 |---|---|---|
 | Service level objectives | [slo.md](slo.md) | Five with an indicator on kind, two designed, one (`triage-completion`) with counters since S064 that nothing reads; every target unmeasured |
-| Alert rules | [`infra/kind/alerts/meridian.yaml`](../../infra/kind/alerts/meridian.yaml), unit tests beside it | Implemented as code, checked by `make alerts`; applied by `make up` and read by check 11 of `make smoke` on every run (five groups and 19 rules loaded since S064, and all 20 in S066's third run, `MeridianRateStoreRefusing` among them; every rule healthy, no Meridian alert firing: seen on kind on 2026-10-06); `MeridianCertificateNotRenewed` seen pending, firing and resolved on kind on 2026-10-06; none of S064's four alerts and not `MeridianRateStoreRefusing` seen firing; notification designed |
+| Alert rules | [`infra/kind/alerts/meridian.yaml`](../../infra/kind/alerts/meridian.yaml), unit tests beside it | Implemented as code, checked by `make alerts`; applied by `make up` and, since S073, by `make deploy` (seen on kind on 2026-10-07), and read by check 11 of `make smoke` on every run, which compares each rule's expression and `for` as well as its name (seen on kind on 2026-10-07) (five groups and 19 rules loaded since S064, and all 20 in S066's third run, `MeridianRateStoreRefusing` among them; every rule healthy, no Meridian alert firing: seen on kind on 2026-10-06); `MeridianCertificateNotRenewed` seen pending, firing and resolved on kind on 2026-10-06; none of S064's four alerts and not `MeridianRateStoreRefusing` seen firing; notification designed |
 | Dashboards | [`infra/kind/dashboards/`](../../infra/kind/dashboards/) | `gateway-cost.json` implemented on kind (S043); `platform-health.json` implemented as code and served by Grafana on kind, its queries run in Prometheus by check 11 of `make smoke`; whether each panel shows data stays a hand check |
-| Runbooks | [runbooks/](#runbooks) | Written from the code; only the certificate-expiry runbook's renewal procedure was run (kind, 2026-10-06); the other seven (the newest, telemetry missing, S064, and rate store, S066) and that runbook's other steps were not exercised, but for two commands S066's runs ran on kind on 2026-10-06: the budget-exhaustion runbook's `make gateway-upkeep` and the rate store runbook's ping as the `probe` user |
+| Runbooks | [runbooks/](#runbooks) | Written from the code; only the certificate-expiry runbook's renewal procedure was run (kind, 2026-10-06); the other seven (the newest, telemetry missing, S064, and rate store, S066) and that runbook's other steps were not exercised, but for two commands S066's runs ran on kind on 2026-10-06: the budget-exhaustion runbook's `make gateway-upkeep` and the rate store runbook's ping as the `probe` user; and, from S073 on 2026-10-07, the certificate-expiry runbook's `make cert-renew` once, on a healthy Certificate (a denied request not seen) |
 
 ## Alerts
 
@@ -26,8 +27,9 @@ and a receiver needs an address or a webhook secret this repository does
 not hold. Routing and notification are designed, and the game day (S028)
 is their first use.
 
-The rules are one `PrometheusRule` object, which `make up` applies. The
-file is that object, so the cluster gets exactly what was reviewed.
+The rules are one `PrometheusRule` object, which `make up` and, since S073,
+`make deploy` apply. The file is that object, so the cluster gets exactly what
+was reviewed.
 `make alerts` takes the rule groups out of it and runs Prometheus's own
 checker on them, then the unit tests in `meridian.test.yaml`: each test
 feeds invented series to the rules and says which alert must fire. It then
@@ -334,7 +336,10 @@ applied to one. The session that owns the cluster checks, on `main`:
    alert table, nothing. `make smoke` reads that Grafana serves it under
    that uid with the file's queries and that every query runs in
    Prometheus; whether a panel shows data stays by hand.
-7. `make smoke` passes, 45 of 45 lines (S055 added three, for service
+7. `make smoke` passes, 46 of 46 lines (S073 one, for the database's own
+   certificates, which fails when the earliest ends within 84 hours: tested
+   with a stand-in, and seen to pass on kind on 2026-10-07, 46 PASS in run R4d,
+   not seen failing; S055 added three, for service
    identity; S056 two more for it and three for the certificate policy; S062
    three for the stores of the `meridian` database, four for the rules and
    the health dashboard, three for the network policy and one for a request
@@ -352,12 +357,12 @@ applied to one. The session that owns the cluster checks, on `main`:
    in the third run (the first two runs had 41 lines); S066 one for the rate
    store, which only the Model Gateway's pods may reach, which passed on kind
    on 2026-10-06 in S066's third run (S064's third run had 44 lines, before it):
-   the 35 below are S062's count); 32 after `make up` alone, with
+   the 35 below are S062's count); 33 after `make up` alone, with
    SKIP lines for
    what `make deploy` brings (counted from the script's own skip lines, and
    seen on 2026-10-06 before S063: 24 lines, 17 PASS and 7 SKIP, no FAIL). The
-   32 is edge 1, database 4, tools 1, telemetry 9, cost panel 4, adjuster
-   pages 1, sweep 2, network policy 1, service identity 1, certificate policy 4
+   33 is edge 1, database 4, tools 1, telemetry 9, cost panel 4, adjuster
+   pages 1, sweep 2, network policy 1, service identity 1, certificate policy 5
    and alert rules 4. Items 3, 5 and 6 above are what the eleventh check reads,
    so they need no hand check now that the session that owns the cluster
    has seen it pass (35 PASS on 2026-10-06, 44 PASS in S064's third run, and 45

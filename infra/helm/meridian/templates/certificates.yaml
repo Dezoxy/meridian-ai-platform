@@ -35,8 +35,16 @@ reload it; instead it turns unhealthy near the end of the one it loaded
 (/healthz answers 503), the kubelet restarts the container and it loads the
 renewed one. With the values' liveness probe (periodSeconds 10, failureThreshold
 6) that takes about a minute, in which readiness fails first, so a service with
-one replica does not answer for that minute. Both identity values are required:
-the chart fails while either is empty (meridian.identity).
+one replica does not answer for that minute. The services do not all go in the
+same minute: each is given a share of the restart margin by its place in the
+sorted list of services (meridian.restartShare, MERIDIAN_TLS_RESTART_SHARE) and
+turns unhealthy that share of a margin earlier, so the restarts are spread
+across the margin (100 seconds apart for one-hour certificates, four hours for
+90 days; implemented and tested with the chart rendered and the clock
+injected, not yet seen on a cluster). Two replicas of one service mount one
+Secret and still restart together: that is not built (one replica of each on
+kind). Both identity values are required: the chart fails while either is empty
+(meridian.identity).
 */ -}}
 {{- $identity := include "meridian.identity" . | fromJson -}}
 {{- range $name, $service := .Values.services }}

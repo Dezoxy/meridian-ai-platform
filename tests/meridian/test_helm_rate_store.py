@@ -400,7 +400,7 @@ def test_the_probe_presents_the_stores_own_certificate_to_its_own_server() -> No
             '--cacert "$1/ca.crt" --cert "$1/tls.crt" --key "$1/tls.key"' in command[2]
         )
         assert command[4] == TLS_DIRECTORY
-        assert container[probe]["timeoutSeconds"] == 3
+        assert container[probe]["timeoutSeconds"] == 5
 
 
 def test_a_change_of_the_configuration_replaces_the_pod() -> None:

@@ -549,7 +549,7 @@ both readings the same hour ("yes both are right, go on").
 | S070 | Claims intake and what the adjuster is told | The owner decides first whether uploads are built or stay out (T-38: the largest item here; if built it is a step of its own, split off when this one opens); a report dated as a recent loss is seen for what it is, or T-66 says why it cannot be; the adjuster's page marks a recommendation that rests on the model's answer, so a steered model's `approve` does not read as the rules' | todo | S067 |
 | S071 | Measurements that need a live model | Costs money (about fifty chat calls and some embedding calls; the owner says yes before any, and the amount is stated first): a real model's answers to the injection cases the screen lets through, recorded beside the golden recording; a model's refusal of a structured request seen from a real provider; retrieval measured with a real embedding, in the evaluation and in S038's one failing check; the judge compared with labels a person wrote for a sample; a held-out set for the injection screen, and a decision on what a false alarm may cost; CLM-0034's `unsure` settled by a prompt or recorded as the right answer; retrieval over a graph measured again only if the synthetic data gains something relational to find | todo | S067 |
 | S072 | The cluster outside `meridian`, second round | On kind: the Prometheus and CloudNativePG operators' reach into Secrets and ConfigMaps of every namespace is narrowed or recorded as accepted with its reason; DNS and the collector cannot carry data out unseen (T-84), or the residual is stated; writes to Prometheus and Loki pass a policy, and the three hops behind the collector are encrypted or the plan says why not; egress from `observability` and the admission webhooks' port are bounded; `cnpg-system` and `envoy-gateway-system` have Pod Security labels and a policy; the owner decides whether node-exporter stays off; Tempo mounts no API token | todo | S064, S066 |
-| S073 | Renewals, upgrades and what smoke cannot see | On kind: a renewal is seen for the collector's certificate and the database's, and something alerts before the database's end; the services do not all restart in the same minute at a renewal; approver-policy is restarted when it hangs, and a repaired policy does not wait an hour for cert-manager's retry; a first install that fails has a way back that was tried; the chart bounds its rollback history and `make images` says what to remove; the scripts' `kubectl` calls have a request timeout; a manual sweep Job does not hide a stopped schedule; the failure paths of smoke's newer lines are seen once on a cluster with something broken on purpose; the line that reads approver-policy's wording says so when it fails; probes that time out under load have a recorded answer for the machine the cluster runs on now | todo | S064, S066 |
+| S073 | Renewals, upgrades and what smoke cannot see | On kind: a renewal is seen for the collector's certificate and the database's, and something alerts before the database's end; the services do not all restart in the same minute at a renewal; approver-policy is restarted when it hangs, and a repaired policy does not wait an hour for cert-manager's retry; a first install that fails has a way back that was tried; the chart bounds its rollback history and `make images` says what to remove; the scripts' `kubectl` calls have a request timeout; a manual sweep Job does not hide a stopped schedule; the failure paths of smoke's newer lines are seen once on a cluster with something broken on purpose; the line that reads approver-policy's wording says so when it fails; probes that time out under load have a recorded answer for the machine the cluster runs on now | doing: the first half is done (2026-10-07: the builds and the runs R0 to R4e, with the answer for the machine recorded); the second half is open: the ingestion's 503 word on a real refusal, the node paused with three deploys, certificates of one hour with all eight renewed, the cold run and a rotation of the rate store's password (the owner's to run or to accept as not seen); approver-policy's liveness probe is not built | S064, S066 |
 | S074 | Test suite and file sizes | Without the cluster: `infra/kind/smoke.sh`, `test_kind_manifests.py` and the four test files over 800 lines are split along the lines their own tests already cut; the six functions over 50 lines are under it; the template-database fixture survives a test that patches the runner's file list; the tests that failed once under load (a lost connection in a parallel run, a tool server's timeout, the gateway's fallback test) are run repeatedly on the machine the suite runs on now and either hold by construction or are closed as not reproduced, with the numbers; the slowest test of the job is under ten seconds; one CPU-time helper; `unused_port()` on macOS has its answer written down; the owner decides whether CI gates on coverage | doing: the first half is done (2026-10-07; tested, none of it run on a cluster): the two upkeep test files, `test_toolserver_meters.py`, `test_claims_graph.py` and `test_kind_manifests.py` are split by moves a script proves, the template database's builder passes the list it read at import, the stack and demo tests that failed under load no longer rest on the machine's speed (argued; the measurement run, 25 loops of each beside a whole suite, has not run), the counting test takes 0.03 s alone where CI saw 47 s, and one CPU-time helper serves nine files; three questions wait for the owner (coverage in CI, a size check, a pytest-level timeout); the second half is open and waits for S073 (`infra/kind/smoke.sh`'s split, the six functions over 50 lines, S076's leftovers) | S064, S066, S037 |
 | S075 | Harness, guard and Renovate | `make docs` notices a blank line that splits a table; the command guard's known gaps to a Secret's values and to superuser SQL are closed or listed where a session reads them, and a hook that times out has a known outcome; a rule for an implementer that edits through the shell, and a guard or a rule for `make up` and `make down` from an old checkout (both the owner's); the workflow linter knows the runner label; Renovate's week of waiting is a required check or the plan says why not (the owner's decision), an image is not proposed before the chart that installs it, and the two pgvector versions are one | done (not built: the two pgvector versions are not one, because the newest CloudNativePG image still holds 0.8.6; the owner chose package-manager holds over a required check, and uv's `exclude-newer` cannot go in before 2026-10-10; N4, the guard's own files, is the owner's open question 6; the shell-edit hook is inert until the owner sets `bashEditDiffEnabled`) | — |
 | S076 | CLI, scaffold and loader small ends | No registry entry lets the runtime name an agent that no tenant lists without a check saying so (T-81); `services_edit` refuses an alias or a merge key by itself; the scaffold says which write failed and names the line it refuses in every case; the two entry-point loaders answer a bad entry in the same fixed words; the screen's fingerprint covers what it claims to; the workload's report builders refuse another workload's manifest; `meridian registry schemas` answers an unwritable directory with a message; the scaffold can write an agent with workers, or the plan says why a second graph of subgraphs is not built. Built as: `meridian registry validate` prints one NOTE, exit code unchanged, for each graph agent the runtime may name and no tenant lists, and `load_registry` refuses nothing new, so the owner's S061 decision stands; `services_edit` itself refuses an anchor, an alias or a merge key, naming the line; a refusal about a line of the person's file names the parser's line where the parser gives one; a failed or interrupted write names its kind and the error's class, the undo puts back every file that still holds the command's own bytes and names every path it did not restore (the scaffold's write and undo are in `scaffold_writes.py`); the two loaders word a refusal in one table of fixed sentences that quote no distribution's name and no import error's text, with the registry's agent ID in front for the graphs; the screen's digest is unchanged and the documents say what it covers and does not; both report builders compare the manifest's workload with their own; `meridian registry schemas` answers a directory it cannot update with one line; a second graph of subgraphs is not built, as a decision (the section says why). Implemented and tested, not run on a cluster | done | S037 |
@@ -739,7 +739,7 @@ that day; the rest stand as their step recorded them.
 | The database pod may reach TCP 6443 at any address on kind, not only the API server's: its instance manager calls the API server at the node's own address (T-84) | S019 | closed by S063: `make up` fills the API server's address into the database's and cert-manager's policies, `make deploy` and `make smoke` compare the database's; proved by hand on kind | S063 |
 | Whether each service is safe to run with two replicas is not measured, so every disruption budget protects nothing yet (T-17) | S019 | open | S027 |
 | The images of the platform charts (Envoy Gateway, the Prometheus stack, Tempo, Loki, the operator and, since S055, cert-manager, whose pods read every Secret) are pinned by chart version, not by digest; PostgreSQL's, the collector's and telemetrygen's are by digest | S019 | closed by S063: every image a chart starts is pinned by its index digest and seen so on kind; four images that nothing starts stay by tag, and `infra/kind/README.md` says what would start each | S063 |
-| On a cluster whose services were first applied as raw manifests, the field manager `kubectl` still co-owns their fields, so a field a later chart version drops would stay | S019 | open; a new cluster ends it | S073 |
+| On a cluster whose services were first applied as raw manifests, the field manager `kubectl` still co-owns their fields, so a field a later chart version drops would stay | S019 | closed by S073 (run R0, 2026-10-06 20:02 UTC): the managers of `deploy/claims-api` on the cluster made that day are `helm` and `kube-controller-manager`, no `kubectl`; a new cluster ended it | S073 |
 | Private endpoints or IP rules for the vault, the Azure OpenAI account and the state storage, and diagnostics settings: `infra/terraform/README.md` had named S019 for "the hardening" | S007, S019 | open | S020 |
 | `tests/meridian/test_helm_chart.py` is over the 800-line ceiling (about 1,080 lines); its network-policy tests could be a file of their own | S019 | closed by S062 (`test_helm_network_policy.py`; 725 lines are left) | S062 |
 | The advisory hook `check-iac.sh` runs `helm lint` on the chart with no values, so every edit of the chart reports the image and the policy peers as missing; `make helm-lint` is the gate | S019 | closed by S057 (for the chart that `make helm-lint` lints, the hook runs that target) | S057 |
@@ -747,7 +747,7 @@ that day; the rest stand as their step recorded them.
 | `make smoke` proves one denied path (Claims API to Model Gateway); egress to an address outside the cluster and the database's policy were proved by hand in S019 | S019 | closed by S062: three denied paths (the Claims API to the gateway; the Claims API to the API server's Service; the database refusing a pod without the workloads' label) beside one allowed, with a probe Pod. An address on the internet is not tried: smoke reaches nothing outside the cluster | S062 |
 | A first `helm upgrade --install` that fails may leave a release Helm refuses to upgrade ("has no deployed releases"); `deploy.sh` names `status` and `history`, and the cure, an uninstall, needs the owner (not tried) | S019 | open | S073 |
 | GitHub Actions are pinned by version tag, not by commit, `azure/setup-helm@v5` among them (T-36) | S002, S019 | open | S022 |
-| Under a laptop load average of 50 to 90 the kubelet's probes time out and containers restart (the database five times on 2026-10-04, the services once or twice); seen before the network policies existed and after, and whether kindnet's enforcement adds to it is not measured | S019 | open | S073 |
+| Under a laptop load average of 50 to 90 the kubelet's probes time out and containers restart (the database five times on 2026-10-04, the services once or twice); seen before the network policies existed and after, and whether kindnet's enforcement adds to it is not measured | S019 | closed by S073 (2026-10-07): the answer is the machine's memory and not the probes' values; with the swap full the control plane's pods and the operators restarted (run R0 read 18 of 35 pods restarted; 04:51 UTC, load 156), and every pod came back on its own once the load fell; no probe value changed, and the rule for the machine is in `docs/development-environment.md`. Whether kindnet's enforcement adds to it stays not measured | S073 |
 | Renovate's one-week hold is advisory: `renovate/stability-days` is not a required check, a pull request asked for from the Dependency Dashboard arrives before the week is up, and the lock file refresh has no hold (on 2026-10-04 it brought two Python packages a day or two old and the Terraform provider that the held pull request was waiting on) | changelog v0.33 | closed in part by S075, the rest re-homed. The owner chose the package managers' holds over a required check (S075's section): the Terraform lock refresh is off, and `renovate/stability-days` stays advisory, which Part A says to read. Open: the Python lock refresh keeps no hold until uv's `exclude-newer = "7 days"` (with `required-version = ">=0.12"`, the lock regenerated in the same pull request) can go in; it fails today, 13 locked packages being younger than a week and 6 of them exact pins, so not before 2026-10-10 09:24 UTC and only if nothing younger is locked by then | S074 |
 | The test database's image has pgvector 0.8.7, the cluster's CloudNativePG image 0.8.6; both are PostgreSQL 17.11 on Debian trixie | changelog v0.33 | open, re-homed from S075: not done there. R1 looked again on 2026-10-06 and the newest CloudNativePG image (`17.11-202610050823-standard-trixie`) still lists 0.8.6, so the pin was not touched. Closes when that image ships 0.8.7 and Renovate proposes it; a new pgvector arrives as a digest update, so whoever merges it reads that digest's SBOM first, and a database image change is a cluster change | S073 |
 | `azurerm` is locked at 5.8.0 and no plan has been read with it: `make azure-plan` stopped at the backend because the Azure CLI's account is not in the pinned tenant (`AADSTS50020`) | changelog v0.33 | open; needs the owner's `az login` | S020 |
@@ -761,7 +761,7 @@ that day; the rest stand as their step recorded them.
 | Nothing credits a tenant, closes a reservation a dead process left `reserved`, or expires old ledger rows (S011's hand-off): the budget runbook says wait for the period or raise the limit by pull request, and forbids editing the ledger by hand; a command of the gateway's own, with its role and an audit row, is the fix | S011, S024 | closed by S066: `meridian gateway` under the role `gateway_upkeep`, through three database functions that hold the rules and write the audit row; tested against PostgreSQL, the migration applied on kind, the command itself not yet run on a cluster | S066 |
 | The cost dashboard's queries take a series as new after a gap in the data longer than five minutes (a laptop that slept) and show its lifetime total as the selected range; S024's review found the same form in the new rules, which carry the fix (the earlier value is looked for 24 hours back) as does the health dashboard | S043, S024 | closed by S064: the nine queries look 24 hours back for the earlier value, and a generated `promtool` file in `make alerts` holds each against a gap | S064 |
 | The runbooks are written from the code and none is exercised: the rollback is S022's, the provider outage, the used-up budget and the database failure are the game day's; the secret rotation has no step, and its database-password procedure (delete the Secret, `make up`, restart) should first run on a cluster that can be thrown away | S024 | open | S022, S028 |
-| CloudNativePG issues and renews the database's certificates; the repository records no expiry, and whether a renewed certificate authority needs the services restarted is not known | S024 | recorded by S063 in the certificate runbook: three certificates, ninety days from the cluster's making, and that the services read the authority's file at each new connection, so a renewed one needs no restart by the code's reading. Still open: no renewal has been seen | S073 |
+| CloudNativePG issues and renews the database's certificates; the repository records no expiry, and whether a renewed certificate authority needs the services restarted is not known | S024 | recorded by S063 in the certificate runbook: three certificates, ninety days from the cluster's making, and that the services read the authority's file at each new connection, so a renewed one needs no restart by the code's reading. Still open: no renewal has been seen. S073, in part: smoke's fifth line of check 10 reads the three expirations and passed on the real Cluster (run R4d, 2026-10-07: the earliest is `platform-db-ca`, 89 days left); the operator's lifetime and threshold are whole days, so a renewal cannot be seen in one run; the line failing was not seen | S073 |
 | The required `python` check pulls the `promtool` image from quay.io on every run, so a registry outage fails it (the test database's image has the same exposure); and Renovate moves that image and the chart's Prometheus under separate lines, with a note and no constraint | S024 | open | S022 |
 | The harness's hook that denies printing a Kubernetes Secret matches only the bare command: with a namespace flag, a kubeconfig flag or a shell variable before `get`, as every command in the runbooks has, it gives no answer; a superuser `psql` through `kubectl exec` and `make grafana-password` are not covered either. Found by S024's security review, which ran the hook on samples. The hook comes from development-base: fix it there, then copy it in | S024 | closed on 2026-10-04 outside a step, in development-base first (its pull request 45), then copied in: the rule reads what follows `get` in a command segment, whatever stands before it, and denies a get of a Secret with any output format but `name` and `wide`; a command that lists the Secrets in one segment and prints what a variable or xargs hands it in another is denied as a pair, which a security review of the first version found missing by running the old and the new hook side by side. The owner decided the other two that day: `psql` through `kubectl exec` asks on every call, and `make grafana-password` asks (a person's own terminal never meets the hook). 125 cases added; 38 mutants of the patterns each fail one | none |
 | The command guard is a pattern on what a session types, and these ways to a Secret's values or to superuser SQL give no answer: `kubectl exec` with `env`, `printenv` or `cat` of a mounted file, `kubectl get --raw`, `kubectl config view --raw`, `kubectl create token`, `helm get manifest`, a cloud CLI's secret commands, `pg_dump` or `pg_restore` through `kubectl exec`, and `psql` reached by `kubectl run`, `kubectl debug`, a plugin or `docker exec`. Listed by the security review of the Secret rule on 2026-10-04. A rule for one of them goes into development-base first; the hook stays a guard for habits, not a boundary, as its header says | S024 | closed by S075 after three security passes: the ways listed here are denied, ask, or are listed as not seen, the neutral rules went to development-base first (pull requests 50 and 51), and what the hook still does not see is listed in the secret-rotation runbook's section "What the command guard does not see", and in the hook's header (`docker exec` into the tests' own database is one of the items in the runbook) | S075 |
@@ -804,18 +804,18 @@ that day; the rest stand as their step recorded them.
 | `make smoke` makes no request that the issuer must refuse (a Certificate in another namespace, read for its Denied condition and removed; done by hand in S056), so a change in how approver-policy reads a policy shows only at a renewal; its audit line accepts a row of the last two minutes, so a second run inside the gateway's minute passes on the first run's row; and `refused` is any TLS error or reset after the server's certificate verified, not the unknown-CA alert alone | S056 | closed by S062: check 10 asks for a certificate from another namespace on every run and passes only on a denial by the deny policy; the audit line is this run's own row or a skip; a reset is told from the unknown-CA alert, and a connection that ends after the request was sent is a failure | S062 |
 | approver-policy has a readiness probe and no liveness probe, so a hung pod is not restarted, and `MeridianCertificateApproverDown` sees a Deployment without a replica, not a hung one; its memory limit of 96 Mi (30 MiB used on kind) was not measured on a larger cluster; its image is pinned by tag, like cert-manager's; and Renovate raises the two charts separately, though v0.28.0 is built against cert-manager v1.21.2 | S056 | partly closed by S063: its image is pinned by digest and the two charts arrive in one Renovate group. Still open: no liveness probe (the chart has no value for one), and its memory limit was measured on kind alone | S073 |
 | The certificate policy is kind's: the namespace, the trust domain and the issuer are literals in `infra/kind/manifests/certificate-policy.yaml`, so the chart in another namespace, with another trust domain or with a namespaced Issuer is denied or never decided, and nothing says so before the pods wait for a Secret. The policy also lets a request made in `meridian` name any DNS name under `meridian.svc`, and a request with no usage gets cert-manager's default usages | S056 | open | S020 |
-| After a denied or failed request cert-manager waits before it asks again (an hour, doubling to 32), so `make deploy` fails again for that long after a policy is repaired; the runbook names `cmctl renew`, which the laptop does not have | S056 | open | S073 |
+| After a denied or failed request cert-manager waits before it asks again (an hour, doubling to 32), so `make deploy` fails again for that long after a policy is repaired; the runbook names `cmctl renew`, which the laptop does not have | S056 | open in part; S073 built `make cert-renew CERT=<name>` (K3) and it renewed one healthy Certificate on kind (run R3, 2026-10-07: revision 1 to 2, a new request Approved); not seen: the request after a denied one, which is what it is for (run R6), and a `409` | S073 |
 | `make deploy`'s check for approver-policy looks once and does not wait: right after a cold `make up` under load the add-on lost its leader election, exited and was back in twenty seconds, and a deploy started in that gap stopped with "run 'make up' first", which was not the remedy (seen once, 2026-10-05; the second run passed). A short wait, or a message that says a restart may be in progress | S056 | closed by S062 (it looks for a minute, and the refusal after that quotes what kubectl said) | S062 |
 | The kind cluster that S055 left was replaced before S056 began: its node was created at 18:16 UTC on 2026-10-04 by a `make up` of a checkout older than `main` (one without cert-manager), and the one S056 then proved its work on was gone again by 08:11 UTC on 2026-10-05, removed by something other than S056's session; the owner had it made again. Nothing tells `make up` or `make down` that the checkout is older than what the cluster runs, or that another session is using the cluster, and with several worktrees one of them always is older | S056 | closed by S075, with a residual: the cluster records its holder and the state of its last run, and `make up`, `make deploy` and `make down` stop for another holder unless `TAKE_CLUSTER=1` (Part A; seen on kind, see S075's section). It is a notice, not a lock, and a cluster made before the record has none, so it is anybody's until the first `make up` or `make deploy` writes one | S075 |
 | Retrieval over a graph was measured on data that has nothing relational to find: no customer holds two policies and no asset is on two (S038's census). Measure again if the synthetic data gains customers with several policies or assets with several claims | S038 | open | S071 |
 | S038's one failing check (all cited clauses, rank 10) is against a fusion whose vector half is the simulated embedding, a hashed bag of words; the comparison was not run against a real embedding, which needs a paid call | S038 | open; a rerun belongs with a step that can call an embedding deployment without a laptop | S071 |
-| At a certificate renewal every service restarts in the same minute: one deploy issues the seven certificates in the same second, so each process reaches its restart margin together, and with one replica each the platform answered nothing for about a minute (seen on kind, 2026-10-06). A second replica, or a margin spread per service, would stagger it | S062 | open | S073 |
+| At a certificate renewal every service restarts in the same minute: one deploy issues the seven certificates in the same second, so each process reaches its restart margin together, and with one replica each the platform answered nothing for about a minute (seen on kind, 2026-10-06). A second replica, or a margin spread per service, would stagger it | S062 | open in part; S073 built the spread (K2: a share of the margin by a service's place in the chart's list) and the shares were seen set on the six pods (run R2, 2026-10-07); not seen: the restarts at a renewal (the one-hour watch, the second half); two replicas of one service would still restart together, not built | S073 |
 | `infra/kind/smoke.sh` is about 2,300 lines and `tests/meridian/test_kind_manifests.py` about 3,900; the checks are cut out of the script by the tests, function by function, and could be files of their own | S062 | closed in part by S074 (first half): `test_kind_manifests.py` is thirteen `test_kind_*` files and two support modules (`kindsupport.py`, `kindharness.py`); open: `smoke.sh`'s split, the second half, after S073 | S074 |
-| The scripts' `kubectl` calls have no request timeout of their own: a hung API server stalls a wait between two checks. Smoke's reads of the database are bounded since S062; the pgvector lines of check 2 still hide psql's message | S062 | open | S073 |
-| The chart sets no `revisionHistoryLimit`, so every earlier image stays a rollback's target for as long as its ReplicaSet is kept; `make images` lists such an image and prints no command for it, and matches only images written `repository:tag` | S062 | open | S073 |
-| Check 10 of `make smoke` reads approver-policy's wording (the names of the policies in a denial's message) at the pinned version; an update of the add-on is when that line would fail without a fault | S062 | open; S063: the Renovate group that carries the add-on tells whoever merges it to run `make up` and `make smoke`, which is where the line would fail | S073 |
-| The failure paths of the lines S062 added to `make smoke` were seen against stubs only (a missing store table, a deleted rule object, a request that is approved, a run interrupted by a signal); `make demo`'s alternating wording and `make images` in a checkout without the cluster's credentials likewise | S062 | open; each needs something broken on purpose on a cluster | S073 |
-| A manual Job of the sweep hides a stopped schedule from `make smoke` for fifteen minutes; check 8 reads the Claims API alone as the sign that the services are deployed | S062 | open | S073 |
+| The scripts' `kubectl` calls have no request timeout of their own: a hung API server stalls a wait between two checks. Smoke's reads of the database are bounded since S062; the pgvector lines of check 2 still hide psql's message | S062 | open in part; S073 bounded every call (K1, then K9 for the calls that wait; tested with stand-ins, `make deploy` and `make smoke` ran under the request flag and the `exec` bound on kind from run R2, 2026-10-07) and the pgvector lines keep psql's first line (K4); not seen: the outer bound of K9 and a frozen API server (run R5) | S073 |
+| The chart sets no `revisionHistoryLimit`, so every earlier image stays a rollback's target for as long as its ReplicaSet is kept; `make images` lists such an image and prints no command for it, and matches only images written `repository:tag` | S062 | open in part; S073 set `revisionHistoryLimit: 2` (K2; seen on the seven Deployments, run R2, 2026-10-07) and `make images` reads a registry, a port and a digest (tested with stand-ins); not seen: the limit removing an old ReplicaSet over three deploys (run R5) and `make images` with the new reading | S073 |
+| Check 10 of `make smoke` reads approver-policy's wording (the names of the policies in a denial's message) at the pinned version; an update of the add-on is when that line would fail without a fault | S062 | open; S063: the Renovate group that carries the add-on tells whoever merges it to run `make up` and `make smoke`, which is where the line would fail; closed by S073 as recorded, not seen failing: the line is in code and tested (`test_a_denial_in_a_form_the_check_does_not_read_is_a_fail_that_prints_it_cut`), and only a new version of the add-on would fail it | S073 |
+| The failure paths of the lines S062 added to `make smoke` were seen against stubs only (a missing store table, a deleted rule object, a request that is approved, a run interrupted by a signal); `make demo`'s alternating wording and `make images` in a checkout without the cluster's credentials likewise | S062 | open in part; each needs something broken on purpose on a cluster; S073 saw the deleted rule object (run R4b, 2026-10-07: smoke named the missing `PrometheusRule` and `make deploy` made it again); the others were not run | S073 |
+| A manual Job of the sweep hides a stopped schedule from `make smoke` for fifteen minutes; check 8 reads the Claims API alone as the sign that the services are deployed | S062 | closed by S073 for smoke: a by-hand Job is not the schedule's (K4, K4b), seen on kind on 2026-10-07 (run R4 showed the flaw, run R4c the fix), and check 8 reads every service's policy object (passes on kind, the FAIL not seen); the alert `MeridianSweepStale` still reads the CronJob's last successful time, which a by-hand success moves (threat model T-86) | S073 |
 | The command guard's hook took 16 s on a 70 KB command under a machine load of 79, over the 10 s a hook is given; what the harness does with a hook that times out was not looked up | S062 (seen in the guard's review) | closed by S075: Claude Code does not block a call whose hook ran out of time (its documentation says so), so the guard arms a watchdog that answers `ask` after 5 of its 10 seconds and asks at once for a command over its byte or part bounds; a test holds the watchdog's time to the settings' timeout. A single regex match in flight cannot be interrupted, which the hook's header says with its measurements | S075 |
 | A holder of the `gateway_upkeep` credential can stall the gateway for a tenant: `credit_tenant` in a transaction left open holds the counter's row lock, and the gateway's own update of that counter waits until its statement timeout. A limit of two sessions on kind bounds it; a role-level idle-in-transaction timeout would cut it short, and the role is created out of band | S066 (both reviews) | closed in part by S068 (0031): a database default of 60 s ends a transaction left idle, so a forgotten one no longer holds a counter's row; it is the database's and not the role's, because it also binds the services, whose transactions were read and wait on nothing but the database. A session can change it for itself, so a holder who means to stall still can until the statement timeout, and it does not touch a session idle outside a transaction: accepted, T-25. Tested on a database the files ran on, not run on a cluster | S068 |
 | Nothing alerts on a credit, an expiry or a release by the ledger's upkeep, and a call the functions refuse leaves no audit row | S066 | open; S064 did not take it: the upkeep is a command a person runs and exports no series, so a rule has nothing to read; its audit rows are the record. S068 decided to build no alert for an upkeep action until a person is on the audit row, since an alert on who did it needs who; the expiry's audit rows say what went and why, and a refused call still leaves none | S021 |
@@ -833,10 +833,10 @@ that day; the rest stand as their step recorded them.
 | The circuit breaker and the refusal throttles are per process: two gateway replicas each count failures on their own and may each write a throttled refusal row | S066 (design) | closed by S069 as accepted, as ADR 8 records, until a second replica of anything but the gateway exists; no code | S069 |
 | The rate store in Azure is designed only: a managed Redis in the same EU region, its cost and SKU, and whether Valkey replaces Redis 8 (run under its AGPLv3 option, unmodified) are open | S066 | open | S020 |
 | No rule reads the rate store's restarts: a store that restarts in a loop while few calls come (256 held connection slots do it every 70 to 90 seconds) resets every tenant's windows each time and stays under the refusal alert's two conditions | S066 (fourth security pass) | open | S072 |
-| `make smoke` compares the loaded alert rules with the file by group and rule name, not by expression, and `make deploy` does not apply the rules: after a rule's expression changed, the old one stays loaded and smoke passes until `make up` is run (seen on kind, 2026-10-06) | S066 (fourth cluster run) | open | S073 |
+| `make smoke` compares the loaded alert rules with the file by group and rule name, not by expression, and `make deploy` does not apply the rules: after a rule's expression changed, the old one stays loaded and smoke passes until `make up` is run (seen on kind, 2026-10-06) | S066 (fourth cluster run) | closed by S073 (K3, K4), seen on kind on 2026-10-07: `make deploy` applied the rules (run R3), smoke compared the expressions and `for` of all the rules with the file's (run R4) and named a changed `for` and a removed rule object, each put back by `make deploy` (run R4b); a changed expression was not seen | S073 |
 | `make deploy` checks the rate store's ACL rules and not that the password in the gateway's address is the one the ACL holds: a mismatch shows as refused calls, not at deploy | S066 (fourth security pass) | open | S073 |
 | The command guard does not ask before `make gateway-upkeep` with an argument that changes the ledger (`credit`, `close`, `expire --confirm`), and the audit row of such a change names the database role, not the person or session | S066 (third security pass) | closed in part by S075, the rest re-homed: the guard asks before `make gateway-upkeep` or `infra/kind/upkeep.sh` with a subcommand that can change the ledger (`credit`, `close`, `expire --confirm`), also behind `gmake`, `env`, `time`, `sudo` and `bash -c`; a variable or a backtick in `ARGS` asks. Open: the audit row of such a change names the database role, not the person or session, which needs a person to name (S021's sign-in) | S021 |
-| Under an overloaded machine (a load average over 100 on 2026-10-06, the session's own doing) Tempo, the collector and the database's pod on kind were each restarted by their probes, and `make demo` then failed at reading its trace back; nothing bounds what else runs on the machine the cluster runs on | S066 (fifth cluster run) | open | S073 |
+| Under an overloaded machine (a load average over 100 on 2026-10-06, the session's own doing) Tempo, the collector and the database's pod on kind were each restarted by their probes, and `make demo` then failed at reading its trace back; nothing bounds what else runs on the machine the cluster runs on | S066 (fifth cluster run) | closed by S073 (2026-10-07): the same answer as the row on probes above, and a rule for the machine in `docs/development-environment.md`: one run with a test database at a time while the cluster is up, a room check before a whole suite, no new implementer while a suite runs | S073 |
 | The triage as a supervisor and workers, the worker's name on the wire and migration 0021 have run in tests and in the replayed evaluation, not on a cluster | S031 | closed by S063's cluster runs (2026-10-06): migration 0021 applied, `make demo` passed for a claim approved automatically and one through the adjuster, and Tempo holds each worker's name on the runtime's and the tool servers' spans. The `worker` column was not read on the cluster | S063 |
 | `tests/meridian/workloads/claims_triage/test_claims_graph.py` is about 1,780 lines; its stubs and helpers would have to move to a support module before it can be split | S031 (python review) | closed by S074 (first half): the file (2,296 lines on the branch, 346 collected) is ten files (the largest 477 lines) and `graphsupport.py`; the collected total is unchanged | S074 |
 | A tool server deployed before its runtime refuses every call of an agent with workers (`worker-missing`). One image runs all six services on kind, so it cannot happen there; a rollout order (the runtime first) is needed where the services are deployed apart | S031 (security review) | open | S020 |
@@ -847,7 +847,7 @@ that day; the rest stand as their step recorded them.
 | `cnpg-system` and `envoy-gateway-system` have neither Pod Security labels nor a NetworkPolicy; Pod Security on the three labelled namespaces warns and audits and enforces nothing, and `audit` records nothing on kind (no audit policy) | S063 (security review) | open | S072 |
 | node-exporter is off on kind, so a node's CPU, memory and disk are not observed; it alone would hold `observability` at Pod Security `privileged` | S063 | open; the owner's to overturn | S072 |
 | Renovate proposes a chart a week after its release and an image at once (the docker datasource gives no dependable release date for quay.io and ghcr.io), so an image's tag can be proposed before the chart that installs it; a note on the pull request says to leave it | S063 (infra review) | closed by S075: one rule switches off Renovate's tag updates for the 17 images a chart installs by default and keeps digest updates, so an image is not proposed before its chart (the collector's two images are outside it until their pin and the chart's appVersion agree); the chart's pull request moves the tags by hand | S075 |
-| A renewal has not been seen for the collector's certificate (90 days), its authority (a year) or the database's three certificates (90 days), and nothing alerts on the database's: cert-manager's series do not cover CloudNativePG's | S063 | open | S073 |
+| A renewal has not been seen for the collector's certificate (90 days), its authority (a year) or the database's three certificates (90 days), and nothing alerts on the database's: cert-manager's series do not cover CloudNativePG's | S063 | open in part; S073 built the database line of smoke (passed on the real Cluster, run R4d, 2026-10-07; no alert can read the dates, since CloudNativePG exports no series for them, read in run R0); not seen: a renewal of the collector's certificate, of its authority or of the database's three, which needs a forced renewal of the collector's certificate (not run in this half) and, for the database's, a lifetime in whole days that no run can wait out | S073 |
 | Every role of the database may create temporary tables (PUBLIC's right on the database); nothing a role can shadow with one was found | S063 (database review) | closed by S068 as decided: the right stays with PUBLIC, because taking it away is a database-level privilege that the tests' copies of the template do not carry and two tests use the right as their control; the defence is completed instead: the four older trigger functions pin `pg_temp` last in their search path (0031) and a test over the migrated catalog fails for any trigger or definer function of the owner's schemas that does not (T-101). Tested against PostgreSQL, not run on a cluster | S068 |
 | `infra/kind/smoke.sh` is near 2,900 lines; a new check would be better as a file of its own, which needs the script split first. Tempo's pod mounts an API token it does not use | S063 | open: the split of `smoke.sh` is S074's second half, after S073; Tempo's API token is re-homed to S072, whose row names it ("Tempo mounts no API token") | S074 |
 | No rule and no dashboard panel reads the values of S064's series: a jump in an assessment reason (`special-data`, `injection-suspected`, `filtered`), triages that fail by reason, a sweep finding that stays above zero, the tool servers' refusals, a runtime that cannot reach the gateway; and no rule reads a log line (kind's Loki runs no ruler) | S064 | open; thresholds need a measurement | S027 |
@@ -880,10 +880,10 @@ that day; the rest stand as their step recorded them.
 | The claims workload's reports: `Report.workload` is not tied to the golden set's manifest by a validator, and both builders accept a hand-built `Report` workload apart from the manifest's; the golden manifest is read three or four times in one build, and a file that changes between two reads is not noticed | S076 (reports of C6 and F1) | open; low; S074 is the nearest that is still open and costs nothing (S071, which works with the reports, is the paid step) | S074 |
 | The injection import test's walker cannot see what its docstring lists (a non-literal argument of `import_module`, `__import__` or `getattr`, `builtins.__import__`, `sys.modules[...]`, an alias made by unpacking or stored on an object, a name reached by a string through `vars()`, `__dict__` or `setattr`, `global`, `nonlocal`, `eval`, `exec`), and it reports a few names that are not private uses (an alias rebound at module level, a `match` capture, a walrus inside a comprehension); it is a tripwire, not a proof | S076 (report of F2; second review) | open; low | S074 |
 | A merge of `main` into a step's branch was pushed after the cheap gates only and left `test_workload_new_note.py` red (S076, 842b977: S037's `claim-brief` changed a list the test pinned); Part A says the later session runs the gates again and not which, so a contract's gate does not yet say that the directories its change reaches are run after a merge | S076 (C10) | closed by S075: Part A now says that after a merge of `main` the whole suite runs on the merged tree before the branch is pushed, and that a contract's gates name every directory its change reaches | S075 |
-| On 2026-10-06 `make deploy` failed twice, a minute apart, at the ingest Job on a cluster that had been up for hours (the Model Gateway answered 503 to the embedding call: "the model gateway refused the embedding call (model gateway answered 503)"); the session's script then deleted the cluster before anyone had read the audit row's reason or the gateway's log, and a fresh cluster deployed the same commit (`make up` 299 s, `make deploy` 97 s, the Job passed). Two failures a minute apart and a pass on a fresh cluster point at the cluster's state, not at load. Candidates, none shown: the rate store not answering inside its 0.25 s read timeout or 1 s connect timeout, with no retry (`gateway/rate_store.py`; the gateway refuses, by design); the ledger's close failing (`gateway/walk.py`: a failed close answers 503; the database's pod had restarted that evening); and the ingestion not retrying a 503 (`knowledge_mcp/ingest.py` waits out a 429 and ends on any other status). The three logs of the commands are the only evidence left | S075 (the incident) | open; not explained | S073 |
+| On 2026-10-06 `make deploy` failed twice, a minute apart, at the ingest Job on a cluster that had been up for hours (the Model Gateway answered 503 to the embedding call: "the model gateway refused the embedding call (model gateway answered 503)"); the session's script then deleted the cluster before anyone had read the audit row's reason or the gateway's log, and a fresh cluster deployed the same commit (`make up` 299 s, `make deploy` 97 s, the Job passed). Two failures a minute apart and a pass on a fresh cluster point at the cluster's state, not at load. Candidates, none shown: the rate store not answering inside its 0.25 s read timeout or 1 s connect timeout, with no retry (`gateway/rate_store.py`; the gateway refuses, by design); the ledger's close failing (`gateway/walk.py`: a failed close answers 503; the database's pod had restarted that evening); and the ingestion not retrying a 503 (`knowledge_mcp/ingest.py` waits out a 429 and ends on any other status). The three logs of the commands are the only evidence left | S075 (the incident) | open; not explained for certain: S073 found a likely cause, not a proven one, in the rate store's probes, which left a defunct process per run until the container could not fork (run R1a, 2026-10-06: 2,024 under the Redis server, the pod not Ready, the gateway's 503 to every call; fixed by K7 and seen on kind in run R2, 2026-10-07), and built the ingestion's word for the gateway's four 503s (K6: tested with scripted replies, not seen on a real refusal, the second half); the ledger's close would show as `database-unavailable` | S073 |
 | The guard's local reader list and what its last review left: a mounted Secret or an `.env` read by `grep`, `awk`, `jq`, `cp`, `docker cp` or a glob is read by no rule (`reader_pre` and the pod's reader list name the plain readers); the pod rule for `env`, `printenv` and `set` tests only the last ` -- `; a fourth level of nested `sh -c`; secret-shaped variable names the `printenv` list does not match (`REDIS_PW`); a heredoc read by quote parity and a list of interpreters, not parsed; a hook file overwritten by a redirect; `-v=8` and `crictl inspect` read from documentation, run against no cluster. The hook's header and the runbook's section list each; S036's cloud rules edited the guard (2026-10-07) and closed none of these (they read the AWS module's names and add no reader for a mounted Secret), and S079, which reuses the wrapper and brings a second AWS module, edits it next, so it is the nearest step | S075 (third security review; F3b's and F4g's reports) | open; listed, not built; re-homed from S036, whose rules did not touch them | S079 |
 | The next rule to the command guard goes into the development base first: the base's copy is level with Meridian's since its pull request 51 (merged 2026-10-06, the guard's rounds two and three), and S036's guard rules for the AWS wrapper are the next ones, so they are now owed to the base (built here first, 2026-10-07; not yet sent). The neutral ones: the `aws` CLI's deny and ask rules with their read list, the ask for `boto3`, `botocore` and `awscli` and for `-auto-approve`, the deny of `TF_*` and `AWS_ENDPOINT_URL*` assignments before a tool, the readers of a state, a plan, `.tfvars.json`, `~/.aws`, `~/.terraformrc` and `~/.terraform.d`, the writers of `~/.terraformrc`, `~/.gitconfig`, `~/.config/git` and `~/.aws`, and the deny of tracing and start-up variables, with the fixes of the two later rounds (`-cm`, a quoted token, the backtick, the cut-out of `workspace select default`). Meridian's own stay out: whatever names `aws.sh`, a `make aws-*` target, `local.env`, `meridian-aws`, `TRIVY_IMAGE` or `PROMTOOL_IMAGE` | S075 | open; owed to the base before S079 changes the guard | S036 |
-| Not seen on a cluster after S075: `TAKE_CLUSTER=1`, a record left `changing` by a run that failed (the refusal that names it), `make up` on an existing cluster, and `make down` refused for a record at `changing`; tests with stand-in binaries hold each. Seen: the record through a deploy, a deploy refused while another runs, and `make down` refused with the record at `ok` (S075's section) | S075 | open | S073 |
+| Not seen on a cluster after S075: `TAKE_CLUSTER=1`, a record left `changing` by a run that failed (the refusal that names it), `make up` on an existing cluster, and `make down` refused for a record at `changing`; tests with stand-in binaries hold each. Seen: the record through a deploy, a deploy refused while another runs, and `make down` refused with the record at `ok` (S075's section) | S075 | open in part; S073 saw `TAKE_CLUSTER=1 make deploy` take the record from S075 (run R2, 2026-10-07); a record left `changing` by a failed run and `make up` on an existing cluster were not seen | S073 |
 | Limits of S075's three small checks and two unverified Renovate rules. The split-table check misses rows in block quotes and rows without a closing pipe, and flags a row inside an HTML comment, a four-space-indented row and a lone header-like line; the lane check counts `--` and `n/a` in "Out now" as running, and a session in a fresh worktree has no board; the shell-edit hook is inert until the owner sets `bashEditDiffEnabled` in `~/.claude/settings.json` and may name files that `make` targets regenerate (baselines, Mermaid blocks) once it is on; Renovate has not run the new rules, so whether Docker Hub gives the Envoy chart a push date (else the chart waits indefinitely), whether the `terraform` block's `description` key is accepted and whether the `agent-framework` label is made are unseen | S075 | open | S074 |
 | A claimant can choose a name made of the words an exclusion turns on, and every such word in the description becomes `[name]` before the model reads it (since S047, for any name part of three letters or more); the posted-text boolean covers screened phrases and not this, so it is one more way to the automatic approval of a small claim, which the injection suite already measures as open (QA-09). A bound on how much of a description a name may replace, and what the adjuster is told when it is hit, is a decision of its own (T-26) | S067 (security review) | open | S070 |
 | A true posted-text flag returns `injection-suspected` before the candidate clauses are screened, so a claimant who posts screened words hides the failure a poisoned clause would give (`wording-addresses-the-model`); a hit of the assessor's own screen did the same before S067 | S067 (security review, low) | open; S070 is the nearest, since it holds what the adjuster is told | S070 |
@@ -954,6 +954,13 @@ that day; the rest stand as their step recorded them.
 | A second Google Cloud module (S079's self-managed cluster) cannot sit in `infra/terraform/gcp/`: the scan's tests hold one cluster and one subnet block to the directory because an ignore-file entry covers every resource of it, and `make gcp-validate` and `make gcp-scan` each name that one directory. The validate door takes a module's name from a closed list (`aws`, `gcp`), so a new name or a new directory, with its own scan recipe, is the shape | S078 | open | S079 |
 | The Google provider is pinned `~> 8.6` and its lock holds 8.6.0, which was published on 2026-10-06, a day before the module was written (8.5.0 a week before); no run has used it beyond `init` and `validate`. Renovate's `terraform` group moves the lock after a week and its note names `make gcp-validate` and `make gcp-scan`; the release notes of the 8 series are unread. S079's twin pins the same provider and is the next step to read them | S078 (G1's report) | open | S079 |
 | The Google Cloud module's `workload_service_account` may be up to 253 characters, but the secret's ID is the 18-character prefix `meridian-gcp-test-` and that name, against Secret Manager's limit of 255: a name of more than 237 characters passes the validation and fails an apply. A bound of 237 on the variable would close it | S078 (G4's report) | open; low | S079 |
+| `make deploy` reads how many rows `knowledge.chunks` holds before it decides to ingest again, and an unreadable count now stops it (S073, K9); two answers still start an ingestion, which embeds the corpus again and calls the model: an exit-0 answer of `psql` that is empty or not a number (a cut stream), and psql's own statement or lock timeout error (5 s and 3 s from `PGOPTIONS`), which under heavy load is a count that could not be read | S073 (K9's report, decision 4) | closed by S073 (2026-10-07, K13, after the re-read named both as findings): the one answer that starts an ingestion is exit 0 with the text `0`; every other answer stops the deploy with nothing removed (tested with a stand-in, not seen on a cluster) | S073 |
+| The test `test_the_probes_and_the_pods_are_the_same_with_seven_services_as_with_one` fails when the clock ticks between its two runs, because each names its pod `smoke-network-<epoch>` (it failed once in K10's broad run, and passed three times alone) | S073 (K10's report) | closed by S073 (2026-10-07, K14), after it failed this step's own pull request in CI: the harness gives both runs one fixed second, shown failing first under a clock made to tick; every other name the kind scripts build from the clock, a random number or a process ID was read against its tests, and none compares two runs | S073 |
+| The tests that hold the variable validations of the three Terraform modules (170 of them: 63 in `test_aws_script.py`, 107 in `test_gcp_module.py`) need the `terraform` program and SKIP where it is missing, and the `python` workflow installs only Helm and uv: on the hosted runner they have never run. Those modules are never applied, so CI was meant to be their gate, and the pull requests of S036 and S078 said "the tests hold" of runs made on the development machine alone. Every other tool the suite needs fails in CI when it is missing (`jq`, Helm, the database, Docker); this one skips without a word. Install the pinned `terraform` in the workflow (a `_VERSION` there needs a Renovate reader) or make the marker fail under CI as the `jq` one does | S073 (K14's reading of the pull request's skipped tests: 178, where the run before S078 merged had 71 and the development machine has 8) | open | S079 |
+| Small ends of S068's last two commits, from a re-read that came back while its pull request was in its checks, none fixed there: the audit expiry's line after a failure does not say "at least" as the ledger's now does (the same commit of unknown outcome), and the kind script's test still holds the ledger's old line in its fixtures, so no test proves the script reads the new one; the two tests that plant a reserved row under a SHARE lock take the past month from a second reading of the clock, so a run in the milliseconds around a month's first instant would fail; a paragraph copied into two test files says the tests of the file call the expiry as the owner, which is true of their expiry tests only; no test asserts that a generic plan was in fact chosen on the sixth call; and only one of the two new concurrency tests was shown to fail under a mutation | S068 (a Python re-read of F3 and F4, 2026-10-07) | open; low | S074 |
+| Three small ends of the kind scripts that the infrastructure review of S073 left: `upkeep.sh` reads a `helm get` that timed out (status 124) as "the release is not installed" and says to run `make deploy`, though it stops and does no harm (L3); `smoke.sh` puts a Deployment's name unescaped into a basic regular expression, safe for a DNS label and not for a dotted name (L6); `kctl` gives a plain `delete` without `--wait=false` the request flag though it waits by default, and no call site is affected today (L7) | S073 (infrastructure review) | open | S073 |
+| The restart share is read from `MERIDIAN_TLS_RESTART_SHARE` by `certlife._restart_share`: an empty value is 0, the old behaviour, so a chart typo that renders an empty share hides itself, while a value of only whitespace refuses the start (the Python review of S073, L4); a share written with Unicode digits or padded is read as a number | S073 (Python review) | open | S073 |
+| What a new 503 of the Model Gateway would have to look like to slip past `test_gateway_503_words.py`, so that the ingestion's word for it would be `unknown`: a status that is an attribute or an imported name (`status.HTTP_503_SERVICE_UNAVAILABLE`, `HTTPStatus.SERVICE_UNAVAILABLE`), a `JSONResponse` or `Response` with no `detail=` keyword, a site under `gateway/providers/` or outside `gateway/` and `common/` (the scan's glob is not recursive), a text from a second mapping like `LIMIT_ANSWERS`, or one of the four texts reused for another cause (the test passes and the word is then ambiguous); an f-string `detail` fails loudly | S073 (Python review) | open | S069 |
 
 ## Part C — Step details
 
@@ -14340,6 +14347,506 @@ each before a fix.
   T-15, T-19, T-20) and what a Google Cloud scaffold copies and avoids.
 - For the owner: the decisions above.
 
+### S073 — Renewals, upgrades and what smoke cannot see
+**Status:** doing · **Started:** 2026-10-06 · **Finished:** —
+**Goal:** on kind, the scripts that deploy, renew and check the platform are
+bounded against an API server that does not answer, a certificate renewal does
+not restart every service in the same minute, a renewal can be asked for on
+request, and `make smoke` reads what it could not before (a Job made by hand
+against the schedule's, the alert rules' expressions, the database's own
+certificates). The evidence is runs on the cluster, and several things are
+still not seen.
+
+**Two halves, in one step and, like S066 and S036, two pull requests.** The
+design cut it by kind of work (the owner may overturn any of its decisions):
+builds, by implementers against stand-ins, and exercises, the session's own
+runs on the cluster. This record is the **first half**: the builds K1 to K10
+and the runs R0 to R4e. The **second half stays open and is not done**:
+
+- the ingestion's 503 word (K6) on a real refusal of the gateway;
+- R5: the node paused and three deploys, which shows the outer bounds of K9
+  against a frozen API server and the history limit trimming a ReplicaSet;
+- certificates of one hour, so that all eight are renewed with the restarts
+  spread (the one-hour watch of the certificate runbook, run again);
+- R6, the cold run: a first install made to fail and its way back, a policy
+  narrowed before the first deploy (the case `make cert-renew` is for), and
+  cold timings;
+- a rotation of the rate store's password with calls going: the owner's to
+  run, or accepted as not seen (the owner's question below).
+
+Decision 4 of the design, a liveness probe for approver-policy, was **not
+built**: no contract of this half took it (its row, below, stays).
+
+**Decisions, as they ended** (each with its reason; where a run or a review
+changed one, the next list says so):
+
+- **Every `kubectl` and Helm call of the kind scripts is bounded** (K1, then
+  K9). The wrapper `kctl` in `common.sh` gives an ordinary call
+  `--request-timeout=15s` (`KCTL_REQUEST_TIMEOUT`); `exec` and a `delete
+  --wait` run under the system's `timeout` for 90 s; `wait` and `rollout
+  status` run under `timeout --foreground --kill-after=5` for their own
+  `--timeout` plus 30 s (`KCTL_WAIT_MARGIN`); `helm upgrade` and `install` keep
+  their own `--timeout` and run under it plus 60 s (`HELM_UPGRADE_MARGIN`),
+  the wider margin because a Helm ended in the middle of an upgrade can leave
+  the release `pending-upgrade`. A waiting call with no usable `--timeout` is
+  refused, and a test reads every call site of every script against the rule.
+  The scripts need GNU `timeout`. The request flag is per request, not per
+  call: against a listener that accepts and never answers, `kubectl get
+  --request-timeout=4s` took 20 s (measured by the review at 4 s; 15 s was not
+  measured). Rejected: the request flag on the waiting verbs, because whether
+  it cuts a legitimate watch short was not checked. The ending sentence says
+  to read the node and the containers before anything is deleted (hard rule
+  8), and never says to uninstall or roll back.
+- **A chunk count that cannot be read stops the deploy** (K9, the infra
+  review's M1): `make deploy` used to delete the ingest Jobs and ingest again
+  when the count was unreadable, a paid model call after an unchecked read.
+  As K9 built it, psql's own answer, a count or an error, decided, and a
+  timeout or an unreachable pod stopped the script before anything was
+  deleted; the re-read showed that an error of psql and an answer that is no
+  number still deleted and ingested again, and K13 closed both: the one
+  answer that starts an ingestion is exit 0 with the text `0`.
+- **The chart bounds each Deployment's rollback history at two
+  ReplicaSets** (K2, `revisionHistoryLimit: 2`; a value below 1 is refused),
+  and `make images` reads a reference with a registry, a port or a digest and
+  stops on an image named by a digest and no tag, which cannot say which tag
+  runs. Whether `helm rollback` works stays S022's.
+- **The services' restarts at a renewal are spread by the chart, as a share of
+  the margin** (K2, K2b). A service's place in the chart's sorted list over the
+  count (0, 1/6 up to 5/6) is handed to it as `MERIDIAN_TLS_RESTART_SHARE`;
+  `certlife` looks at the file that share of a margin earlier than before, so
+  the last service looks at most one and five sixths of a margin before the
+  end: 100 s apart for one-hour certificates, 4 h apart for 90 days, and never
+  later than before. No refusal of a short `renewBefore` is built (below).
+  Two replicas of one service would still restart together (not built: one
+  replica of each on kind). Rejected: a second replica (192 to 256 Mi each,
+  and by the code it does not stagger by itself).
+- **`make cert-renew CERT=<name>`** (K3, K10): it does what `cmctl renew`
+  does and nothing else, a merge patch of the Certificate's status that sets
+  `Issuing` to `True` with the reason `ManuallyTriggered`, carrying every
+  other condition and the resource version it read (a Certificate that changed
+  in between is a 409 and the command is run again), and the condition's time
+  set to now, which is how cert-manager tells a new request from a failed one
+  of the earlier attempt. A name that is no DNS label or no Certificate of
+  `meridian` is refused before anything is written, without echoing it. No
+  Secret is read. The holder's record is written `ok` after the patch and not
+  at all after a refusal (K10), and `CERT=rate-store` says first what it costs
+  (the store restarts: a 503 for one to three minutes and the rate windows
+  lost). `deploy.sh`'s 120-second stop names the command. Rejected: `cmctl` as
+  a tool on the machine.
+- **`make deploy` applies the alert rules, and smoke compares each rule's
+  expression and `for`**, not the names alone (K3, K4): one function, shared
+  with `make up`, applies the file after the deploy's checks and before the
+  build. Prometheus returns a parsed expression (matchers sorted, `[24h]` as
+  `[1d]`), so both sides go through one `jq` filter that collapses whitespace,
+  writes durations in milliseconds and sorts the matchers between braces; a
+  rule of the cluster that differs is named, never its text. The filter is not
+  a PromQL parser: what it cannot see is listed in the README.
+- **The sweep's verdict does not take a by-hand Job for the schedule's** (K4,
+  K4b): a Job with the annotation `cronjob.kubernetes.io/instantiate: manual`
+  and not `batch.kubernetes.io/cronjob-scheduled-timestamp` is left out (the
+  scheduled timestamp is the positive fact and wins), and the line says when
+  the newest finished Job of all was made by hand. The CronJob keeps three
+  succeeded Jobs, not one, and the verdict has a case of "cannot tell" for a
+  history that lacks the schedule's newest run, decided by `lastScheduleTime`
+  (a SKIP within 900 s, the stopped FAIL after).
+- **No answer of the cluster or of Prometheus is a program's argument** (K8):
+  they reach `jq` on standard input or as a file; the sweep line lists the
+  Jobs by the sweep's label.
+- **The database's certificates are one smoke line and no series** (K5): the
+  fifth line of check 10 reads the Cluster's three expirations, judges the
+  earliest and fails inside 84 hours (half of the operator's seven days). No
+  short lifetime was built: the operator's lifetime and threshold are whole
+  days, so no renewal can be seen inside one cluster run. CloudNativePG
+  exports no series for them (run R0), so nothing alerts between two smoke
+  runs: a gap, open. Kind only: on Azure the database is the provider's.
+- **The ingestion says which of the gateway's four 503s it met** (K6): the
+  four `detail` texts are a closed set copied into `embedding_client.py` (a
+  test finds every 503 of the gateway's and the common HTTP code by an AST
+  scan), a body is matched only when it is at most 256 bytes, and the Job's
+  last line and the search tool's log hold the matched word (`rate-store-
+  unavailable`, `database-unavailable`, `audit-unavailable`,
+  `provider-unavailable`) or `unknown`, never a body's text. The audit reason
+  stays `gateway-failed`, and the ingestion retries a 429 only, as before.
+- **The rate store's probes leave no process behind** (K7, K10): `redis-cli`
+  and `sleep 2` run as the probe shell's own children and the shell reaps
+  both (`wait -n`); the image's `timeout` is gone; `timeoutSeconds` is 5, so
+  the probe's own 2 s ends first. Found by accident, below.
+- **Smoke's other small changes** (K4, K10): a failed pgvector read says that
+  it failed and with psql's first line; check 8 reads that each service has a
+  policy object of its name; a date of the right form that is no date is
+  "cannot tell when it ends"; a missing `jq` fails the tests under CI and no
+  longer skips them; the sentence of an outer bound reaches smoke's terminal
+  at the telemetry waits (K10b's report said it did so at the two network
+  waits "already": false, the re-read ran that shape and saw smoke die without
+  a word; K13 made those two say it and go on).
+- **The answer for probes that time out under load** (the design's decision
+  13) came by accident and is not a probe value: no value changed, and the
+  rule for the machine is in the development environment document (below, "The
+  machine").
+
+**Where the session's own choices were wrong, and what caught them:**
+
+- **Decision 3 was wrong twice.** The first draft spread the restarts by a
+  fortieth of the certificate's lifetime per service; the advisor (19:57 UTC)
+  showed that above about eight days that passes the 24-hour margin and puts
+  a restart before the renewed file exists, so the spread became a share of
+  the margin. The second draft had the chart refuse a `renewBefore` shorter
+  than the widest restart; K2's implementer stopped, because the chart's
+  lifetime check holds no margin and two existing tests render a 5-minute
+  `renewBefore`. Read again, the refusal was never needed: the health rule
+  reads the file, so a service whose time has passed stays healthy until the
+  file holds a renewed certificate, and a short `renewBefore` costs the
+  spread, never availability. A test pins that (K2b).
+- **The sweep's verdict was wrong on a real cluster** (run R4). K4 passed its
+  tests against stand-ins. On the cluster a Job made by hand evicted the
+  schedule's own success, because the CronJob kept one, and the line failed a
+  healthy schedule for four minutes, resting on a failed Job of the night
+  before. The same fact is a blind spot of the alert `MeridianSweepStale`
+  (the CronJob's last successful time follows a by-hand success), which is
+  still there. K4b raised the limit to three and added the "cannot tell" case;
+  R4c saw the by-hand Job leave the schedule's success alone.
+- **Smoke broke itself after four runs** (run R4b): from the second smoke of
+  that run on, check 7 failed with `jq: Argument list too long`, because smoke
+  handed the namespace's whole Job list to `jq` as an argument (one argument
+  may be 131,072 bytes; seven runs in an hour had left 28 of smoke's own Jobs
+  and a list of 227,658 bytes). The fault is older than this step and is on
+  `main`; it was found by running smoke often, and K8 fixed it (R4c).
+- **The calls that wait were left unbounded** (the infrastructure review's
+  HIGH): K1's comment said they "carry their own `--timeout`", and the review
+  showed against a silent listener that `kubectl wait --timeout=3s` was still
+  running after 25 s, as were `rollout status` and `helm upgrade`: the flag
+  bounds the loop and not the first request. K1's whole purpose was that case.
+  K9 added the outer bound.
+- **Smaller ones.** K4's contract said whitespace normalising would do; the
+  implementer loaded the rules into the pinned Prometheus and found 9 of 20
+  differing, so smoke would have been permanently red, and extended the
+  filter. The design's decision 8 asked for a lifetime short enough to see a
+  database renewal; K5's reading of the operator's source showed it is in
+  whole days. The Python review found three tests that pinned "not yet seen on
+  a cluster" and would fail when the claim became true, and several that
+  would pass against a function that always printed PASS (K10). A contract's
+  wording "three deploys" for run R2 would have overstated it (R2 was one
+  `make deploy`); K9's implementer read the notes and wrote what they show.
+  And the documents understated what was seen (`make cert-renew`, the
+  database line and the by-hand fix all said "not yet seen" after a run had
+  seen them): this record's second job is to bring them to the notes.
+
+**Advisor:** consulted once, at the design before the first contract (2026-10-06
+19:57 UTC). It changed three things: decision 3 became a share of the margin
+and not of the lifetime (above); the ingestion's 503 word is matched against
+the gateway's closed set and only the matched word is logged, never a body; and
+the schedule of the cluster runs, so that a whole suite with loops beside it
+does not overlap them, and the checkout moves to `main` and the holder's record
+is taken before the first run. No later consultation is recorded in this
+step's notes: K2's stop, run R1a's finding, run R4's failure and K6's stop
+were each a result that contradicted what was expected (Part A, step 4), and
+the session settled them itself. The main session adds here any consultation
+it made.
+
+**Work log:**
+
+- **A read-only map** of the step (25 backlog rows, ten clauses, what each
+  needs), a **design** with sixteen decisions and a threat note, then ten
+  contracts, K1 to K10, with three addenda (K2b, K4b, K10b), side by side
+  where their files did not meet, each in a worktree of its own. The first
+  half's commits are in the table below.
+- **Two reviews** of the branch, `infra-reviewer` and `python-reviewer`, once
+  every build but K9 and K10 had landed. The infrastructure review found one
+  HIGH (the calls that wait), four MEDIUM (the chunk count that deletes and
+  ingests again, the process left by a killed probe, the per-request reading
+  of the request flag, the undocumented cost of `CERT=rate-store`) and eight
+  LOW; K9 and K10 took them, but for three LOW (L3, L6 and L7: a row below).
+  The Python review found no critical or high finding, four MEDIUM (tests that
+  pin "not yet seen", tests that pass against an always-PASS function, a `jq`
+  that skips, one test that runs the whole smoke script on stand-ins without
+  ending its process) and five LOW; K9 and K10 took the four MEDIUM and four
+  of the LOW, but for its L4 (a share that is only whitespace refuses the
+  start while an empty one is read as 0, so a chart typo that renders an empty
+  share hides itself) and its account of what a new 503 would have to look
+  like to slip past the word test (rows below).
+- **K6 stopped at a stop of its contract** (2026-10-07 04:22 UTC): the
+  embedding client reads a gateway's reply with a buffered call, so the whole
+  body is held before the client sees it and nothing caps its size. The
+  session's decision: K6 goes on without changing the read (the word is
+  matched only from a body of at most 256 bytes), and the unbounded read is a
+  backlog row at S069's, whose runtime client already got a streamed read with
+  a cap (the row is on `main`; it is cited below and not added again).
+- **The runs on kind**, in the table below, by the session from a separate
+  checkout, each ending with the cluster as `main` and the step's branch
+  describe, the holder's record at S073 and, where smoke was usable, a green
+  smoke.
+
+**The runs** (UTC; local kind cluster, made 2026-10-06 at 18:09; the step's
+branch at the commit named; "tests" means stand-ins, never a cluster):
+
+| Run | When | What it ran | What it saw | What it did not see |
+|---|---|---|---|---|
+| R0 | 2026-10-06 20:02 | Read-only, on `main` d78ff0f; nothing changed | `kubectl` is no field manager of the deployments (B02); a by-hand Job carries `cronjob.kubernetes.io/instantiate: manual` and a scheduled one `batch.kubernetes.io/cronjob-scheduled-timestamp`; the database's three expirations as Go-format text, the operator's ConfigMap with no keys, no series with `cnpg` in 1,728 names; 18 of 35 pods had restarted (the machine had been in swap at a load of 207); a failed sweep Job of 18:26 (`ConnectionTimeout`, the database's pod restarting); 13 ReplicaSets | Anything of the branch: it was not deployed |
+| R1a | 2026-10-06 20:21 to 20:23 | A baseline smoke before breaking a rule object on purpose: it stopped there and changed nothing | The baseline was not green (44 PASS, 1 FAIL: check 8's control); the rate store's pod went not Ready at 20:22, with 2,024 defunct `timeout` processes under the Redis server and "can't fork" in its probes (found by accident, below). Read overnight (02:53 on 2026-10-07): the liveness probe had restarted it at 20:31 and it held 2,025 again | The rule object removed, an interrupted smoke, a stopped schedule (R1 as designed): not run |
+| R2 | 2026-10-07 03:06 to 03:12 | `make deploy` of the branch at 3beaccf (K1, K2, K2b, K7), `TAKE_CLUSTER=1`, 90 s | K2: `revisionHistoryLimit: 2` on seven Deployments, the shares 0 to 5/6 on six services and none on the store, 20 ReplicaSets (13 before); K7: no defunct process at five readings a minute apart and after smoke, six minutes in (the old probes left about 90), Ready, no restart; the holder's record taken from S075; smoke 45 PASS, 0 FAIL, 0 SKIP | A restart at a renewal; a frozen API server; the history trimming a ReplicaSet |
+| R3 | 2026-10-07 03:41 to 03:42 | `make deploy` and `make cert-renew` at 12a6d92 (K3) | The deploy applied the rules (its log line), in 17 s; `cert-renew`: three refusals with nothing written, and one renewal of `policy-mcp` (revision 1 to 2 in the same second, a new request Approved and issued); the service's pod kept its loaded certificate and was not restarted; smoke 45 PASS | A request after a denied one; a 409 |
+| R4 | 2026-10-07 03:49 to 03:52 | Smoke at 5c01f81 (K4), a by-hand sweep Job | Baseline 45 PASS: the rules' expressions and `for` equal the file's after K4's filter; with the by-hand Job, smoke 43 PASS, 1 FAIL, 1 SKIP: the sweep line failed a healthy schedule (the flaw, above) | Step c (a changed `for`) did not run: the operator refused a `for` on the first rule, a recording rule |
+| R4b | 2026-10-07 03:56 to 04:07 | The rule checks at 5c01f81 | A rule's `for` changed on the object (2m to 59m): named, with `make deploy or make up`; `make deploy` put it back; the rule object removed: named, and `make deploy` made it again with five groups; and the `jq` argument-limit failure of check 7 from the second smoke on (above) | A changed expression |
+| R4c | 2026-10-07 04:16 to 04:22 | `make deploy` and smoke at 3d15ada (K4b, K8) | K8: 17 Jobs in the namespace, a list of 123,794 bytes, smoke 45 PASS three times in six minutes; K4b: the CronJob keeps three, a by-hand Job after a scheduled run did not evict the schedule's success, the line passed with its note; a failed scheduled Job of the night kept without turning the line red | The list above 131,072 bytes again; the "cannot tell" case itself |
+| R4d | 2026-10-07 05:00 to 05:03 | `make deploy` (an image build: K6 changed the service) and smoke at 16d0318 (K5), after an overload | Every pod Ready again, with nothing restarted by hand (eight minutes after the load fell); smoke 46 PASS: the database line passed, "the earliest of 3 is platform-db-ca, with 89 days left" | The database line failing; K6's word on a real 503 |
+| R4e | 2026-10-07 06:14 to 06:17 | `make deploy` (an image build, 99 s) and smoke at 3270162 (K9, K10), after a second overload | Every pod Ready again before the deploy, nothing restarted by hand; the deploy with K9's outer bounds on every waiting call (none fired); smoke 46 PASS, 0 FAIL, 0 SKIP; the rate store's new pod with both probes at `timeoutSeconds: 5`, Ready, 0 restarts, 0 defunct processes on the node; restart counts since the cluster's making after four overloads: Envoy Gateway 19, the Prometheus operator, the log agent and the CloudNativePG operator 18 each | K9's outer bound firing (it needs an API server that accepts and never answers: R5); the sentence smoke now shows from a `wait` a bound ended; `cert-renew` with the rate store's name or after a refused write; `images.sh` on a read that fails |
+
+Run R4e is the run at the branch's tip before this record, 3270162, the first
+to carry K9 and K10 (the outer bound on waits and Helm, the probes'
+`timeoutSeconds: 5`, the holder's record of `cert-renew`, the new smoke verdict
+and sentence); its row is filled by the main session. Nothing of K9 or K10 has
+been on kind before it.
+
+**What was found on the cluster and not looked for.** The rate store's probes
+left a defunct process per run: S066 had measured the probe against a paused
+container for a leftover `redis-cli` and found none with `timeout`, and the
+leftover it did not look for was `timeout`'s own (busybox's leaves a watcher
+that becomes an orphan of PID 1, the Redis server, which never reaps a child
+that is not its own). Run R1a read 2,024 defunct processes after about two
+hours, the store not Ready ("can't fork"), and, while it is not Ready, the
+gateway's 503 "the rate store is unavailable" to every call and the rate
+windows lost at the restart. **This is the likely cause, and not a proven one,
+of the 503 at the ingest Job on 2026-10-06 at 18:06** (two refused embedding
+calls a minute apart, the gateway Ready, a store that had been up since the
+morning): the old cluster is gone, so only the mechanism is seen. K7 fixed the
+probes, K10 raised their time limit, and run R2 saw the fix over six minutes.
+
+**The machine** (decision 13's answer, which came by accident, twice): the
+control plane's pods restart when the machine runs out of memory, and not
+because of the probes' values. At 04:51 UTC on 2026-10-07 (the session's own
+whole suite, five implementers, two documents implementers, three
+reviewers and the cluster) the load was 156 and the swap was full (4,095 of
+4,095 MB); eight pods were not Ready, and since the cluster's making the log
+agent, Envoy Gateway, the collector and the Prometheus operator had restarted
+11 or 12 times, the controller manager 9, the scheduler 8 and the database's
+pod 6. At 05:42 UTC, after a second
+overload (a suite at six workers beside a loop of database tests), the
+CloudNativePG operator stood at 17 restarts and Envoy Gateway at 18. Run R0
+had read 18 of 35 pods restarted after the first. Every pod came back on its
+own. No probe value was changed. The rule for the machine, which the notes
+of the two overloads led to, is in
+[the development environment](development-environment.md), "The rule for the
+machine while the cluster is up". Part A's cost-rules bullet still states the
+older rule (it counts test databases only) and is not changed here.
+
+**Contracts and commits** (the first half; `git log --oneline origin/main..HEAD`
+of the step's branch at 3270162, before this record):
+
+| Contract | What it built | Commit |
+|---|---|---|
+| K2, K2b | the history limit, the share of the margin, `make images`'s reading; K2b the pin test and the wording of why no refusal is built | 7a8f8af |
+| K7 | the rate store's probes leave no process behind | d8e78c4 |
+| K1 | the `kubectl` and Helm calls bounded | 3beaccf |
+| K3 | `make deploy` applies the rules; `make cert-renew` | 12a6d92 |
+| K4 | smoke: by-hand Job, expression compare, policy objects, pgvector reads | 5c01f81 |
+| K4b | the history limit of three and the "cannot tell" verdict (run R4) | ff7badb |
+| K8 | smoke hands no answer to `jq` as an argument (run R4b) | 3d15ada |
+| K6 | the ingestion's word for a 503 | 4186001 |
+| K5 | smoke's line for the database's certificates | 16d0318 |
+| K9 | the outer bound on waits and Helm; the chunk count (the review's HIGH and M1) | 21b7acc |
+| K10, K10b | the reviews' other findings; K10b the `wait` sentence reaching the terminal and the prerequisites | 3270162 |
+| D1 | this record, the threat rows, the machine's rule and the sentences the runs made false | with this commit |
+| K12 | the rate store's liveness rule allows two seconds; a stand-in's log line in one write (after the pull request's first run in CI) | eea3599 |
+| K13 | the re-read's four MEDIUM and three LOW, and its sentences (after the re-read of K9, K10 and K12) | ff0d48a |
+
+**Result / verification:**
+
+- **On the cluster**, in the runs above: the history limit and the shares on
+  the services, the probes without a process, `make deploy` applying the
+  rules, one renewal by `make cert-renew`, the by-hand Job that no longer
+  fails a healthy schedule, the rule checks naming a changed `for` and a
+  removed object, smoke past the Job list that broke it, and the database
+  line passing: smoke 45 and then 46 PASS with no FAIL and no SKIP (R4d).
+  Run R4e deployed K9 and K10 on the same cluster and smoke stayed at 46
+  PASS: nothing regressed, and nothing of K9 or K10 that needs a fault was
+  seen.
+- **Tested with stand-ins and not seen on a cluster** is everything else of
+  the ten contracts, and it is named in the next list.
+- **Gates, run by the main session on the final tree** (`main` with S069, S036,
+  S074 and S068 merged in; 4efe910): `make test` (343 tests), `make docs` (14
+  checks) and `make lint` ended 0; the whole suite at six workers beside the
+  kind cluster and no other run with a database: 17,370 passed, 8 skipped (3
+  min 53 s). The commit after it fills this line.
+- **What the pull request's first run in CI showed, and K12.** The hosted
+  runner failed one test of this branch that never failed on the development
+  machine: all twenty runs of the rate store's liveness probe in one container
+  returned 1. Read, not rerun. The liveness rule (on `main` since the store
+  got TLS) called the store unhealthy when the certificate file's second was
+  later than the server's start second, and that start is computed from two
+  numbers each cut down to the second: it can lie up to two seconds below the
+  real start, so a file written just before a start could read as newer than
+  the server, on every probe for the container's life. On a cluster that is
+  one restart of the store about 70 seconds after its pod starts, on a node
+  whose boot second has a large fraction; the development machine's is near
+  zero (measured: six containers), which is why nothing here ever saw it. K12
+  (eea3599) changes the rule to "more than two seconds later", corrects the
+  chart's comment that had called "equal" safe, and tests the rule at the
+  probe's own start second +0, +1, +2 (healthy) and +3 (unhealthy), also with
+  the real image; with the old rule +1 fails on any machine. Its cost is
+  written in the chart: a certificate written within two seconds after a start
+  is not seen as newer, which only a by-hand `make cert-renew` typed as the pod
+  starts can meet. The test that failed now prints what the probe said. A
+  second fault showed while K12's gates ran under load: the stand-in `kubectl`
+  of two test files logged a call in two writes, and the two halves of a pipe
+  could cut each other's line (three changes read as two, once); each call is
+  one write now. The advisor was asked before the fix and confirmed fixing the
+  rule here, not the test; it corrected the session's reason for the two
+  seconds (two cuts, not a step of the clock).
+- **Gates after K12** (the tip, not 4efe910): the rate store's three test
+  files, `test_kind_cert_renew.py` and `test_kind_upkeep_script.py`, three
+  times, 225 passed each; `make test`, `make docs` and `make lint` ended 0.
+  The whole suite was NOT run again on the development machine after K12: the
+  pull request's run in CI on the tip is the whole-suite evidence for it. K12
+  was not deployed: the rule's new form is not seen on kind, and kind's host
+  could not show the fault in any case.
+- **The re-read of the fixes, and K13.** K9, K10 and K12 had been read by
+  nobody; one infrastructure re-read took all three. No critical or high
+  finding, four MEDIUM and seven LOW, and for K12: the arithmetic of the two
+  seconds holds (150 starts measured 0.006 to 0.997 s below the real start on
+  a machine with a boot fraction near zero), no real renewal is missed beyond
+  the named case, and three sentences overclaimed. The four MEDIUM, each in
+  the unsafe or the silent direction: smoke died without a word when a bound
+  fired at the two network waits (the sentence went into a file nobody read);
+  a chunk count that came back empty or not a number with exit 0 still
+  deleted the kept ingest Jobs and ingested again; so did any error of psql
+  itself, which K9's contract had chosen ("as today") and which on a loaded
+  node turns a timed-out count into a delete and a model call; and Helm's
+  `--timeout` is per operation, so the outer bound of one timeout and a
+  minute could end a healthy install of a chart with hooks and leave it
+  `pending-install`. K13 (ff0d48a) fixed the four, each with a test seen
+  failing first: the two sites say the sentence and smoke goes on; only exit
+  0 with the text `0` ingests (K9's choice for psql's errors is REVERSED:
+  `migrate` runs before the count, so the table exists and an error never
+  means "no rows"); the bound for `make up`'s releases is three timeouts and
+  the margin, a ceiling for a pre-hook, the wait and a post-hook that nobody
+  measured (the charts' hooks were not rendered or counted), and its sentence
+  says the way out of `pending-*` is the owner's; the two margins refuse what
+  is not digits. Also: `images.sh` no longer lists every image as unused on
+  an empty answer, the bound's sentence says the call may have been killed,
+  and the sentences say what is true (`timeout` here is uutils 0.10.0, not
+  GNU; the wrapper ran on kind on the path where nothing goes wrong and no
+  bound has fired there; `cert-renew`'s one write of the record is not seen;
+  the restart 70 seconds after a pod starts is what the rule's numbers
+  predict, not something seen). Left as rows: the date verdict's edge (L4)
+  and a real-image test that could flake if `btime` moves between two reads.
+  Nobody reviewed K13.
+- **Gates after K13** (ff0d48a): the implementer's run of every test file
+  that reads a kind script, the chart or the smoke script, 2,551 passed; the
+  main session's run of the nine changed or touched test files, 394 passed,
+  and `make test`, `make docs` and `make lint` ended 0.
+- **The final tree** (`main` with S078 merged in as well; 483502d): `make
+  test` (343 tests), `make docs` (14 checks) and `make lint` ended 0; the
+  whole suite at six workers beside the kind cluster and no other run with a
+  database: 17,681 passed, 8 skipped (3 min 41 s). This run is after K12 and
+  K13, so the sentence above that CI's run would be the only whole-suite
+  evidence for K12 no longer holds: this is it. The commit after it fills
+  this line.
+- **The pull request's second failed run, and K14.** With everything above
+  pushed, the `python` check failed again, on one test of 17,511: a test of
+  smoke's network check runs the script twice and compares the calls, the
+  script names its probe pod after the clock's second, and the second passed
+  between the two runs. An earlier contract of this step had seen exactly
+  that once and the session wrote a backlog row for another step instead of
+  fixing a test it knew could fail on a clock: its own miss, and it cost a
+  run. K14 gives both runs one fixed second in the harness (red first with a
+  clock made to tick on every call, green under the same clock after), and
+  read every other name the kind scripts build from the clock, a random
+  number or a process ID against the tests that see it: none compares two
+  runs. The same reading answered why that run skipped 178 tests where the
+  one before S078 merged skipped 71: the 170 tests of the three Terraform
+  modules' validations skip where `terraform` is missing, and the workflow
+  does not install it. On the hosted runner they have never run (a backlog
+  row, homed at S079, which builds the validate door).
+
+**Not seen** (the first half's list; the second half's items are above):
+
+- the outer bound of K9 and everything K10 changed (R4e is to be the first);
+- a frozen API server against any of the bounds, a Helm ended mid-upgrade;
+- `make cert-renew` after a denied request (what it is for), after a `409`,
+  for the rate store, and as K10 left it;
+- the restarts at a renewal with the spread, and a renewal by the operator;
+- the database line failing, and an alert on the database's certificates
+  (none exists);
+- the "cannot tell" verdict of the sweep line, a list over the kernel's limit
+  again, check 8's FAIL, the pgvector line's failure message, the rules'
+  compare of a changed expression;
+- the history limit removing an old ReplicaSet, and `make images` with the
+  new reading of references;
+- K6's word on a real 503, and the 503 at the ingest Job explained for certain;
+- the failure paths of S062's lines but the deleted rule object (B13), the
+  rate store's 503 and alert (B18), the four telemetry alerts and a renewal of
+  the collector's certificate (B23): none was run;
+- a liveness probe for approver-policy: not built.
+
+**Backlog rows of this step** (the table's rows with the home S073 at the
+start of this half; "closed" means this half closed it, where, and the row's
+status is brought to say so):
+
+| Row (its first words) | This half |
+|---|---|
+| No generated workload has run through the Agent Runtime's run API | Stays: no kind script drives a generated workload, and its image would be one no commit describes; the second half or the step that adds the next workload |
+| the field manager `kubectl` still co-owns | Closed, run R0: the managers are `helm` and `kube-controller-manager` |
+| A first `helm upgrade --install` that fails | Stays: run R6 |
+| Under a laptop load average of 50 to 90 the kubelet's probes time out | Closed, by the machine's answer above and the rule: what restarts the control plane is memory, and no probe value changed |
+| The test database's image has pgvector 0.8.7 | Stays: waits for the CloudNativePG image; untouched here |
+| CloudNativePG issues and renews the database's certificates | Stays, in part: the smoke line passes on the real Cluster (R4d), no renewal can be seen in one run, and no alert reads them |
+| Nothing alerts on missing data | Stays: a rule per absence is S072's kind of work, and the gap was not shown (the design's run for it was not made) |
+| approver-policy has a readiness probe and no liveness probe | Stays: not built in this half |
+| After a denied or failed request cert-manager waits | Stays, in part: `make cert-renew` is built and renewed one healthy Certificate (R3); a request after a denial is run R6 |
+| At a certificate renewal every service restarts in the same minute | Stays, in part: the spread is built and the shares are on the pods (R2); the restarts at a renewal are the one-hour watch of the second half |
+| The scripts' `kubectl` calls have no request timeout | Stays, in part: built (K1, K9) and the deploys ran under it (R2 on); the pgvector message is closed (K4); a frozen API server is run R5 |
+| The chart sets no `revisionHistoryLimit` | Stays, in part: the limit and the new reading are built, the limit seen on the Deployments (R2); the trimming is run R5 |
+| Check 10 of `make smoke` reads approver-policy's wording | Closed, as recorded: in code and tested (`test_a_denial_in_a_form_the_check_does_not_read_is_a_fail_that_prints_it_cut`); only a new version of the add-on fails the line |
+| The failure paths of the lines S062 added | Stays, in part: the deleted rule object was seen (R4b); the approved request, an interrupted run, a missing store table, `make images` without credentials and the demo's wording were not |
+| A manual Job of the sweep hides a stopped schedule | Closed, runs R4 and R4c, for smoke; check 8 reads every service's policy object (passes on kind, the FAIL not seen); the alert's blind spot stands and is said in the threat model |
+| A rotation of the rate store's password has no overlap | Stays: the owner's to run or to accept as not seen |
+| The rate store's liveness script compares the certificate's time | Stays, as accepted: a clock step is a step of the machine's clock, for everything on it |
+| A cold `make up` depends on the chart hosts | Stays: run R6 records the cold time; a retry or a cache is accepted for now |
+| Not seen on a cluster for the rate store | Stays: the 503 with the store down, the alert, two replicas, a frozen store, the refusal of an old Secret were not run |
+| `make smoke` compares the loaded alert rules by group and rule name | Closed, runs R3, R4 and R4b: `make deploy` applies the rules and smoke compares each expression and `for` |
+| `make deploy` checks the rate store's ACL rules and not that the password | Stays: not touched by this half |
+| Under an overloaded machine Tempo, the collector and the database's pod | Closed: the answer and the rule above |
+| A renewal has not been seen for the collector's certificate | Stays, in part: no renewal of the collector's certificate or its authority was run in this half; the database's line is built and passes, and no run can wait out its whole days |
+| Not seen on a cluster after S064 | Stays: no run of this half provoked the four alerts or the renewal of the authority |
+| A migration that is not applied fails one statement of the sweep | Stays: not touched by this half |
+| Not seen on a cluster after S037 | Stays: no run drove a brief |
+| On 2026-10-06 `make deploy` failed twice | Stays, with a likely cause and not a proven one: the store's probes (above, fixed); the ingestion's word is built and not seen on a real refusal |
+| Not seen on a cluster after S075 | Closed in part: `TAKE_CLUSTER=1` was seen (R2); a record left `changing` and `make up` on an existing cluster were not |
+
+**Follow-ups:**
+
+- In the backlog, each with its home (rows added by this record, in Part B):
+  an exit-0 empty or non-numeric answer of `psql` still starts an ingestion,
+  and so does a psql timeout error (K9's decision 4: the shape the review's M1
+  closed, one case short) at **S073**, because it is `deploy.sh`, whose second
+  half is open and whose R6 runs it cold; the test whose pod name carries the
+  epoch and fails when the clock ticks between its two runs
+  (`test_the_probes_and_the_pods_are_the_same_with_seven_services_as_with_one`)
+  at **S074**, whose row is load- and clock-sensitive tests; three small
+  ends in the kind scripts that nobody took (the infrastructure review's L3: a
+  `helm get` timeout in `upkeep.sh` reads as "not installed"; L6: a
+  Deployment name goes unescaped into a regular expression in `smoke.sh`; L7: a
+  plain `delete` without `--wait=false` gets the request flag) at **S073**,
+  because S074 splits `smoke.sh` after this step is on `main` and the fix is
+  cheaper before the split; an empty restart share is read as 0, so a chart
+  typo that renders none hides itself (the Python review's L4) at **S073**,
+  which built the share and whose one-hour watch is where it would show; and
+  the Python review's account of what a new
+  gateway 503 would have to look like to slip past the word test (a status
+  that is an attribute or an imported name, a `JSONResponse` or a `Response`
+  with no `detail=`, a site under `gateway/providers/` or outside `gateway/`
+  and `common/`, a text shared by two causes) at **S069**, which owns the
+  gateway's edges and the embedding client's row below.
+- Already a row on `main`, cited and not added again (K6's stop): the
+  knowledge service's embedding client reads a gateway reply without a size
+  bound; home S069.
+- For the owner: (1) a rotation of the rate store's password with calls going
+  (the design's B15): accept it as not seen, which is the session's default,
+  or run the Secret's removal yourself while calls go; (2) the spread of the
+  restarts is a share of the margin by a service's place in the chart's list,
+  the session's choice; (3) approver-policy's liveness probe was not built in
+  this half: build it in the second, or say it is not wanted.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -14951,3 +15458,30 @@ each before a fix.
   recorded slip. Part A's Renovate list gains the two commands. Six backlog
   rows new, one of them with no step (the open questions only an apply
   settles), two closed (the threat rows and what a scaffold copies and avoids).
+- **v0.72, 2026-10-07:** S073, first half: the kind scripts' `kubectl`
+  and Helm calls are bounded (the calls that wait too, after the
+  infrastructure review's HIGH), a chunk count that cannot be read stops the
+  deploy, the chart bounds the rollback history and spreads the services'
+  restarts at a renewal across their margin, `make cert-renew` asks
+  cert-manager again now, `make deploy` applies the alert rules, the rate
+  store's probes leave no process behind, and `make smoke` (46 lines after a
+  deploy) tells a by-hand sweep Job from the schedule's, compares the rules'
+  expressions, reads every service's policy object and the database's own
+  certificates; the ingestion names which of the gateway's four 503s it met.
+  Evidence is runs R0 to R4e on kind: the session's own choices were wrong
+  five times and the advisor, an implementer, a run or a review caught each
+  (the restart spread twice, the sweep's verdict, a Job list over the kernel's
+  limit, the calls that wait), and a fault found by accident (the probes left
+  2,024 defunct processes) is the likely cause of the 503 of 2026-10-06. The
+  pull request's first run in CI found a fault that is on `main`: the rate
+  store's liveness rule compared two times each cut to the second and could
+  restart a healthy store once; it now allows two seconds (tested with the
+  real image, not deployed). A re-read of the fixes then found four MEDIUM
+  (smoke silent at two waits, two answers of the chunk count that still
+  ingested, Helm's bound too short for charts with hooks), all closed. The
+  machine's rule after four overloads is in the development environment. The
+  step stays open for its
+  second half (a frozen API server, certificates of one hour, the cold run,
+  the ingestion's word on a real refusal, a rotation of the store's
+  password). T-84, T-86, T-87, T-89, T-91 and T-92 changed, no new threat. Eight
+  backlog rows closed, eight closed in part, six new.

@@ -101,7 +101,7 @@ EVAL_INPUTS         := src config/registry data/synthetic data/evaluation/record
 
 STRUCTURIZR := docker run --rm -v "$(CURDIR)/$(ARCH_DIR):/w:ro"
 
-.PHONY: help validate inspect check docs test secret-scan view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db alerts eval eval-compare eval-baseline eval-record synthetic up deploy images helm-lint demo smoke gateway-upkeep grafana grafana-password cluster-holder down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry aws-validate aws-scan aws-plan aws-apply aws-destroy gcp-validate gcp-scan
+.PHONY: help validate inspect check docs test secret-scan view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db alerts eval eval-compare eval-baseline eval-record synthetic up deploy images helm-lint demo smoke gateway-upkeep grafana grafana-password cert-renew cluster-holder down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry aws-validate aws-scan aws-plan aws-apply aws-destroy gcp-validate gcp-scan
 .DEFAULT_GOAL := help
 
 ## help            list the targets
@@ -305,6 +305,10 @@ grafana-password:
 ## helm-lint       lint the Meridian chart strictly, with kind's values (the rate store on, with the image of PYTEST_REDIS_IMAGE: the pin in infra/kind/pins.env is the same one) and every Job on, the upkeep Job with one argument (needs helm)
 helm-lint:
 	helm lint --strict infra/helm/meridian -f infra/kind/values/meridian.yaml --set-string image.repository=meridian --set-string image.tag=lint --set-string rateStore.image=$(PYTEST_REDIS_IMAGE) --set jobs.migrate.enabled=true --set jobs.seed.enabled=true --set jobs.ingest.enabled=true --set jobs.upkeep.enabled=true --set-string jobs.upkeep.runSuffix=lint --set-json 'jobs.upkeep.args=["reservations"]'
+
+## cert-renew      ask cert-manager to issue one Certificate of the namespace meridian again now, for after a denied or failed request when cert-manager's own wait (an hour, doubling) would otherwise hold a repaired deploy: make cert-renew CERT=<name> (the name of a Certificate, see kubectl -n meridian get certificate); it sets the Certificate's Issuing condition as cmctl renew does and changes nothing else; needs make up and make deploy; stops when another holder has the cluster unless TAKE_CLUSTER=1; CERT=rate-store restarts the store (503 for one to three minutes); tested against a stub kubectl; seen on kind on 2026-10-07 (the refusals and one renewal of a healthy Certificate); not seen (a denied request, a 409)
+cert-renew:
+	infra/kind/cert-renew.sh
 
 ## cluster-holder  print who holds the kind cluster (the holder, its commit, the time and the state: changing after a make up or make deploy that did not end well), or that there is no record or no cluster; make up, deploy and down stop when another holder has it unless TAKE_CLUSTER=1 is in front of the command (CLUSTER_HOLDER=<name> names a checkout that is not on a branch); a notice, not a lock
 cluster-holder:

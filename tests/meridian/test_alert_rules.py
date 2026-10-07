@@ -171,7 +171,7 @@ def reason_words(expression: str) -> set[str]:
 
 # ── The manifest ─────────────────────────────────────────────────────────────
 def test_the_folder_holds_the_manifest_and_its_unit_tests_and_nothing_else() -> None:
-    # up.sh applies alerts/meridian.yaml and the Makefile checks meridian.rules.yaml
+    # common.sh applies alerts/meridian.yaml and the Makefile checks meridian.rules.yaml
     # and meridian.test.yaml by name: a second manifest needs both changed.
     assert sorted(p.name for p in ALERTS_DIR.iterdir()) == [
         "meridian.test.yaml",
@@ -613,7 +613,8 @@ def test_up_applies_the_service_monitor_after_the_stack_beside_the_rules() -> No
     (stack,) = [
         i for i, line in enumerate(lines) if line.startswith("install_release kube-")
     ]
-    (rules,) = [i for i, line in enumerate(lines) if "alerts/meridian.yaml" in line]
+    # The rules are applied by the function that deploy.sh calls too (S073).
+    (rules,) = [i for i, line in enumerate(lines) if line == "apply_alert_rules"]
     (monitor,) = [
         i
         for i, line in enumerate(lines)
@@ -630,16 +631,14 @@ def test_up_applies_the_service_monitor_after_the_stack_beside_the_rules() -> No
 def test_up_applies_the_rules_right_after_the_dashboards() -> None:
     text = UP_SH.read_text(encoding="utf-8")
     header = text.split("\n\n", 1)[0]
-    applied = (
-        'log "observability: Meridian\'s alert rules"\n'
-        "kctl apply --server-side --force-conflicts "
-        '-f "${KIND_DIR}/alerts/meridian.yaml" >/dev/null\n'
-    )
 
     assert "alert rules" in header
     call = re.search(r"^apply_dashboards\n", text, re.MULTILINE)
     assert call is not None
-    assert text[call.end() :].startswith(applied)
+    # One call of the function that `make deploy` calls too (S073: one copy, so
+    # the two cannot drift); the apply itself is read in test_kind_alert_rules_deploy.
+    assert text[call.end() :].startswith("apply_alert_rules\n")
+    assert "alerts/meridian.yaml" not in text
 
 
 # ── scripts/alert_rules.py ───────────────────────────────────────────────────

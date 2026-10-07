@@ -85,6 +85,17 @@ APPROVER_STATES = {
     "api-error-messy": "printf 'first line\\n\\033[31mlast   line\\033[0m\\n' >&2; "
     "exit 1",
 }
+# What the stub answers the apply of the alert rules with (S073, K3): the rule
+# object's kind is served, the apply fails, or the kind is not served at all
+# (kubectl's own text for a cluster without the Prometheus operator).
+ALERT_RULE_STATES = {
+    "applied": ":",
+    "failed": 'echo "Error from server (Forbidden): not allowed" >&2; exit 1',
+    "kind-not-served": 'echo "error: resource mapping not found for name: '
+    '\\"meridian\\" namespace: \\"observability\\" from \\"rules\\": no matches for '
+    'kind \\"PrometheusRule\\" in version \\"monitoring.coreos.com/v1\\"" >&2; '
+    'echo "ensure CRDs are installed first" >&2; exit 1',
+}
 
 
 def write_stub(directory: Path, name: str, body: str) -> None:
@@ -113,6 +124,7 @@ def run_deploy(
     approver: str = "ready",
     approver_after: int | None = None,
     telemetry_ca: str = "present",
+    alert_rules: str = "applied",
 ) -> tuple[subprocess.CompletedProcess, str]:
     """deploy.sh whole, in a scratch copy of ``infra/kind/``, with stub
     ``docker``, ``kind``, ``helm`` and ``kubectl`` that log every call. The
@@ -123,7 +135,9 @@ def run_deploy(
     state of ``POLICY_STATES``; the approver-policy Deployment is in the state
     ``approver`` names (``APPROVER_STATES``), until it has been looked at
     ``approver_after`` times when that is given: from the next look on it has
-    one replica (the stub answers by the count of its own log). ``sleep`` is
+    one replica (the stub answers by the count of its own log). The apply of
+    the alert rules is answered as ``alert_rules`` says (``ALERT_RULE_STATES``).
+    ``sleep`` is
     a stub that only logs its call, so the pause between two looks at the
     add-on costs nothing and the log counts the pauses. A ``docker build``
     fails, so a run that gets that far ends there. Returns the process and
@@ -175,6 +189,9 @@ def run_deploy(
         # ... and the record it writes at the start and the end (`create | apply`).
         '  *"create configmap meridian-cluster-holder"*) echo "{}" ;;\n'
         '  *"-n kube-system apply --server-side"*) cat >/dev/null ;;\n'
+        # Meridian's alert rules (S073): the file's path is the scratch copy's.
+        '  *"apply --server-side --force-conflicts -f "*"alerts/meridian.yaml"*) '
+        f"{ALERT_RULE_STATES[alert_rules]} ;;\n"
         '  *"get database"*) printf true ;;\n'
         f"  *\"get networkpolicy\"*) printf '%s' '{DATABASE_POLICY}' ;;\n"
         f"  *\"get endpointslices\"*) printf '%s' '{API_SERVER_SLICE}' ;;\n"
@@ -524,12 +541,14 @@ def test_deploy_checks_the_issuer_and_the_approval_after_the_database_only() -> 
     assert calls.index("require_approval") < calls.index("build_image")
     assert calls.index("require_approval") < first_job
     # `require_database` is the line the split above cut at; the issuer is the
-    # first call after it, the approval the second, and the rate store's Secret
-    # (S066) the third, in front of the build.
-    assert [line for line in calls if line][:4] == [
+    # first call after it, the approval the second, the rate store's Secret
+    # (S066) the third and the alert rules (S073) the fourth, the first thing
+    # the deploy changes, in front of the build.
+    assert [line for line in calls if line][:5] == [
         "require_issuer",
         "require_approval",
         "require_rate_store_secret",
+        "apply_alert_rules",
         "build_image",
     ]
 

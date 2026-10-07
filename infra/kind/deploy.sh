@@ -21,6 +21,12 @@
 #      and the Secret `rate-store-credentials` (S066), with its two keys, the
 #      gateway's address in the rate store and the store's ACL file, which
 #      `make up` makes once: a pod that cannot read it would not start
+#      Then, the first change (S073): Meridian's alert rules, the one
+#      PrometheusRule `make up` applies too (apply_alert_rules, common.sh), so a
+#      rule changed in the tree is on the cluster after a deploy. They come after
+#      the checks, so a refused deploy changes nothing, and before the build, so
+#      a cluster without the Prometheus operator is refused in seconds, not after
+#      the image and the Jobs
 #   1. docker build of the repository's Dockerfile, tagged meridian:<first 12 hex
 #      digits of the image ID> and loaded into the kind node (no registry)
 #   2. the migration Job, as the database owner role, then the policy seed Job,
@@ -97,6 +103,15 @@ readonly GATEWAY_SERVICE=model-gateway
 readonly JOB_TIMEOUT=420
 readonly JOB_INTERVAL=3
 readonly ROLLOUT_TIMEOUT=300s
+# The release is installed without --wait (the rollouts above are the wait), so
+# this bounds Helm's own work: as long as a rollout may take. S073.
+readonly HELM_UPGRADE_TIMEOUT=300s
+# How long a deleted Job may take to go, its pod's termination included. Under
+# kctl's KCTL_OUTER_TIMEOUT (90 s), which bounds the call whatever happens.
+readonly DELETE_TIMEOUT=60s
+# The deadlines of a psql in a pod, as smoke.sh's PSQL_OPTIONS (S062): a lock or
+# a statement that hangs ends the read, and the script goes on without the count.
+readonly PSQL_OPTIONS='-c statement_timeout=5s -c lock_timeout=3s'
 # cert-manager issues the services' certificates in seconds once its webhook and
 # the issuer are Ready (`make up` waited for both); two minutes is far more than
 # a first deploy needs.
@@ -113,7 +128,7 @@ readonly TOKEN_WINDOW_SECONDS=62
 # SECONDS at which this deploy saw its ingestion complete; empty when none ran.
 ingested_at=""
 
-need_tools docker kind kubectl helm jq
+need_tools docker kind kubectl helm jq timeout
 require_local_docker
 need_cluster
 docker info >/dev/null 2>&1 || die "the Docker daemon is not running; start Docker Desktop"
@@ -341,7 +356,7 @@ render_job() {
 # the Jobs run is idempotent.
 run_job() {
   local job="$1" chart_job="$2" state deadline
-  kctl -n "${NAMESPACE}" delete "job/${job}" --ignore-not-found --wait >/dev/null
+  kctl -n "${NAMESPACE}" delete "job/${job}" --ignore-not-found --wait --timeout="${DELETE_TIMEOUT}" >/dev/null
   log "job ${job}"
   render_job "${chart_job}" | kctl apply --server-side --force-conflicts -f - >/dev/null
   deadline=$((SECONDS + JOB_TIMEOUT))
@@ -371,22 +386,37 @@ run_job() {
 # does not create the namespace: make up did.
 install_release() {
   log "installing release ${RELEASE}"
-  helm_chart upgrade --install --take-ownership --server-side=true --force-conflicts >/dev/null ||
+  helm_chart upgrade --install --take-ownership --server-side=true --force-conflicts --timeout "${HELM_UPGRADE_TIMEOUT}" >/dev/null ||
     die "helm could not install release ${RELEASE} (its error is above; to see why: helm --kubeconfig ${KUBECONFIG_FILE} --kube-context ${KUBE_CONTEXT} -n ${NAMESPACE} status ${RELEASE}, or history ${RELEASE})"
 }
 
 # stored_chunk_count: the number of rows in knowledge.chunks (the query is
 # CHUNK_COUNT_SQL of common.sh, which smoke.sh reads too), read in the
-# database's primary pod the way smoke.sh reaches psql. Fails when it cannot be
-# read.
+# database's primary pod the way smoke.sh reaches psql. Prints psql's answer and
+# returns 0 when the exec ended with status 0; returns 1 for anything else: the
+# pod was not found or not reached, the call ended at its outer bound (124 or
+# 137), or psql ran and failed (kubectl exits with psql's own status then, and
+# says "command terminated with exit code N"). Only status 0 says what the table
+# holds, and its text is the caller's to check: an error never means "no rows",
+# because `migrate` runs before this and the table exists. kubectl's error is
+# shown (cleaned and cut short) when the call failed.
 stored_chunk_count() {
-  local primary
+  local primary errors answer status=0
   primary="$(kctl -n "${NAMESPACE}" get pod \
     -l cnpg.io/cluster=platform-db,cnpg.io/instanceRole=primary \
-    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)" || return 1
+    -o jsonpath='{.items[0].metadata.name}')" || return 1
   [[ -n "${primary}" ]] || return 1
-  kctl -n "${NAMESPACE}" exec "${primary}" -c postgres -- \
-    psql -d meridian -tAc "${CHUNK_COUNT_SQL}" 2>/dev/null
+  errors="$(mktemp)"
+  answer="$(kctl -n "${NAMESPACE}" exec "${primary}" -c postgres -- \
+    env "PGOPTIONS=${PSQL_OPTIONS}" psql -d meridian -tAc "${CHUNK_COUNT_SQL}" 2>"${errors}")" || status=$?
+  if ((status == 0)); then
+    rm -f "${errors}"
+    printf '%s\n' "${answer}"
+    return 0
+  fi
+  printable_ascii <"${errors}" | cut -c 1-300 >&2
+  rm -f "${errors}"
+  return 1
 }
 
 # The ingestion of this image's corpus, at most once per image. Its Job is kept
@@ -396,7 +426,7 @@ stored_chunk_count() {
 # other ingestion Job (another tag, or a failed one) is deleted first. Sets
 # ${ingested_at} when it ran.
 ingest_corpus() {
-  local job="meridian-ingest-${tag}" found state chunks
+  local job="meridian-ingest-${tag}" found state chunks count_status=0
   # An error is not "no such Job" (that would ingest again): it stops the
   # deploy. An empty answer means there is no such Job. Stderr is not part of
   # the answer: a warning there is not a Job.
@@ -407,13 +437,22 @@ ingest_corpus() {
     state="$(job_state "${job}")" || die "could not read the state of job/${job}"
   fi
   if [[ "${state}" == succeeded ]]; then
-    if chunks="$(stored_chunk_count)" && [[ "${chunks}" =~ ^[0-9]+$ ]] && ((10#${chunks} > 0)); then
+    chunks="$(stored_chunk_count)" || count_status=$?
+    # Ingesting again removes the kept ingestion Jobs and embeds the corpus
+    # again, which calls the model: the only answer that starts it is exit 0
+    # with the text 0. Everything else that is not a positive number with
+    # exit 0 stops the deploy with nothing removed: an error says nothing about
+    # the table (`migrate` ran before this, so the table exists and an error
+    # never means "no rows"), nor does an empty or garbled answer.
+    ((count_status == 0)) && [[ "${chunks}" =~ ^[0-9]+$ ]] ||
+      die "could not read how many rows knowledge.chunks holds (the database's pod was not found, did not answer, or psql failed, or the answer was not a number; kubectl's error, if any, is above), so it is not known whether the corpus of image ${image} is in the store. Nothing was removed and no ingestion started: it would embed the corpus again, which calls the model and costs money. Find out why the count cannot be read (kubectl -n ${NAMESPACE} get pods -l cnpg.io/cluster=platform-db), then run make deploy again"
+    if ((10#${chunks} > 0)); then
       log "the corpus of image ${image} is already in the store (job ${job} succeeded, ${chunks} chunks in knowledge.chunks); not ingesting again"
       return 0
     fi
-    log "job ${job} succeeded, but knowledge.chunks holds no rows or could not be read; ingesting again"
+    log "job ${job} succeeded, but knowledge.chunks holds no rows; ingesting again"
   fi
-  kctl -n "${NAMESPACE}" delete jobs -l app.kubernetes.io/name=meridian-ingest --ignore-not-found --wait >/dev/null
+  kctl -n "${NAMESPACE}" delete jobs -l app.kubernetes.io/name=meridian-ingest --ignore-not-found --wait --timeout="${DELETE_TIMEOUT}" >/dev/null
   run_job "${job}" ingest
   ingested_at=${SECONDS}
 }
@@ -425,7 +464,7 @@ ingest_corpus() {
 wait_for_certificates() {
   kctl -n "${NAMESPACE}" wait --for=condition=Ready certificate \
     -l app.kubernetes.io/part-of=meridian --timeout="${CERTIFICATE_TIMEOUT}" >/dev/null ||
-    die "the Certificates were not all Ready in ${CERTIFICATE_TIMEOUT}. Look at the requests first (since S056 the usual cause is one that approver-policy denied or never decided): kubectl -n ${NAMESPACE} get certificaterequest, then describe the one of the Certificate that is not Ready and read its Approved or Denied condition and the reason. Then the issuer '${ISSUER_NAME}': is it Ready? (kubectl get clusterissuer ${ISSUER_NAME}; 'make up' makes it). The runbook: docs/operations/runbooks/certificate-expiry.md"
+    die "the Certificates were not all Ready in ${CERTIFICATE_TIMEOUT}. Look at the requests first (since S056 the usual cause is one that approver-policy denied or never decided): kubectl -n ${NAMESPACE} get certificaterequest, then describe the one of the Certificate that is not Ready and read its Approved or Denied condition and the reason. Then the issuer '${ISSUER_NAME}': is it Ready? (kubectl get clusterissuer ${ISSUER_NAME}; 'make up' makes it). After a failed request cert-manager waits before it asks again (an hour, doubling), so once the cause is repaired ask it now: make cert-renew CERT=<name> (the name of a Certificate that is not Ready: kubectl -n ${NAMESPACE} get certificate). The runbook: docs/operations/runbooks/certificate-expiry.md"
   log "the services' certificates are ready"
 }
 
@@ -472,6 +511,7 @@ require_database
 require_issuer
 require_approval
 require_rate_store_secret
+apply_alert_rules
 build_image
 run_job "meridian-migrate-${tag}" migrate
 run_job "meridian-seed-${tag}" seed

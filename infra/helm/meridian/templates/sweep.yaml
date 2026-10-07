@@ -21,10 +21,14 @@ no image tag.
   startingDeadlineSeconds   a run the controller could not start within 120 s
                             is skipped; the next one is five minutes away
   backoffLimit 0            the next run is the retry
-  history limits            one success and the last three failures; a by-hand
-                            Job counts, as the CronJob owns it. A success is
-                            removed when the next one finishes, about five
-                            minutes later; make smoke reads the last finished
+  history limits            the last three successes and the last three
+                            failures; a by-hand Job counts, as the CronJob owns
+                            it. With one success kept, a by-hand success
+                            evicted the schedule's own (seen on kind on
+                            2026-10-07), and make smoke could not tell the
+                            schedule's last run; three leave it there after a
+                            by-hand run or two. The oldest success goes when a
+                            fourth finishes; make smoke reads the last finished
   ttlSecondsAfterFinished   a day: what keeps a failure for the morning, and
                             the last success of a suspended CronJob, which no
                             later Job pushes out
@@ -94,7 +98,7 @@ spec:
   schedule: {{ .Values.sweep.schedule | quote }}
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 120
-  successfulJobsHistoryLimit: 1
+  successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   jobTemplate:
     metadata:
