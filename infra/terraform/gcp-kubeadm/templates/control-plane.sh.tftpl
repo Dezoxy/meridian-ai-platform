@@ -1,0 +1,166 @@
+#!/bin/bash
+# The control-plane node's boot script (cloud-init user data), rendered by
+# nodes.tf. It has never run on a real node: tests/meridian/
+# test_gcp_kubeadm_bootstrap.py runs it against stand-in programs.
+#
+# It holds NO secret. User data is metadata of the instance, readable by anyone
+# who may get the instance, so the join token is made on this node, after boot,
+# and leaves it only through one version of one Secret Manager secret (the secret
+# that Terraform made, with no version).
+#
+# The cluster's API server is at the node's INTERNAL address (INTERNAL_ADDRESS,
+# reserved by Terraform and given to the node as its own): the workers join there
+# and this node's own kubeconfig names it, so no node ever has to reach this one
+# through its public address. The PUBLIC address (a reserved one, attached when
+# the instance is created) goes into the API server's certificate as an extra
+# name, so that the one address the firewall admits (the owner's) can reach the
+# API server with a certificate that names what it dials.
+#
+# Five settings have defaults and may be set in the environment: a test shortens
+# them, and cloud-init sets none of them. Three are below the "Bounds" heading
+# (ADDRESS_ATTEMPTS, PUBLISH_ATTEMPTS and POLL_SECONDS: BOOT_ROOT, the root prefix
+# a test points elsewhere, is the fourth line there), two are in the text shared
+# with the workers (CONTAINERD_ATTEMPTS and APT_ATTEMPTS).
+#
+# Terraform renders this file: every shell parameter expansion is written with
+# a doubled dollar sign, and no percent sign is followed by a brace.
+set -euo pipefail
+# The alphabet of the join pattern (node-common) is bytes: see the note there.
+export LC_ALL=C
+export HOME=/root
+
+ROLE='control-plane'
+LOCATION='${location}'
+SECRET_ID='${secret_id}'
+INTERNAL_ADDRESS='${internal_address}'
+PUBLIC_ADDRESS='${public_address}'
+API_PORT='${api_port}'
+POD_NETWORK_CIDR='${pod_network_cidr}'
+CALICO_VERSION='${calico_version}'
+CALICO_MANIFEST_SHA256='${calico_manifest_sha256}'
+
+# Bounds: a number of tries and the seconds between two of them.
+BOOT_ROOT="$${BOOT_ROOT:-}"
+ADDRESS_ATTEMPTS="$${ADDRESS_ATTEMPTS:-12}"
+PUBLISH_ATTEMPTS="$${PUBLISH_ATTEMPTS:-10}"
+POLL_SECONDS="$${POLL_SECONDS:-5}"
+
+${common}
+
+# The addresses are given to the instance when it is created (the internal one
+# as the interface's own, the public one as its access configuration), so unlike
+# an address that is attached after boot there is nothing to wait for. The
+# metadata server is asked all the same, with a bound, and kubeadm does not start
+# unless it reports exactly the two addresses the certificates and the join
+# command are about to name: a node that reports others would write a control-plane
+# endpoint nothing answers on. Runs after the packages, because curl is installed
+# by them.
+wait_for_the_addresses() {
+  local attempt internal external
+  for ((attempt = 1; attempt <= ADDRESS_ATTEMPTS; attempt++)); do
+    internal=$(metadata instance/network-interfaces/0/ip 2>/dev/null) || internal=''
+    external=$(metadata instance/network-interfaces/0/access-configs/0/external-ip 2>/dev/null) ||
+      external=''
+    if [[ $internal == "$INTERNAL_ADDRESS" && $external == "$PUBLIC_ADDRESS" ]]; then
+      log "the node's addresses are the internal $INTERNAL_ADDRESS and the public $PUBLIC_ADDRESS"
+      return 0
+    fi
+    log "waiting for the addresses (the node reports '$internal' and '$external', try $attempt of $ADDRESS_ATTEMPTS)"
+    sleep "$POLL_SECONDS"
+  done
+  die "gave up after $ADDRESS_ATTEMPTS tries: the node's addresses never became the internal $INTERNAL_ADDRESS and the public $PUBLIC_ADDRESS"
+}
+
+# Once per node, and the first thing the script does, before it installs or
+# restarts anything. A bootstrap that failed is removed and applied again, not
+# repaired by hand (the README says so), so a node that already has an admin
+# kubeconfig is refused, and nothing on it is touched.
+refuse_a_second_run() {
+  local admin_conf="$BOOT_ROOT/etc/kubernetes/admin.conf"
+  [[ ! -e $admin_conf ]] || die "this node already has $admin_conf: kubeadm init runs once per node"
+}
+
+initialise_the_control_plane() {
+  local admin_conf="$BOOT_ROOT/etc/kubernetes/admin.conf"
+  log "running kubeadm init"
+  # --skip-token-print: init would print its own bootstrap token, and cloud-init
+  # keeps this script's output in a log on the node for the node's life.
+  #
+  # Two tokens exist for the hour: init still creates its default one (unused,
+  # and not printed), and publish_the_join_command makes a second. The first is
+  # left because the workers' discovery reads the cluster-info ConfigMap, which
+  # init's bootstrap-token phase writes: skipping that phase would remove the
+  # ConfigMap along with the token. No page of kubeadm's documentation was read
+  # for this, and the module knows of no flag that drops only the token. Both
+  # tokens die at the end of the hour.
+  kubeadm init \
+    --control-plane-endpoint "$INTERNAL_ADDRESS:$API_PORT" \
+    --apiserver-cert-extra-sans "$PUBLIC_ADDRESS" \
+    --pod-network-cidr "$POD_NETWORK_CIDR" \
+    --token-ttl 1h \
+    --skip-token-print || die "kubeadm init failed"
+  [[ -r $admin_conf ]] || die "kubeadm init finished but $admin_conf is not there"
+}
+
+# The network plugin, from the manifest of one release. The digest is checked
+# before anything is applied.
+apply_the_network_plugin() {
+  local admin_conf="$BOOT_ROOT/etc/kubernetes/admin.conf"
+  local manifest="$WORK_DIR/calico.yaml"
+  local actual
+  log "fetching the network plugin manifest $CALICO_VERSION"
+  fetch "https://raw.githubusercontent.com/projectcalico/calico/$CALICO_VERSION/manifests/calico.yaml" "$manifest"
+  actual=$(sha256sum "$manifest") || die "could not compute the manifest's SHA-256"
+  actual=$${actual%% *}
+  [[ $actual == "$CALICO_MANIFEST_SHA256" ]] ||
+    die "the network plugin manifest has SHA-256 $actual, not the pinned $CALICO_MANIFEST_SHA256; nothing was applied"
+  log "applying the network plugin"
+  kubectl --kubeconfig "$admin_conf" apply --server-side -f "$manifest" || die "could not apply the network plugin"
+}
+
+# A token that lives one hour, printed as a join command, read back through the
+# same strict pattern the workers use, and only then written as a new version of
+# the one secret. The version's data (the command, base64 encoded, as the API
+# asks) goes to curl through a file in a private temporary directory (made by
+# mktemp -d, mode 700), not through the argument list, and so does the access
+# token. A failed try says why in one masked line (the status curl reports), and
+# the tries are bounded.
+publish_the_join_command() {
+  local line encoded attempt
+  local body_file="$WORK_DIR/request-body" error_file="$WORK_DIR/api-error"
+  line=$(kubeadm token create --ttl 1h --print-join-command) || die "kubeadm could not make a join command"
+  parse_join_command "$line" "$INTERNAL_ADDRESS:$API_PORT" ||
+    die "what kubeadm printed is not a join command for $INTERNAL_ADDRESS:$API_PORT; nothing was published"
+  encoded=$(printf 'kubeadm join %s:%s --token %s --discovery-token-ca-cert-hash sha256:%s' \
+    "$INTERNAL_ADDRESS" "$API_PORT" "$JOIN_TOKEN" "$JOIN_HASH" | base64 -w0) ||
+    die "could not encode the join command"
+  printf '{"payload":{"data":"%s"}}' "$encoded" >"$body_file"
+  for ((attempt = 1; attempt <= PUBLISH_ATTEMPTS; attempt++)); do
+    if {
+      make_the_auth_header &&
+        secret_api ':addVersion' --request POST \
+          --header 'Content-Type: application/json' --data-binary "@$body_file" >/dev/null
+    } 2>"$error_file"; then
+      log "wrote the join command as a new version of the secret $SECRET_ID"
+      return 0
+    fi
+    log "could not write the secret (try $attempt of $PUBLISH_ATTEMPTS): $(the_last_error "$error_file")"
+    sleep "$POLL_SECONDS"
+  done
+  die "gave up after $PUBLISH_ATTEMPTS tries: the join command was not written to the secret $SECRET_ID; the last error: $(the_last_error "$error_file")"
+}
+
+for setting in ADDRESS_ATTEMPTS PUBLISH_ATTEMPTS POLL_SECONDS CONTAINERD_ATTEMPTS APT_ATTEMPTS; do
+  require_number "$setting"
+done
+
+refuse_a_second_run
+make_work_dir
+
+install_node
+wait_for_the_addresses
+read_the_project_id
+initialise_the_control_plane
+apply_the_network_plugin
+publish_the_join_command
+log "done"

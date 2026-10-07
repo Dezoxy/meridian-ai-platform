@@ -1938,4 +1938,254 @@
 {"expect":"deny","command":"kubectl exec deploy/rate-store -- sh -c \"redis-cli ping; cat /etc/redis-acl/users.acl\""}
 {"expect":"deny","command":"kubectl exec deploy/rate-store -- awk 1 /etc/redis-acl/users.acl"}
 {"expect":"deny","command":"kubectl exec deploy/rate-store -- redis-cli ping -- awk 1 /etc/redis-acl/users.acl"}
+{"expect":"ask","note":"K6 (S079): -chdir twins of lines 295-303 and 472-476 for the second module","command":"terraform -chdir=infra/terraform/aws-kubeadm plan"}
+{"expect":"ask","command":"tofu -chdir=infra/terraform/aws-kubeadm plan"}
+{"expect":"ask","command":"terraform -chdir=infra/terraform/aws-kubeadm plan -var-file=stand-in.json"}
+{"expect":"ask","command":"terraform -chdir=infra/terraform/aws-kubeadm show"}
+{"expect":"ask","command":"terraform -chdir=infra/terraform/aws-kubeadm show aws-kubeadm.tfplan"}
+{"expect":"ask","command":"terraform -chdir=infra/terraform/aws-kubeadm output -json"}
+{"expect":"ask","command":"tofu -chdir=infra/terraform/aws-kubeadm output"}
+{"expect":"ask","command":"terraform -chdir=infra/terraform/aws-kubeadm state list"}
+{"expect":"ask","command":"tofu -chdir=infra/terraform/aws-kubeadm state list"}
+{"expect":"ask","command":"terraform -chdir=infra/terraform/aws-kubeadm state show aws_instance.control_plane"}
+{"expect":"ask","command":"terraform -chdir=infra/terraform/aws-kubeadm state pull"}
+{"expect":"ask","command":"terraform -chdir=infra/terraform/aws-kubeadm console"}
+{"expect":"ask","command":"terraform -chdir=infra/terraform/aws-kubeadm refresh"}
+{"expect":"ask","command":"terraform -chdir=infra/terraform/aws-kubeadm workspace select default"}
+{"expect":"ask","command":"terraform -chdir=infra/terraform/aws-kubeadm workspace show"}
+{"expect":"ask","command":"terraform -chdir=\"infra/terraform/aws-kubeadm\" show"}
+{"expect":"ask","command":"terraform -chdir=./infra/terraform/aws-kubeadm output"}
+{"expect":"deny","note":"K6 (S079): -chdir twins of lines 233-252 and 486-491 for the second module","command":"terraform -chdir=infra/terraform/aws-kubeadm apply"}
+{"expect":"deny","command":"terraform -chdir=./infra/terraform/aws-kubeadm apply aws-kubeadm.tfplan"}
+{"expect":"deny","command":"terraform -chdir=infra/terraform/aws-kubeadm destroy"}
+{"expect":"deny","command":"terraform -chdir=infra/terraform/aws-kubeadm plan -out=x.tfplan"}
+{"expect":"deny","command":"terraform -chdir=infra/terraform/aws-kubeadm plan -input=false -out x.tfplan"}
+{"expect":"deny","command":"terraform -chdir=infra/terraform/aws-kubeadm import aws_vpc.main vpc-0abc"}
+{"expect":"deny","command":"terraform -chdir=infra/terraform/aws-kubeadm state mv a b"}
+{"expect":"deny","command":"terraform -chdir=infra/terraform/aws-kubeadm state rm aws_vpc.main"}
+{"expect":"deny","command":"terraform -chdir=infra/terraform/aws-kubeadm state push x.tfstate"}
+{"expect":"deny","command":"terraform -chdir=infra/terraform/aws-kubeadm force-unlock 1234"}
+{"expect":"deny","command":"terraform -chdir=infra/terraform/aws-kubeadm workspace new w1"}
+{"expect":"deny","command":"terraform -chdir=infra/terraform/aws-kubeadm workspace delete x"}
+{"expect":"deny","command":"terraform -chdir=infra/terraform/aws-kubeadm workspace select stand-in"}
+{"expect":"deny","command":"tofu -chdir=infra/terraform/aws-kubeadm workspace select stand-in"}
+{"expect":"deny","command":"terraform -chdir=infra/terraform/aws-kubeadm workspace select default; terraform -chdir=infra/terraform/aws-kubeadm workspace new x"}
+{"expect":"deny","command":"tofu -chdir=infra/terraform/aws-kubeadm apply"}
+{"expect":"deny","command":"tofu -chdir=infra/terraform/aws-kubeadm import a b"}
+{"expect":"deny","command":"terraform -chdir=\"infra/terraform/aws-kubeadm\" apply"}
+{"expect":"deny","command":"terraform -chdir=/srv/stand-in/infra/terraform/aws-kubeadm workspace new x"}
+{"expect":"none","note":"K6 (S079): the checks that change nothing still pass in the second module, as lines 253-256, 480 and 493 do in the first","command":"terraform -chdir=infra/terraform/aws-kubeadm validate"}
+{"expect":"none","command":"terraform -chdir=infra/terraform/aws-kubeadm validate -no-color"}
+{"expect":"none","command":"terraform -chdir=infra/terraform/aws-kubeadm fmt -check -recursive"}
+{"expect":"none","command":"terraform -chdir=infra/terraform/aws-kubeadm init -backend=false -lockfile=readonly"}
+{"expect":"none","command":"terraform -chdir=infra/terraform/aws-kubeadm providers lock -platform=linux_amd64 -platform=darwin_arm64"}
+{"expect":"none","command":"terraform -chdir=infra/terraform/aws-kubeadm workspace list"}
+{"expect":"deny","note":"K6 (S079): cd twins of lines 245-251 for the second module","command":"cd infra/terraform/aws-kubeadm && terraform apply"}
+{"expect":"deny","command":"cd infra/terraform/aws-kubeadm; terraform apply -auto-approve"}
+{"expect":"deny","command":"cd /srv/x/infra/terraform/aws-kubeadm && terraform workspace new x"}
+{"expect":"deny","command":"cd infra/terraform/aws-kubeadm && tofu import a b"}
+{"expect":"deny","command":"cd infra/terraform/aws-kubeadm && terraform state rm a"}
+{"expect":"deny","command":"cd infra/terraform/aws-kubeadm && terraform plan -out=x.tfplan"}
+{"expect":"deny","command":"cd infra/terraform/aws-kubeadm && terraform workspace select stand-in"}
+{"expect":"deny","command":"cd \"infra/terraform/aws-kubeadm\" && terraform apply"}
+{"expect":"deny","command":"cd infra/terraform && cd aws-kubeadm && terraform apply"}
+{"expect":"deny","command":"cd aws-kubeadm && terraform destroy"}
+{"expect":"ask","note":"K6 (S079): cd twins of lines 302-303 and 474-475 and 487","command":"cd infra/terraform/aws-kubeadm && terraform output"}
+{"expect":"ask","command":"cd infra/terraform/aws-kubeadm && tofu show aws-kubeadm.tfplan"}
+{"expect":"ask","command":"cd infra/terraform/aws-kubeadm && terraform plan"}
+{"expect":"ask","command":"cd infra/terraform/aws-kubeadm && tofu plan -input=false"}
+{"expect":"ask","command":"cd infra/terraform/aws-kubeadm && terraform state list"}
+{"expect":"ask","command":"cd infra/terraform/aws-kubeadm && terraform workspace select default"}
+{"expect":"ask","command":"cd aws-kubeadm && terraform show"}
+{"expect":"none","command":"cd infra/terraform/aws-kubeadm && ls"}
+{"expect":"none","command":"cd infra/terraform/aws-kubeadm && terraform validate"}
+{"expect":"none","command":"cat infra/terraform/aws-kubeadm/README.md"}
+{"expect":"none","command":"cat infra/terraform/aws-kubeadm/variables.tf"}
+{"expect":"none","command":"cat infra/terraform/aws-kubeadm/terraform.tfvars.example"}
+{"expect":"none","command":"ls infra/terraform/aws-kubeadm"}
+{"expect":"none","command":"git add infra/terraform/aws-kubeadm docs"}
+{"expect":"none","command":"git diff -- infra/terraform/aws-kubeadm"}
+{"expect":"none","note":"K6 (S079): a name that only starts like the second module's is not the module (the boundary of the new pattern); the settings test is what asks about a third module","command":"terraform -chdir=infra/terraform/aws-kubeadmx output"}
+{"expect":"none","command":"terraform -chdir=infra/terraform/aws-eks show"}
+{"expect":"none","command":"terraform -chdir=infra/terraform/aws-kubeadmx workspace new w1"}
+{"expect":"none","command":"cd infra/terraform/aws-eks && terraform output"}
+{"expect":"none","command":"cd infra/terraform/aws-kubeadmx && terraform show"}
+{"expect":"ask","command":"terraform -chdir=infra/terraform/aws-kubeadmx apply"}
+{"expect":"deny","note":"K6 (S079): working directory twins of lines 494-509 for the second module","cwd":"/srv/stand-in/infra/terraform/aws-kubeadm","command":"terraform apply"}
+{"expect":"deny","cwd":"/srv/stand-in/infra/terraform/aws-kubeadm","command":"tofu apply"}
+{"expect":"deny","cwd":"/srv/stand-in/infra/terraform/aws-kubeadm","command":"terraform workspace new x"}
+{"expect":"deny","cwd":"/srv/stand-in/infra/terraform/aws-kubeadm","command":"terraform workspace select stand-in"}
+{"expect":"deny","cwd":"/srv/stand-in/infra/terraform/aws-kubeadm","command":"terraform plan -out=x.tfplan"}
+{"expect":"deny","cwd":"/srv/stand-in/infra/terraform/aws-kubeadm","command":"tofu destroy"}
+{"expect":"deny","cwd":"/srv/stand-in/infra/terraform/aws-kubeadm","command":"tofu import a b"}
+{"expect":"deny","cwd":"/srv/stand-in/infra/terraform/aws-kubeadm","command":"tofu state rm a"}
+{"expect":"deny","cwd":"/srv/stand-in/infra/terraform/aws-kubeadm","command":"terraform state push x"}
+{"expect":"deny","cwd":"/srv/stand-in/infra/terraform/aws-kubeadm/.terraform","command":"terraform apply"}
+{"expect":"deny","cwd":"infra/terraform/aws-kubeadm","command":"terraform apply"}
+{"expect":"ask","cwd":"/srv/stand-in/infra/terraform/aws-kubeadm","command":"terraform plan"}
+{"expect":"ask","cwd":"/srv/stand-in/infra/terraform/aws-kubeadm","command":"tofu plan"}
+{"expect":"ask","cwd":"/srv/stand-in/infra/terraform/aws-kubeadm","command":"terraform state list"}
+{"expect":"ask","cwd":"/srv/stand-in/infra/terraform/aws-kubeadm","command":"terraform show"}
+{"expect":"ask","cwd":"/srv/stand-in/infra/terraform/aws-kubeadm","command":"terraform output"}
+{"expect":"ask","cwd":"/srv/stand-in/infra/terraform/aws-kubeadm","command":"tofu output -json"}
+{"expect":"ask","cwd":"/srv/stand-in/infra/terraform/aws-kubeadm","command":"terraform workspace select default"}
+{"expect":"ask","cwd":"/srv/stand-in/infra/terraform/aws-kubeadm/.terraform","command":"terraform show"}
+{"expect":"none","cwd":"/srv/stand-in/infra/terraform/aws-kubeadm","command":"terraform validate"}
+{"expect":"none","cwd":"/srv/stand-in/infra/terraform/aws-kubeadm","command":"terraform fmt -check"}
+{"expect":"none","cwd":"/srv/stand-in/infra/terraform/aws-kubeadm","command":"make aws-kubeadm-validate"}
+{"expect":"none","cwd":"/srv/stand-in/infra/terraform/aws","command":"terraform validate"}
+{"expect":"none","note":"K6 (S079): the boundary of the working-directory pattern","cwd":"/srv/stand-in/infra/terraform/aws-kubeadmx","command":"terraform output"}
+{"expect":"none","cwd":"/srv/stand-in/infra/terraform/aws-eks","command":"terraform show"}
+{"expect":"none","cwd":"/srv/stand-in/infra/terraform/aws-kubeadmx","command":"terraform workspace new x"}
+{"expect":"ask","cwd":"/srv/stand-in/infra/terraform/aws-kubeadmx","command":"terraform apply"}
+{"expect":"deny","note":"K6 (S079): writers into the saved plan, by module; the first module lacked mv, install, sed -i and a bare redirect (see lines 454-455)","command":"mv x infra/terraform/aws/aws.tfplan"}
+{"expect":"deny","command":"install -m 600 x infra/terraform/aws/aws.tfplan"}
+{"expect":"deny","command":"sed -i s/a/b/ infra/terraform/aws/aws.tfplan"}
+{"expect":"deny","command":"tee infra/terraform/aws/aws.tfplan"}
+{"expect":"deny","command":"true > infra/terraform/aws/aws.tfplan"}
+{"expect":"deny","command":"truncate -s 0 infra/terraform/aws/aws.tfplan"}
+{"expect":"deny","command":"ln -sf x infra/terraform/aws/aws.tfplan"}
+{"expect":"deny","command":"mv x ~/.local/state/meridian-aws/aws.tfplan"}
+{"expect":"deny","command":"tee ~/.local/state/meridian-aws/aws.tfplan"}
+{"expect":"deny","command":"cp x infra/terraform/aws-kubeadm/aws-kubeadm.tfplan"}
+{"expect":"deny","command":"printf x | tee infra/terraform/aws-kubeadm/aws-kubeadm.tfplan.meta"}
+{"expect":"deny","command":"mv x infra/terraform/aws-kubeadm/aws-kubeadm.tfplan"}
+{"expect":"deny","command":"install -m 600 x infra/terraform/aws-kubeadm/aws-kubeadm.tfplan"}
+{"expect":"deny","command":"sed -i s/a/b/ infra/terraform/aws-kubeadm/aws-kubeadm.tfplan"}
+{"expect":"deny","command":"tee infra/terraform/aws-kubeadm/aws-kubeadm.tfplan"}
+{"expect":"deny","command":"true > infra/terraform/aws-kubeadm/aws-kubeadm.tfplan"}
+{"expect":"deny","command":"truncate -s 0 infra/terraform/aws-kubeadm/aws-kubeadm.tfplan"}
+{"expect":"deny","command":"ln -sf x infra/terraform/aws-kubeadm/aws-kubeadm.tfplan"}
+{"expect":"deny","command":"mv x ~/.local/state/meridian-aws-kubeadm/aws-kubeadm.tfplan"}
+{"expect":"deny","command":"tee ~/.local/state/meridian-aws-kubeadm/aws-kubeadm.tfplan"}
+{"expect":"deny","command":"tee -a ~/.local/state/meridian-aws-kubeadm/aws-kubeadm.tfplan.meta"}
+{"expect":"deny","note":"K6 (S079): readers of the second module's closed paths were denied already (the closed-path pattern holds meridian-aws and .tfplan); these pin that","command":"cat ~/.local/state/meridian-aws-kubeadm/aws-kubeadm.tfstate"}
+{"expect":"deny","command":"strings infra/terraform/aws-kubeadm/aws-kubeadm.tfplan"}
+{"expect":"deny","command":"od -c infra/terraform/aws-kubeadm/aws-kubeadm.tfplan.meta"}
+{"expect":"deny","command":"grep a infra/terraform/aws-kubeadm/terraform.tfvars"}
+{"expect":"deny","command":"jq . infra/terraform/aws-kubeadm/x.tfvars.json"}
+{"expect":"deny","command":"cat infra/terraform/aws-kubeadm/terraform.tfstate"}
+{"expect":"none","command":"stat -c %a ~/.local/state/meridian-aws-kubeadm"}
+{"expect":"deny","note":"K6 (S079): make-target twins of lines 154-165; the targets do not exist yet, the guard is ready for them","command":"make aws-kubeadm-destroy"}
+{"expect":"deny","command":"make -C . aws-kubeadm-destroy"}
+{"expect":"deny","command":"make -n aws-kubeadm-destroy"}
+{"expect":"deny","command":"gmake aws-kubeadm-destroy"}
+{"expect":"deny","command":"make 'aws-kubeadm-destroy'"}
+{"expect":"deny","command":"make \"aws-kubeadm-destroy\""}
+{"expect":"deny","command":"make aws-kubeadm-validate aws-kubeadm-destroy"}
+{"expect":"deny","command":"yes | make aws-kubeadm-destroy"}
+{"expect":"deny","command":"env FOO=1 make aws-kubeadm-destroy"}
+{"expect":"deny","command":"time make aws-kubeadm-destroy"}
+{"expect":"deny","command":"bash -c \"make aws-kubeadm-destroy\""}
+{"expect":"deny","command":"`make aws-kubeadm-destroy`"}
+{"expect":"deny","command":"git commit -m x && make aws-kubeadm-destroy"}
+{"expect":"deny","command":"infra/terraform/aws.sh destroy aws-kubeadm"}
+{"expect":"deny","command":"infra/terraform/aws.sh \"destroy\" aws-kubeadm"}
+{"expect":"none","command":"make aws-kubeadm-destroyx"}
+{"expect":"none","command":"make aws-kubeadm-destroy-notes"}
+{"expect":"none","command":"git commit -m \"deny make aws-kubeadm-destroy\""}
+{"expect":"none","command":"gh pr create --title t --body \"make aws-kubeadm-destroy is the owner's\""}
+{"expect":"ask","note":"K6 (S079): make-target twins of lines 261-269","command":"make aws-kubeadm-plan"}
+{"expect":"ask","command":"make -C . aws-kubeadm-plan"}
+{"expect":"ask","command":"make aws-kubeadm-apply"}
+{"expect":"ask","command":"gmake aws-kubeadm-apply"}
+{"expect":"ask","command":"make 'aws-kubeadm-apply'"}
+{"expect":"ask","command":"make aws-kubeadm-validate aws-kubeadm-plan"}
+{"expect":"ask","command":"env FOO=1 make aws-kubeadm-apply"}
+{"expect":"ask","command":"time make aws-kubeadm-plan"}
+{"expect":"ask","command":"bash -c \"make aws-kubeadm-apply\""}
+{"expect":"ask","command":"`make aws-kubeadm-apply`"}
+{"expect":"ask","command":"infra/terraform/aws.sh plan aws-kubeadm"}
+{"expect":"ask","command":"bash infra/terraform/aws.sh apply aws-kubeadm"}
+{"expect":"ask","command":"make aws-kubeadm-scan TRIVY_IMAGE=stand-in/trivy:1"}
+{"expect":"none","command":"make aws-kubeadm-planx"}
+{"expect":"none","command":"make aws-kubeadm-validate"}
+{"expect":"none","command":"make aws-kubeadm-scan"}
+{"expect":"none","command":"make -C . aws-kubeadm-validate aws-kubeadm-scan"}
+{"expect":"none","command":"infra/terraform/aws.sh validate aws-kubeadm"}
+{"expect":"none","command":"git commit -m \"make aws-kubeadm-apply asks, make aws-kubeadm-plan asks\""}
+{"expect":"deny","note":"K6 (S079): pseudo-terminal, trace and assignment twins of lines 183-225 for the second module's targets","command":"script -qec 'make aws-kubeadm-apply' /dev/null"}
+{"expect":"deny","command":"unbuffer make aws-kubeadm-plan"}
+{"expect":"deny","command":"socat - EXEC:'make aws-kubeadm-apply',pty"}
+{"expect":"deny","command":"python3 -c \"import pty; pty.spawn(['make', 'aws-kubeadm-destroy'])\""}
+{"expect":"deny","command":"timeout 5 unbuffer make aws-kubeadm-plan"}
+{"expect":"deny","command":"set -x; make aws-kubeadm-validate"}
+{"expect":"deny","command":"set -o xtrace && make aws-kubeadm-scan"}
+{"expect":"deny","command":"SHELLOPTS=xtrace make aws-kubeadm-validate"}
+{"expect":"deny","command":"BASH_XTRACEFD=2 make aws-kubeadm-scan"}
+{"expect":"deny","command":"BASH_ENV=/tmp/stand-in.sh make aws-kubeadm-validate"}
+{"expect":"deny","command":"bash -x infra/terraform/aws.sh validate aws-kubeadm"}
+{"expect":"deny","command":"TF_LOG=trace make aws-kubeadm-validate"}
+{"expect":"deny","command":"TF_VAR_node_count=5 make aws-kubeadm-plan"}
+{"expect":"none","command":"set -eu; make aws-kubeadm-validate"}
+{"expect":"none","command":"bash -c 'make aws-kubeadm-validate'"}
+{"expect":"deny","note":"K7 (S079): writers INTO the first module's state file (the steering path holds .tfstate and meridian-aws); the review of K6, finding M1","command":"tee ~/.local/state/meridian-aws/aws.tfstate"}
+{"expect":"deny","command":"tee -a ~/.local/state/meridian-aws/aws.tfstate"}
+{"expect":"deny","command":"printf x | tee ~/.local/state/meridian-aws/aws.tfstate"}
+{"expect":"deny","command":"tee ~/.local/state/meridian-aws/aws.tfstate < /dev/null"}
+{"expect":"deny","command":"mv x ~/.local/state/meridian-aws/aws.tfstate"}
+{"expect":"deny","command":"install -m 600 x ~/.local/state/meridian-aws/aws.tfstate"}
+{"expect":"deny","command":"ln -sf x ~/.local/state/meridian-aws/aws.tfstate"}
+{"expect":"deny","command":"truncate -s 0 ~/.local/state/meridian-aws/aws.tfstate"}
+{"expect":"deny","command":"true > ~/.local/state/meridian-aws/aws.tfstate"}
+{"expect":"deny","command":": > ~/.local/state/meridian-aws/aws.tfstate"}
+{"expect":"deny","command":"exec > ~/.local/state/meridian-aws/aws.tfstate"}
+{"expect":"deny","command":"printf x >> ~/.local/state/meridian-aws/aws.tfstate"}
+{"expect":"deny","command":"bash -c \"true > ~/.local/state/meridian-aws/aws.tfstate\""}
+{"expect":"deny","note":"K7 (S079): the same writers into the second module's state file","command":"tee ~/.local/state/meridian-aws-kubeadm/aws-kubeadm.tfstate"}
+{"expect":"deny","command":"tee -a ~/.local/state/meridian-aws-kubeadm/aws-kubeadm.tfstate"}
+{"expect":"deny","command":"printf x | tee ~/.local/state/meridian-aws-kubeadm/aws-kubeadm.tfstate"}
+{"expect":"deny","command":"tee ~/.local/state/meridian-aws-kubeadm/aws-kubeadm.tfstate < /dev/null"}
+{"expect":"deny","command":"mv x ~/.local/state/meridian-aws-kubeadm/aws-kubeadm.tfstate"}
+{"expect":"deny","command":"install -m 600 x ~/.local/state/meridian-aws-kubeadm/aws-kubeadm.tfstate"}
+{"expect":"deny","command":"ln -sf x ~/.local/state/meridian-aws-kubeadm/aws-kubeadm.tfstate"}
+{"expect":"deny","command":"truncate -s 0 ~/.local/state/meridian-aws-kubeadm/aws-kubeadm.tfstate"}
+{"expect":"deny","command":"true > ~/.local/state/meridian-aws-kubeadm/aws-kubeadm.tfstate"}
+{"expect":"deny","command":": > ~/.local/state/meridian-aws-kubeadm/aws-kubeadm.tfstate"}
+{"expect":"deny","command":"exec > ~/.local/state/meridian-aws-kubeadm/aws-kubeadm.tfstate"}
+{"expect":"deny","command":"printf x >> ~/.local/state/meridian-aws-kubeadm/aws-kubeadm.tfstate"}
+{"expect":"deny","command":"bash -c \"true > ~/.local/state/meridian-aws-kubeadm/aws-kubeadm.tfstate\""}
+{"expect":"deny","note":"K7 (S079): a copy OUT of the state to another path, which a second command then reads without naming a closed path","command":"install -m 644 ~/.local/state/meridian-aws/aws.tfstate ~/c"}
+{"expect":"deny","command":"ln -s ~/.local/state/meridian-aws/aws.tfstate ~/l"}
+{"expect":"deny","command":"mv ~/.local/state/meridian-aws/aws.tfstate ~/m"}
+{"expect":"deny","command":"tee ~/c < ~/.local/state/meridian-aws/aws.tfstate"}
+{"expect":"deny","command":"tee < ~/.local/state/meridian-aws/aws.tfstate"}
+{"expect":"deny","command":"install -m 644 ~/.local/state/meridian-aws-kubeadm/aws-kubeadm.tfstate ~/c"}
+{"expect":"deny","command":"ln -s ~/.local/state/meridian-aws-kubeadm/aws-kubeadm.tfstate ~/l"}
+{"expect":"deny","command":"mv ~/.local/state/meridian-aws-kubeadm/aws-kubeadm.tfstate ~/m"}
+{"expect":"deny","command":"tee ~/c < ~/.local/state/meridian-aws-kubeadm/aws-kubeadm.tfstate"}
+{"expect":"deny","command":"tee < ~/.local/state/meridian-aws-kubeadm/aws-kubeadm.tfstate"}
+{"expect":"deny","note":"K7 (S079): the state directory moved or linked, both modules","command":"mv ~/.local/state/meridian-aws ~/x"}
+{"expect":"deny","command":"mv ~/.local/state/meridian-aws ~/.local/state/meridian-aws.bak"}
+{"expect":"deny","command":"ln -sfn ~/elsewhere ~/.local/state/meridian-aws"}
+{"expect":"deny","command":"mv ~/.local/state/meridian-aws-kubeadm ~/x"}
+{"expect":"deny","command":"mv ~/.local/state/meridian-aws-kubeadm ~/.local/state/meridian-aws-kubeadm.bak"}
+{"expect":"deny","command":"ln -sfn ~/elsewhere ~/.local/state/meridian-aws-kubeadm"}
+{"expect":"deny","note":"K7 (S079): the state file and its backup in the module's own directory (a call that passes no path writes them there), both modules","command":"truncate -s 0 infra/terraform/aws/terraform.tfstate"}
+{"expect":"deny","command":"mv x infra/terraform/aws/terraform.tfstate.backup"}
+{"expect":"deny","command":"true > infra/terraform/aws/terraform.tfstate"}
+{"expect":"deny","command":"tee infra/terraform/aws/terraform.tfstate"}
+{"expect":"deny","command":"install infra/terraform/aws/terraform.tfstate ~/c"}
+{"expect":"deny","command":"truncate -s 0 infra/terraform/aws-kubeadm/terraform.tfstate"}
+{"expect":"deny","command":"mv x infra/terraform/aws-kubeadm/terraform.tfstate.backup"}
+{"expect":"deny","command":"true > infra/terraform/aws-kubeadm/terraform.tfstate"}
+{"expect":"deny","command":"tee infra/terraform/aws-kubeadm/terraform.tfstate"}
+{"expect":"deny","command":"install infra/terraform/aws-kubeadm/terraform.tfstate ~/c"}
+{"expect":"none","note":"K7 (S079): a name that holds tfstate as part of another word, with no dot before it, is not a state file","command":"tee infra/terraform/aws/tfstate-notes.md"}
+{"expect":"none","command":"tee infra/terraform/aws-kubeadm/tfstate-notes.md"}
+{"expect":"none","command":"mv x ~/notes-tfstate.txt"}
+{"expect":"none","command":"install x /tmp/mytfstate"}
+{"expect":"none","command":"true > /tmp/tfstate"}
+{"expect":"none","command":"ln -s x tfstate"}
+{"expect":"none","command":"tee ~/.local/state/meridian-foo/notes.txt"}
+{"expect":"none","note":"K7 (S079): git commands that name a state path write nothing the guard reads as a writer","command":"git add infra/terraform/aws/aws.tfstate"}
+{"expect":"none","command":"git add -n infra/terraform/aws-kubeadm/aws-kubeadm.tfstate"}
+{"expect":"none","command":"git check-ignore -v infra/terraform/aws-kubeadm/aws-kubeadm.tfstate"}
+{"expect":"none","command":"git status --short -- infra/terraform/aws-kubeadm/aws-kubeadm.tfstate"}
+{"expect":"none","command":"git log --oneline -- infra/terraform/aws/aws.tfstate"}
+{"expect":"none","command":"git commit -m \"the guard denies tee into aws-kubeadm.tfstate and aws.tfstate\""}
+{"expect":"none","command":"git add .gitignore"}
+{"expect":"deny","note":"K7 (S079): false alarm by design, measured: a writer verb in a line that holds meridian-aws anywhere is denied, a file of that name outside the state directory included; the repository's scripts, Makefile and documents tell nobody to write such a path","command":"true > /tmp/meridian-aws-notes.log"}
+{"expect":"deny","note":"K7 (S079): false alarm by design, as the line above","command":"mv docs/old.md docs/meridian-aws-notes.md"}
+{"expect":"deny","note":"K7 (S079): false alarm by design, as the line above (git mv is the verb mv)","command":"git mv docs/old.md docs/meridian-aws-notes.md"}
 {"expect":"ask","command":"gh issue list\nmerge --admin aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}

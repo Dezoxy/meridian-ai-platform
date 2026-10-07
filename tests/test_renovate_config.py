@@ -20,6 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG = ROOT / ".github" / "renovate.json"
 WORKFLOW = ".github/workflows/docs.yml"
+PYTHON_WORKFLOW = ".github/workflows/python.yml"
 PINS = "infra/kind/pins.env"
 
 # Per glob, the lines that pin a version.
@@ -478,27 +479,77 @@ class Readers(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertFalse(any(fnmatch.fnmatchcase(name, p) for p in patterns))
 
-    def test_the_terraform_note_names_the_checks_of_the_three_modules(self) -> None:
+    def test_the_terraform_note_names_the_checks_of_the_modules(self) -> None:
         rules = self.config["packageRules"]
 
-        (group,) = [r for r in rules if r.get("groupName") == "terraform"]
+        (group,) = [
+            r for r in rules if r.get("groupName") == "terraform" and "prBodyNotes" in r
+        ]
         note = " ".join(group["prBodyNotes"])
 
         for words in (
-            "CI does not run Terraform",
+            "CI installs Terraform only to run the modules' variable validations",
+            "it never runs init, validate, plan or apply",
             "`make azure-plan`",
             "`make aws-validate`",
             "`make aws-scan`",
             "`make gcp-validate`",
             "`make gcp-scan`",
+            "`make aws-kubeadm-validate`",
+            "`make aws-kubeadm-scan`",
+            "`make gcp-kubeadm-validate`",
+            "`make gcp-kubeadm-scan`",
             "Google Cloud module",
+            "self-managed AWS module",
+            "Google Cloud twin",
         ):
             with self.subTest(words=words):
                 self.assertIn(words, note)
-        for target in ("aws-validate", "aws-scan", "gcp-validate", "gcp-scan"):
+        for target in (
+            "aws-validate",
+            "aws-scan",
+            "gcp-validate",
+            "gcp-scan",
+            "aws-kubeadm-validate",
+            "aws-kubeadm-scan",
+            "gcp-kubeadm-validate",
+            "gcp-kubeadm-scan",
+        ):
             with self.subTest(target=target):
                 makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
                 self.assertIn(f"\n{target}:", makefile)
+
+    def test_the_terraform_program_ci_installs_is_read_from_its_releases(self) -> None:
+        text = (ROOT / ".github" / "workflows" / "python.yml").read_text(
+            encoding="utf-8"
+        )
+
+        found = [
+            match.group("datasource", "depName", "extractVersion", "currentValue")
+            for match in self.comment_reader(PYTHON_WORKFLOW).finditer(text)
+            if match.group("depName") == "hashicorp/terraform"
+        ]
+
+        self.assertEqual(
+            found,
+            [
+                (
+                    "github-releases",
+                    "hashicorp/terraform",
+                    "^v(?<version>.+)$",
+                    re.search(r'TERRAFORM_VERSION: "(.+)"', text).group(1),
+                )
+            ],
+        )
+
+    def test_the_terraform_program_arrives_with_the_providers(self) -> None:
+        (rule,) = [
+            r
+            for r in self.config["packageRules"]
+            if "hashicorp/terraform" in r.get("matchPackageNames", [])
+        ]
+
+        self.assertEqual(rule["groupName"], "terraform")
 
     def test_the_terraform_lock_refresh_is_off_and_the_others_are_not(self) -> None:
         terraform = self.config["terraform"]

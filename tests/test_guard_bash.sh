@@ -517,6 +517,56 @@ case "$reason" in
     fail=1
     ;;
 esac
+# The second module's lines (S079, K7, the review's L3): the reason names the
+# module's own directory or target, and keeps what the first module's says.
+reason="$(reason_of 'make aws-kubeadm-apply')"
+case "$reason" in
+  *"aws-kubeadm-apply"*"COST MONEY"*"owner"*"no session holds the credentials"*) echo "ok   the ask for make aws-kubeadm-apply names its target, says it costs money and who runs it" ;;
+  *)
+    echo "FAIL the ask for make aws-kubeadm-apply does not name its target, or does not say it costs money and who runs it: $reason"
+    fail=1
+    ;;
+esac
+reason="$(reason_of 'make aws-kubeadm-destroy')"
+case "$reason" in
+  *"aws-kubeadm-destroy"*"owner's"*"terminal"*"no session holds the credentials"*) echo "ok   the deny for make aws-kubeadm-destroy names its target and says it is the owner's, in a terminal" ;;
+  *)
+    echo "FAIL the deny for make aws-kubeadm-destroy does not name its target, or does not say it is the owner's, in a terminal: $reason"
+    fail=1
+    ;;
+esac
+reason="$(reason_of 'make aws-kubeadm-plan')"
+case "$reason" in
+  *"aws-kubeadm-plan"*"owner"*) echo "ok   the ask for make aws-kubeadm-plan names its target" ;;
+  *)
+    echo "FAIL the ask for make aws-kubeadm-plan does not name its target: $reason"
+    fail=1
+    ;;
+esac
+reason="$(reason_of 'terraform -chdir=infra/terraform/aws-kubeadm workspace new x')"
+case "$reason" in
+  *"infra/terraform/aws-kubeadm"*"wrapper"*) echo "ok   the deny for Terraform by hand in the second module's directory names that directory" ;;
+  *)
+    echo "FAIL the deny for Terraform by hand in the second module's directory does not name that directory: $reason"
+    fail=1
+    ;;
+esac
+reason="$(reason_of 'terraform -chdir=infra/terraform/aws-kubeadm show')"
+case "$reason" in
+  *"infra/terraform/aws-kubeadm"*"owner's own session"*) echo "ok   the ask for terraform show in the second module's directory names that directory" ;;
+  *)
+    echo "FAIL the ask for terraform show in the second module's directory does not name that directory: $reason"
+    fail=1
+    ;;
+esac
+reason="$(reason_of 'tee ~/.local/state/meridian-aws-kubeadm/aws-kubeadm.tfstate')"
+case "$reason" in
+  *"saved plan"*"state file"*"meridian-aws-kubeadm"*) echo "ok   the deny for a write into the state names the saved plan, a state file and both modules' directories" ;;
+  *)
+    echo "FAIL the deny for a write into the state does not name the saved plan, a state file and the second module's directory: $reason"
+    fail=1
+    ;;
+esac
 
 # The settings (S036): a hook decision comes first, and the settings are what a
 # session meets when it uses a tool the hook does not read. The lists are held
@@ -545,6 +595,7 @@ else
   echo "ok   allow no longer holds the bare terraform plan"
 fi
 for entry in 'Bash(terraform plan*)' 'Bash(terraform -chdir=*aws* plan*)' 'Bash(make aws-plan*)' 'Bash(make aws-apply*)' \
+  'Bash(make aws-kubeadm-plan*)' 'Bash(make aws-kubeadm-apply*)' \
   'Bash(terraform apply*)' 'Bash(terraform -chdir=* apply*)'; do
   if in_list ask "$entry"; then
     echo "ok   ask holds ${entry}"
@@ -558,6 +609,7 @@ closed_paths=(
   './**/local.env*' './**/*.tfstate*' './**/*.tfplan*' './**/*.tfvars.json' './**/*.auto.tfvars*'
   './infra/terraform/aws/.*tfvars*' './**/terraform.tfstate.d/**' './**/*override*.tf' './**/.terraform/**'
   '~/.local/state/meridian-aws/**' '~/.aws/**' '~/.terraformrc' '~/.terraform.d/**'
+  './infra/terraform/aws-kubeadm/.*tfvars*' '~/.local/state/meridian-aws-kubeadm/**'
 )
 for path in "${closed_paths[@]}"; do
   for tool in Read Edit Write; do
@@ -583,7 +635,8 @@ done
 # The old denies stay.
 # The removal has a second layer (the hook is the first): a hook that timed out
 # or crashed would let make aws-destroy through, as Bash(make *) is allowed.
-for entry in 'Bash(make aws-destroy*)' 'Bash(infra/terraform/aws.sh destroy*)' 'Bash(./infra/terraform/aws.sh destroy*)'; do
+for entry in 'Bash(make aws-destroy*)' 'Bash(make aws-kubeadm-destroy*)' \
+  'Bash(infra/terraform/aws.sh destroy*)' 'Bash(./infra/terraform/aws.sh destroy*)'; do
   if in_list deny "$entry"; then
     echo "ok   deny holds ${entry}"
   else
@@ -599,4 +652,85 @@ for entry in 'Read(./**/*.tfvars)' 'Read(./**/.env)' 'Edit(./**/.env)' 'Bash(ter
     fail=1
   fi
 done
+# Every entry that names the first module's state directory, its directory or
+# its make targets has a twin for the second module (S079, K6): a deny that
+# names one module and not the other is how the review found the gap. The twin
+# is built from the entry, so an entry added for the first module without one
+# fails; the count keeps the loop from passing empty. A module that is a third
+# directory is caught by the scan after it, which reads the directories.
+twin_count=0
+while IFS=$'\t' read -r list entry; do
+  twin="${entry//meridian-aws\//meridian-aws-kubeadm/}"
+  twin="${twin//infra\/terraform\/aws\//infra/terraform/aws-kubeadm/}"
+  twin="${twin//make aws-/make aws-kubeadm-}"
+  twin_count=$((twin_count + 1))
+  if in_list "$list" "$twin"; then
+    echo "ok   ${list} holds ${twin}, the twin of ${entry}"
+  else
+    echo "FAIL ${list} lacks ${twin}, the twin of ${entry}"
+    fail=1
+  fi
+done < <(jq -r '.permissions | to_entries[] | .key as $l | .value[]
+  | select(contains("meridian-aws/") or contains("infra/terraform/aws/") or test("make aws-(plan|apply|destroy)"))
+  | "\($l)\t\(.)"' "$settings_file")
+if [ "$twin_count" -ge 9 ]; then
+  echo "ok   the twin check read ${twin_count} entries of the first module"
+else
+  echo "FAIL the twin check read ${twin_count} entries of the first module, fewer than 9"
+  fail=1
+fi
+# A module of the AWS family is a directory infra/terraform/aws* that holds
+# Terraform files (the wrapper aws.sh is a file, not a directory). Each one has
+# the settings entries the first two have: the hidden variable files, the state
+# directory under home (the wrapper names it meridian-<directory>), and the make
+# targets' second layer (the removal denied, the plan and the apply asked). A
+# third module fails here the day its directory lands, until its entries are in
+# the settings and its names are in the guard's patterns.
+module_count=0
+for dir in "$here"/../infra/terraform/aws*/; do
+  [ -d "$dir" ] || continue
+  module="$(basename "$dir")"
+  module_count=$((module_count + 1))
+  for tool in Read Edit Write; do
+    for entry in "${tool}(./infra/terraform/${module}/.*tfvars*)" "${tool}(~/.local/state/meridian-${module}/**)"; do
+      if in_list deny "$entry"; then
+        echo "ok   deny holds ${entry}, for the directory ${module}"
+      else
+        echo "FAIL deny lacks ${entry}, for the directory ${module}"
+        fail=1
+      fi
+    done
+  done
+  if in_list deny "Bash(make ${module}-destroy*)"; then
+    echo "ok   deny holds Bash(make ${module}-destroy*), for the directory ${module}"
+  else
+    echo "FAIL deny lacks Bash(make ${module}-destroy*), for the directory ${module}"
+    fail=1
+  fi
+  for verb in plan apply; do
+    if in_list ask "Bash(make ${module}-${verb}*)"; then
+      echo "ok   ask holds Bash(make ${module}-${verb}*), for the directory ${module}"
+    else
+      echo "FAIL ask lacks Bash(make ${module}-${verb}*), for the directory ${module}"
+      fail=1
+    fi
+  done
+  # The guard as well as the settings (S079, K7, the review's L2): one by-hand
+  # show in the directory asks, one new workspace and one write into the saved
+  # plan are denied, and the removal target is denied, so a module whose name
+  # the patterns do not read fails here with the settings' entries.
+  ask_for "the guard asks for a show in infra/terraform/${module}" ask \
+    "terraform -chdir=infra/terraform/${module} show"
+  ask_for "the guard denies a new workspace in infra/terraform/${module}" deny \
+    "terraform -chdir=infra/terraform/${module} workspace new x"
+  ask_for "the guard denies a write into ${module}.tfplan" deny \
+    "tee infra/terraform/${module}/${module}.tfplan"
+  ask_for "the guard denies make ${module}-destroy" deny "make ${module}-destroy"
+done
+if [ "$module_count" -ge 2 ]; then
+  echo "ok   the directory scan found ${module_count} modules of the AWS family"
+else
+  echo "FAIL the directory scan found ${module_count} modules of the AWS family, fewer than 2"
+  fail=1
+fi
 exit "$fail"

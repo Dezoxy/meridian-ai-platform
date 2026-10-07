@@ -296,10 +296,17 @@ request's body says so:
 - `terraform`: `make azure-plan`, and the plan read; for the AWS module
   `make aws-validate` and `make aws-scan`, which need no account (S036); for
   the Google Cloud module `make gcp-validate` and `make gcp-scan`, which need
-  no project and no credential (S078).
-- The Trivy image of `make aws-scan` and `make gcp-scan` (`TRIVY_IMAGE` in the
-  `Makefile`, no group of its own): both scans on the branch, since CI does not
-  run them and a newer image carries newer checks that can turn them red.
+  no project and no credential (S078); for the AWS self-managed module
+  `make aws-kubeadm-validate` and `make aws-kubeadm-scan`, which need no
+  account (S079); and for the Google Cloud twin of that module
+  `make gcp-kubeadm-validate` and `make gcp-kubeadm-scan`, which need no
+  project and no credential (S079). Since S079 the `python` workflow installs
+  the Terraform program the tests need (the `terraform` group moves that pin
+  too, by the same reader); it runs no `init`, `validate`, plan or apply.
+- The Trivy image of the scans (`TRIVY_IMAGE` in the `Makefile`, no group of
+  its own): every scan on the branch (`aws-scan`, `gcp-scan`, `aws-kubeadm-scan`
+  and `gcp-kubeadm-scan`), since CI does not run them and a newer image carries
+  newer checks that can turn them red.
 - `tooling`: the result of `Docs / Architecture PDF`, the one job that
   runs Pandoc and Mermaid. It is not a required check.
 - `agent framework`: never merged on green checks alone. Read the note on
@@ -551,7 +558,7 @@ both readings the same hour ("yes both are right, go on").
 | S070 | Claims intake and what the adjuster is told | The owner decides first whether uploads are built or stay out (T-38: the largest item here; if built it is a step of its own, split off when this one opens); a report dated as a recent loss is seen for what it is, or T-66 says why it cannot be; the adjuster's page marks a recommendation that rests on the model's answer, so a steered model's `approve` does not read as the rules'. Built as, first half (2026-10-07; implemented and tested against PostgreSQL and in the pages' own tests, none of it run on a cluster, nothing paid, no fingerprint moved): the adjuster's claim page says beside a recommendation whether it rests on a model's reading of the exclusion clauses or on the rules alone, and the queue marks it in a column, from one function over the stored fields (no new field, no migration); it reaches the 6 steered recommendations that wait for an adjuster and not the 28 automatic approvals, which no page lists; the page labels the loss date and the report date as not checked and shows two gaps in days, with no rule or bound, and T-66 says why; the claimant's name pattern is built from a read before the claim's row is locked and only for a request the claim can go on with, so a refused request pays no compile (a stale page and a documents post past the cap still do); the redaction is split into six modules by a proven move; the differential test classifies every lost run, its generator writes the forms it lacked and both date guards are pinned from both sides; the e-mail pass reads its placeholder from the mapping; and an international Hungarian phone number is cut at a space before a second number, in a form narrowed after a review (R3b) and narrowed again after a second (R3c, 951b72c), so that it turns the plain shape and not every text the row quoted. Not built, each with its reason in the section: uploads (the owner's decision is open), a bound on what a name may replace, a reorder of the assessor's checks, the wider cut of a dotted number with a `06` group and a third date guard (the owner's questions), and the fix of three known leaks of the phone matcher | doing: the first half is done (R3c and its review stand; the whole suite is the main session's); the owner's decision on uploads and four more questions are open, and the second half holds what the owner decides; so far it has built, with no word of the owner's, the property test's missing forms, the queue's judgment of a stored proposal by the claim page's function with a received time refused when it has no zone, and one shaped 500 for an answer that cannot be built after the proposal is stored (the section), and it did not build `drafted_by`, which waits for the owner | S067 |
 | S071 | Measurements that need a live model | Costs money (about fifty chat calls and some embedding calls; the owner says yes before any, and the amount is stated first): a real model's answers to the injection cases the screen lets through, recorded beside the golden recording; a model's refusal of a structured request seen from a real provider; retrieval measured with a real embedding, in the evaluation and in S038's one failing check; the judge compared with labels a person wrote for a sample; a held-out set for the injection screen, and a decision on what a false alarm may cost; CLM-0034's `unsure` settled by a prompt or recorded as the right answer; retrieval over a graph measured again only if the synthetic data gains something relational to find | todo | S067 |
 | S072 | The cluster outside `meridian`, second round | On kind: the Prometheus and CloudNativePG operators' reach into Secrets and ConfigMaps of every namespace is narrowed or recorded as accepted with its reason; DNS and the collector cannot carry data out unseen (T-84), or the residual is stated; writes to Prometheus and Loki pass a policy, and the three hops behind the collector are encrypted or the plan says why not; egress from `observability` and the admission webhooks' port are bounded; `cnpg-system` and `envoy-gateway-system` have Pod Security labels and a policy; the owner decides whether node-exporter stays off; Tempo mounts no API token | doing: the first part is on `main` (2026-10-07; implemented and tested, and seen on a warm cluster by run R8 in the limits the section gives: both pods run with no token, the labels applied, smoke's 46 lines and the 21 rules passed, the Certificates Ready but issued before under the old policy; the cold run R9 then approved all eight under the exact lists from nothing): Tempo's and Loki's pods mount no service-account token (three keys); the namespaces of the CloudNativePG operator and of Envoy Gateway warn and audit at Pod Security `restricted` from a render (the gateway's namespace confirmed by the API server's dry run with its proxy pod running, R9; the operator's namespace is gone); the certificate policy for the services names the eight URIs and six DNS names the chart renders, not a wildcard; an alert on the rate store's restart loop. The documents record the four accounts that read Secrets in every namespace (not two), the accepted reaches, the residuals and the one measurement (seen on kind: the API server's calls arrive from the node's address on the pod network and pass a default-deny ingress). The cluster batch is written in files, tested without a cluster and seen on kind by the cold run R9 (2026-10-07, 11:08 to 11:17 UTC, from the batch's commit; five contracts, W, E, C, N and S, and the fix contract F2; not seen: the guard, the fall-backs, a webhook failing closed, Loki's usage report refused, the four other pods of the node rule on the kubelet's port): no pod reaches the webhooks' port 10250 but Prometheus, on the operator's; egress from `observability` is denied by default and admitted by rule; the CloudNativePG operator is released into `meridian` under `config.clusterWide=false` and a policy of its own (`cnpg-system` is gone); `envoy-gateway-system` is denied by default and admitted by rule, and `make deploy` refuses a cluster without the operator's policy; smoke compares a Deployment's name as text. The infrastructure review of the batch is in (nothing critical or high; four medium findings answered by F2); left: the merge of `main`, the whole suite and the pull request, and the rows (the cluster on this machine is the one made from the batch's commit: no `make up` from `main` on it until the batch is merged); the owner decides the writes clause and node-exporter (stays off) | S064, S066 |
-| S073 | Renewals, upgrades and what smoke cannot see | On kind: a renewal is seen for the collector's certificate and the database's, and something alerts before the database's end; the services do not all restart in the same minute at a renewal; approver-policy is restarted when it hangs, and a repaired policy does not wait an hour for cert-manager's retry; a first install that fails has a way back that was tried; the chart bounds its rollback history and `make images` says what to remove; the scripts' `kubectl` calls have a request timeout; a manual sweep Job does not hide a stopped schedule; the failure paths of smoke's newer lines are seen once on a cluster with something broken on purpose; the line that reads approver-policy's wording says so when it fails; probes that time out under load have a recorded answer for the machine the cluster runs on now | doing: the first half is done (2026-10-07: the builds and the runs R0 to R4e, with the answer for the machine recorded); the second half is open: the ingestion's 503 word on a real refusal, the node paused with three deploys, certificates of one hour with all eight renewed, the cold run and a rotation of the rate store's password (the owner's to run or to accept as not seen); approver-policy's liveness probe is not built | S064, S066 |
+| S073 | Renewals, upgrades and what smoke cannot see | On kind: a renewal is seen for the collector's certificate and the database's, and something alerts before the database's end; the services do not all restart in the same minute at a renewal; approver-policy is restarted when it hangs, and a repaired policy does not wait an hour for cert-manager's retry; a first install that fails has a way back that was tried; the chart bounds its rollback history and `make images` says what to remove; the scripts' `kubectl` calls have a request timeout; a manual sweep Job does not hide a stopped schedule; the failure paths of smoke's newer lines are seen once on a cluster with something broken on purpose; the line that reads approver-policy's wording says so when it fails; probes that time out under load have a recorded answer for the machine the cluster runs on now | doing: the first half is done (2026-10-07: the builds and the runs R0 to R4e, with the answer for the machine recorded); the second half is under way (runs R5a, R5b, R7, R8, R9a, R9, R10 and R11 of 2026-10-07: the one-hour watch run again saw the restarts spread across the six services, the node paused ended every call at the clients' own timeout, with the history limit holding at three ReplicaSets, the cold run gave its timings, and the ingestion's word `rate-store-unavailable` was seen on a real 503); still open: the ingestion's other three words, a call that a bound of the wrapper ends, a first install made to fail, a policy narrowed before the first deploy and a rotation of the rate store's password (the owner's to run or to accept as not seen); approver-policy's liveness probe is not built | S064, S066 |
 | S074 | Test suite and file sizes | Without the cluster: `infra/kind/smoke.sh`, `test_kind_manifests.py` and the four test files over 800 lines are split along the lines their own tests already cut; the six functions over 50 lines are under it (counted by signature plus body without the docstring, as the section says: by the whole count the row used, four of the six, `assess`, `build_report`, `build_injection_report` and `summarise`, are still over); the template-database fixture survives a test that patches the runner's file list; the tests that failed once under load (a lost connection in a parallel run, a tool server's timeout, the gateway's fallback test) are run repeatedly on the machine the suite runs on now and either hold by construction or are closed as not reproduced, with the numbers; the slowest test of the job is under ten seconds; one CPU-time helper; `unused_port()` on macOS has its answer written down; the owner decides whether CI gates on coverage | doing: the first half is done (2026-10-07; tested, none of it run on a cluster): the two upkeep test files, `test_toolserver_meters.py`, `test_claims_graph.py` and `test_kind_manifests.py` are split by moves a script proves, the template database's builder passes the list it read at import, the stack and demo tests that failed under load no longer rest on the machine's speed (argued; the measurement run, 25 loops of each beside a whole suite, has not run), the counting test takes 0.03 s alone where CI saw 47 s, and one CPU-time helper serves nine files; three questions wait for the owner (coverage in CI, a size check, a pytest-level timeout); the second half is built except what waits (2026-10-07; implemented and tested, none of it run on a cluster): S076's leftovers are closed or accepted row by row (the registry `schemas` link and `--check` line, the services edit's small ends, the scaffold's undo, the import walker's limits pinned, the golden set's workload tied to `Report` by its own validator, the claimant's closed tables read-only and three stale sentences), `run_command`, `build_report` and `render_summary` are under 50 lines by signature plus body (37, 47 and 29) with `--help`, every report and the committed summary byte for byte the same, and two of the half's own commits carried a defect that the review reproduced and a contract fixed; the third part (2026-10-07; moves a script proves, tested; seen on kind once: `make smoke` from the split as it stands printed 46 PASS, 0 FAIL, 0 SKIP, the same lines as the unsplit script's, the trace ID apart): `infra/kind/smoke.sh` is an entry of 1,185 lines and ten files under `infra/kind/smoke.d/` (`shared.sh` and nine checks, 36 to 644 lines), and checks 8 and 10 are still in the entry; the leftovers are done (2026-10-07; tested, none of it run on a cluster): the five loaders of the name-masked cases are one helper, `servicesupport.injection_case_claim`, whose missing case fails by name, and `test_redaction_hungarian.py` (858 lines) is three files and `hungariansupport.py`, the largest 368 lines, by a move a script proves with the collected count unchanged; the last cut (2026-10-07; moves a script proves, tested; seen on kind once, run R12: `make smoke` from the cut printed 46 PASS, 0 FAIL, 0 SKIP, the same lines as the run before it): checks 8 and 10 are `smoke.d/08-network-policy.sh` and `10-certificate-policy.sh`, the entry is 88 lines and every file of the script, twelve parts and the entry, is under 800 lines (the largest 647); what waits: the rows the section's last table keeps, the backlog rows with home S074 and the owner's three questions | S064, S066, S037 |
 | S075 | Harness, guard and Renovate | `make docs` notices a blank line that splits a table; the command guard's known gaps to a Secret's values and to superuser SQL are closed or listed where a session reads them, and a hook that times out has a known outcome; a rule for an implementer that edits through the shell, and a guard or a rule for `make up` and `make down` from an old checkout (both the owner's); the workflow linter knows the runner label; Renovate's week of waiting is a required check or the plan says why not (the owner's decision), an image is not proposed before the chart that installs it, and the two pgvector versions are one | done (not built: the two pgvector versions are not one, because the newest CloudNativePG image still holds 0.8.6; the owner chose package-manager holds over a required check, and uv's `exclude-newer` cannot go in before 2026-10-10; N4, the guard's own files, is the owner's open question 6; the shell-edit hook is inert until the owner sets `bashEditDiffEnabled`) | — |
 | S076 | CLI, scaffold and loader small ends | No registry entry lets the runtime name an agent that no tenant lists without a check saying so (T-81); `services_edit` refuses an alias or a merge key by itself; the scaffold says which write failed and names the line it refuses in every case; the two entry-point loaders answer a bad entry in the same fixed words; the screen's fingerprint covers what it claims to; the workload's report builders refuse another workload's manifest; `meridian registry schemas` answers an unwritable directory with a message; the scaffold can write an agent with workers, or the plan says why a second graph of subgraphs is not built. Built as: `meridian registry validate` prints one NOTE, exit code unchanged, for each graph agent the runtime may name and no tenant lists, and `load_registry` refuses nothing new, so the owner's S061 decision stands; `services_edit` itself refuses an anchor, an alias or a merge key, naming the line; a refusal about a line of the person's file names the parser's line where the parser gives one; a failed or interrupted write names its kind and the error's class, the undo puts back every file that still holds the command's own bytes and names every path it did not restore (the scaffold's write and undo are in `scaffold_writes.py`); the two loaders word a refusal in one table of fixed sentences that quote no distribution's name and no import error's text, with the registry's agent ID in front for the graphs; the screen's digest is unchanged and the documents say what it covers and does not; both report builders compare the manifest's workload with their own; `meridian registry schemas` answers a directory it cannot update with one line; a second graph of subgraphs is not built, as a decision (the section says why). Implemented and tested, not run on a cluster | done | S037 |
@@ -584,7 +591,7 @@ Kubernetes" above).
 |---|---|---|---|---|
 | S036 | AWS Terraform, applied once | ~~The module passes `terraform validate` and a policy scan; it is never applied~~ Changed by the owner on 2026-10-06 ("add the aws template too and we will test it in a real aws enviroment"). Two halves. Without an account and without cost: the module for what S025 maps (network, cluster, registry, database with pgvector, workload identity to a secret store) in an EU region passes `terraform validate` and a policy scan, and one command each creates and removes it. With the owner, in the owner's AWS account, after the cost of an hour of it is stated and the owner says yes: it is applied once, what came up is recorded, it is removed, and the run's cost is logged. ADR 1 ("design AWS") gets a dated successor or note that says so. Since the owner's decision on managed and self-managed Kubernetes the same day, the apply of this managed cluster is asked at the paid stop of S079 and may be answered no; the first half is unchanged. First half built as (2026-10-07; implemented as code, checked without an account, never applied; nothing ran in AWS): `infra/terraform/aws/` is a module for a VPC of two public subnets with no NAT gateway, an EKS cluster at Kubernetes 1.36 with one managed node group of two `t3.large` and the Pod Identity and EBS CSI add-ons, one ECR repository, an RDS for PostgreSQL 17 instance on `db.t4g.small` whose password RDS keeps in Secrets Manager, one empty secret with a role that one named service account may assume, and a USD 25 monthly budget, in an EU Region (a validated variable, `eu-central-1` by default) with a local state under the owner's home and the provider pinned to one account; `infra/terraform/aws.sh` and five `make aws-*` targets validate, scan, plan, apply a saved plan and remove, and the scan is Trivy's from an image pinned by digest with three accepted findings, each with its reason; the command guard and the settings know the commands (T-100), and ADR 1 has a dated note. Not built in the first half: the `vector` extension (it needs a connection to the database), the Meridian chart and its controllers on the cluster, and the module in CI (S022) | doing: the first half is done (2026-10-07); the second half, one apply in the owner's account, waits for the owner's yes at S079's paid stop and may be answered no | S025 |
 | S078 | GCP Terraform, ~~applied once~~ a scaffold only | As S036, for Google Cloud (the owner, 2026-10-06: "like aws too"). ~~Two halves.~~ Without a project and without cost: the module for what S077 maps (network, cluster, registry, database with pgvector, workload identity to a secret store) in an EU region passes `terraform validate` and a policy scan, and one command each creates and removes it. ~~With the owner, in the owner's Google Cloud project, after the cost of an hour of it is stated and the owner says yes: it is applied once, what came up is recorded, it is removed, and the run's cost is logged.~~ Changed by the owner on 2026-10-06 ("gcp just scafold"): the module is never applied; whether a scaffold carries commands that create and remove it at all, or a README that says how the owner would, is its design's to say. The successor or note to ADR 1 ~~that S036 writes~~ that S078 writes (corrected 2026-10-07: S036's first half wrote no second note and left it to its second half) names this cloud too. Built as (2026-10-07; implemented as code, checked by `terraform validate` and an offline Trivy scan, never planned and never applied; nothing ran in Google Cloud and no project exists): `infra/terraform/gcp/` is a module for a VPC with one regional subnet and Cloud NAT, a GKE Standard zonal cluster with Dataplane V2, workload identity and private nodes, one Artifact Registry repository, a Cloud SQL for PostgreSQL 17 instance in the Enterprise edition reached by Private Service Connect, one empty regional secret with one workload-identity binding and a budget in the billing account's own currency, in an EU Region (a validated variable of eleven, `europe-west3` by default) with the project pinned by a precondition that no run has seen refuse; `make gcp-validate` and `make gcp-scan` check it, the scan being the AWS scan's image with the same flags and accepting nothing. By design no command plans, applies or removes it, and the command guard and the settings are unchanged (the owner's "gcp just scafold"); the module's README says how the owner would apply it by hand, nobody having done so, and what would have to be built first; ADR 7 and ADR 1 each have a dated note | done (a scaffold: the owner's change of 2026-10-06 dropped the applied half, and no step applies it) | S077 |
-| S079 | Self-managed Kubernetes: applied once on AWS, a scaffold on Google Cloud | The owner, 2026-10-06 ("we will build it on aws, gcp just scafold"). A cluster whose control plane the owner's account runs itself, on the cloud's virtual machines, beside the managed cluster of S036 and S078. Two halves. Without an account and without cost: a Terraform module for AWS beside S036's, with a small network of its own, that reuses S036's wrapper script, scan and the lessons of its reviews, and brings up the control plane and the workers with an installer the step's design chooses and says why (its threat note first: the cluster's certificates, its join token and its etcd are then the owner's to keep); its twin for Google Cloud; both pass `terraform validate` and a policy scan, and for AWS one command each creates and removes it. ADR 6, ADR 7 and the Azure platform document each gain the comparison of a managed and a self-managed cluster on that cloud: who runs and upgrades the control plane, where etcd and its backup live, how a pod gets a cloud identity, how a load balancer and a volume are made, what an hour costs, and why the platform's default stays managed. With the owner, in the owner's AWS account, after the cost of an hour of it is stated and the owner says yes: the owner applies it once from where no agent session holds credentials, what came up is recorded, it is removed, and the run's cost is logged; whether S036's managed cluster is applied as well is asked then. The Google Cloud twin is never applied | todo | S036, S078 |
+| S079 | Self-managed Kubernetes: applied once on AWS, a scaffold on Google Cloud | The owner, 2026-10-06 ("we will build it on aws, gcp just scafold"). A cluster whose control plane the owner's account runs itself, on the cloud's virtual machines, beside the managed cluster of S036 and S078. Two halves. Without an account and without cost: a Terraform module for AWS beside S036's, with a small network of its own, that reuses S036's wrapper script, scan and the lessons of its reviews, and brings up the control plane and the workers with an installer the step's design chooses and says why (its threat note first: the cluster's certificates, its join token and its etcd are then the owner's to keep); its twin for Google Cloud; both pass `terraform validate` and a policy scan, and for AWS one command each creates and removes it. ADR 6, ADR 7 and the Azure platform document each gain the comparison of a managed and a self-managed cluster on that cloud: who runs and upgrades the control plane, where etcd and its backup live, how a pod gets a cloud identity, how a load balancer and a volume are made, what an hour costs, and why the platform's default stays managed. With the owner, in the owner's AWS account, after the cost of an hour of it is stated and the owner says yes: the owner applies it once from where no agent session holds credentials, what came up is recorded, it is removed, and the run's cost is logged; whether S036's managed cluster is applied as well is asked then. The Google Cloud twin is never applied. First half built as (2026-10-07; implemented as code, checked without an account, tested with stand-ins and never planned or applied; nothing ran in AWS or Google Cloud and no instance booted): `infra/terraform/aws-kubeadm/` is a module for a VPC with one public subnet and no NAT gateway, one control-plane instance and two workers (`t3.medium`, Ubuntu 24.04 from the publisher's public parameter) brought up by kubeadm from two boot scripts, Calico from a manifest pinned by version and SHA-256, and the join command passed through one write-only Parameter Store parameter, with no key pair, no port 22 and no secret in user data or in the state; `infra/terraform/aws.sh` plans, applies and removes it by the word `aws-kubeadm`, with a state, a saved plan and a record of its own and a redaction that knows instance identifiers, and `make aws-kubeadm-validate` and `make aws-kubeadm-scan` check it (the scan accepts three findings, each with its reason), while no `make` target plans, applies or removes it yet; the `python` workflow installs a pinned Terraform so that the 225 Terraform-marked tests run on the runner (not yet seen there); `infra/terraform/gcp-kubeadm/` is its twin on Compute Engine, checked by `make gcp-kubeadm-validate` and `make gcp-kubeadm-scan` (one finding accepted with its reason) and by a test that holds the boot scripts' common parts equal to the AWS module's, with no command that creates it; ADR 6, ADR 7 and the Azure platform document hold the comparison of a managed and a self-managed cluster, written from what was built; T-102 is new. Three reviews of the module found one critical and two high findings (the critical one would have failed the first apply after resources existed), all closed; a fourth, of the wrapper's second module, found no critical or high finding and two medium, which two contracts answer | doing: the first half is done (2026-10-07); the second half, one apply in the owner's account, waits for the owner's yes at the paid stop; the `make` targets that create, and the guard's rules beyond a tightening to the second module's names, wait for the owner to start the guard's task | S036, S078 |
 | S037 | Second-framework workload | A small workload in Microsoft Agent Framework on the same platform contract. Built as: a second host behind the Agent Runtime's `Host` protocol, picked for each agent by the registry's `host` field, with a PostgreSQL checkpoint store of its own, and a second workload, `claim-brief`, that calls tools, pauses for an adjuster and is started by the Claims API; implemented, tested, and seen on kind once under replay (ADR 9, the second applied service acceptance) | done | S005, S018 |
 | S038 | GraphRAG spike | A small knowledge graph of customer, policy, asset and claim; retrieval compared with hybrid search | done (the rule set before the comparison gives no: no step for retrieval over a graph) | S012 |
 | S039 | Workload scaffold | `meridian workload new` generates a workload that passes registry validation, the import contract and an empty evaluation on its first run | done | S018 |
@@ -768,7 +775,7 @@ that day; the rest stand as their step recorded them.
 | The harness's hook that denies printing a Kubernetes Secret matches only the bare command: with a namespace flag, a kubeconfig flag or a shell variable before `get`, as every command in the runbooks has, it gives no answer; a superuser `psql` through `kubectl exec` and `make grafana-password` are not covered either. Found by S024's security review, which ran the hook on samples. The hook comes from development-base: fix it there, then copy it in | S024 | closed on 2026-10-04 outside a step, in development-base first (its pull request 45), then copied in: the rule reads what follows `get` in a command segment, whatever stands before it, and denies a get of a Secret with any output format but `name` and `wide`; a command that lists the Secrets in one segment and prints what a variable or xargs hands it in another is denied as a pair, which a security review of the first version found missing by running the old and the new hook side by side. The owner decided the other two that day: `psql` through `kubectl exec` asks on every call, and `make grafana-password` asks (a person's own terminal never meets the hook). 125 cases added; 38 mutants of the patterns each fail one | none |
 | The command guard is a pattern on what a session types, and these ways to a Secret's values or to superuser SQL give no answer: `kubectl exec` with `env`, `printenv` or `cat` of a mounted file, `kubectl get --raw`, `kubectl config view --raw`, `kubectl create token`, `helm get manifest`, a cloud CLI's secret commands, `pg_dump` or `pg_restore` through `kubectl exec`, and `psql` reached by `kubectl run`, `kubectl debug`, a plugin or `docker exec`. Listed by the security review of the Secret rule on 2026-10-04. A rule for one of them goes into development-base first; the hook stays a guard for habits, not a boundary, as its header says | S024 | closed by S075 after three security passes: the ways listed here are denied, ask, or are listed as not seen, the neutral rules went to development-base first (pull requests 50 and 51), and what the hook still does not see is listed in the secret-rotation runbook's section "What the command guard does not see", and in the hook's header (`docker exec` into the tests' own database is one of the items in the runbook) | S075 |
 | Nothing alerts on missing data: when the collector or the path to Prometheus stops, every gateway alert goes quiet, and a deleted Deployment or CronJob takes its alert with it; and any pod outside `meridian` can push a series under the gateway's name (T-68), which since S024 can raise or hide an alert | S024 | partly closed by S064: three rules compare the two ends of a hop (the gateway's series against the runtime's, the runtime's against the app's, the sweep's gauge against its CronJob) and one watches the log agent's DaemonSet; loaded and healthy on kind, none seen firing. Still open: with no traffic anywhere a stopped collector leaves nothing to compare; a deleted Deployment or CronJob still takes its alert with it; one of the six services can push under another's name (T-68) | S073 |
-| A renewed certificate reaches a service only with its next restart: nothing reloads it and nothing alerts before it expires (90 days, renewed at 60), so a pod that never restarts would serve an expired one, with its probes still green because the kubelet verifies no certificate (T-89). The infrastructure review's two ways out: `/healthz` answers 503 when the certificate loaded at the start is near its end, so liveness restarts the pod, or a restart on renewal with an alert on cert-manager's expiry metric | S055 | closed by S056 (inside the last 24 hours of the certificate it loaded, a service answers 503 on `/healthz` once the mounted file holds a renewed one, and from the certificate's end whatever the file holds; alerts at 21 days left, on a certificate that is not Ready, on the metrics going missing and on the two Deployments that issue). The restart itself was not seen on the cluster | S056 |
+| A renewed certificate reaches a service only with its next restart: nothing reloads it and nothing alerts before it expires (90 days, renewed at 60), so a pod that never restarts would serve an expired one, with its probes still green because the kubelet verifies no certificate (T-89). The infrastructure review's two ways out: `/healthz` answers 503 when the certificate loaded at the start is near its end, so liveness restarts the pod, or a restart on renewal with an alert on cert-manager's expiry metric | S055 | closed by S056 (inside the last 24 hours of the certificate it loaded, a service answers 503 on `/healthz` once the mounted file holds a renewed one, and from the certificate's end whatever the file holds; alerts at 21 days left, on a certificate that is not Ready, on the metrics going missing and on the two Deployments that issue). The restart itself was seen on the cluster with certificates of one hour: in the watch of 2026-10-06 (all six containers restarted once, in the same minute) and again on 2026-10-07 (S073, run R7, the restarts spread) | S056 |
 | Nothing revokes a service's certificate, and the `meridian-services` issuer signs a Certificate from any namespace with any URI, since cert-manager's built-in approver approves every request; the operators with a cluster-wide read of Secrets can read the CA's key (T-88) | S055 | partly closed by S056 (cert-manager's own approver is off and approver-policy lets the issuer sign only a request made in `meridian` with a URI under its prefix; on the cluster a request from another namespace was denied). Open, for before the chart goes to AKS: revocation; a CA key outside a Kubernetes Secret; inside `meridian` the policy does not tell one service's request from another's | S020 |
 | Telemetry from the services to the collector is clear text inside the cluster (T-90) | S055 | closed by S063: TLS 1.3 to the collector, verified against an authority of its own; on kind | S063 |
 | `meridian workload new` adds a new agent to the registry but not to the Agent Runtime's entry in `services.yaml`, so on a cluster the gateway would refuse the scaffolded workload's calls (S055's name rule) | S055 | closed in part by S055's review: `meridian registry validate` now fails for a graph agent a tenant may run that the runtime may not name, and says where to add it; closed by S061 for the agent (the scaffold writes it into the runtime's entry, the owner's decision of 2026-10-05); a new workload's own API still needs an entry and a chart entry by hand, which the command now says | S061 |
@@ -801,7 +808,7 @@ that day; the rest stand as their step recorded them.
 | The gateway bounds an embedding input in bytes because it has no tokenizer, so it refuses non-Latin inputs the provider would take (Cyrillic past 4,095 characters, CJK past 2,730); a tokenizer that needs no download at start could count closer | S058 | closed by S069 as a decision, not built: a tokenizer in the gateway's image needs an encoding file that the image cannot fetch (it has no egress) or a vendored one, for a bound whose cost today is a refused long non-Latin input, and the byte bound is the safe side | S069 |
 | A reply's output count is held to the wire's cap of 1,024 tokens and not to the request's own `max_output_tokens`, because the replay provider ignores that cap; a model that bills reasoning tokens as completion tokens would be refused by the bound, as a bad response | S058 | open | S030 |
 | The health check reads the certificate file a moment after the server did: uvicorn builds its TLS context before it builds the application, so a renewal that lands between the two reads leaves `/healthz` watching a newer certificate than the one served, and green for the two months that one has left. The window is the time the application takes to import. The security review's way out: one read for both, through uvicorn's `ssl_context_factory` | S056 | open; the second half of S069, on the cluster, not built in the first: a start module that builds the TLS context itself and hands the app the certificate it loaded (the security review's first option; six commands in the chart change, to be seen on kind with a renewal) | S069 |
-| A service that restarts itself near its certificate's end was not seen on the cluster: every certificate lasts 90 days, and the chart has no value for another lifetime. With one (an hour is cert-manager's shortest) a run on kind could watch a renewal, the 503 and the restart | S056 | closed by S062: watched on kind on 2026-10-06 with one-hour certificates: renewed thirty minutes in, 503 ten minutes before the end of the certificate each process had loaded, each container restarted once by the kubelet | S062 |
+| A service that restarts itself near its certificate's end was not seen on the cluster: every certificate lasts 90 days, and the chart has no value for another lifetime. With one (an hour is cert-manager's shortest) a run on kind could watch a renewal, the 503 and the restart | S056 | closed by S062: watched on kind on 2026-10-06 with one-hour certificates: renewed thirty minutes in, 503 ten minutes before the end of the certificate each process had loaded, each container restarted once by the kubelet; watched again on 2026-10-07 (S073, run R7, with the restarts spread): each service's old container stopped once, 52 or 53 seconds after the moment the chart computes for it | S062 |
 | The pods of one deploy hold certificates that end in the same minute, so they turn unhealthy and restart together: about a minute without an answer from a service with one replica (readiness fails after 10 to 15 seconds, liveness after 60). With one replica each that is the shortest total; with more, the pods of one service should not go together, which needs a margin that differs per pod | S056 | open | S020 |
 | `make smoke` makes no request that the issuer must refuse (a Certificate in another namespace, read for its Denied condition and removed; done by hand in S056), so a change in how approver-policy reads a policy shows only at a renewal; its audit line accepts a row of the last two minutes, so a second run inside the gateway's minute passes on the first run's row; and `refused` is any TLS error or reset after the server's certificate verified, not the unknown-CA alert alone | S056 | closed by S062: check 10 asks for a certificate from another namespace on every run and passes only on a denial by the deny policy; the audit line is this run's own row or a skip; a reset is told from the unknown-CA alert, and a connection that ends after the request was sent is a failure | S062 |
 | approver-policy has a readiness probe and no liveness probe, so a hung pod is not restarted, and `MeridianCertificateApproverDown` sees a Deployment without a replica, not a hung one; its memory limit of 96 Mi (30 MiB used on kind) was not measured on a larger cluster; its image is pinned by tag, like cert-manager's; and Renovate raises the two charts separately, though v0.28.0 is built against cert-manager v1.21.2 | S056 | partly closed by S063: its image is pinned by digest and the two charts arrive in one Renovate group. Still open: no liveness probe (the chart has no value for one), and its memory limit was measured on kind alone | S073 |
@@ -811,10 +818,10 @@ that day; the rest stand as their step recorded them.
 | The kind cluster that S055 left was replaced before S056 began: its node was created at 18:16 UTC on 2026-10-04 by a `make up` of a checkout older than `main` (one without cert-manager), and the one S056 then proved its work on was gone again by 08:11 UTC on 2026-10-05, removed by something other than S056's session; the owner had it made again. Nothing tells `make up` or `make down` that the checkout is older than what the cluster runs, or that another session is using the cluster, and with several worktrees one of them always is older | S056 | closed by S075, with a residual: the cluster records its holder and the state of its last run, and `make up`, `make deploy` and `make down` stop for another holder unless `TAKE_CLUSTER=1` (Part A; seen on kind, see S075's section). It is a notice, not a lock, and a cluster made before the record has none, so it is anybody's until the first `make up` or `make deploy` writes one | S075 |
 | Retrieval over a graph was measured on data that has nothing relational to find: no customer holds two policies and no asset is on two (S038's census). Measure again if the synthetic data gains customers with several policies or assets with several claims | S038 | open | S071 |
 | S038's one failing check (all cited clauses, rank 10) is against a fusion whose vector half is the simulated embedding, a hashed bag of words; the comparison was not run against a real embedding, which needs a paid call | S038 | open; a rerun belongs with a step that can call an embedding deployment without a laptop | S071 |
-| At a certificate renewal every service restarts in the same minute: one deploy issues the seven certificates in the same second, so each process reaches its restart margin together, and with one replica each the platform answered nothing for about a minute (seen on kind, 2026-10-06). A second replica, or a margin spread per service, would stagger it | S062 | open in part; S073 built the spread (K2: a share of the margin by a service's place in the chart's list) and the shares were seen set on the six pods (run R2, 2026-10-07); not seen: the restarts at a renewal (the one-hour watch, the second half); two replicas of one service would still restart together, not built | S073 |
+| At a certificate renewal every service restarts in the same minute: one deploy issues the seven certificates in the same second, so each process reaches its restart margin together, and with one replica each the platform answered nothing for about a minute (seen on kind, 2026-10-06). A second replica, or a margin spread per service, would stagger it | S062 | closed by S073 for one replica each, seen on kind: S073 built the spread (K2: a share of the margin by a service's place in the chart's list), the shares were seen set on the six pods (run R2, 2026-10-07), and the one-hour watch run again (run R7, 2026-10-07) saw six restarts 99 or 100 seconds apart, never fewer than five of the six Ready, each service not Ready for 41 to 46 seconds. Residual, the row's own: two replicas of one service would still restart together (they mount one Secret), not built and not seen; nor was a `renewBefore` shorter than one and five sixths of the margin | S073 |
 | `infra/kind/smoke.sh` is about 2,300 lines and `tests/meridian/test_kind_manifests.py` about 3,900; the checks are cut out of the script by the tests, function by function, and could be files of their own | S062 | closed in part by S074 (first half): `test_kind_manifests.py` is thirteen `test_kind_*` files and two support modules (`kindsupport.py`, `kindharness.py`); closed in part by S074 (third part, 2026-10-07; seen on kind: one `make smoke` from the split, 46 PASS like the unsplit script's): `smoke.sh` is an entry and ten files under `infra/kind/smoke.d/`, nine checks and the shared code, each under 800 lines (36 to 644); closed by S074 (the last cut, 2026-10-07, commit 3efea92; seen on kind: run R12, 46 PASS equal to the run before it): checks 8 and 10 are parts too, twelve files under `smoke.d/` (36 to 647 lines) and an entry of 88 lines, so no file of the script is over the ceiling | S074 |
-| The scripts' `kubectl` calls have no request timeout of their own: a hung API server stalls a wait between two checks. Smoke's reads of the database are bounded since S062; the pgvector lines of check 2 still hide psql's message | S062 | open in part; S073 bounded every call (K1, then K9 for the calls that wait; tested with stand-ins, `make deploy` and `make smoke` ran under the request flag and the `exec` bound on kind from run R2, 2026-10-07) and the pgvector lines keep psql's first line (K4); not seen: the outer bound of K9 and a frozen API server (run R5) | S073 |
-| The chart sets no `revisionHistoryLimit`, so every earlier image stays a rollback's target for as long as its ReplicaSet is kept; `make images` lists such an image and prints no command for it, and matches only images written `repository:tag` | S062 | open in part; S073 set `revisionHistoryLimit: 2` (K2; seen on the seven Deployments, run R2, 2026-10-07) and `make images` reads a registry, a port and a digest (tested with stand-ins); not seen: the limit removing an old ReplicaSet over three deploys (run R5) and `make images` with the new reading | S073 |
+| The scripts' `kubectl` calls have no request timeout of their own: a hung API server stalls a wait between two checks. Smoke's reads of the database are bounded since S062; the pgvector lines of check 2 still hide psql's message | S062 | open in part; S073 bounded every call (K1, then K9 for the calls that wait; tested with stand-ins, `make deploy` and `make smoke` ran under the request flag and the `exec` bound on kind from run R2, 2026-10-07) and the pgvector lines keep psql's first line (K4); a frozen API server was met once (run R5b, 2026-10-07, the node paused for thirty seconds): every call ended after 10 seconds with the client's own handshake error, before the wrapper's request timeout of 15 s and any outer bound, so no bound of the wrapper was seen to fire; not seen: a call that a bound of the wrapper ends (a waiting call against a node that completes the handshake and then never answers) | S073 |
+| The chart sets no `revisionHistoryLimit`, so every earlier image stays a rollback's target for as long as its ReplicaSet is kept; `make images` lists such an image and prints no command for it, and matches only images written `repository:tag` | S062 | open in part; S073 set `revisionHistoryLimit: 2` (K2; seen on the seven Deployments, run R2, 2026-10-07) and `make images` reads a registry, a port and a digest (tested with stand-ins); the limit was seen holding (run R5b, 2026-10-07: after six deploys of different commits that day every Deployment of `meridian` kept exactly three ReplicaSets, the current one and two old); not seen: `make images` with the new reading | S073 |
 | Check 10 of `make smoke` reads approver-policy's wording (the names of the policies in a denial's message) at the pinned version; an update of the add-on is when that line would fail without a fault | S062 | open; S063: the Renovate group that carries the add-on tells whoever merges it to run `make up` and `make smoke`, which is where the line would fail; closed by S073 as recorded, not seen failing: the line is in code and tested (`test_a_denial_in_a_form_the_check_does_not_read_is_a_fail_that_prints_it_cut`), and only a new version of the add-on would fail it | S073 |
 | The failure paths of the lines S062 added to `make smoke` were seen against stubs only (a missing store table, a deleted rule object, a request that is approved, a run interrupted by a signal); `make demo`'s alternating wording and `make images` in a checkout without the cluster's credentials likewise | S062 | open in part; each needs something broken on purpose on a cluster; S073 saw the deleted rule object (run R4b, 2026-10-07: smoke named the missing `PrometheusRule` and `make deploy` made it again); the others were not run | S073 |
 | A manual Job of the sweep hides a stopped schedule from `make smoke` for fifteen minutes; check 8 reads the Claims API alone as the sign that the services are deployed | S062 | closed by S073 for smoke: a by-hand Job is not the schedule's (K4, K4b), seen on kind on 2026-10-07 (run R4 showed the flaw, run R4c the fix), and check 8 reads every service's policy object (passes on kind, the FAIL not seen); the alert `MeridianSweepStale` still reads the CronJob's last successful time, which a by-hand success moves (threat model T-86) | S073 |
@@ -829,9 +836,9 @@ that day; the rest stand as their step recorded them.
 | A tenant's two rate limits are capped in the registry at a billion (S066), which keeps the script's arithmetic exact and binds nothing real; the rate store's memory is bounded by the request limit (about six entries per allowed request and tenant), and no ceiling tied to that memory exists | S066 (security review) | closed by S069 as a decision, not built: the registry already refuses tenants' limits that sum above a deployment's own (`check_tenant_limits`), a figure far below what the store's memory holds, for every candidate that states `rate_limits`; on a route of replay deployments alone only the billion applies, and the registry's README now says so | S069 |
 | A rotation of the rate store's password has no overlap: the store and the gateway restart one after the other, and model calls are refused with a 503 for the seconds between (the runbook says so) | S066 | open | S073 |
 | The rate store's own metrics are scraped by nothing (memory, connections, a slow script), and its own output is not in the platform's JSON format, is not redacted by it and is not shipped to Loki: it stays in the pod's output on the node | S066 | open; S072, 2026-10-07: stays as a stated residual (T-92 holds it), no contract of its first four took it; an exporter sidecar or a scrape and a longer include list for the log agent would be a chart change and a run, and nothing here asks for one | S072 |
-| The rate store's liveness script compares the certificate's time with the server's start, so a step of the node's clock can delay or repeat a restart (measured over 25 containers: never early) | S066 (infra review) | open | S073 |
+| The rate store's liveness script compares the certificate's time with the server's start, so a step of the node's clock can delay or repeat a restart (measured over 25 containers: never early) | S066 (infra review) | open, as accepted: a step of the clock stays the machine's. Seen on kind with the two-second form of the rule (K12): runs R5a and R7, 2026-10-07: no restart of a healthy store at any of the readings of R5a, and one restart per renewal in R7 | S073 |
 | A cold `make up` depends on the chart hosts answering in time: on 2026-10-06 the Tempo chart's download from GitHub timed out after 296 s and `make up` had to be run again; no chart is cached or mirrored | S066 (third cluster run) | open | S073 |
-| Not seen on a cluster for the rate store: a 503 from the gateway while the store is down, `MeridianRateStoreRefusing` firing, two gateway replicas sharing a window, a store frozen by a script and restarted by its probe, and `make deploy` refusing a Secret older than the ACL | S066 | open | S073 |
+| Not seen on a cluster for the rate store: a 503 from the gateway while the store is down, `MeridianRateStoreRefusing` firing, two gateway replicas sharing a window, a store frozen by a script and restarted by its probe, and `make deploy` refusing a Secret older than the ACL | S066 | open on all but the first: the 503 was seen on kind on 2026-10-07 (S073, run R11: the store scaled to 0 for 10 seconds, the gateway Ready with no restart and admitting again with the same pod, the error class `TimeoutError`); still not seen: the alert (one refused call is under its thresholds), two replicas, a frozen store and an old Secret | S073 |
 | The circuit breaker and the refusal throttles are per process: two gateway replicas each count failures on their own and may each write a throttled refusal row | S066 (design) | closed by S069 as accepted, as ADR 8 records, until a second replica of anything but the gateway exists; no code | S069 |
 | The rate store in Azure is designed only: a managed Redis in the same EU region, its cost and SKU, and whether Valkey replaces Redis 8 (run under its AGPLv3 option, unmodified) are open | S066 | open | S020 |
 | No rule reads the rate store's restarts: a store that restarts in a loop while few calls come (256 held connection slots do it every 70 to 90 seconds) resets every tenant's windows each time and stays under the refusal alert's two conditions | S066 (fourth security pass) | closed by S072 (contract R, `2fbf472`; unit-tested by `make alerts`; seen loaded on the warm cluster, R8, 2026-10-07: smoke's check 11 passed with the tree's 21 rules; not seen pending or firing): `MeridianRateStoreRestartLoop`, `warning`, three restarts of the store's container in 15 minutes (a renewal's restart and a start's liveness restart are at most two), with no wait; a loop slower than about seven minutes between restarts is not seen, which the kubelet's back-off cap rules out | S072 |
@@ -882,8 +889,8 @@ that day; the rest stand as their step recorded them.
 | The claims workload's reports: the golden manifest is read three times in one build (the injection builder reads its own three times and the golden one twice), and a file that changes between two reads is not noticed | S076 (reports of C6 and F1) | closed in part by S074's second half (H16): `Report` refuses a report whose golden set names a workload other than its own, and passes one whose golden set names none; the read-once part is a row of its own below; low; S074 is the nearest that is still open and costs nothing (S071, which works with the reports, is the paid step) | S074 |
 | The injection import test's walker cannot see what its docstring lists (a non-literal argument of `import_module`, `__import__` or `getattr`, `builtins.__import__`, `sys.modules[...]`, an alias made by unpacking or stored on an object, a name reached by a string through `vars()`, `__dict__` or `setattr`, `global`, `nonlocal`, `eval`, `exec`), and it reports a few names that are not private uses (an alias rebound at module level, a `match` capture, a walrus inside a comprehension); it is a tripwire, not a proof | S076 (report of F2; second review) | accepted limit, pinned by S074's second half (H13): the docstring needed no correction, and each of eleven routes it cannot see and two uses it over-reports has a case in `test_injection_imports_limits.py` that fails when the walker's reach changes; it stays a tripwire, not a proof; low | S074 |
 | A merge of `main` into a step's branch was pushed after the cheap gates only and left `test_workload_new_note.py` red (S076, 842b977: S037's `claim-brief` changed a list the test pinned); Part A says the later session runs the gates again and not which, so a contract's gate does not yet say that the directories its change reaches are run after a merge | S076 (C10) | closed by S075: Part A now says that after a merge of `main` the whole suite runs on the merged tree before the branch is pushed, and that a contract's gates name every directory its change reaches | S075 |
-| On 2026-10-06 `make deploy` failed twice, a minute apart, at the ingest Job on a cluster that had been up for hours (the Model Gateway answered 503 to the embedding call: "the model gateway refused the embedding call (model gateway answered 503)"); the session's script then deleted the cluster before anyone had read the audit row's reason or the gateway's log, and a fresh cluster deployed the same commit (`make up` 299 s, `make deploy` 97 s, the Job passed). Two failures a minute apart and a pass on a fresh cluster point at the cluster's state, not at load. Candidates, none shown: the rate store not answering inside its 0.25 s read timeout or 1 s connect timeout, with no retry (`gateway/rate_store.py`; the gateway refuses, by design); the ledger's close failing (`gateway/walk.py`: a failed close answers 503; the database's pod had restarted that evening); and the ingestion not retrying a 503 (`knowledge_mcp/ingest.py` waits out a 429 and ends on any other status). The three logs of the commands are the only evidence left | S075 (the incident) | open; not explained for certain: S073 found a likely cause, not a proven one, in the rate store's probes, which left a defunct process per run until the container could not fork (run R1a, 2026-10-06: 2,024 under the Redis server, the pod not Ready, the gateway's 503 to every call; fixed by K7 and seen on kind in run R2, 2026-10-07), and built the ingestion's word for the gateway's four 503s (K6: tested with scripted replies, not seen on a real refusal, the second half); the ledger's close would show as `database-unavailable` | S073 |
-| The guard's local reader list and what its last review left: a mounted Secret or an `.env` read by `grep`, `awk`, `jq`, `cp`, `docker cp` or a glob is read by no rule (`reader_pre` and the pod's reader list name the plain readers); the pod rule for `env`, `printenv` and `set` tests only the last ` -- `; a fourth level of nested `sh -c`; secret-shaped variable names the `printenv` list does not match (`REDIS_PW`); a heredoc read by quote parity and a list of interpreters, not parsed; a hook file overwritten by a redirect; `-v=8` and `crictl inspect` read from documentation, run against no cluster. The hook's header and the runbook's section list each; S036's cloud rules edited the guard (2026-10-07) and closed none of these (they read the AWS module's names and add no reader for a mounted Secret), and S079, which reuses the wrapper and brings a second AWS module, edits it next, so it is the nearest step | S075 (third security review; F3b's and F4g's reports) | open; listed, not built; re-homed from S036, whose rules did not touch them | S079 |
+| On 2026-10-06 `make deploy` failed twice, a minute apart, at the ingest Job on a cluster that had been up for hours (the Model Gateway answered 503 to the embedding call: "the model gateway refused the embedding call (model gateway answered 503)"); the session's script then deleted the cluster before anyone had read the audit row's reason or the gateway's log, and a fresh cluster deployed the same commit (`make up` 299 s, `make deploy` 97 s, the Job passed). Two failures a minute apart and a pass on a fresh cluster point at the cluster's state, not at load. Candidates, none shown: the rate store not answering inside its 0.25 s read timeout or 1 s connect timeout, with no retry (`gateway/rate_store.py`; the gateway refuses, by design); the ledger's close failing (`gateway/walk.py`: a failed close answers 503; the database's pod had restarted that evening); and the ingestion not retrying a 503 (`knowledge_mcp/ingest.py` waits out a 429 and ends on any other status). The three logs of the commands are the only evidence left | S075 (the incident) | open; not explained for certain: S073 found a likely cause, not a proven one, in the rate store's probes, which left a defunct process per run until the container could not fork (run R1a, 2026-10-06: 2,024 under the Redis server, the pod not Ready, the gateway's 503 to every call; fixed by K7 and seen on kind in run R2, 2026-10-07), and built the ingestion's word for the gateway's four 503s (K6: tested with scripted replies, and seen on a real refusal on 2026-10-07, run R11: with the rate store down for 10 seconds the Job's one log line said `kind rate-store-unavailable`, the gateway's refusal and the ingestion's row shared one run ID, and the gateway recovered with no restart; the other three words are not seen); the ledger's close would show as `database-unavailable`. The 2026-10-06 failure itself stays not explained for certain: R11 made the fault on purpose and does not show what happened that evening | S073 |
+| The guard's local reader list and what its last review left: a mounted Secret or an `.env` read by `grep`, `awk`, `jq`, `cp`, `docker cp` or a glob is read by no rule (`reader_pre` and the pod's reader list name the plain readers); the pod rule for `env`, `printenv` and `set` tests only the last ` -- `; a fourth level of nested `sh -c`; secret-shaped variable names the `printenv` list does not match (`REDIS_PW`); a heredoc read by quote parity and a list of interpreters, not parsed; a hook file overwritten by a redirect; `-v=8` and `crictl inspect` read from documentation, run against no cluster. The hook's header and the runbook's section list each; S036's cloud rules edited the guard (2026-10-07) and closed none of these (they read the AWS module's names and add no reader for a mounted Secret), and S079, which reuses the wrapper and brings a second AWS module, edits it next, so it is the nearest step | S075 (third security review; F3b's and F4g's reports) | open; listed, not built; re-homed from S036, whose rules did not touch them. S079's first half edited no guard file either: the guard's rules for the second module wait for the owner to start the guard's task, the base first, so the row stays open at S079 | S079 |
 | The next rule to the command guard goes into the development base first: the base's copy is level with Meridian's since its pull request 51 (merged 2026-10-06, the guard's rounds two and three), and S036's guard rules for the AWS wrapper are the next ones, so they are now owed to the base (built here first, 2026-10-07; not yet sent). The neutral ones: the `aws` CLI's deny and ask rules with their read list, the ask for `boto3`, `botocore` and `awscli` and for `-auto-approve`, the deny of `TF_*` and `AWS_ENDPOINT_URL*` assignments before a tool, the readers of a state, a plan, `.tfvars.json`, `~/.aws`, `~/.terraformrc` and `~/.terraform.d`, the writers of `~/.terraformrc`, `~/.gitconfig`, `~/.config/git` and `~/.aws`, and the deny of tracing and start-up variables, with the fixes of the two later rounds (`-cm`, a quoted token, the backtick, the cut-out of `workspace select default`). Meridian's own stay out: whatever names `aws.sh`, a `make aws-*` target, `local.env`, `meridian-aws`, `TRIVY_IMAGE` or `PROMTOOL_IMAGE` | S075 | open; owed to the base before S079 changes the guard | S036 |
 | Not seen on a cluster after S075: `TAKE_CLUSTER=1`, a record left `changing` by a run that failed (the refusal that names it), `make up` on an existing cluster, and `make down` refused for a record at `changing`; tests with stand-in binaries hold each. Seen: the record through a deploy, a deploy refused while another runs, and `make down` refused with the record at `ok` (S075's section) | S075 | open in part; S073 saw `TAKE_CLUSTER=1 make deploy` take the record from S075 (run R2, 2026-10-07); a record left `changing` by a failed run and `make up` on an existing cluster were not seen | S073 |
 | Limits of S075's three small checks and two unverified Renovate rules. The split-table check misses rows in block quotes and rows without a closing pipe, and flags a row inside an HTML comment, a four-space-indented row and a lone header-like line; the lane check counts `--` and `n/a` in "Out now" as running, and a session in a fresh worktree has no board; the shell-edit hook is inert until the owner sets `bashEditDiffEnabled` in `~/.claude/settings.json` and may name files that `make` targets regenerate (baselines, Mermaid blocks) once it is on; Renovate has not run the new rules, so whether Docker Hub gives the Envoy chart a push date (else the chart waits indefinitely), whether the `terraform` block's `description` key is accepted and whether the `agent-framework` label is made are unseen | S075 | the limits of the three checks are accepted and written as sentences in S074's second half (Part C); the check's docstring and the two values of `empty()` that would state or close them, and Renovate's three unseen results, are rows of their own below | S074 |
@@ -928,15 +935,15 @@ that day; the rest stand as their step recorded them.
 | The knowledge service's embedding client (`knowledge_mcp/embedding_client.py`) posts with a buffered call, so the whole reply of the gateway, 2xx or not, is held in memory before the client reads it, and nothing caps its size (the timeout is per read); the runtime's client got a streamed read with a cap in this step, and the same change is owed here | S073 (its contract K6 stopped on it, 2026-10-07) | open; low: the gateway is a peer behind mutual TLS | S069 |
 | No real withheld completion and no real refusal of a structured request has been seen from a real provider, so `drafted_by` for a withheld completion rests on a mocked transport and a scripted provider, and the evaluation baseline's `model_asked` has not moved (no recorded or scripted case is one); the measurement costs money and the owner says yes first (T-67) | S069 (E6, boundary review) | open; S071's done-when already names the refusal of a structured request, and this adds the withheld completion | S071 |
 | Not seen on a cluster after S069's first half: any of its code. A kind run would show the 400's four headers on a withheld completion, the 422 for a resume that carries a value, one `suppressed` row from each service after a flood and from a tool server after a shed call with its run named, a takeover of a run left `Running` past the lease (`stale-running`) with the late leg's end matching nothing, the access log's path of a request with an encoded address, and the metric `not-started` of a resume that could not read its run | S069 (the step's evidence) | open; the second half of S069 holds the cluster and deploys this code | S069 |
-| What an apply of the AWS module would settle, none of it seen: whether `db.t4g.small` and a PostgreSQL 17 minor are offered in the Region (ADR 6, not verified); whether `CREATE EXTENSION vector` works on the instance; whether the secret RDS manages waits out a recovery window and keeps its name (ADR 6, not verified); whether ECR removes a repository that holds an image without the module's `force_delete` (ADR 6, not verified); whether a budget can be written in EUR (the module uses USD); the CPU-credit charges of burstable nodes (ADR 6, not verified); whether the Free plan withholds EKS, RDS or `t3.large`, and the quotas; the add-on defaults for Kubernetes 1.36; whether the Pod Identity trust conditions, the `eks-cluster-name` one in particular, let the EBS CSI driver and the workload get credentials, and whether the nodes join; whether an Identity Center principal is accepted as the access entry; how `allowed_account_ids` fed from a sensitive variable and the lookups of managed policies by name behave at plan; the real times of an apply and a removal; and what the whole costs against the sketch (about USD 0.35 an hour from ADR 6's prices, not from a bill). The module's README holds the list as its checklist | S036 (reports of T1, T2b and T2d; the infrastructure review) | open; only an apply settles them, and the apply is asked at S079's paid stop | S079 |
-| `aws.sh` never ran against a real `aws` CLI or a real Terraform with credentials, and its tests use stand-in programs: what a real plan prints for a sensitive variable (`(sensitive value)` is the documentation's word), whether the redaction meets a shape it does not know (a VPC, subnet or instance identifier, an IPv6 address, a host written with dashes, a `db-` identifier, the cluster's CA, the sign-in's start URL are not covered, and a four-part version number is hidden as an address), the plan file's real mode, `stat -f` and bash 3.2 on macOS, and a differently cased variable file on a case-insensitive file system; the last words of the removal's prompt show only after the answer is typed, because the filter holds a partial line and `sed -u` is GNU-only | S036 (reports of T2, T2c and T2d; the second and third reviews) | open | S079 |
-| What `aws.sh` does not close, each stated in the module's README and none built: `terraform`, `aws`, `git` and `sha256sum` come from the caller's `PATH`; `~/.terraformrc` (a credentials helper, `dev_overrides`), `~/.terraform.d`, a `credential_process` or sign-in helper in the AWS configuration, a shell start-up variable, an exported function and `LD_PRELOAD`; a clean filter in the repository's own `.git/config` runs during the status call; a changed `HOME` in the same checkout plans against an empty state without a stop (a count of the state's resources logged by `plan` is not built); a link at the plan's or the record's path is followed; a stray `terraform.tfstate` in the module's directory is not refused; a 777 parent directory of the local file is accepted; inherited file descriptors stay open | S036 (reviews 2 and 3; T2e) | open; listed, not built | S079 |
-| Small ends of the AWS script and module, all low: a "no" at the removal's question is reported as a failed removal; the empty-state sentence prints the state's path under home; `make aws-scan` without Docker prints the shell's error and no sentence; a sentence of `aws.sh`'s header is broken across two lines; `identity.tf`'s comments still say each role trusts one service account, which the README says is not observed until an apply; the comment above the EBS CSI add-on says more of a removal order than the module holds | S036 (reports of T2b, T2c and T2d) | open; low | S079 |
-| What the AWS module leaves to production, each named beside its test value in its README and none built: private subnets behind a NAT gateway, deletion protection and a final snapshot, retained backups, a second zone, customer-managed keys, control-plane logging, flow logs and RDS IAM authentication (the scan's nine MEDIUM and three LOW findings), a separate role for the VPC CNI, a launch template that pins the node metadata service, an ECR lifecycle policy, `rds.force_ssl` pinned in a parameter group, a network-level limit on which pods reach the database (its security group admits the whole cluster), lock hashes for `linux_arm64` and `windows_amd64`, a remote state bucket with locking, and a role per team in place of one cluster administrator. S079 reuses the module's script, scan and the lessons of its reviews, so it is the step that decides which of these its own module takes | S036 (reviews; README) | open; not built, by design | S079 |
-| The Meridian chart on the AWS cluster is not built: the controllers it needs (an edge, cert-manager), the eleven database roles and Secrets that CloudNativePG makes on kind and nothing makes on RDS, the chart's `automountServiceAccountToken: false` against the token volume Pod Identity injects, and a service that reads Secrets Manager (none does); a removal also gains an order once anything is installed (Kubernetes objects, then the cluster, then the network). The module is infrastructure only on purpose, and whether it is applied at all is asked at S079's stop | S036 (design; README) | open; no step runs the platform on a managed AWS cluster | S079 |
-| Where the AWS apply is run is the owner's choice and nothing checks it: a machine or an operating-system user where no session runs and no credential is readable by one (no `~/.aws` a session can read), with a sign-in of about an hour that is removed afterwards (`aws sso logout`); on a machine where a session runs and credentials exist, neither the script nor the guard stops a session that means to apply or remove (T-100). The cost, from fresh prices, and this are said to the owner before the yes | S036 (security reviews) | open; the owner's to choose | S079 |
-| The AWS rules of the command guard read text and list what they do not see, once in the secret-rotation runbook and once in the module's README: the two generic rules for the removal verb read the whole command, so a commit message or pull request body that names it is denied for `terraform` and `tofu` (write it to a file); the second tool's bare `state rm`, `import` and `force-unlock` are not asked; `gh … -b`, `-t` and `--subject` are not blanked as `--body` is; a working directory that reaches the module only through `..` or a link is not seen; wrappers before `aws` (`timeout`, `nice`, `watch`, `env -i`, `xargs`, `find -exec`, a brace group, a path prefix), the `hashicorp/terraform` image, `terragrunt` and `state replace-provider`; readers after a `cd` into a credentials directory or through `find`, a redirect or a glob; `git config --global` with a key that runs a program and `git add -f` of the local file; `printenv` of a credential; and S075's asks that stay asks (`sts get-session-token`, `assume-role`, `ecr get-login-password`, `eks get-token`, `configure export-credentials`), with `kms schedule-key-deletion` and `organizations close-account` asking and not denied. A try at emptying a search's quoted pattern, to spare a session's false alarms, was taken out because it hid a command (a quoted word is read as a use of what it names: search with the Grep tool) | S036 (T3b, T3d; the reviews of T3 and T3b) | open; listed, not built | S079 |
-| What the guard and the settings of S036 rest on was not verified in a live session: whether the harness's working directory follows a `cd` of an earlier call, whether an `ask` in the settings beats an `allow` (`Bash(terraform -chdir=*aws* plan*)` against `Bash(terraform -chdir=* plan*)`), whether the settings' `./` denies match a file reached by an absolute path from another checkout, and whether the bare `Grep` and `Glob` tools are held by the `Read` denies; Codex reads no settings file, so it has the hook's rules alone | S036 (reviews of T3 and T3b) | open; each needs a probe in a live session | S079 |
+| What an apply of the AWS module would settle, none of it seen: whether `db.t4g.small` and a PostgreSQL 17 minor are offered in the Region (ADR 6, not verified); whether `CREATE EXTENSION vector` works on the instance; whether the secret RDS manages waits out a recovery window and keeps its name (ADR 6, not verified); whether ECR removes a repository that holds an image without the module's `force_delete` (ADR 6, not verified); whether a budget can be written in EUR (the module uses USD); the CPU-credit charges of burstable nodes (ADR 6, not verified); whether the Free plan withholds EKS, RDS or `t3.large`, and the quotas; the add-on defaults for Kubernetes 1.36; whether the Pod Identity trust conditions, the `eks-cluster-name` one in particular, let the EBS CSI driver and the workload get credentials, and whether the nodes join; whether an Identity Center principal is accepted as the access entry; how `allowed_account_ids` fed from a sensitive variable and the lookups of managed policies by name behave at plan; the real times of an apply and a removal; and what the whole costs against the sketch (about USD 0.35 an hour from ADR 6's prices, not from a bill). The module's README holds the list as its checklist | S036 (reports of T1, T2b and T2d; the infrastructure review) | open; only an apply settles them, and the apply is asked at S079's paid stop (it may be answered no, and S079's first half changed nothing in this module; the self-managed module's own list is a row of its own, further down) | S079 |
+| `aws.sh` never ran against a real `aws` CLI or a real Terraform with credentials, and its tests use stand-in programs: what a real plan prints for a sensitive variable (`(sensitive value)` is the documentation's word), whether the redaction meets a shape it does not know (a VPC, subnet or instance identifier, an IPv6 address, a host written with dashes, a `db-` identifier, the cluster's CA, the sign-in's start URL are not covered, and a four-part version number is hidden as an address), the plan file's real mode, `stat -f` and bash 3.2 on macOS, and a differently cased variable file on a case-insensitive file system; the last words of the removal's prompt show only after the answer is typed, because the filter holds a partial line and `sed -u` is GNU-only | S036 (reports of T2, T2c and T2d; the second and third reviews) | closed in part by S079 (2026-10-07, K2b): `redact` now hides the identifier of an instance, an image, a VPC, a subnet, a security group and its rules, a route table, an internet gateway, an Elastic IP, a network interface and a volume (`<resource-id>`), a host written with dashes that embeds an address (`<host>`) and compressed user data (`<user-data>`), with a whole synthetic plan excerpt of the self-managed module run through it (tested with made-up values; a filter, not a guarantee); open: the script has still never run against a real `aws` CLI or a real Terraform with credentials, an IPv6 address, a `db-` identifier, the cluster's CA and the sign-in's start URL are not covered (see the row on the wrapper's small ends), the plan file's real mode, `stat -f` and bash 3.2 on macOS, a differently cased variable file on a case-insensitive file system, and the removal's prompt | S079 |
+| What `aws.sh` does not close, each stated in the module's README and none built: `terraform`, `aws`, `git` and `sha256sum` come from the caller's `PATH`; `~/.terraformrc` (a credentials helper, `dev_overrides`), `~/.terraform.d`, a `credential_process` or sign-in helper in the AWS configuration, a shell start-up variable, an exported function and `LD_PRELOAD`; a clean filter in the repository's own `.git/config` runs during the status call; a changed `HOME` in the same checkout plans against an empty state without a stop (a count of the state's resources logged by `plan` is not built); a link at the plan's or the record's path is followed; a stray `terraform.tfstate` in the module's directory is not refused; a 777 parent directory of the local file is accepted; inherited file descriptors stay open | S036 (reviews 2 and 3; T2e) | open; listed, not built. Since S079's K2b the whole list holds for the second module word for word (its README's "What the wrapper does not stop"), and the state holds the rendered boot scripts, with the Elastic IP in them, in clear (from the provider's schema, not seen) | S079 |
+| Small ends of the AWS script and module, all low: a "no" at the removal's question is reported as a failed removal; the empty-state sentence prints the state's path under home; `make aws-scan` without Docker prints the shell's error and no sentence; a sentence of `aws.sh`'s header is broken across two lines; `identity.tf`'s comments still say each role trusts one service account, which the README says is not observed until an apply; the comment above the EBS CSI add-on says more of a removal order than the module holds | S036 (reports of T2b, T2c and T2d) | open; low; K2b's report names none of these ends as changed, so they stand | S079 |
+| What the AWS module leaves to production, each named beside its test value in its README and none built: private subnets behind a NAT gateway, deletion protection and a final snapshot, retained backups, a second zone, customer-managed keys, control-plane logging, flow logs and RDS IAM authentication (the scan's nine MEDIUM and three LOW findings), a separate role for the VPC CNI, a launch template that pins the node metadata service, an ECR lifecycle policy, `rds.force_ssl` pinned in a parameter group, a network-level limit on which pods reach the database (its security group admits the whole cluster), lock hashes for `linux_arm64` and `windows_amd64`, a remote state bucket with locking, and a role per team in place of one cluster administrator. S079 reuses the module's script, scan and the lessons of its reviews, so it is the step that decides which of these its own module takes | S036 (reviews; README) | closed by S079 (2026-10-07), by the decision the row asked for: the self-managed module takes one, a metadata service at version 2 with a hop limit of 1 on every instance, set in the module itself; it leaves the rest as the managed one does, each in its README: public subnets with no NAT gateway (AWS-0164) and open egress (AWS-0104) and no flow logs (AWS-0178), all three accepted for an environment that lives an hour, a local state under home, two lock platforms, and a managed policy on the node roles that allows more than a node needs (a row of its own). The managed module's list stays in its README, not built, by design | S079 |
+| The Meridian chart on the AWS cluster is not built: the controllers it needs (an edge, cert-manager), the eleven database roles and Secrets that CloudNativePG makes on kind and nothing makes on RDS, the chart's `automountServiceAccountToken: false` against the token volume Pod Identity injects, and a service that reads Secrets Manager (none does); a removal also gains an order once anything is installed (Kubernetes objects, then the cluster, then the network). The module is infrastructure only on purpose, and whether it is applied at all is asked at S079's stop | S036 (design; README) | open; no step runs the platform on a managed AWS cluster. Nor on the self-managed one, by design: it installs Calico and nothing else, so a volume claim and a `LoadBalancer` Service stay pending and there is no ingress (its README says so, and the comparison in ADR 6 with it); whether the platform runs on either AWS cluster at all is asked at the paid stop | S079 |
+| Where the AWS apply is run is the owner's choice and nothing checks it: a machine or an operating-system user where no session runs and no credential is readable by one (no `~/.aws` a session can read), with a sign-in of about an hour that is removed afterwards (`aws sso logout`); on a machine where a session runs and credentials exist, neither the script nor the guard stops a session that means to apply or remove (T-100). The cost, from fresh prices, and this are said to the owner before the yes | S036 (security reviews) | open; the owner's to choose, for the self-managed module's three wrapper lines as for the managed module's: its README says the owner runs them after the cost is stated and a yes, from where no session holds credentials, and nothing checks it | S079 |
+| The AWS rules of the command guard read text and list what they do not see, once in the secret-rotation runbook and once in the module's README: the two generic rules for the removal verb read the whole command, so a commit message or pull request body that names it is denied for `terraform` and `tofu` (write it to a file); the second tool's bare `state rm`, `import` and `force-unlock` are not asked; `gh … -b`, `-t` and `--subject` are not blanked as `--body` is; a working directory that reaches the module only through `..` or a link is not seen; wrappers before `aws` (`timeout`, `nice`, `watch`, `env -i`, `xargs`, `find -exec`, a brace group, a path prefix), the `hashicorp/terraform` image, `terragrunt` and `state replace-provider`; readers after a `cd` into a credentials directory or through `find`, a redirect or a glob; `git config --global` with a key that runs a program and `git add -f` of the local file; `printenv` of a credential; and S075's asks that stay asks (`sts get-session-token`, `assume-role`, `ecr get-login-password`, `eks get-token`, `configure export-credentials`), with `kms schedule-key-deletion` and `organizations close-account` asking and not denied. A try at emptying a search's quoted pattern, to spare a session's false alarms, was taken out because it hid a command (a quoted word is read as a use of what it names: search with the Grep tool) | S036 (T3b, T3d; the reviews of T3 and T3b) | open; listed, not built. S079 measured the hook's answer to the wrapper's new lines (see the section) and found two gaps that are rows of their own (the settings' deny globs, and a by-hand run in a module's directory); the rest of the list is unchanged | S079 |
+| What the guard and the settings of S036 rest on was not verified in a live session: whether the harness's working directory follows a `cd` of an earlier call, whether an `ask` in the settings beats an `allow` (`Bash(terraform -chdir=*aws* plan*)` against `Bash(terraform -chdir=* plan*)`), whether the settings' `./` denies match a file reached by an absolute path from another checkout, and whether the bare `Grep` and `Glob` tools are held by the `Read` denies; Codex reads no settings file, so it has the hook's rules alone | S036 (reviews of T3 and T3b) | open; each needs a probe in a live session. S079's measurement of 2026-10-07 was the hook's own answer to lines read from a file (a probe of the hook, not a live session), so none of the four premises is settled by it | S079 |
 | Nothing in CI runs `make aws-validate`, `make aws-scan` or a plan, and no pipeline identity exists for AWS: a bump of the provider or of the Trivy pin, or a change to the module, is checked by whoever merges it, by hand (Part A says so); S022 owns Terraform and the scan in the pipeline, for Azure first | S036 (README; the infrastructure review) | open | S022 |
 | What a Google Cloud scaffold should copy from S036 and what it should avoid. Copy: the provider's own pin of the account or project beside the script's (`allowed_account_ids` is the one pin that holds for a hand-typed command: find the counterpart in the provider's documentation); a local file that is read and never run, owner's and mode 600, with a name the guard's reader rule covers; an environment the script chose; a saved plan bound to its commit, its age and its hash; sensitive variables for an address and an e-mail; closed lists of instance types as a cost ceiling; managed policies and roles read by name, since two AWS pages disagreed on one ARN's path; trust conditions on the workload identity's tokens; a state outside the checkout, a default-workspace check and a removal that refuses over an empty state; a scan ignore file whose entries are one check ID with a reason above, held by tests (an inline `trivy:ignore` or `tfsec:ignore` and a YAML configuration refused); the scan offline from an image pinned by digest; a test that holds the script's exports to the module's variables; and a redaction written for Google Cloud's identifiers before a plan is read. Avoid: sourcing the local file; a variable that is not marked sensitive; `cidrhost` on an IPv6 range; a README sentence that says a control holds before a test has tried to break it (the second review found seven, the third one more); and a test parameter built from the clock | S036 (all six reviews) | closed by S078 (2026-10-07), by the design: kept are (i) the provider's own pin, as a precondition on the text that no run has seen refuse (the provider has no list of projects; the counterpart is the module's own check, not a provider setting), (v) sensitive variables, (vi) closed lists, (vii) in kind only (a Google role is a name, there is no ARN whose path two pages could give differently, and whether the one node role exists as named is not seen: ADR 7, question 16), (viii) in kind only (the binding's principal names one namespace and one ServiceAccount; it is not a set of conditions on a token), (x) an ignore file of one check ID with a reason above, held by tests, with inline ignores and a configuration file refused (it holds no entry), and (xi) the scan offline from the pinned image; fell away because no plan or apply path exists: (ii) the local file, (iii) the script's environment, (iv) the saved plan's record, (ix) the default-workspace check and the removal over an empty state (the state's place is a sentence of the README), (xii) the exports test, and (xiii) the redaction before a plan is read (listed in the README as what to build first). Avoided: no sourced file, every variable naming a project, billing account or address is sensitive, the address is a validated IPv4 /32, the README labels each control and says what no one has seen, and no test parameter comes from the clock | S078 |
 | No pytest-level timeout: a hung test ends only with its own bound or CI's job limit of 15 minutes (the stack's tool bound, 30 s, keeps one run's 16 calls inside the 600 s lease and the job, and a hung fixture or any other test is not bounded at all); `pytest-timeout` is a new development dependency | S074 (review of the first half, M-2) | open; the owner's question c | S074 |
@@ -960,15 +967,15 @@ that day; the rest stand as their step recorded them.
 | Every figure of S068's expiry was measured on one machine with the data in memory: the builds of 0027 and 0029 (each blocks writers of its table while it runs), a batch of 10,000 rows, the closing call (measured with no counters planted), the cost of an insert into the new indexes (argued, not timed), the write-ahead log of a batch (estimated, not measured) and a dry run's count over tens of millions of rows | S068 (reviews, F2) | open; the first database that is not in memory is the Azure one | S020 |
 | Rows the upkeep role wrote (every `audit.expire` and `ledger.expired` row, a credit's and a close's) are never removed by the audit expiry, so they stay for ever: a few rows for each operator action, with slugs and tenant IDs and no personal data; a period for them needs a function of their own and the owner's answer | S068 (F1) | open | S020 |
 | Migration 0031 sets a default on the database, which only the database's owner may do: on kind the migrations' role is that owner; on a managed server where it owns the schemas and not the database the file fails and the migrate Job with it (not tried on Azure). A restore without the database's own settings, or a copy made from a template, loses the default while the ledger of migrations still says 0031 is applied, and nothing looks for that drift. The upkeep command's one connection uses psycopg's server-side prepared statements from the sixth call, which a pooler in transaction mode would break (none is used) | S068 (the database re-read of U5, U5b and F2) | open; low | S020 |
-| Rules for the command guard and the settings for Google Cloud, owed on the day a credential for it could exist on a machine where a session runs: `gcloud` beyond the two verbs it reads (a secret's value, an access or identity token), `gsutil`, `~/.config/gcloud` and the `gcp-*` targets; with them a redaction for Google's identifiers (a project ID, `*.googleapis.com` names, a Cloud SQL connection name) and, if the module were ever applied by more than one careful person, a wrapper of S036's kind. None exists by decision: no credential exists, and a hand-typed `terraform plan` in the module's directory is allowed and reaches nothing. The next rule of the guard goes into the development base first | S078 (design; README) | open; not built, by design | S079 |
-| The open questions of ADR 7 that only an apply settles, and the README's list of what `validate` and the scan cannot see (the project pin never seen to refuse, the Cloud Resource Manager API that must already be on, `billing_project`'s API and role, the node role's name and its reach into Artifact Registry, Private Service Connect with `ipv4_enabled = false` and no `private_network`, the forwarding rule's empty scheme, the DNS left off, the public-range setting beside private nodes, a cluster without `network_policy` beside Dataplane V2, the generated instance name, a budget with no currency, the quota of a trial account, how long an enabled API takes, whether workload identity reads the one secret, whether the nodes' one reader grant is enough to pull the image, whether the cluster's temporary default pool is created under an organization's default-grants constraint, whether `SYSTEM_COMPONENTS` alone is accepted beside the default `logging_service`, and the instance's first disk size against the ceiling of 20 GB) | S078 (README; ADR 7) | open; the module is never applied, so nothing settles these unless the owner applies it. The row had no step when S078 merged ("no step: the owner's word"), against the plan's rule that every backlog row names one (the owner asked on 2026-10-07 whether any did); S079 holds the Google Cloud scaffold's other rows and writes its twin, so it judges this one at its close: kept as the list of what was never seen, or closed if the owner applies the module | S079 |
-| What the Google Cloud module leaves to production, each beside its test value in its README and none built: deletion protection and a final backup, more retained backups, a regional cluster and database, a chosen release channel and version, Cloud SQL's logging flags and subnet flow logs (the scan's six MEDIUM and one LOW finding), a private control-plane endpoint, a managed firewall at the edge, a remote state bucket, customer-managed keys, a node-pool `network_policy`, and a role per team. S079 builds a twin beside this module, so it is the step that decides which of these its own takes | S078 (scan; README) | open; not built, by design | S079 |
-| A second Google Cloud module (S079's self-managed cluster) cannot sit in `infra/terraform/gcp/`: the scan's tests hold one cluster and one subnet block to the directory because an ignore-file entry covers every resource of it, and `make gcp-validate` and `make gcp-scan` each name that one directory. The validate door takes a module's name from a closed list (`aws`, `gcp`), so a new name or a new directory, with its own scan recipe, is the shape | S078 | open | S079 |
-| The Google provider is pinned `~> 8.6` and its lock holds 8.6.0, which was published on 2026-10-06, a day before the module was written (8.5.0 a week before); no run has used it beyond `init` and `validate`. Renovate's `terraform` group moves the lock after a week and its note names `make gcp-validate` and `make gcp-scan`; the release notes of the 8 series are unread. S079's twin pins the same provider and is the next step to read them | S078 (G1's report) | open | S079 |
-| The Google Cloud module's `workload_service_account` may be up to 253 characters, but the secret's ID is the 18-character prefix `meridian-gcp-test-` and that name, against Secret Manager's limit of 255: a name of more than 237 characters passes the validation and fails an apply. A bound of 237 on the variable would close it | S078 (G4's report) | open; low | S079 |
+| Rules for the command guard and the settings for Google Cloud, owed on the day a credential for it could exist on a machine where a session runs: `gcloud` beyond the two verbs it reads (a secret's value, an access or identity token), `gsutil`, `~/.config/gcloud` and the `gcp-*` targets; with them a redaction for Google's identifiers (a project ID, `*.googleapis.com` names, a Cloud SQL connection name) and, if the module were ever applied by more than one careful person, a wrapper of S036's kind. None exists by decision: no credential exists, and a hand-typed `terraform plan` in the module's directory is allowed and reaches nothing. The next rule of the guard goes into the development base first | S078 (design; README) | open; not built, by design. The twin of S079 changes nothing here: it is never applied either and no credential exists | S079 |
+| The open questions of ADR 7 that only an apply settles, and the README's list of what `validate` and the scan cannot see (the project pin never seen to refuse, the Cloud Resource Manager API that must already be on, `billing_project`'s API and role, the node role's name and its reach into Artifact Registry, Private Service Connect with `ipv4_enabled = false` and no `private_network`, the forwarding rule's empty scheme, the DNS left off, the public-range setting beside private nodes, a cluster without `network_policy` beside Dataplane V2, the generated instance name, a budget with no currency, the quota of a trial account, how long an enabled API takes, whether workload identity reads the one secret, whether the nodes' one reader grant is enough to pull the image, whether the cluster's temporary default pool is created under an organization's default-grants constraint, whether `SYSTEM_COMPONENTS` alone is accepted beside the default `logging_service`, and the instance's first disk size against the ceiling of 20 GB) | S078 (README; ADR 7) | open; the module is never applied, so nothing settles these unless the owner applies it. The row had no step when S078 merged ("no step: the owner's word"), against the plan's rule that every backlog row names one (the owner asked on 2026-10-07 whether any did); S079 holds the Google Cloud scaffold's other rows and writes its twin, so it judges this one at its close. Verdict of the first half (2026-10-07): kept as the list of what was never seen. The owner has not applied the module and none is planned, and the twin adds its own such list (a row of its own, further down); the row is closed only if the owner applies the module | S079 |
+| What the Google Cloud module leaves to production, each beside its test value in its README and none built: deletion protection and a final backup, more retained backups, a regional cluster and database, a chosen release channel and version, Cloud SQL's logging flags and subnet flow logs (the scan's six MEDIUM and one LOW finding), a private control-plane endpoint, a managed firewall at the edge, a remote state bucket, customer-managed keys, a node-pool `network_policy`, and a role per team. S079 builds a twin beside this module, so it is the step that decides which of these its own takes | S078 (scan; README) | closed by S079 (2026-10-07), by the decision the row asked for: the twin has no database, registry or managed cluster, so most of the list does not arise; it takes private nodes for the workers (no external address, Cloud NAT for the way out) and OS Login on every instance, and it leaves the rest: a private control-plane endpoint through IAP or an internal load balancer (designed, not built; the control plane's one external address is the scan's one accepted finding, GCP-0031), subnet flow logs and customer-managed disk keys (reported by the scan, not accepted), and a remote state bucket. The scaffold's list stays in its README, not built, by design | S079 |
+| A second Google Cloud module (S079's self-managed cluster) cannot sit in `infra/terraform/gcp/`: the scan's tests hold one cluster and one subnet block to the directory because an ignore-file entry covers every resource of it, and `make gcp-validate` and `make gcp-scan` each name that one directory. The validate door takes a module's name from a closed list (`aws`, `gcp`), so a new name or a new directory, with its own scan recipe, is the shape | S078 | closed by S079 (2026-10-07): the twin is `infra/terraform/gcp-kubeadm/`, a directory of its own with an ignore file of its own, and the door takes its name (`aws.sh validate gcp-kubeadm`, `make gcp-kubeadm-validate`, `make gcp-kubeadm-scan`, each with the recipe's directory and its pinned image); `plan`, the applying command and the removing command refuse the word with the sentence the managed scaffold's word gets | S079 |
+| The Google provider is pinned `~> 8.6` and its lock holds 8.6.0, which was published on 2026-10-06, a day before the module was written (8.5.0 a week before); no run has used it beyond `init` and `validate`. Renovate's `terraform` group moves the lock after a week and its note names `make gcp-validate` and `make gcp-scan`; the release notes of the 8 series are unread. S079's twin pins the same provider and is the next step to read them | S078 (G1's report) | open: the twin's lock is a byte copy of the scaffold's, so the two move together, and K3 read the provider's pages for two resources at v8.6.0 and not the release notes of the 8 series; read at S079's close, or by the first pull request of Renovate's `terraform` group that moves the lock, whichever comes first | S079 |
+| The Google Cloud module's `workload_service_account` may be up to 253 characters, but the secret's ID is the 18-character prefix `meridian-gcp-test-` and that name, against Secret Manager's limit of 255: a name of more than 237 characters passes the validation and fails an apply. A bound of 237 on the variable would close it | S078 (G4's report) | open; low; the twin declares no such variable (its two service accounts have fixed names), so the question does not arise there and the bound would go on the scaffold's variable | S079 |
 | `make deploy` reads how many rows `knowledge.chunks` holds before it decides to ingest again, and an unreadable count now stops it (S073, K9); two answers still start an ingestion, which embeds the corpus again and calls the model: an exit-0 answer of `psql` that is empty or not a number (a cut stream), and psql's own statement or lock timeout error (5 s and 3 s from `PGOPTIONS`), which under heavy load is a count that could not be read | S073 (K9's report, decision 4) | closed by S073 (2026-10-07, K13, after the re-read named both as findings): the one answer that starts an ingestion is exit 0 with the text `0`; every other answer stops the deploy with nothing removed (tested with a stand-in, not seen on a cluster) | S073 |
 | The test `test_the_probes_and_the_pods_are_the_same_with_seven_services_as_with_one` fails when the clock ticks between its two runs, because each names its pod `smoke-network-<epoch>` (it failed once in K10's broad run, and passed three times alone) | S073 (K10's report) | closed by S073 (2026-10-07, K14), after it failed this step's own pull request in CI: the harness gives both runs one fixed second, shown failing first under a clock made to tick; every other name the kind scripts build from the clock, a random number or a process ID was read against its tests, and none compares two runs | S073 |
-| The tests that hold the variable validations of the three Terraform modules (170 of them: 63 in `test_aws_script.py`, 107 in `test_gcp_module.py`) need the `terraform` program and SKIP where it is missing, and the `python` workflow installs only Helm and uv: on the hosted runner they have never run. Those modules are never applied, so CI was meant to be their gate, and the pull requests of S036 and S078 said "the tests hold" of runs made on the development machine alone. Every other tool the suite needs fails in CI when it is missing (`jq`, Helm, the database, Docker); this one skips without a word. Install the pinned `terraform` in the workflow (a `_VERSION` there needs a Renovate reader) or make the marker fail under CI as the `jq` one does | S073 (K14's reading of the pull request's skipped tests: 178, where the run before S078 merged had 71 and the development machine has 8) | open | S079 |
+| The tests that hold the variable validations of the three Terraform modules (170 of them: 63 in `test_aws_script.py`, 107 in `test_gcp_module.py`) need the `terraform` program and SKIP where it is missing, and the `python` workflow installs only Helm and uv: on the hosted runner they have never run. Those modules are never applied, so CI was meant to be their gate, and the pull requests of S036 and S078 said "the tests hold" of runs made on the development machine alone. Every other tool the suite needs fails in CI when it is missing (`jq`, Helm, the database, Docker); this one skips without a word. Install the pinned `terraform` in the workflow (a `_VERSION` there needs a Renovate reader) or make the marker fail under CI as the `jq` one does | S073 (K14's reading of the pull request's skipped tests: 178, where the run before S078 merged had 71 and the development machine has 8) | closed by S079 (2026-10-07, K2c), as far as a check can close it before it has run: the count was 225 in four files (63 in `test_aws_script.py`, 107 in `test_gcp_module.py`, 53 in `test_aws_kubeadm_module.py`, 2 in `test_aws_kubeadm_bootstrap.py`; K2b then moved the managed module's rules into a fifth file); the marker, `needs_terraform` in `tests/meridian/terraformsupport.py`, fails the test under `GITHUB_ACTIONS=true` with one line when the program is missing and skips elsewhere (shown by hiding the program: 107 failed with the variable set and 107 skipped without it, on one file); the `python` workflow installs Terraform 1.16.5 through `hashicorp/setup-terraform` pinned to a commit, read by a rule of Renovate's `terraform` group, and a test holds that the pin satisfies every module's `required_version`. Not seen on the runner until this pull request's check: no run of the workflow has used the step yet, so whether the program installs there and every marked test passes stays open until that check is green. Seen green on 2026-10-07 (pull request 121's `python` check: Terraform 1.16.5 installed by the step, `20009 passed, 8 skipped`, the development machine's own two numbers on that tree) | S079 |
 | Small ends of S068's last two commits, from a re-read that came back while its pull request was in its checks, none fixed there: the audit expiry's line after a failure does not say "at least" as the ledger's now does (the same commit of unknown outcome), and the kind script's test still holds the ledger's old line in its fixtures, so no test proves the script reads the new one; the two tests that plant a reserved row under a SHARE lock take the past month from a second reading of the clock, so a run in the milliseconds around a month's first instant would fail; a paragraph copied into two test files says the tests of the file call the expiry as the owner, which is true of their expiry tests only; no test asserts that a generic plan was in fact chosen on the sixth call; and only one of the two new concurrency tests was shown to fail under a mutation | S068 (a Python re-read of F3 and F4, 2026-10-07) | open; low | S074 |
 | Three small ends of the kind scripts that the infrastructure review of S073 left: `upkeep.sh` reads a `helm get` that timed out (status 124) as "the release is not installed" and says to run `make deploy`, though it stops and does no harm (L3); `smoke.sh` puts a Deployment's name unescaped into a basic regular expression, safe for a DNS label and not for a dotted name (L6); `kctl` gives a plain `delete` without `--wait=false` the request flag though it waits by default, and no call site is affected today (L7) | S073 (infrastructure review) | open in part: L6 is closed by S072's contract S (`0577663`; tested with stand-ins, and seen on kind by the cold run R9: smoke's 46 lines passed): `smoke.sh` compares a policy's name with the Deployment's as text, with no pattern, so a dotted name no longer matches its dash twin; L3 and L7 stay | S073 |
 | The restart share is read from `MERIDIAN_TLS_RESTART_SHARE` by `certlife._restart_share`: an empty value is 0, the old behaviour, so a chart typo that renders an empty share hides itself, while a value of only whitespace refuses the start (the Python review of S073, L4); a share written with Unicode digits or padded is read as a number | S073 (Python review) | open | S073 |
@@ -994,6 +1001,21 @@ that day; the rest stand as their step recorded them.
 | The CloudNativePG chart renders two ClusterRoles of its own, `cnpg-cloudnative-pg-view` and `-edit` (read, and read and write, on the operator's own objects), bound to no account and aggregated to no built-in role (no aggregation label in the render); contract C left them. On AKS, where people sign in (S021), whether someone is bound to them is part of who may change a database Cluster | S072 (contract C) | open; noticed, harmless as rendered on kind | S020 |
 | The CloudNativePG operator being down is seen by no alert. Since contract C its Deployment `cnpg-cloudnative-pg` is in `meridian`, where `MeridianServiceUnavailable` and two panels of the health dashboard counted it as a Meridian service; F2 (`4050156`; tested, and the changed alert rule was loaded in the cold run R9 with smoke passing; the alert with the operator at zero replicas is not seen) excludes it from the alert and the panels because it is not one, so a database that is no longer reconciled while its operator is down shows nowhere. No alert was built | S072 (the infrastructure review of the batch, finding 4, and F2) | open: a rule on the operator's Deployment of its own (with a unit case), or the sentence that kind accepts it; the home is S073, which owns the alerts on what is absent or ends (the row on missing data above, the database's certificate end) | S073 |
 | The tests of the four policy files (`observability`, cert-manager, the CloudNativePG operator, Envoy Gateway) compare the files with each other and with constants in the test files, never with the charts' render, which lives outside the repository: the operator's pod label for Prometheus's rule, Loki's memberlist port on both halves, the operator's `instance` label (tied to the release name in `up.sh`, not to the chart's convention) and Envoy's `control-plane` label each have a second copy only in a test. A chart bump that renames one passes the tests, and the rule then selects nothing; the review ran no mutation (its question 6) | S072 (the infrastructure review of the batch) | open: one test that renders the pinned charts once (or reads a committed render) and holds each label and port the policies name against it | S074 |
+| The settings' deny globs for Read, Edit and Write name `~/.local/state/meridian-aws/**` and not the second module's state directory `~/.local/state/meridian-aws-kubeadm/`, a sibling and not a child, so a file tool of Claude Code is not denied that state, its plan or its record by the settings (the hook's patterns read `.tfstate`, `.tfplan` and `meridian-aws` as substrings and do deny a `cat` of the new state file: measured on 2026-10-07 from lines in a file, not in a live session). The hidden-variable globs (`./infra/terraform/aws/.*tfvars*`) name the first directory only too, and whether `./**/*.auto.tfvars*` matches a dot-name is not measured (the wrapper itself refuses such files). The review of K2b found the same (M2) and read it from the file: the Read tool answered "File does not exist" for both state paths, so its probe could not tell them apart. A tightening that needs no ask: three more globs and the mirror in the guard's case file | S079 (K2b's report; the session's measurement; the security review of K2b, M2 and L5) | closed by S079 (K6, 974d6d1; implemented, with cases; reviewed): the settings deny the Read, Edit and Write tools the second state directory and the second module's hidden variable files, and the settings test asks for the entries of every directory of the family | S079 |
+| A `terraform` run by hand in the second module's directory passes the command guard unasked for a plan: measured on 2026-10-07 on this branch's hook, from lines in a file and not in a live session, `-chdir` into `infra/terraform/aws-kubeadm` and a `cd` there followed by a plan both answered nothing, and so did `init` (as `init` does for the first module, which makes no cloud call). The hook reads the first module's directory as `terraform/aws` followed by an end character, and `terraform/aws-kubeadm` is no such text (a hyphen does not end it); the same lines for the first module ask for the plan and deny a by-hand apply, whereas an apply by hand in the second module's directory asks by the generic rule and is not denied. The settings' ask for a plan with `-chdir` into a path that holds `aws` also matches the second module's name, but the form with a `cd` has no such rule, and whether an ask beats an allow is not verified (a row above). The wrapper's own lines are read: `aws.sh plan aws-kubeadm` and the applying line ask, the removing line is denied, and a `cat` of either state file is denied. The security review of K2b measured more: for the second module `show`, `output`, `state list`, `workspace new` and `plan -out` answer nothing either, and a `tee` into its plan's path passes (`aws\.tfplan` does not match `aws-kubeadm.tfplan`), where for the first module the plan, `show`, `output` and `state list` ask and `plan -out`, an apply, `import`, `state rm` and `workspace new` are denied. `show` is the one that matters: after the owner's apply it reads the state with no credential, and `terraform` is not in the reader rule's program list. The review's fix is the module name `aws(-kubeadm)?` in the three patterns (`aws_dir_re`, `aws_cwd_re`, `aws_steer_path`) and the mirror in the case file; a target named `aws-kubeadm-plan` does not contain `aws-plan`, so a rule for the creating targets must name it | S079 (K2b's report; the session's measurement, checked again by the documents contract; the security review of K2b, M1) | closed by S079 (K6, 974d6d1; reviewed: the second module gets the first's decision in 1,682 shapes of the review's own): a by-hand plan, `show`, `output` or state listing in the second module's directory asks, and a plan written to a file, an import, a change of the state, a new workspace or an apply by hand is denied. The creating targets and the base's two narrowings wait for the owner to start the guard's task | S079 |
+| What the command guard still does not stop around a Terraform state, for both AWS modules, after K7 denied the writers and the copies (the security review of K6 and K7's report): `rm` and `unlink` are not writer verbs (making them so would also deny removing a saved plan by hand: a decision); readers outside the guard's list (`rev`, `paste`, `fold`, `column`, `tr <`, a `read` loop) print a copy that was made before K7 or by a verb it does not know; `touch`, `chmod`, `wget -O` and `openssl -out` are not writer verbs; `terraform init -backend-config=path=<state>` gets no decision from the hook and falls to an allow entry; a working directory at the parent of the modules is read as neither module; a quote or a backslash inside the module's name hides it (the guard's header says so); and K7's known false alarm: a writer verb or a redirect on any line that holds the state directory's name is denied, also for a file of that name elsewhere (`git mv` included) | S079 (review of K6; K7) | open; low to medium: no state exists until the owner's one apply; decide with the owner's guard task | S079 |
+| The two files that K2b cut the wrapper's tests into are 1,406 lines (`test_aws_script.py`) and 1,436 (`test_aws_script_plan.py`), against the ceiling of 800; the original was 2,996 and over it already (S036). They are not named a deliberate exception: K2b's report gives the reason for the cut it made (by the wrapper's own concern, and a third file for the managed module's `.tf` rules) and none why the halves cannot be cut again, and each finding's test runs once per module through one fixture, which is the only argument for keeping a concern together. Either cut them along that fixture's own concerns (the local file and the environment; the plan, the record and the apply; the state and the removal) or list them among the exceptions S074's size check holds | S079 (K2b's report) | open | S074 |
+| What only an apply of the self-managed AWS module would settle, none of it seen (the module's README holds the list as its checklist): whether the hairpin rule or the own-address rule was needed and which source address the Elastic IP gives a packet; that `ssm put-parameter --value file://` reads the file; whether the default key `aws/ssm` needs no `kms:` statement; that the managed policy on the node roles allows what the account's version of it says (`aws iam get-policy-version` settles that and needs no apply) and whether the explicit Deny on parameter reads stops the Systems Manager agent from registering a node, in which case Session Manager, the only way onto a node, is lost; that the Ubuntu image carries the agent; that `kubeadm init --skip-token-print` keeps the token out of cloud-init's log; that `ip_protocol = "4"` is accepted; that containerd's default configuration has exactly one `SystemdCgroup` line and that containerd 2.2.1 and kubelet 1.36 work together (read from pages, not seen); that kubeadm writes the Elastic IP into every kubeconfig; that snapd seeds inside its bound; the digest of the Calico manifest against the release's own file (one fetch); the account's vCPU quota for the Standard family (six vCPUs at the defaults; a quota of five fails after two instances bill); the real times of an apply and a removal, the join window of 240 tries and the first boot at all; the default tags on the root volumes; and what an hour costs against a bill | S079 (the security review and the two infrastructure reviews; the reports of K1, K1c, K1d and K1e) | open; only an apply settles them, and the apply is asked at S079's paid stop | S079 |
+| The Google Cloud twin rests on premises that no page settled, each read from the report of K3 and none tested against Google: the character set of a firewall rule's description and name (the AWS module's review found an apostrophe the API refuses; no test holds the twin's descriptions to a set); the regional Secret Manager URL for adding a version and for reading one (the regional host with the path by analogy; the reference pages hide the regional form); which subnet addresses Google reserves; how long an IAM grant takes to apply; that an instance has no setting that limits a pod's reach to the metadata server; that a new service account has no role; that `curl -H @file` needs curl 7.55 or later; and the role names for OS Login and IAP. The twin is never applied, so a page read, not an apply, settles each | S079 (K3's report) | open; a contract that reads those pages can close part of it with no project | S079 |
+| The Calico pin and the signing key's fingerprint of the self-managed modules have no reader: Renovate reads a version in a workflow, a `Makefile` or `pins.env`, and the AWS module holds `calico_version`, `calico_manifest_sha256` and the key's fingerprint as variable defaults, the twin holds copies, and a test holds the twin equal to the AWS module; the repository's rule says a pin of another shape needs a line in `tests/test_renovate_config.py` that says why it has none, and none exists, and `make test` does not fail on it. Calico v3.33.0 was out on 2026-10-01 against the pinned v3.32.2, and the package key expires on 2026-12-29 | S079 (K1's report) | open; before the apply, which reads both | S079 |
+| Small ends of the self-managed module's boot scripts, all low and none seen: `kubeadm token create` is read through `$(...)`, so a NUL in its output would warn (the control plane's own command, not reachable by a writer of the parameter); `gpg --show-keys` may print its trustdb notices on stderr; `sysctl --system` under `set -e` ends the boot on an unrelated failing key in `/etc/sysctl.d` (a stock image has none); `put-parameter` in the control plane has no `timeout`, only a try count; the worker's 240 tries last 2,400 s only at the default pause, and a pause set low in the environment (tests only) shortens the window; and the 16 KB bound is measured on the compressed text with Python's gzip, a few bytes from Terraform's | S079 (K1b, K1d and K1f reports) | open; low | S079 |
+| The node roles of the self-managed AWS module carry `AmazonSSMManagedInstanceCore`, which allows twelve actions on `*` that a node does not need (associations, documents, inventory, compliance and patch snapshots; the page was read on 2026-10-07 and the account's copy has not been); the module denies parameter reads and leaves the rest, because narrowing the managed policy means a customer-managed one. Whether the policy is left or narrowed is asked at the paid stop with the Deny question above | S079 (K1c's report) | open; low | S079 |
+| Small ends of the wrapper's second module: `redact` does not hide an IPv6 address (the module makes none, so a plan cannot print one until it does) and is shared with the Azure scripts, where the new shapes have never been looked for; `test_the_two_state_directories_are_named_by_their_modules_literal_names` pins the test-side table and the script's own literals are held by the `-backend-config=path=` assertions alone; the plan record has four lines and a three-line record from before K2b is refused once and the plan made again; the word `aws` after `plan`, `apply` or `destroy` is refused (the closed list is one word there), which is reversible; and from the security review of K2b, a gzip blob that Terraform printed over several lines would leave its continuation unredacted (the rule matches a line that starts `H4sI`; a plan shows the attribute as known after apply, so it matters for `show` and `state pull` only), and three `redact` edge cases (a token shaped `sg-deadbeef-...` is eaten because the dash counts as a boundary, upper-case identifiers survive though AWS never prints them, and an `aws_route` identifier survives though the module has none). K6b takes the review's other low findings (the record parser's partial fifth line, a run that does not say its module, the removal's order in the README) | S079 (K2b's report; the security review of K2b, L1 to L4) | open; low | S079 |
+| `requires_jq` in `tests/meridian/kindsupport.py` is a plain `skipif`, so a test that needs `jq` skips without a word under CI, where the plan's Part A and the contract that built the Terraform marker both said it fails; the runner image probably ships `jq`, so it has not been seen to matter | S079 (K2c's report) | open; low | S074 |
+| ADR 6's note of 2026-10-07 holds three sentences that the later contracts made false and that S079's documents contract could not edit (the ADR is the owner's to amend by a further dated note, as the note says): that the twin on Google Cloud is "designed and not written" (it is written, K3), that the self-managed module's `validate` was run by hand on a copy because nothing runs it (`make aws-kubeadm-validate` exists since K2a; nothing in CI runs it), and the row on what each needs before an apply, which says an apply path does not exist (the wrapper is the path, K2b). The Azure platform document's section had the same three and was corrected | S079 (the documents contract) | open; a further dated note in ADR 6 at the paid stop, with whatever the apply falsifies | S079 |
+| `make aws-kubeadm-validate` and `make gcp-kubeadm-validate` (and by the same recipe the two managed modules' targets) leave the provider's `.terraform/` directory in the module's directory. Two tests of the Google kubeadm module then fail in the same tree until it is removed: `test_no_variable_file_override_file_or_state_sits_in_the_modules_directory` forbids the directory and `test_no_text_of_the_module_states_a_price` tries to read it as text. Seen once, by K8's implementer, who ran the validates and then the tests in the order its contract listed. The directory is ignored by git and no check in CI runs a validate before the tests, so a pull request does not show it; a person who validates and then runs the suite does. Either the tests skip the directory or the wrapper's `validate` keeps its provider cache outside the module (`TF_DATA_DIR` is set by the script itself, never by a caller: the guard denies a `TF_*` assignment in front of the program) | S079 (K8, 2026-10-07) | open | S020 (it widens the `validate` door for the Azure module) |
+| The add-ons' pods restart and nothing sees it. Read on 2026-10-07, before run R8: `tempo-0` had 12 restarts (the last 5 h 1 min before, about 05:40) and `loki-0` 2 (the last 5 h 51 min before), both in `observability`, and `platform-db-1` in `meridian` 9 (the last at 05:39): the hours of the four overloads of the machine that morning. Run R9a (2026-10-07 11:04, read only, before the cluster was deleted) read the cluster's 22 restarted containers: every last end lay between 05:33 and 05:50, in the fourth overload (05:27 to 05:42); the database's previous container ended cleanly at 05:39:35 (exit 0, "Shutdown signal received" in its log), a restart by the kubelet under the stall and not a crash; the node's kernel log held no out-of-memory kill. Nobody read Tempo's and Loki's previous logs (`make up` had replaced their pods, a new template), and the cluster those pods ran on is gone (run R9 made it again), so those logs are too. No smoke line and no alert reads restarts outside the rate store's (`MeridianRateStoreRestartLoop`, S072: smoke's check 11 compared the new alert rule in run R8) | S073 (run R8) | open. Home S072, which owns that alert and the cluster batch that is next on the lane; a smoke line that reads the counts would be S073's kind of work, so the home may move there | S072 |
+| `make smoke`'s sentence for a cluster that exists and does not answer says "run 'make up'" (seen with the node paused, run R5b, 2026-10-07: "cluster meridian is not reachable; run 'make up'", rc 2, no line printed), which is not the remedy for a frozen or overloaded node: the node is looked at first | S073 (run R5b) | open | S073 |
 | `INJECTION_CASES` in `tests/meridian/injectionsupport.py` and `INJECTION_CASES_JSON` in `tests/meridian/servicesupport.py` are two definitions of one path, `data/synthetic/injection/cases.json`; `test_claimant_name_capital_rule.py` (near line 159) reads the file a third way | S074 (leftovers, T2) | open: one of the two constants imports the other, or both read one; not built | S074 |
 | `NAME_MASKED = ("CLM-1053", "CLM-1054")` is written out in three test files: defined in `test_run_input_stack.py` and in `test_posted_text_screen.py`, and inline in `test_claims_app.py` (`tests/synthetic/test_injection_cases.py` holds the same two with their names as `NAME_MASKED_CASES`) | S074 (leftovers, T2) | open: one definition in `servicesupport.py` beside `injection_case_claim`; not built | S074 |
 
@@ -14661,7 +14683,18 @@ COMPARISON HOLDS
 - **The whole suite on the final tree** (the main session fills the next line
   when it has run):
 
-FINAL-SUITE-RESULT
+  On 3efea92 (the last cut, with `main` 3b1f42a merged in), the whole suite
+  at six workers: 18,304 passed, 8 skipped (3 min 30 s); `make test` (372
+  tests), `make docs`, `make lint` and `make secret-scan` ended 0. After that
+  only documents changed on the branch (T4), and `main` aa65a1b was merged in
+  (S079's first half, S073's records). The whole suite was NOT run again
+  locally on the merged tree: the machine's one database slot was held by
+  another step's implementer. Run on the merged tree instead: `make test`
+  (385 tests), `make docs`, `make lint`, `make secret-scan`, `shellcheck` on
+  the entry and every part (exit 0), and the tests of the smoke script, the
+  kind scripts, the certificates, the chart's identity and the guardrails
+  without a database: 3,800 passed. The pull request's `python` check runs
+  the whole suite on the merged tree.
 
 - **What is left of S074:** the smoke script's split is done (the entry and
   every part under 800 lines). The rows the second half's last table keeps
@@ -15457,7 +15490,10 @@ still not seen.
 design cut it by kind of work (the owner may overturn any of its decisions):
 builds, by implementers against stand-ins, and exercises, the session's own
 runs on the cluster. This record is the **first half**: the builds K1 to K10
-and the runs R0 to R4e. The **second half stays open and is not done**:
+and the runs R0 to R4e. The **second half stays open and is not done** (this
+list is as the first half left it; the part "The second half so far", after
+the first half's follow-ups below, gives each item's verdict from the runs of
+2026-10-07):
 
 - the ingestion's 503 word (K6) on a real refusal of the gateway;
 - R5: the node paused and three deploys, which shows the outer bounds of K9
@@ -15868,7 +15904,8 @@ of the step's branch at 3270162, before this record):
   compare of a changed expression;
 - the history limit removing an old ReplicaSet, and `make images` with the
   new reading of references;
-- K6's word on a real 503, and the 503 at the ingest Job explained for certain;
+- K6's word on a real 503 (seen in the second half, run R11), and the 503 at
+  the ingest Job explained for certain;
 - the failure paths of S062's lines but the deleted rule object (B13), the
   rate store's 503 and alert (B18), the four telemetry alerts and a renewal of
   the collector's certificate (B23): none was run;
@@ -15898,7 +15935,7 @@ status is brought to say so):
 | A rotation of the rate store's password has no overlap | Stays: the owner's to run or to accept as not seen |
 | The rate store's liveness script compares the certificate's time | Stays, as accepted: a clock step is a step of the machine's clock, for everything on it |
 | A cold `make up` depends on the chart hosts | Stays: run R6 records the cold time; a retry or a cache is accepted for now |
-| Not seen on a cluster for the rate store | Stays: the 503 with the store down, the alert, two replicas, a frozen store, the refusal of an old Secret were not run |
+| Not seen on a cluster for the rate store | Stays: the 503 with the store down, the alert, two replicas, a frozen store, the refusal of an old Secret were not run (the 503 was run in the second half, R11: seen) |
 | `make smoke` compares the loaded alert rules by group and rule name | Closed, runs R3, R4 and R4b: `make deploy` applies the rules and smoke compares each expression and `for` |
 | `make deploy` checks the rate store's ACL rules and not that the password | Stays: not touched by this half |
 | Under an overloaded machine Tempo, the collector and the database's pod | Closed: the answer and the rule above |
@@ -15906,7 +15943,7 @@ status is brought to say so):
 | Not seen on a cluster after S064 | Stays: no run of this half provoked the four alerts or the renewal of the authority |
 | A migration that is not applied fails one statement of the sweep | Stays: not touched by this half |
 | Not seen on a cluster after S037 | Stays: no run drove a brief |
-| On 2026-10-06 `make deploy` failed twice | Stays, with a likely cause and not a proven one: the store's probes (above, fixed); the ingestion's word is built and not seen on a real refusal |
+| On 2026-10-06 `make deploy` failed twice | Stays, with a likely cause and not a proven one: the store's probes (above, fixed); the ingestion's word is built and was not seen on a real refusal in this half (seen in the second, run R11) |
 | Not seen on a cluster after S075 | Closed in part: `TAKE_CLUSTER=1` was seen (R2); a record left `changing` and `make up` on an existing cluster were not |
 
 **Follow-ups:**
@@ -15942,6 +15979,127 @@ status is brought to say so):
   restarts is a share of the margin by a service's place in the chart's list,
   the session's choice; (3) approver-policy's liveness probe was not built in
   this half: build it in the second, or say it is not wanted.
+
+**The second half so far (runs of 2026-10-07).** Written while the step is
+`doing`: the main session's own runs on the local kind cluster, from the
+cluster checkout, after the first half merged (PR 113, main 6553e07). Seen
+means what a run printed; everything else is not seen. The step stays open.
+
+**Work log of the second half** (UTC; the local kind cluster, one entry per
+run):
+
+| Run | When | What it ran | What it saw | What it did not see |
+|---|---|---|---|---|
+| R5a | 2026-10-07 08:57 to 09:04 | The cluster checkout moved to main 6553e07 (the first half as merged: K9 to K14), every pod Ready before and nothing restarted by hand; `make deploy`, then `make smoke` | `make deploy` rc 0 (08:59:01); the rate store's pod was replaced by the deploy (its template changed) and the deployed liveness probe holds `written > started + 2`, read from the Deployment (the two-second form of K12); `make smoke` 46 PASS, 0 FAIL, 0 SKIP (09:00:08); the store read every thirty seconds for three minutes after smoke: restarts 0 at every reading, the last at an age past four minutes. With K11 to K13 in: the chunk count's new rule on the path where the count is a number, the three-timeout Helm bound not reached, and smoke's two network waits answered | A bound firing; the count's refusals; the liveness fault itself (this host's boot second has no fraction, so the old rule would not have fired here either) |
+| R5b | 2026-10-07 09:06 to 09:08 | `docker pause` of the node's container for thirty seconds, four calls against it, unpaused by a trap; every pod Ready before | The history bound: after six deploys of different commits that day every Deployment of `meridian` keeps exactly three ReplicaSets (the current one and two old), as the chart says. A frozen node does not reach the wrapper's bounds: every call ended after 10 seconds with the tool's own error, a plain read through `kctl` ("Unable to connect to the server: net/http: TLS handshake timeout"), a Helm read through `helmc` (the same, from Helm) and `make smoke` ("cluster meridian is not reachable; run 'make up'", rc 2, no line printed). The port still accepts a connection (Docker's forward), the server cannot finish the handshake, and the client gives up at its own ten seconds, before the request timeout of 15 s and any outer bound; so the paused node is ended by the clients themselves, and the wrapper's bounds are for a server that completes the handshake and then never answers, which this run did not produce. `make cluster-holder` failed at once at `kind export kubeconfig` (Docker refuses an exec into a paused container), with Docker's sentence. The cluster came back by itself: every pod Ready 15 seconds after the unpause, no container restarted across the pause, `make smoke` after it 46 PASS, 0 FAIL, 0 SKIP. A small finding: smoke's sentence for a cluster that exists and does not answer says "run 'make up'", which is not the remedy for a frozen or overloaded node (a backlog row, below) | A waiting call against a paused node: the call meant to exercise one (`rollout status` with its own timeout) was made through the wrapper's inner function instead of `kctl`, which classifies first, and the wrapper refused it as a call with no timeout ("a mistake in the script; nothing was run"): the right refusal for the wrong call. By what the other calls showed it would have ended at the handshake too, which is not seen |
+| R7 | 2026-10-07 09:41 to about 10:42 | The one-hour watch of the certificate runbook, run again: the cluster checkout at 6553e07 with `certificate.duration: 1h` and `renewBefore: 30m` in an uncommitted edit of kind's values, taken back at the end; samples of readiness every 5 seconds from 10:20 to 10:35 | The table of restart times is in the next list and in the runbook's second table. 09:42:00 `make deploy` rc 0, all eight Certificates reissued at once (revision +1, `notAfter` 10:41:59, renewal time 10:11:59), the shares on the six Deployments 0, 1/6, 2/6, 3/6, 4/6 and 5/6 (agent-runtime, claims-api, claims-mcp, knowledge-mcp, model-gateway, policy-mcp: the sorted list); the six restarted once by hand at 09:42:01; cert-manager renewed all eight at 10:11:59 (`notAfter` 11:11:59, read at 10:13:30); the six restarts, 99 or 100 seconds apart; readiness; the rate store's two restarts; 8 Warning events said a liveness probe failed (six services and the store's two); at 10:35:21 the edit taken back and `make deploy` rc 0 (the 90-day certificates), the six restarted once, then five minutes and `make smoke` rc 0 at 10:41:36: 45 PASS, 0 FAIL, 1 SKIP (the cost-series line: the gateway had settled no call since it started at 10:35:22, the designed skip after a restart). The script ended 0, the checkout is clean at 6553e07 and the holder's record says S073, state ok | The alert `MeridianCertificateNotRenewed` (it trips an hour after issuance for a duration under 21 days; the run gave the values back at 53 minutes, before it); two replicas of one service (they would still restart together); a `renewBefore` shorter than one and five sixths of the margin (the services would then wait for the file and restart together when it changes) |
+| R8 | 2026-10-07 10:42 to 10:48 | Main on the warm cluster, and the split smoke script beside the whole one: a run made for two other steps (S072's first part, PR 117, and S074's split of `smoke.sh`) on this step's lane; the checkout moved to main 064e5ab, then to the split's commit 804a6e7, then back | `make up` on the warm cluster rc 0 at 10:44:51, no pod not Ready after it; Tempo's and Loki's pods read `automountServiceAccountToken=false`, phase Running; `cnpg-system` and `envoy-gateway-system` carry warn and audit `restricted` and no enforce; the policy `meridian-services` lists 8 URIs and 6 DNS names; `make deploy` rc 0 at 10:46:31, all eight Certificates Ready under the exact lists; `make smoke` from main rc 0, 46 PASS, 0 FAIL, 0 SKIP (with the Claims API's listed URI in check 10's refused request and the new alert rule in check 11's comparison); at the split's commit (ten parts, an entry of 1,185 lines) `make smoke` rc 0, 46 PASS, 0 FAIL, 0 SKIP, and the PASS lines of the two runs, every number made N, differ in one line, the trace line, whose trace ID is random hex: with the ID masked the 46 lines are equal (nine other lines each, the log lines above and below the checks). The checkout is back at main 064e5ab, clean, and the holder's record says S073, commit 064e5ab, state ok. Read in passing before the run: `tempo-0` had 12 restarts and `loki-0` 2, `platform-db-1` 9 (a backlog row, below) | A cold `make up` of PR 117's content (the cluster batch's cold run is that); the labels' warnings from the API server (nothing violated them) |
+| R9a | 2026-10-07 11:04, read only | What had restarted on the cluster, read before it was deleted and made again for S072's cold run (the rule is that it is never deleted to clear a fault nobody has looked at) | 22 containers had restarted, 4 to 19 times each: the API server (4, its last end 05:33:22, exit 137: killed), the controller manager (13) and the scheduler (12), CoreDNS (1), cert-manager's four pods (10 to 12), the database operator (18), Envoy Gateway's controller (19) and its proxy (5 and 4), the log agent (18), the collector (17), kube-state-metrics (16), the Prometheus operator (18), Prometheus (7) and the database (9). Every one of those last ends lies between 05:33 and 05:50 UTC, inside the machine's fourth overload of that morning (05:27 to 05:42; recorded above, the session's own doing). Nothing but the rate store had restarted since (its 3 are the designed ones: the reissue, the renewal, the certificates put back). The database's previous container ended cleanly at 05:39:35 (exit 0, reason Completed; its log ends with the instance manager's "Shutdown signal received", "All workers finished", "Releasing primary lease"): a restart by the kubelet under the stall, not a crash. The node: no memory, disk or PID pressure, Ready; requests 3,042 Mi of memory (26 %), limits 6,996 Mi (61 %); the node container's kernel log holds no out-of-memory kill. The audit table (`audit.events`, the only copy on kind) held 171 rows, 2026-10-06 18:14:25 to 2026-10-07 10:48:46, all synthetic, which go with the cluster. The session's reading: one event with a known cause, nothing unexplained in the five hours since, so no fault that nobody had looked at | The API server keeps events for an hour, and none was left for the database pod; the earlier previous-container logs (one per container is kept), Tempo's and Loki's, whose pods run R8 replaced: not looked at, and gone with the cluster |
+| R9 | 2026-10-07 11:08 to 11:17 | The cold run, made for S072's cluster batch and this step's R6 in part: the cluster deleted and made again from S072's batch commit 4050156, exit 0 (the whole record is S072's) | Cold timings on the virtual machine (load about 1): `make down` 3 s, `make up` 273 s, `make deploy` 97 s, `make smoke` 70 s (46 PASS, 0 FAIL, 0 SKIP), and `make up` a second time 28 s; no container restarted during the run. The checkout is at 4050156 (detached) and the holder's record says S073, state ok | R6's other parts: a first install made to fail and its way back, and a policy narrowed before the first deploy (the case `make cert-renew` is for). Until S072's batch is on main, `make up` from main on this cluster is refused by nothing and would not converge backwards: cluster commands are run from the batch's commit or later |
+| R10 | 2026-10-07 11:30 | Smoke from the tree where the split script and S072's batch meet: the cluster checkout moved to cadf82b (S072's batch with main 8e2f4a1 merged in: ten parts under `smoke.d/`) | `make smoke` rc 0, 46 PASS, 0 FAIL, 0 SKIP; its PASS lines equal the cold run's (R9, the unsplit script) with the numbers and the trace ID masked. The checkout stays at cadf82b | Nothing else was run |
+| R11 | 2026-10-07 11:53 to 11:55 | The ingestion's word on a real 503, on the cluster made at 11:08 (checkout cadf82b); nothing cost money (the embeddings on kind are the replay provider's) and nothing was deleted. Before: image tag eba7324060d4, the kept Job `meridian-ingest-eba7324060d4` Complete, 85 chunks, 18 audit rows, the gateway's pod Ready with 0 restarts (started 11:13:10), the rate store's `spec.replicas` 1 owned by the field manager `helm`. The ingest Job rendered as `deploy.sh` renders it, one line changed (the Job's own name, `…-r11a`, and `…-r11b` for the second); 11:53:02 the rate store scaled to 0 (its pod gone at 11:53:04) | The Job `…-r11a` against the gateway with no store failed (11:53:11), and its one log line is the one K6 built: `ERROR the model gateway refused the embedding call (model gateway answered 503; kind rate-store-unavailable)`. Two audit rows at 11:53:07 with one run ID: the gateway's (`model-gateway \| model.call \| refused \| rate-store-unavailable`, deployment `replay-embedding`) and the ingestion's (`knowledge-ingestion \| knowledge.ingest \| refused \| gateway-failed`). The gateway's log, one ERROR line at 11:53:07.460: "the rate store is unavailable (RateStoreUnavailable): the rate store did not answer (TimeoutError)": with the store's Service at no endpoint the class is `TimeoutError` (the 1 s connect timeout), not `ConnectionError` (the run's map of the gateway's 503s had that as an open question, answered for this network plugin). The gateway's pod stayed Ready, 0 restarts, the same start time; the chunks stayed 85 (everything is embedded before anything is written). 11:53:12 the store back (scaled to 1, rollout done): down for 10 s, its new pod Running with 0 restarts. The Job `…-r11b`, the same render, succeeded at 11:53:18 (85 clauses, 85 stored, 0 differences; 5,773 input tokens; deployment `replay-embedding`) with the same gateway pod and no restart: the gateway admits again by itself once the store answers; audit: `knowledge.ingest \| completed` at 11:53:13 and `knowledge.verify \| verified` at 11:53:14, 28 audit rows in all. After 62 s `make smoke` rc 0, 46 PASS, 0 FAIL, 0 SKIP; no container on the cluster has restarted. The run left: the two extra Jobs (`…-r11a` Failed, `…-r11b` Complete, no TTL; the next deploy that ingests removes them by label); the NetworkPolicy and the ServiceAccount `meridian-ingest` carrying kubectl's `last-applied-configuration` annotation (the run applied the render with a client-side apply, two warnings said so; `deploy.sh` applies them another way); and, after the by-hand scale, no field manager listed as owning the store's `spec.replicas` (before: `helm`): the next `make deploy` applies the chart's literal 1 with force-conflicts and takes it back, by the code and not seen | `MeridianRateStoreRefusing` (one refused call is under its thresholds, by design); `MeridianServiceUnavailable` (10 s, far under five minutes); the gateway's three other 503 words; a 429 after the second ingestion; the search tool's log line for a refused embedding; the next `make deploy` taking `spec.replicas` back |
+
+**The second half's items, with a verdict each:**
+
+- **The ingestion's word on a real 503 (K6): SEEN (R11), for the word
+  `rate-store-unavailable`.** With the rate store scaled to 0 for 10 seconds
+  (11:53:02 to 11:53:12) an ingest Job failed at 11:53:11 and its one log line
+  was, verbatim: `ERROR the model gateway refused the embedding call (model
+  gateway answered 503; kind rate-store-unavailable)`. Two audit rows at
+  11:53:07 carried one run ID: the gateway's (`model.call`, `refused`,
+  `rate-store-unavailable`) and the ingestion's (`knowledge.ingest`,
+  `refused`, `gateway-failed`). The gateway stayed Ready with no restart and
+  the same start time, and the chunks stayed 85. The gateway's error class was
+  `TimeoutError`, not `ConnectionError` (the Service had no endpoint; the 1 s
+  connect timeout ended it). A second ingestion, made once the store was back,
+  succeeded with the same gateway pod (85 stored, 0 differences), and `make
+  smoke` 62 seconds later ended 46 PASS, 0 FAIL, 0 SKIP. Not seen: the
+  gateway's three other 503 words, the search tool's log line for a refused
+  embedding, and a 429 after the second ingestion.
+- **R5, the node paused and three deploys: seen in part.** What R5b saw: every
+  call ended at the client's own handshake timeout of ten seconds and never
+  reached the wrapper's bounds, there were three ReplicaSets per Deployment
+  (the history limit holding), and all pods were Ready 15 seconds after the
+  node was resumed. What it did not see: a call that the wrapper's bound ends.
+  Why: the session's script called an inner function for the waiting call, and
+  the wrapper refused it as a call with no timeout; a waiting call against a
+  frozen node is not seen, and by what the other calls showed it would end at
+  the handshake too. A server that completes the handshake and never answers
+  is the case the bounds are for, and it stays tested with stand-ins only.
+- **Certificates of one hour: SEEN (R7), with one replica of each service.**
+  The six restarts, each service's old container stopping once, in the reverse
+  order of the shares:
+
+  | Service | Share | Stopped | Gap |
+  |---|---|---|---|
+  | policy-mcp | 5/6 | 10:24:32 | |
+  | model-gateway | 4/6 | 10:26:11 | 99 s |
+  | knowledge-mcp | 3/6 | 10:27:51 | 100 s |
+  | claims-mcp | 2/6 | 10:29:31 | 100 s |
+  | claims-api | 1/6 | 10:31:11 | 100 s |
+  | agent-runtime | 0 | 10:32:51 | 100 s |
+
+  By the chart's arithmetic (the end 10:41:59, a margin of 10 minutes, one
+  sixth of the margin per place) the first look at the file is 10:23:39 and
+  the last 10:31:59: each restart came 52 or 53 seconds after its computed
+  moment, the same for all six (the liveness probe's period and threshold). The
+  readiness samples: each service was not Ready for 41 to 46 seconds (for
+  example policy-mcp from 10:23:52 to 10:24:37), never two at once, and the
+  fewest of the six Ready in any sample was 5; with one replica each, the
+  service that restarts answers nothing for those seconds, one at a time now,
+  where the watch of 2026-10-06 had all six in the same minute. The rate
+  store restarted itself twice, once after the reissue and once at 10:13:02,
+  63 seconds after the renewal: its liveness rule as designed (K12's
+  two-second form; the count on its pod went 0 to 2). Not seen: the alert, two
+  replicas of one service and a short `renewBefore` (the table above).
+- **R6, the cold run: cold timings SEEN, the rest open.** R9, made for S072's
+  cluster batch, gave the cold timings on the virtual machine (load about 1):
+  `make down` 3 s, `make up` 273 s, `make deploy` 97 s, `make smoke` 70 s (46
+  PASS, 0 FAIL, 0 SKIP) and a second `make up` 28 s, with no container
+  restarted during the run. Still open of R6: a first install made to fail and
+  its way back, and a policy narrowed before the first deploy (the case `make
+  cert-renew` is for).
+- **The rotation of the rate store's password: the owner's, unchanged**
+  (accept it as not seen or run it).
+- **approver-policy's liveness probe: not built, unchanged.**
+
+**The rows this part judged** (Part B's rows, whose verdicts are brought to
+say so; the first half's table above stays as it was written):
+
+| Row (its first words) | The second half so far |
+|---|---|
+| At a certificate renewal every service restarts in the same minute | Closed for one replica each, seen on kind (R7): six restarts 99 or 100 seconds apart, never fewer than five of the six Ready, each service not Ready for 41 to 46 seconds. Residual, the row's own: two replicas of one service would still restart together; stays as not built |
+| A service that restarts itself near its certificate's end was not seen on the cluster | Stays closed (by S062, 2026-10-06): R7 watched it again with one-hour certificates, and each service's old container stopped once, 52 or 53 seconds after its computed moment |
+| The scripts' `kubectl` calls have no request timeout of their own | Stays, in part: a frozen API server was met once (R5b) and every call ended at the client's own timeout; a call that a bound of the wrapper ends is not seen |
+| The chart sets no `revisionHistoryLimit` | Stays, in part: the limit seen holding at three ReplicaSets per Deployment (R5b); `make images` with the new reading not seen |
+| The rate store's liveness script compares the certificate's time | Stays, as accepted; the two-second form was seen to behave (R5a: restarts 0 at every reading; R7: one restart per renewal) |
+| The restart share is read from `MERIDIAN_TLS_RESTART_SHARE` | Stays: R7 saw six non-empty shares and the spread they make; a chart typo that renders an empty share was not seen and is not refused |
+| Not seen on a cluster for the rate store | Stays open, but the 503 is SEEN (R11): the store scaled to 0 for 10 seconds, the gateway Ready with no restart and admitting again with the same pod. Still not seen: the alert, two replicas, a frozen store, an old Secret |
+| On 2026-10-06 `make deploy` failed twice | Stays, with a likely cause and not a proven one: the ingestion's word is now seen on a real refusal (R11, for `rate-store-unavailable`); R11 made the fault on purpose and does not show what happened that evening |
+
+**New rows of this part** (Part B's follow-up backlog, each with a home that
+exists): the add-ons' pods restart and nothing sees it (`tempo-0` 12 restarts,
+`loki-0` 2, `platform-db-1` 9, read before R8), home **S072**, which owns the
+only alert on restarts and the cluster batch that is next on the lane, with
+S073 as the other candidate, which would own a smoke line that reads the
+counts; smoke's sentence "run 'make up'" for a cluster that does not answer
+(R5b), home **S073**. Not a row: smoke's cost-series line skips after every
+restart of the Model Gateway until a call is settled (R7's 45 PASS and 1 SKIP),
+which is by design and is written in the kind README at check 5; and each
+restart at a renewal coming 52 or 53 seconds after its computed moment, which
+is a sentence in the certificate runbook.
+
+- **The gates of this record:** this branch changes documents only (the plan,
+  the runbooks, the READMEs and the threat model), so its gates are `make
+  docs`, `make check`, `make test` and the pytest line that pins the READMEs'
+  and the runbooks' phrases (`uv run pytest tests/meridian/knowledge_mcp/
+  tests/meridian/test_kind_*.py tests/meridian/test_certificate_*.py
+  tests/meridian/test_helm_identity.py tests/meridian/test_runbook_queries.py
+  -n 2 -q`), run before this sentence was written: the pytest line ended `1825
+  passed, 234 skipped in 49.41s`, `make docs` ended `docs consistency: 14
+  checks passed`, `make check` ended with no ERROR line (its last line is a
+  structurizr `IGNORE` line) and `make test` ended `codex agents: 11 twins
+  current`.
 
 ### S070 — Claims intake and what the adjuster is told
 **Status:** doing · **Started:** 2026-10-07 · **Finished:** —
@@ -17701,6 +17859,635 @@ CloudNativePG chart's `view` and `edit` ClusterRoles (S020), the operator
 being down seen by no alert (S073) and the policy tests that never meet the
 charts' render (S074).
 
+### S079 — Self-managed Kubernetes: applied once on AWS, a scaffold on Google Cloud
+**Status:** doing · **Started:** 2026-10-06 · **Finished:** —
+**Goal:** a cluster whose control plane the owner's account runs itself, on the
+cloud's virtual machines, so that the owner can see what a provider takes off
+your hands when a cluster is "managed" (the owner, 2026-10-06: "we will build
+it on aws, gcp just scafold"); a Terraform module for AWS, its twin for Google
+Cloud, the comparison with the managed cluster of each cloud in ADR 6, ADR 7
+and the Azure platform document; and, with the owner, one apply on AWS once the
+cost is stated. This record is the first half, the pull request that carries
+it: the modules, the wrapper's word for the second module, the checks, the
+comparison and the threat model's rows, implemented as code, tested with
+stand-ins and never applied. Nothing ran in AWS or in Google Cloud and no
+instance booted.
+
+**Decisions** (the main session's unless marked; the owner may overturn any;
+the design, with its threat note, was written on 2026-10-06 before the first
+contract, and where a review or a result reversed one, the entry says which and
+what was wrong):
+
+- **Two halves; this pull request is the first, and the row says `doing`.** The
+  second half is the owner's apply of the AWS module, from where no session
+  holds credentials, asked after the cost is stated and a yes (the paid stop,
+  below); the Google Cloud twin is never applied. If the owner answers no, this
+  section closes the step as done with its second half not built, and says so.
+- **kubeadm.** The upstream installer leaves every part visible: static pods
+  for the API server, the controller manager, the scheduler and etcd, a CA
+  under `/etc/kubernetes/pki`, a bootstrap token for the join. That is what the
+  owner asked to see. Rejected: k3s (one binary with an embedded datastore,
+  which hides it), kOps and Cluster API (they automate the steps this is meant
+  to show and make more cloud resources to remove) and Talos (a second thing to
+  learn at once).
+- **One control-plane node and two workers, a stacked etcd, no load balancer in
+  front of the API server.** A cluster that lives an hour. What a production
+  control plane adds (three nodes, an odd quorum, a load balancer, snapshots of
+  etcd off the node) is in the comparison, with the statement that a managed
+  cluster's fee buys exactly that.
+- **A module of its own with a small network of its own, copied from S036's and
+  not shared** (the plan's row said "reuses S036's network"; the advisor's
+  first reading had that sentence changed before the first contract). S036's
+  module is reviewed and may be applied by itself, a switch for the cluster's
+  kind would put a `count` on every EKS resource and on its tests, and a shared
+  child module is what S036's scan tests refuse. It has no database, registry
+  or secret store; one cluster at a time on AWS is two states.
+- **The wrapper takes the module as a word from a closed list**, not a path:
+  `select_module` sets one row of literals (`aws`, `aws-kubeadm`, and `gcp`
+  with a directory only, for `validate`), and the directory, the state's
+  directory and file, the saved plan and its record are each derived from the
+  row. K2a gave `validate` the second name; K2b gave `plan`, the applying
+  command and the removing command the word `aws-kubeadm`. The record gained a
+  fourth line, `module=`, so a plan or record of the other module is refused
+  whatever its hash says. Both modules read the one local file, because the
+  account, Region, address and e-mail belong to the owner's account and one
+  file means one account pin (the cost: the modules cannot carry different
+  addresses, and a test holds that a second file is never read). The state of
+  the second module is a sibling directory, `meridian-aws-kubeadm`, not a child
+  of the first's (so the settings' globs for the first do not reach it: a row).
+  The three wrapper lines are published in the module's README, marked
+  implemented, tested with stand-ins and never run, and not for sessions
+  (K2b's decision, reversible). No `make` target plans, applies or removes the
+  module: the targets come with the guard's rules in one contract, so that no
+  creating command exists that the guard does not read.
+- **Nodes: Ubuntu 24.04 from the publisher's public parameter, `t3.medium` or
+  `t3.large` from a closed list, 20 GiB encrypted `gp3` root volumes, a
+  metadata service at version 2 with a hop limit of 1, no key pair and no port
+  22.** A person reaches a node through Session Manager. The instances run in
+  `unlimited` CPU credit mode. **The first review's advice was `standard`, and
+  that was wrong for this instance family:** the second infrastructure review
+  doubted it, and three pages of the EC2 guide, read on 2026-10-07, say a T3
+  gets no launch credits because it supports unlimited mode, so a `standard`
+  node would have started a CPU-heavy boot at 20 percent of each vCPU (K1f).
+- **The API server's address is an Elastic IP the module makes**, so the
+  certificate's extra name is known before the node boots; the control plane
+  waits, with a bound, until the metadata service reports it as the node's
+  address before `kubeadm init`.
+- **The join command passes through one Parameter Store parameter, and the
+  design's way of keeping it out of the state was wrong.** The design created
+  the parameter empty and ignored its value (`ignore_changes`). K1 read the
+  provider's source (v6.67.0): a refresh reads a SecureString back with
+  decryption and sets `value` into the state, and `ignore_changes` hides the
+  value from the plan, not from the state, and every plan, apply and removal
+  refreshes first, so the one-hour token and its hash would have sat in the
+  state and its backup. The parameter is created with a write-only value
+  (`value_wo`, `value_wo_version = 1`), which the provider documents as never
+  stored; read from the source and the documentation, **not seen in a state**.
+- **A worker joins only what its template says.** It requires the address in
+  the parameter to equal the control plane's Elastic IP and passes the
+  template's own address to `kubeadm join`; the pattern of the join command is
+  ASCII-only (`LC_ALL=C` in both scripts, after the security review showed
+  that the pattern matched fullwidth digits in a UTF-8 locale), a NUL is a
+  refusal, and the worker's error line is masked and cut. `kubeadm init` runs
+  with `--skip-token-print`. This replaces the design's sentence that the
+  node's cloud-init log holds the join command for the node's life.
+- **A pinned signing key and a pinned network plugin.** The package
+  repository's key must be a file that holds exactly one key, the pinned one,
+  unexpired; it expires on 2026-12-29, after which `apt-get update` fails with
+  apt's own error and the pin's check still passes, so the apply comes before
+  that date or the pin is read again. Calico v3.32.2 is applied from a local
+  file whose SHA-256 was checked (v3.33.0 was newest on 2026-10-01; v3.32.2 is
+  the newest patch of a line Calico lists as tested with Kubernetes 1.34 to
+  1.36). The default Kubernetes minor is 1.36 and the list is 1.35 and 1.36:
+  the review's memory of containerd 1.7 in Ubuntu 24.04 was wrong (the package
+  page lists 2.2.1 in `noble-updates`), and 1.36 is the newest minor that both
+  that package and Calico support.
+- **A node role holds Session Manager's managed policy, which allows more than
+  a node needs, and an explicit Deny on every parameter read** (the control
+  plane's role, all; a worker's, all but the join parameter). The security
+  review's memory that the managed policy allows `ssm:GetParameter` on `*` was
+  confirmed by its page on 2026-10-07; the Deny is right whether or not the
+  page had agreed. **The design's sentence "a pod cannot use the node's role"
+  was too strong:** a hop limit of 1 stops a pod with its own network
+  namespace, not one on the host network (`calico-node`, `kube-proxy`, any
+  `hostNetwork` pod). The module's comment, its README and T-102 say so.
+- **Egress stays open, and three scan findings are accepted for an hour-lived
+  network:** `AWS-0164` (public subnet), `AWS-0104` (open egress, two security
+  groups) and `AWS-0178` (no flow logs, MEDIUM, which the recipe's filter hides
+  and the file records for the reader), each with its reason above it in the
+  module's ignore file, held by tests (exactly these IDs, a reason above each,
+  no inline ignore, one subnet and two egress rules so that an entry cannot
+  cover a new resource unseen). The reason for the egress is that no fixed
+  address exists for the repositories, the registries and the snap store and
+  that the nodes hold nothing of value for the hour; narrowing the ports would
+  not silence the check.
+- **The control plane is created last, user data goes out compressed, a new
+  image does not replace a node, and a second apply is never done.** The
+  security-group rules the nodes need now come before the instances (the
+  critical finding below), which gave a new order: the workers, then the rule
+  that reads their addresses, then the control plane; the workers poll, so
+  booting first is fine. The instances take `user_data_base64 =
+  base64gzip(...)` because the fixes had taken the control plane's script past
+  16 KB raw (compressed it is about 8 KB). `ignore_changes = [ami]` and a
+  README sentence say: remove, then apply.
+- **Timing and retries as the second review settled them.** A worker polls for
+  the join command 240 times, 10 seconds apart, a window that a test holds
+  above the sum of what only the control plane spends first (1,385 seconds by
+  the scripts' own bounds); every package call is retried a bounded number of
+  times because `DPkg::Lock::Timeout` probably does not cover the lists lock
+  (from memory, about 70 percent); `HOME`, the bridge modules and the three
+  sysctl settings are set; the script waits for containerd's socket.
+- **Terraform in CI, as far as the tests need it.** The `python` workflow
+  installs Terraform 1.16.5 through `hashicorp/setup-terraform` pinned to a
+  commit, and the marker `needs_terraform` fails the 225 tests that need the
+  program under `GITHUB_ACTIONS=true` instead of skipping (K2c). The workflow
+  runs no `init`, `validate`, plan or apply: the validate and the scan stay
+  local commands.
+- **The Google Cloud twin, `infra/terraform/gcp-kubeadm/`: three Compute Engine
+  instances, the same cloud-init in the same text where the cloud allows it,
+  the join command in a regional Secret Manager secret, never applied and no
+  command that creates it.** A test holds the boot scripts' common functions
+  equal to the AWS module's, function by function, and holds the differences
+  as differences. Where it departs: the firewall names its sources by address
+  and its targets by service account (the scan read a rule that names sources
+  by service account as open to the world, which is false and was proved on
+  scratch variants); the API endpoint is the control plane's internal address,
+  and the external address is only a certificate name; the workers have no
+  external address and leave through Cloud NAT; OS Login is set on each
+  instance; `europe-north1` is out of the twin's region list and, by K3b, out
+  of the managed scaffold's (ADR 7's first note still lists eleven), because
+  the locations page (read 2026-10-07, updated 2026-09-30) says that region has
+  no regional secrets. **One scan finding is accepted, by the session's decision
+  and for the owner to overturn:** GCP-0031 (HIGH, an instance has a public
+  address), because the design asks for the API server from the owner's one
+  address and there is one external address in the module, on the control
+  plane, admitting nothing but 6443 from that /32; production would use a
+  control plane with no external address, reached through IAP or an internal
+  load balancer (designed, not built). K3 stopped on it rather than accept it
+  itself. The three findings the scan reports and does not fail on (GCP-0029,
+  GCP-0076, GCP-0033) are not accepted and named in the README.
+- **The comparison, written once and placed three times.** A table of 14 rows
+  in ADR 6 (EKS against kubeadm on three instances), in ADR 7 (GKE against the
+  twin) and in the Azure platform document (AKS against a cluster on virtual
+  machines, a comparison for the reader and not a plan: the document's opening
+  sentence "it names no other cloud" gained one exception), with one paragraph
+  on why the platform's default stays managed: it is run by one person and its
+  chart needs volumes, a load balancer and an ingress, none of which the
+  self-managed cluster provides on its first day. K4's contract said "applied
+  once on AWS" for the self-managed cluster and "built" for AKS; the notes say
+  "validated code, to be applied" and "a plan row, not built", because neither
+  is true today (hard rule 7). ADR 7's first note was written when the twin was
+  designed and says so; a second dated note brings it to what was built.
+- **The guard: a tightening now, the rest waits.** The security review of K2b
+  found that the guard's patterns and the settings' deny globs know only the
+  first module's names; K6 (out) takes the second module's directory, plan
+  path and state directory into them, as a tightening with cases that needs
+  no ask (the session's reading of 2026-10-07). The creating `make` targets
+  and any rule beyond that wait for the owner to start the guard's task, the
+  base first (the plan's Part D question 6 and the base-first rule); until
+  then no creating `make` target exists. The session measured what the hook
+  answers today on this branch, from lines in a file: see "Not seen".
+- **The cost, stated again before the ask.** The design's figure is about USD
+  0.17 an hour in `eu-central-1` (three `t3.medium`, three small volumes, three
+  public IPv4 addresses at USD 0.005 an hour each, the Elastic IP being one of
+  them once attached; no EKS fee, no NAT gateway, no database), by the
+  session's arithmetic of 2026-10-06 and not from a bill; S036's managed
+  environment is about USD 0.35 an hour by ADR 6's prices of the same day. No
+  price is written in the module's directory, by a test. The figure is read
+  again from AWS's price files before any ask, and stays a figure of the design
+  until the owner's billing console confirms it.
+
+**Advisor:** three consultations (the third is in the work log, with K6's review).
+
+- **2026-10-06, 17:21 UTC, before the first contract (the design).** It changed
+  five things. The plan's row no longer says "reuses S036's network" (fixed in
+  pull request 104 before its merge, so that the row and the decision agree);
+  cloud-init waits for the Elastic IP before `kubeadm init`; the script's module
+  argument is a closed choice of names from which every file name is derived;
+  the workers poll the join parameter with a bound; and the cost figure names
+  its three address lines.
+- **2026-10-07, about 09:57 UTC, at the report of K2b and before that of K3.**
+  It was called for another step's pull request and read K2b's report with it.
+  It changed four things here. The guard's answers for the wrapper's new lines
+  were MEASURED instead of taken from the implementer's reading of the
+  pattern (the three wrapper lines are asked or denied; a by-hand plan in the
+  second module's directory passes, which the review then sized). The
+  settings' deny globs that do not reach the second state directory were
+  handed to the security reviewer by name, and their fix was judged a
+  tightening that needs no ask. The root README's line and the `Makefile`'s
+  help line that K2b made false went into the documents contract. And the
+  two wrapper test files over the ceiling became a row instead of a silence.
+  It came before K3's report, so the acceptance of GCP-0031 was not put to it
+  separately: the acceptance repeats the reviewed precedent of `AWS-0164` on a
+  module that is never applied, and is the session's.
+
+No other consultation is recorded.
+
+**Work log:**
+
+- **A read-only map of the repository** (`mapping-2.md`), made on 2026-10-07
+  after S036 and S078 merged: what the wrapper binds to one module, what the
+  tests pin to a directory, what the guard reads, the backlog rows homed here
+  (ten), and the secrets that a cluster of one's own creates.
+- **Thirteen contracts to the `implementer`**, each in a worktree of its own,
+  carried onto the step's branch with git (the hashes are the branch's):
+  - **K1, the AWS module** (d036171): all the `.tf` files, the lock file, the
+    three boot-script templates, the tests that run the scripts whole against
+    stand-in programs, and a README; the scan's three findings reported, not
+    accepted.
+  - **K1b, the boot scripts after the security review** (5e69010): the signing
+    key's exactness and expiry, `LC_ALL=C`, the guards that stop a second run
+    before anything is touched, a NUL in the value, and 25 more hostile values.
+  - **K1c, the module after the security review** (000b557): the Deny on
+    parameter reads, the hairpin hedge, the ignore file with its tests, the
+    README's list of what only an apply settles.
+  - **K1e, the module after the infrastructure review** (5cd1f3e): no character
+    the EC2 API refuses in a rule description, instances ordered after their
+    rules, compressed user data, `ignore_changes` on the image, the third scan
+    finding accepted, the README's sections on what the cluster cannot run and
+    how to look.
+  - **K1d, the boot scripts after the infrastructure review** (e45e135): the
+    package lock, the bridge modules and settings, `HOME`, a wait for
+    containerd, a worker that says why it could not read the parameter.
+  - **K1f, after the second review** (ccb7b55, with dd08583's README): the join
+    window, the package retry, the credit mode, the error line's cut and mask,
+    a timeout on the read, the quota item.
+  - **K4, the comparison** (a433b01): the three tables and the one amended
+    sentence.
+  - **K2a, the door** (9ce2a99): `aws.sh validate aws-kubeadm`, `make
+    aws-kubeadm-validate` and `make aws-kubeadm-scan`, each run once.
+  - **K2c, Terraform in CI** (35d0c7a): the marker, the pinned step, the
+    Renovate rule and its tests.
+  - **K2b, the wrapper for the second module** (d816787): the table of modules,
+    the four-line record, a state of its own, three new redaction rules, and
+    the wrapper's test file cut in three (it was 2,996 lines).
+  - **K3, the Google Cloud twin** (7fcbc1a): 19 resources, the boot scripts held
+    equal to the AWS module's, the scan run at every severity.
+  - **K3b, the twin's scan decision and door** (0605b22): the ignore file with
+    GCP-0031 and its reason, `aws.sh validate gcp-kubeadm`, `make
+    gcp-kubeadm-validate` and `make gcp-kubeadm-scan` (both ended 0), and the
+    managed scaffold's `europe-north1` out of its region list because its
+    secret is regional (one empty regional secret); the twin's region list and
+    zone map are now held equal to the scaffold's.
+  - **K5, these documents.**
+- **Four reviews**, three of the module and one of the wrapper's second module,
+  each read by the main session and answered by contracts (below).
+- **Two contracts answer the fourth review, out and pending.** K6: the guard
+  and the settings take the second module's names (a tightening only, with
+  cases; it also edits `docs/development-environment.md` and the module
+  READMEs' lines on what the guard stops). K6b: the wrapper (the record
+  compared whole, each run saying its module, the README's state paragraph,
+  the removal's order). Their results go below when they land:
+
+- **K6 landed** (974d6d1): a tightening of the command guard and of the
+  project's deny list, and nothing else. Eleven patterns of the guard's AWS
+  rules take the second module's name beside the first's (the directory in
+  three spellings, the plan and state file names, the working directory, the
+  plan's path as a thing written to, the three `make` targets, which do not
+  exist yet, and the two patterns that refuse a pseudo-terminal or a trace
+  beside them). Measured on the cases: in the second module's directory a
+  plan, `show`, `output` and a listing of the state now ask where the hook
+  gave no decision; a plan written to a file, an import, a change of the
+  state, a new workspace and an apply by hand are denied where they passed or
+  only asked; six ways of writing into the saved plan are denied. Nine
+  settings entries: the Read, Edit and Write tools are denied the second
+  state directory and the module's hidden variable files, and the three
+  target names are asked or denied as their twins are. The first 1,940 cases
+  are byte for byte the same and none changed its decision; 181 cases were
+  added, 98 of them failing against the guard before; the settings test now
+  asks for the entries of every directory of the family, so a third module
+  fails it until it has them. The main session ran the guard's cases on the
+  commit as rebased: 2,293 `ok` lines, no failure. Not closed, for either
+  module, and said in the module's README: a write into a state file by
+  `tee`, `mv`, `install`, `ln`, `truncate` or a redirect (the hook names no
+  state file as a path to steer away from; the settings cover the three
+  tools only). The security review this change needs is out:
+
+- **The security review of K6** (`security-reviewer`, on 974d6d1): yes; a
+  tightening only. It ran the old guard and the new over the 1,941 cases as
+  they were before the commit (no decision weaker, none changed), over the
+  181 new cases (111 changed, each from no decision to an ask or a deny, or
+  from an ask to a deny: the implementer's report said 98, a counting slip),
+  and over a corpus of its own, 1,682 shapes for each module: the second
+  module gets the first's decision in every one, the first module's
+  decisions did not change, and 839 of the second's tightened. Each of the
+  eleven patterns is the old one when its new optional group is empty, so
+  it matches a superset; no widened ask stands before a deny (the last deny
+  is above the first of them). The settings' nine entries are in the right
+  lists, and the test's directory scan fails for a third module without
+  entries (run on a replica: nine failures). No window opens for ordinary
+  work on the second module's files (its README, its tests, `git` on its
+  paths, its validate and scan targets); five new false alarms of the kind
+  the first module already has (a search or an `echo` that quotes one of the
+  three target names).
+  - **Medium, older than K6 and true of both modules: K7, out.** The guard
+    names no state file as a path to steer away from, so a write into a
+    state file or a copy out of it gets no decision (`tee`, `mv`, `install`,
+    `ln`, `truncate`, a redirect), and a copy that is then read prints the
+    state. The review tried one more alternative in the pattern on a
+    scratch copy: 5,486 lines, none weaker, 144 writer shapes denied. K7
+    applies that line with cases.
+
+- **K7 landed** (dfc3d75): the review's own line, applied. One pattern of the
+  guard gains two alternatives (a state file's suffix and the state
+  directories' name), so that a writer verb or a redirect into a state file
+  or a state directory, or a copy out of one, is denied for both modules. 69
+  cases, 53 of them failing against the guard before; the 2,121 cases before
+  them pass unchanged, and the main session's run of the guard's cases on
+  the commit as rebased printed 2,376 `ok` lines and no failure. The
+  settings test's directory scan now also asks the guard four questions per
+  directory of the family, and the reasons the guard prints name both
+  modules (the hook cannot tell which matched). A search of the repository
+  found no script, target or document that tells anyone to write a path
+  holding the state directory's name, so the wider of the review's two
+  alternatives stands; its false alarm is pinned by three cases. No second
+  review of K7: its pattern is the one the security review measured on 5,486
+  lines of its own and recommended (none weaker, 144 writer shapes denied),
+  and the rest changes no decision (reason texts, a test's scan, cases). What
+  it leaves open is a backlog row.
+
+- **A third consultation, before this pull request** (11:10 UTC, asked with
+  another step's): K6b, which landed after the wrapper's review and which no
+  reviewer read, is that review's prescription applied, with its tests seen
+  red, and may go on that ground; K6, a change of the guard, waits for its
+  own review whatever a consultation says (the owner's condition).
+
+- **K6b landed** (e335061). The plan's record is held to exactly its four
+  lines: a partial fifth line and a NUL, which the old read let through
+  (harmless, every field being bound), are refused, and the record table's
+  assertion is now the parse sentence itself, because the old one ("record"
+  in the message) was also true of the refusal that followed and so could not
+  fail. `plan`, the applying command and the removing command print the
+  module first, and the removing command names it in the last line above
+  Terraform's question. The module's README says all the state holds in
+  clear (the owner's address, the budget's e-mail address and the account
+  number beside the boot scripts and the Elastic IP), that a write to the
+  state is an integrity risk, the order of a removal by hand, and four edges
+  of the redaction as sentences. Seen red first: ten record cases and eight
+  module-line cases. The implementer's gates: `shellcheck` 0, 1,405 tests of
+  the wrapper and the module passed, `make lint` and `make docs` 0. Nothing
+  was run against an account.
+
+**Reviews:**
+
+1. **The security review of the first contract (no critical or high finding;
+   seven medium, eight low, eleven items only an apply settles).** The medium
+   findings: both node roles probably read every Parameter Store parameter in
+   the account (the managed policy; closed by the Deny, and the page confirmed
+   it); the signing-key pin checked the first fingerprint and trusted the whole
+   file; the join pattern was strict only in the C locales; a pod on the host
+   network reaches the metadata service; the key's expiry sentence was wrong
+   and the apply has a deadline; the state's place was not decided (a bare
+   `init` writes it beside the `.tf` files); the run-once guards came after the
+   side effects. Closed by K1b and K1c, with 25 hostile values added to the
+   tests and the six mutations that the suite had left green now caught (a
+   token lifetime of 0, `kubectl` fed a URL, a dropped `--proto`, a rule made
+   another way, a two-key file, the run-once guards moved after the side
+   effects).
+2. **The infrastructure review of the whole module: the first apply would have
+   failed after resources existed (one critical, two high, eight medium, eight
+   low).** The critical finding: four security-group rule descriptions held an
+   apostrophe, which the EC2 API refuses, and those are the rules the nodes
+   need to reach the API, with nothing ordering the instances after them (the
+   page's character set was read on 2026-10-07 and a test now holds every name
+   and description to it). The two high findings: no lock timeout on `apt-get`,
+   so a first boot that meets `apt-daily` ends under `set -e`; and no `overlay`
+   or `br_netfilter` module and one sysctl (the review said the Kubernetes page
+   lists them, and it does not; they were built as asked and the comment says
+   so). Its remaining findings (`HOME`, a Kubernetes minor against containerd,
+   containerd's socket, a recreate on a new image, user data near 16 KB, the
+   worker discarding every error, nothing for a person to read, the module
+   outside every check) were closed by K1d and K1e, and the last of them (no
+   check ran the module) first by K2a's door and K2c's marker. The stand-ins
+   had accepted anything, so none of the 331 tests could see any of it; K1d
+   made them refuse an argument they do not expect.
+3. **The re-read of the fixes (no critical or high finding; five medium, eight
+   low).** Every finding of the first review closed but the one about CI. The
+   five medium findings: the join window had no margin in the worst case the
+   scripts' bounds allow (240 tries now, and a test holds the relation);
+   `standard` credit mode may throttle the boot (reversed to `unlimited`: see
+   above); `apt-get update` probably does not honour the lock timeout (a
+   bounded retry); the account's vCPU quota is unchecked (an item for the
+   owner, below); and no apply path existed (K2b). Its lows include a masking
+   bypass by a non-ASCII byte inside a token (K1f deviated from the contract's
+   method, because the contract's order did not catch it: the shapes are now
+   matched on a copy with every non-printable byte deleted).
+
+4. **The security review of the wrapper's second module, K2b (verdict yes: no
+   critical or high finding; two medium, six low).** The modules cannot be
+   crossed (the word only selects a row of literals; a plan or record of the
+   other module is refused three ways), no protection got weaker, the record
+   parser accepts only the exact four lines but for a partial fifth, and
+   `redact` changed 22 lines of 304,602 in the repository's own text, all new
+   fixtures. The two medium findings are one gap seen twice: the guard's
+   patterns and the settings' deny globs know only the first module's names, so
+   a by-hand `show`, `output`, `state list`, `workspace new` or `plan -out` in
+   the second module's directory gets no decision from the hook (where the
+   first module's asks or is denied), the settings' ask for a plan with
+   `-chdir` into a path holding `aws` still matches the second name (read, not
+   measured), a `tee` into its plan path passes, and the Read, Edit and Write
+   tools are open on `~/.local/state/meridian-aws-kubeadm/`; and the state
+   holds more than the README said: the owner's /32, the budget's e-mail
+   address and the account number inside ARNs, in clear (Terraform marks a
+   value sensitive in the display only). The low findings: the record parser
+   accepts a partial fifth line (harmless: every field is regex-bound); a
+   forgotten word on `destroy` targets the costlier managed module and no run
+   prints its module's name; a gzip blob split over lines would leave its
+   continuation unredacted; three edge cases of `redact`; the hidden-variable
+   globs name the first directory only; and the README's removal order says
+   release the address before the instances, where an address cannot be
+   released while associated. Answered by K6 (the guard and the settings) and
+   K6b (the wrapper), out and pending.
+
+**Result / verification:**
+
+- **Nothing was planned or applied.** No account exists for the session and no
+  credential is on the machine, and no `aws` or `gcloud` command, plan, apply,
+  removal or import ran. The only real Terraform calls were `fmt`, `init`,
+  `validate`, `providers lock` and `console` on scratch copies, and the two
+  `make` targets of K2a. The modules are **implemented as code and tested with
+  stand-ins**: the wrapper's tests run the script against programs that pretend
+  to be `terraform` and `aws`, and the boot scripts' tests run each script
+  whole against programs that pretend to be `kubeadm`, `aws`, `curl`,
+  `systemctl` and the rest, which proves the scripts' own logic and no flag,
+  package, lock, module or output format of a real tool. The policy scan is
+  **implemented and run offline**. The apply is **designed**.
+- **What the implementers reported (claims, not the main session's runs).**
+  The module's three test files passed 478 tests at K1f's close; K2b's
+  contract line of five files passed 1,318 (1,538 with the module and marker
+  files); the twin's four files and two more passed 923 at K3's; K2a's contract line
+  passed 1,017 with 73 subtests; and `make aws-kubeadm-validate` printed
+  "Success! The configuration is valid." and `make aws-kubeadm-scan` ended
+  clean, each ending 0 (K2a). Each contract's `make docs` printed 14 checks
+  passed and `make test` ended OK. The tests of the wrapper run once per module
+  through one fixture: 1,163 where the managed module's had been 575.
+- **The whole suite on the final tree, with `main` merged in, run by the main
+  session:**
+
+The main session's run on the tree with `main` merged in (S073's first half,
+S074's second half, S070's first half and S072's first part; 0b9aab6): `make
+test` (356 tests), `make docs` (14 checks) and `make lint` ended 0; the whole
+suite at six workers beside the kind cluster and no other run with a
+database: 19,767 passed, 8 skipped (4 min 58 s). The Terraform tests ran in
+it (the program is on this machine); on the CI runner they run for the first
+time with this pull request's check. That run was before K7 and before three
+more merges of `main`. The final one, on 042bd47 (K6, K7 and `main` 3b1f42a
+merged in: S074's third part, S070's second half so far, S072's cluster
+batch; one commit after it adds a blank line to this plan): `make test` (385
+tests), `make docs` and `make lint` ended 0; the whole suite at six workers:
+20,009 passed, 8 skipped (4 min 4 s). The guard's own cases, run by the main
+session on K7's commit as rebased: 2,376 `ok` lines, no failure.
+
+**Pull request 121 was closed for its successor.** Its `secret scan` job
+failed on two lines: the scanner's `generic-api-key` rule read the pin of the
+package signing key's fingerprint in both kubeadm modules,
+`kubernetes_apt_key_fingerprint = "…"`, as a credential (a name with `key`,
+then forty hex digits). The value is the public fingerprint of the Kubernetes
+project's signing key, not a secret. The main session had not run
+`make secret-scan` on this branch, though Part A's "Before pushing" asks for
+it; the script it runs a step's gates with did not hold the scan, and holds
+it now. As at the gateway step's first pull request: renamed, not
+allowlisted. K8: the Terraform name is `kubernetes_apt_signer_fingerprint` on
+nine lines in nine files, and the comment at each pin says why the name has
+no `key`; the shell variable in the boot scripts keeps its name, because its
+value on that line is a placeholder; `terraform fmt` realigned one
+neighbouring line in each `nodes.tf`. Measured with the scanner on a
+one-line file before the contract went out: the old name fires, the new one
+does not. The scan reads every commit of a pull request, so the branch was
+replayed as one commit on `s079-kubeadm` off `main`. K8's gates, as the
+implementer ran them: `terraform fmt -check` and `validate` on both modules,
+exit 0; the 1,004 tests of the kubeadm modules and of the Terraform scripts
+passed; `make lint`, `make test` (385 tests) and `make docs` ended 0; the
+scanner on the tree found no leak. The whole suite was not run again after
+these nine lines; the pull request's `python` check runs it. Found on the
+way, and a row of its own: a `validate` leaves the provider's `.terraform/`
+directory in the module's directory, and two tests of the Google kubeadm
+module then fail until it is removed.
+
+**Seen on the hosted runner (pull request 121's `python` check, before it
+was closed).** The workflow installed Terraform 1.16.5 through the pinned
+`setup-terraform` step, and the suite ended `20009 passed, 8 skipped` in
+11 min 22 s: the same two numbers as the development machine's run on that
+tree, where the program is installed. Under `GITHUB_ACTIONS=true` a marked
+test fails when the program is missing and does not skip, so the tests that
+need Terraform ran there, for the first time.
+
+- **Hosted runner.** The 225 tests that need the Terraform program have never
+  run on the runner: not seen on the runner until this pull request's check.
+  The demonstration that the marker fails under CI and skips outside it was
+  made on the development machine by hiding the program.
+
+**Not seen** (the whole of it; each is a statement about what has not met a
+real thing):
+
+- **Nothing was planned, applied or removed, in either cloud.** No account and
+  no project exists for a session, and no credential.
+- **No instance booted.** The boot scripts ran only against stand-in programs.
+  Whether kubeadm, containerd 2.2.1 and kubelet 1.36 come up together, whether
+  Calico does, whether the join works, whether `--skip-token-print` keeps the
+  token out of the log, whether the Deny stops the Systems Manager agent from
+  registering a node, and whether the Ubuntu image carries the agent are not
+  seen. The README's list is the longer one (a row of the backlog).
+- **The Terraform tests have not run on the CI runner.** They run there for the
+  first time with this pull request's checks.
+- **The guard's answers to the wrapper's new lines were measured from lines
+  read out of a file, on the branch's own hook, not in a live session** (the
+  session's measurement, repeated by the documents contract): `aws.sh plan
+  aws-kubeadm` asks, the applying line asks, the removing line is denied, a
+  `cat` of either module's state file is denied, and a `terraform` plan run by
+  hand in the second module's directory passes unasked (both the `-chdir` form
+  and the `cd` form), where the same line for the first module asks and an
+  apply by hand there is denied. The security review of K2b measured the same
+  and found `show`, `output`, `state list`, `workspace new`, `plan -out` and a
+  `tee` into the plan's path unasked for the second module too. Whether the
+  settings' ask beats the settings' allow for the `-chdir` plan is not
+  verified, and neither is whether the Read tool is denied the second state
+  (the review's probe answered "File does not exist" for both paths).
+- **The state was never seen.** What it would hold in clear is read from the
+  provider's schema, not from a real state: the rendered boot scripts with the
+  Elastic IP, the addresses, the account number inside ARNs, the owner's /32
+  and the budget's e-mail address (the module's README said less until the
+  review of K2b).
+- **The twin's own boot is further from a test than the AWS one's:** the
+  regional Secret Manager URLs are by analogy with the global ones (the
+  reference pages hide the regional form), and a list of premises that no page
+  settled is a row of the backlog.
+- **The cost is a figure of the design,** not a bill and not a price file read
+  again.
+
+**Not done, by decision or left open:**
+
+- **The second half: the paid stop.** The owner applies the AWS module once,
+  after the cost is stated and a yes, from a machine or an operating-system
+  user where no session holds credentials, with the three lines of the wrapper
+  (`plan`, `apply`, `destroy` and the word `aws-kubeadm`); what came up is
+  recorded, it is removed, and the run's cost is logged. It may be answered no.
+  The cost is the design's figure above, stated again from fresh prices first.
+  Whether S036's managed cluster is applied as well is asked then, and one
+  cluster at a time on AWS is the suggestion. **What the owner is told first:**
+  the account's vCPU quota for the Standard instance family (six vCPUs at the
+  defaults; a quota of five fails the third instance after two are billing);
+  that the package signing key expires on 2026-12-29, so the apply comes before
+  it; the open question of whether the Deny on parameter reads stops the
+  Systems Manager agent from registering a node, the only way onto one; that a
+  failed boot stays up and bills until it is removed, and the budget's e-mail
+  comes after money is spent; and that a second apply is never done.
+- **The guard's two narrowings and the creating `make` targets.** The settings'
+  deny globs and the by-hand run in a module's directory (two rows) are the
+  tightening that K6 (out, pending) makes for the second module's names; that
+  contract is not the owner's guard task, which still waits to be started, the
+  base first, and the targets that plan, apply and remove the second module
+  come in that task. No creating command exists until then.
+- **Not built:** workload identity for pods, a StorageClass, a load balancer
+  controller, an ingress, a cloud controller manager, three control-plane nodes
+  and a load balancer, a backup of etcd, encryption of etcd beyond the volume's,
+  an audit policy, flow logs, a retry of the join, a narrowed egress, a
+  customer-managed policy in place of the managed one, a self-managed
+  deployment view, and the platform's chart on either AWS cluster. The README
+  of each module and the comparison name each.
+- **Views and ADR 1.** If the AWS cluster is applied it is the first thing on
+  AWS that is not "Designed": `deployment-aws.dsl`'s header, C-05, the scope
+  line on a second deployed cloud and ADR 1's successor come due at the paid
+  stop, whichever cluster is applied (S036's section says so too).
+
+**What the owner should know** (the pull request body repeats it):
+
+- **Three decisions to overturn, if the owner wants:** the scan's three accepted
+  findings on the AWS module and its one on the twin (GCP-0031: the control
+  plane's external address, with IAP or an internal load balancer as the
+  production value), and the apply of the twin, which is never done.
+- **A reversal of the design, in the owner's interest to know:** the join
+  command's parameter is write-only because the design's way would have put the
+  token in the state; the nodes' credit mode is `unlimited`, not `standard`;
+  and a pod on the host network can reach a node's role, so the design's
+  "a pod cannot" is gone.
+- **ADR 6 holds three sentences the later contracts made false,** and this step
+  could not edit that ADR: a row of the backlog names them.
+- **A gap seen twice by two people:** the guard and the settings were written
+  for the first module's names, so a by-hand plan, `show` or `output` in the
+  second module's directory passes unasked, where for the first module the plan
+  asks and an apply is denied (the session's measurement and the security
+  review of K2b agree); K6 closes it for the names, and the plan's rows say what
+  was measured.
+
+**Follow-ups:**
+
+- In the backlog, each with its step: the settings' deny globs and the by-hand
+  run in a module's directory (S079, the guard contract; K6 takes the names
+  into the guard and the settings); the wrapper's two test files over the
+  ceiling (S074); what only an apply of the self-managed
+  module settles, the twin's unsourced premises, the Calico and key pins
+  without a reader, the boot scripts' small ends, the managed policy's other
+  actions and the wrapper's small ends (S079); a skipped `jq` under CI (S074);
+  and ADR 6's three sentences (S079). Rows changed: the apply of the managed
+  module, the wrapper's gaps and the guard's lists keep their home at S079 with
+  the first half's verdict; the two rows on what each module leaves to
+  production and the one on a second Google Cloud module are closed by the
+  decisions above; the Terraform-in-CI row is closed, as far as a check can
+  close it before it has run; the row that S078 left without a step is homed
+  here and kept.
+- For the owner: the decisions above and the four questions at the paid stop.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -18469,15 +19256,71 @@ charts' render (S074).
   on the gateway's namespace with its proxy pod running and no warning, and
   a probe that answered the review's open question: a pod's egress to the
   node is bounded by policy on this plugin, the kubelet's port included.
-- **PLAN-VERSION, 2026-10-07:** S074, the leftovers (still `doing`; tested,
-  none of it run on a cluster): `test_redaction_hungarian.py` (858 lines) is
+- **v0.79, 2026-10-07:** S079, first half: a Terraform module for a
+  self-managed Kubernetes cluster on AWS (one control-plane instance and two
+  workers brought up by kubeadm from two boot scripts, Calico from a pinned
+  manifest, the join command through one write-only parameter, no key pair and
+  no secret in user data or state), the wrapper's word `aws-kubeadm` for plan,
+  apply and removal with a state, a saved plan and a record of its own, a
+  twin for Google Cloud, `make` targets that check both and none that create
+  anything, and Terraform installed in the `python` workflow so that 225 tests
+  run on the runner (not yet seen there). ADR 6, ADR 7 (a second dated note)
+  and the Azure platform document hold the comparison of a managed and a
+  self-managed cluster.
+  Implemented as code and tested with stand-ins; nothing was planned or
+  applied and no instance booted. Three reviews of the module (one critical
+  and two high findings, all closed; the critical one would have failed the
+  first apply after resources existed) and one of the wrapper (no critical or
+  high). The step stays open for its second half, one apply in the owner's
+  account, asked after the cost is stated. T-102 new (102 threats) and T-36,
+  T-37, T-42 and T-100 changed. Five backlog rows closed or closed in part,
+  the rest of the rows homed here kept with a verdict, eleven new.
+- **v0.80, 2026-10-07:** S073, the second half so far: the main
+  session's runs R5a, R5b, R7, R8, R9a, R9, R10 and R11 on the local cluster
+  are in the step's section, each with what it saw and did not see, and the
+  step stays `doing`. Seen on kind: the one-hour watch run again with the
+  restarts spread (six restarts 99 or 100 seconds apart, never fewer than five
+  of the six Ready, each service not Ready for 41 to 46 seconds, one replica
+  each); the rate store's
+  two-second liveness rule behaving (no restart of a healthy store at the
+  readings of R5a, one restart per renewal in R7); the history limit holding at
+  three ReplicaSets per Deployment; the paused node ending every call at the
+  clients' own ten-second timeout, so no bound of the wrapper was seen to fire;
+  and main with S072's first part deployed on the warm cluster with smoke at 46
+  PASS, also from the split smoke script; and the ingestion's word on a real
+  503 (R11: the rate store down for 10 seconds, the Job's line ended
+  `kind rate-store-unavailable`, the gateway Ready with no restart and
+  admitting again with the same pod, the gateway's error class `TimeoutError`).
+  Still open: the ingestion's other three words,
+  a call that a bound of the wrapper ends, a first install made to fail and a
+  policy narrowed before the first deploy (the cold timings are seen, in R9, for
+  S072's cluster batch), the rotation of the rate store's password (the
+  owner's) and approver-policy's liveness probe (not built). The certificate
+  runbook gains a second table, its first point and the README's sentence say
+  what is seen now, and T-89's clause on the spread is brought to the run; no
+  new threat; T-45 and T-92 say the 503 is seen, and the rate store's runbook,
+  the knowledge service's README and the kind README say it too. Backlog: the
+  row on every service restarting in the same minute is closed for one replica
+  each; four rows say what R5b, R5a and R7 saw; the rate store's "not seen"
+  row and the row of the 2026-10-06 incident say what R11 saw; two rows are new
+  (the add-ons' restarts, home S072; smoke's sentence for a cluster that does
+  not answer, home S073).
+- **v0.81, 2026-10-07:** S074, the leftovers and the last cut of the smoke
+  script (still `doing`): `test_redaction_hungarian.py` (858 lines) is
   three test files, the largest 368 lines, and `hungariansupport.py`, cut
   along the production module each group exercises by a move
   `scripts/split_proof.py` proves, with 1,716 tests collected before and after;
   the five loaders of the name-masked injection cases are one helper,
   `servicesupport.injection_case_claim`, and a missing case fails with its name
-  and its file. The step's row and S067's "left by reviews" row say what is
+  and its file. The last cut: checks 8 and 10 of `infra/kind/smoke.sh` are
+  parts (`08-network-policy.sh`, `10-certificate-policy.sh`), the entry is
+  88 lines and every file of the script is under 800; the move is proved line
+  by line against 764159b (1,194 old lines, each used once), the definitions
+  the entry and its parts make are unchanged, and smoke from the cut passed on
+  kind with 46 lines equal to the run before it (R12). The step's row, the two
+  rows on the script's size and S067's "left by reviews" row say what is
   closed; two rows are new (two definitions of the injection cases' path, and
-  `NAME_MASKED` written out in three files). What is left of S074 is the last
-  cut of the smoke script's split, which waits for S072's cluster batch. No
-  behaviour change, no new threat.
+  `NAME_MASKED` written out in three files). What S074 still holds open: the
+  owner's three questions (coverage in CI, a size check, a pytest-level
+  timeout), the measurement run of the load-sensitive tests, and its small
+  rows. No behaviour change, no new threat.

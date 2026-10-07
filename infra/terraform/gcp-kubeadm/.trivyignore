@@ -1,0 +1,22 @@
+# Findings of the configuration scan that are accepted for this module, a scaffold
+# that is checked and never planned or applied (S079). The one acceptance is the
+# main session's decision of 2026-10-07, which the owner sees before anything is
+# ever applied and may overturn: the first scan of the module (every severity, the
+# repository's pinned image, offline) reported this one HIGH finding, which the
+# design cannot remove, and it is accepted with the reason below.
+#
+# One Trivy check ID per line, exactly `GCP-` and four digits and nothing after it
+# (no expiry, no file name, no wildcard, not the older AVD- spelling), and on the
+# line directly above it the reason: what the check says, why it holds here, and
+# what a production environment would do instead. The module's tests
+# (tests/meridian/test_gcp_kubeadm_scan.py) fail on an entry that breaks any of
+# this, on an entry the list there does not name, on an inline ignore comment in a
+# .tf file, on a Trivy configuration or YAML ignore file in this directory, and on
+# a second external address or subnet: an entry here applies to EVERY resource of
+# the directory, not to one. A finding fixed in the module is deleted from here.
+# The module's LOW and MEDIUM findings (flow logs, customer-managed disk keys) are
+# not accepted and not listed: the README names them as what an unfiltered run
+# reports, and the scan's recipe lists HIGH and CRITICAL only.
+
+# GCP-0031 (high), "Instance has a public IP allocated": the control plane has one external address, a reserved one attached to it when it is created. The design asks for the API server to be reachable from the owner's one address, which needs an address the owner can reach. It is the only external address in the module (the workers have none and leave through Cloud NAT), and the one firewall rule that admits anything from outside the nodes' subnet admits nothing but port 6443, from the owner's /32. The module is a scaffold that is never applied. Production: a control plane with no external address, reached through Identity-Aware Proxy or an internal load balancer (designed, not built).
+GCP-0031

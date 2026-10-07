@@ -68,8 +68,23 @@ export AZURE_CORE_ONLY_SHOW_ERRORS=true
 # the VPC's 10.0.0.0/16, which costs a reader of Terraform's and the aws CLI's
 # output nothing, where a miss would leak an address. An ARN may hold commas (a
 # session name can), so one comma followed by more ARN characters stays in it.
+#
+# A plan of instances (the self-managed cluster's module, S079) prints more, and
+# redact knows it: compressed user data (a gzip stream in base64 starts with
+# H4sI, and holds the boot scripts with the cluster's address in them) becomes
+# <user-data>, first of all so that no other rule cuts into it; the identifier of
+# an instance, an image, a VPC, a subnet, a security group and its rules, a route
+# table and its association, an internet gateway, an Elastic IP's allocation and
+# association, a network interface (and its attachment) and a volume becomes
+# <resource-id> (the prefix, a hyphen, and eight or seventeen lower-case
+# hexadecimal digits, a whole token: the rule runs twice, as the account's does,
+# for two side by side); and a host written with dashes that embeds an address
+# (ip- or ec2-, four numbers, an optional domain) becomes <host>, which the
+# dotted-quad rule cannot see. The instance profile's, the role's and the
+# parameter's ARN are <arn> already, with the account inside them.
 redact() {
   sed -E \
+    -e 's#H4sI[A-Za-z0-9+/]{40,}={0,2}#<user-data>#g' \
     -e 's#arn:aws[a-z-]*:[A-Za-z0-9-]+:[a-z0-9-]*:[0-9]*:[^][:space:]"'\''<>,()]+(,[^][:space:]"'\''<>,()]+)*#<arn>#g' \
     -e 's#([Ss][Ee][Cc][Rr][Ee][Tt][_-]?[Aa][Cc][Cc][Ee][Ss][Ss][_-]?[Kk][Ee][Yy])([[:space:]=:"'\'']{1,8})[A-Za-z0-9/+=]{16,}#\1\2<secret-access-key>#g' \
     -e 's#([Ss][Ee][Ss][Ss][Ii][Oo][Nn][_-]?[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Uu][Rr][Ii][Tt][Yy][_-]?[Tt][Oo][Kk][Ee][Nn])([[:space:]=:"'\'']{1,8})[A-Za-z0-9/+=%_-]{16,}#\1\2<session-token>#g' \
@@ -80,6 +95,9 @@ redact() {
     -e 's/(ABIA|ACCA|AGPA|AIDA|AIPA|AKIA|ANPA|ANVA|APKA|AROA|ASCA|ASIA)[A-Z0-9]{16,17}/<access-key-id>/g' \
     -e 's#[A-Za-z0-9.-]+\.(eks|rds)\.amazonaws\.com#<host>#g' \
     -e 's#oidc\.eks\.[a-z0-9-]+\.amazonaws\.com(/id/[A-Za-z0-9]+)?#<host>#g' \
+    -e 's#(^|[^A-Za-z0-9])(ip|ec2)-[0-9]{1,3}(-[0-9]{1,3}){3}(\.[A-Za-z0-9.-]+)?#\1<host>#g' \
+    -e 's#(^|[^A-Za-z0-9])(i|ami|vpc|subnet|sgr|sg|rtbassoc|rtb|igw|eipalloc|eipassoc|eni-attach|eni|vol)-[0-9a-f]{8}([0-9a-f]{9})?([^A-Za-z0-9]|$)#\1<resource-id>\4#g' \
+    -e 's#(^|[^A-Za-z0-9])(i|ami|vpc|subnet|sgr|sg|rtbassoc|rtb|igw|eipalloc|eipassoc|eni-attach|eni|vol)-[0-9a-f]{8}([0-9a-f]{9})?([^A-Za-z0-9]|$)#\1<resource-id>\4#g' \
     -e 's#(^|[^0-9.])[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?#\1<ip>#g' \
     -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/<email>/g' \
     -e 's/(^|[^A-Za-z0-9])[0-9]{12}([^A-Za-z0-9]|$)/\1<account>\2/g' \

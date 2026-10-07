@@ -1,0 +1,145 @@
+#!/bin/bash
+# A worker node's boot script (cloud-init user data), rendered by nodes.tf. It
+# has never run on a real node: tests/meridian/test_gcp_kubeadm_bootstrap.py runs
+# it against stand-in programs.
+#
+# It holds NO secret. The workers boot before the control plane has written the
+# join command, so the script polls the secret, with a bound, until its newest
+# version is a join command, and then joins. A secret with no version yet answers
+# the read with an error, which is a try like any other.
+#
+# THE SECRET'S TEXT IS NEVER RUN. Whoever can add a version to that secret (the
+# control plane's service account and the owner) must not thereby get a shell on a
+# worker. The value is matched against one strict pattern, the address in it must
+# be the control plane's own, and the token and the CA hash that the pattern
+# captured are handed to kubeadm as arguments. A value of any other shape, an
+# empty value included, is "not a join command yet".
+#
+# Four settings have defaults and may be set in the environment: a test shortens
+# them, and cloud-init sets none of them. Two are below the "Bounds" heading
+# (JOIN_ATTEMPTS and POLL_SECONDS: BOOT_ROOT, the root prefix a test points
+# elsewhere, is the third line there), two are in the text shared with the control
+# plane (CONTAINERD_ATTEMPTS and APT_ATTEMPTS).
+#
+# Terraform renders this file: every shell parameter expansion is written with
+# a doubled dollar sign, and no percent sign is followed by a brace.
+set -euo pipefail
+# The alphabet of the join pattern (node-common) is bytes: see the note there.
+export LC_ALL=C
+export HOME=/root
+
+ROLE='worker'
+LOCATION='${location}'
+SECRET_ID='${secret_id}'
+CONTROL_PLANE_ADDRESS='${control_plane_address}'
+API_PORT='${api_port}'
+
+# Bounds: a number of tries and the seconds between two of them.
+BOOT_ROOT="$${BOOT_ROOT:-}"
+# 240 tries of 10 seconds are 40 minutes of pauses, and the reads add to that
+# (each read is cut off at about 30 seconds in all, so about 44 minutes at the
+# least in an estimate, and more if every read is slow). The control plane is
+# created after the workers, and what only it spends before the join command exists
+# (the command is made at the very end of its script, by `kubeadm token create`)
+# can add up to more than the old 20 minutes: a test holds the window above the sum
+# of its bounds. The token lives an hour from that command, not from this boot, so
+# a longer poll costs nothing: a worker that gave up would bill the same.
+JOIN_ATTEMPTS="$${JOIN_ATTEMPTS:-240}"
+POLL_SECONDS="$${POLL_SECONDS:-10}"
+
+${common}
+
+# The newest version of the secret, decoded, on the standard output; the failure
+# of any step is a failed read. The response is JSON (the version's name and a
+# payload whose `data` is base64 encoded: the page "AccessSecretVersionResponse",
+# read 2026-10-07), and it is only ever matched against one pattern for that one
+# field, never run. A response with no such field (an error body is not shown:
+# curl is told to fail on it) is a failed read.
+read_the_secret() {
+  local response
+  make_the_auth_header || return 1
+  response=$(secret_api '/versions/latest:access') || return 1
+  [[ $response =~ \"data\"[[:space:]]*:[[:space:]]*\"([A-Za-z0-9+/=_-]*)\" ]] || {
+    echo 'the answer of Secret Manager holds no data field' >&2
+    return 1
+  }
+  printf '%s' "$${BASH_REMATCH[1]}" | base64 -d
+}
+
+# Reads the secret until it holds a join command for the control plane's
+# address, and leaves its token and hash in JOIN_TOKEN and JOIN_HASH. The value
+# is never printed: it is a secret for an hour, and it may be anything.
+#
+# A read that fails is a try like any other (a secret with no version answers
+# with a 404 until the control plane has written one), but curl's error stream goes
+# to a file in the private directory, and the line the worker gives up with
+# carries the last failed read's error: without it, a refusal (a 403, an expired
+# token, no metadata server) looks like a secret that was never written, and the
+# hour is spent not knowing. A read that succeeds clears it: the line describes the
+# last try, not an old one. The error is also logged when it is first seen and
+# whenever it changes (not on every try, so a refusal shows at the first try and
+# not at the end of the window), in the same masked form.
+#
+# Each read is bounded by curl's own cut-offs (five seconds for the metadata
+# server, twenty for Secret Manager), so a try cannot hang, and the bound here is
+# a number of tries.
+wait_for_the_join_command() {
+  local attempt value last_error='' logged_error=''
+  local error_file="$WORK_DIR/api-error"
+  for ((attempt = 1; attempt <= JOIN_ATTEMPTS; attempt++)); do
+    # A NUL byte cannot live in a bash variable: command substitution would drop
+    # it and print a warning of its own. tr turns each one into a byte (\001) that
+    # no join command holds, so the value is refused by the pattern, silently, and
+    # never read as the join command that is left when the NUL is dropped.
+    if value=$(read_the_secret 2>"$error_file" | tr '\000' '\001'); then
+      last_error=''
+      logged_error=''
+    else
+      value=''
+      last_error=$(the_last_error "$error_file")
+      if [[ $last_error != "$logged_error" ]]; then
+        log "the request to Secret Manager reported: $last_error"
+        logged_error=$last_error
+      fi
+    fi
+    if parse_join_command "$value" "$CONTROL_PLANE_ADDRESS:$API_PORT"; then
+      log "the secret holds a join command"
+      return 0
+    fi
+    log "the secret does not hold a join command yet (try $attempt of $JOIN_ATTEMPTS)"
+    sleep "$POLL_SECONDS"
+  done
+  die "gave up after $JOIN_ATTEMPTS tries: the secret $SECRET_ID never held a join command for $CONTROL_PLANE_ADDRESS:$API_PORT$${last_error:+; the last error of the request: $last_error}"
+}
+
+# Once per node, and the first thing the script does, before it installs or
+# restarts anything: a node that has a kubelet configuration has joined, and
+# nothing on it is touched.
+refuse_a_second_run() {
+  local kubelet_conf="$BOOT_ROOT/etc/kubernetes/kubelet.conf"
+  [[ ! -e $kubelet_conf ]] || die "this node already has $kubelet_conf, so it has joined: kubeadm join runs once per node"
+}
+
+# One shot, no retry. The join command may be older than the control plane (the
+# control plane was replaced and the secret, with the same address, kept), and
+# then it is well formed and kubeadm refuses it: the line says what to do.
+join_the_cluster() {
+  log "running kubeadm join"
+  kubeadm join "$CONTROL_PLANE_ADDRESS:$API_PORT" \
+    --token "$JOIN_TOKEN" \
+    --discovery-token-ca-cert-hash "sha256:$JOIN_HASH" ||
+    die "kubeadm join failed. The join command in the secret may be older than the control plane (the control plane was replaced and the secret kept): remove this environment and apply it again."
+}
+
+for setting in JOIN_ATTEMPTS POLL_SECONDS CONTAINERD_ATTEMPTS APT_ATTEMPTS; do
+  require_number "$setting"
+done
+
+refuse_a_second_run
+make_work_dir
+
+install_node
+read_the_project_id
+wait_for_the_join_command
+join_the_cluster
+log "done"
