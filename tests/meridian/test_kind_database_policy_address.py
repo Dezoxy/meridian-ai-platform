@@ -29,7 +29,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from test_kind_manifests import (
+from kindsupport import (
     COMMON_SH,
     DB_POLICY_FILE,
     DEPLOY_SH,

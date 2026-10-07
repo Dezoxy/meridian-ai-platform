@@ -12,7 +12,7 @@ import psycopg
 import typer
 
 from meridian.platform.cli.db import INGEST_DATABASE_URL_ENV
-from meridian.platform.common.audit import record_event
+from meridian.platform.common.audit import AuditEvent, record_event
 from meridian.platform.common.db import connect
 from meridian.platform.common.env import SettingsError, registry_dir_from
 from meridian.platform.common.tls import ClientTls
@@ -27,10 +27,23 @@ from meridian.platform.knowledge_mcp.settings import (
     GATEWAY_URL_ENV,
     gateway_url_problem,
 )
+from meridian.platform.knowledge_mcp.verify import (
+    Verification,
+    database_error_event,
+    verification_event,
+    verify_wordings,
+)
+from meridian.platform.knowledge_mcp.verify import refusal_event as verify_refusal
 from meridian.platform.registry import Registry
 from meridian.platform.registry.loader import RegistryError, load_registry
 
 APPLICATION_NAME = "meridian-knowledge-ingest"
+VERIFY_APPLICATION_NAME = "meridian-knowledge-verify"
+# `verify`: 0 the store is the manifest's, 1 it differs (a result, not a usage
+# error), 2 the check could not be made (a refused wording, a variable, the
+# database); a usage error is Typer's 2 as well, as in `meridian evaluation`.
+EXIT_DIFFERS = 1
+EXIT_UNVERIFIABLE = 2
 # Relative to the working directory, which is the repository root for `make`.
 DEFAULT_SOURCE = Path("data/synthetic")
 # The gateway gives a provider attempt 20 s, so one embedding call can take a
@@ -149,3 +162,88 @@ def ingest(
     typer.echo(f"chunks: {counts.chunks}")
     typer.echo(f"deployment: {counts.deployment}")
     typer.echo(f"input tokens: {counts.input_tokens}")
+
+
+def _cannot_verify(message: str) -> NoReturn:
+    typer.echo(f"ERROR {message}", err=True)
+    raise typer.Exit(code=EXIT_UNVERIFIABLE)
+
+
+def _audit_check(conn: psycopg.Connection, event: AuditEvent) -> str | None:
+    """End the read's transaction, write the check's one row and commit. The
+    name of the exception when the row could not be written, else None."""
+    try:
+        conn.rollback()
+        record_event(conn, event)
+        conn.commit()
+    except psycopg.Error as exc:
+        return type(exc).__name__
+    return None
+
+
+def _database_failure(exc: psycopg.Error) -> str:
+    # Only the server's own message: libpq's text can echo part of a bad DSN.
+    detail = exc.diag.message_primary or "no server message (connection failed?)"
+    return f"verification failed ({type(exc).__name__}): {detail}"
+
+
+def _report(result: Verification) -> None:
+    for difference in result.differences:
+        typer.echo(difference.line)
+    typer.echo(
+        f"clauses: {result.clauses} stored: {result.stored} "
+        f"differences: {len(result.differences)}"
+    )
+
+
+@app.command()
+def verify(
+    source: Annotated[
+        Path,
+        typer.Option(
+            "--from", help="The generator's output directory (manifest.json inside)."
+        ),
+    ] = DEFAULT_SOURCE,
+) -> None:
+    """Compare the stored clauses with the manifest-verified wordings (S067).
+
+    One line per difference, naming the clause and never its text; exit 0 when
+    there is none, 1 when there is, 2 when the check could not be made. Writes
+    one audit row and nothing else."""
+    dsn = os.environ.get(INGEST_DATABASE_URL_ENV)
+    if not dsn:
+        _cannot_verify(f"{INGEST_DATABASE_URL_ENV} is not set")
+    run_id = uuid.uuid4()
+    try:
+        with connect(dsn, VERIFY_APPLICATION_NAME) as conn:
+            try:
+                result = verify_wordings(conn, source)
+            except IngestError as exc:
+                unaudited = _audit_check(conn, verify_refusal(exc, run_id))
+                typer.echo(f"ERROR {exc}", err=True)
+                if unaudited:
+                    typer.echo(
+                        f"ERROR the refusal could not be audited ({unaudited})",
+                        err=True,
+                    )
+                raise typer.Exit(code=EXIT_UNVERIFIABLE) from None
+            except psycopg.Error as exc:
+                # The check's own query failed: the row is a fixed word, and the
+                # transaction is rolled back before it is written.
+                unaudited = _audit_check(conn, database_error_event(run_id))
+                failure = _database_failure(exc)
+                if unaudited:
+                    failure += f"; the failure could not be audited ({unaudited})"
+                _cannot_verify(failure)
+            # The read transaction is still open here. End it before printing:
+            # a standard output that stalls must not hold a transaction idle
+            # until the database ends the session (0031) and the audit row with it.
+            conn.rollback()
+            _report(result)
+            unaudited = _audit_check(conn, verification_event(result, run_id))
+    except psycopg.Error as exc:
+        _cannot_verify(_database_failure(exc))
+    if unaudited:
+        _cannot_verify(f"the check could not be audited ({unaudited})")
+    if result.differences:
+        raise typer.Exit(code=EXIT_DIFFERS)

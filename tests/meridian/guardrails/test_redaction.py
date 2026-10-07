@@ -4,11 +4,11 @@ import hashlib
 import json
 import random
 import re
-import time
 import uuid
 from collections.abc import Callable
 
 import pytest
+from cputime import MAX_GROWTH, growth
 
 from meridian.platform.guardrails import (
     CARD_PLACEHOLDER,
@@ -25,14 +25,9 @@ IBANS = ["GB82 WEST 1234 5698 7654 32", "HU42 1177 3016 1111 1018 0000 0000"]
 UNSPACED_IBAN = "GB82WEST12345698765432"
 CARDS = ["4111 1111 1111 1111", "5555 5555 5555 4444"]
 PHONES = ["+44 20 7946 0958", "+1 (202) 555-0123", "+36301234567"]
-# A linear redaction takes four times as long on a text four times as long; a
-# quadratic one sixteen times. The limit sits between them, at twice the linear
-# growth, so that timer noise does not fail a linear run. The best of RUNS
-# runs is taken at each size.
+# The two lengths of the linear-time test; cputime says how they are compared.
 SMALL_LENGTH = 10_000
 LARGE_LENGTH = 40_000
-MAX_GROWTH = 8
-RUNS = 5
 
 VALID = {
     "email": (
@@ -66,6 +61,9 @@ def test_the_placeholders_are_fixed_and_safe_inside_a_json_string() -> None:
         "iban": "[iban]",
         "card": "[card]",
         "phone": "[phone]",
+        "tax_number": "[tax-number]",
+        "account": "[account]",
+        "national_id": "[national-id]",
     }
     for placeholder in PLACEHOLDERS.values():
         assert json.loads(json.dumps(placeholder)) == placeholder
@@ -165,7 +163,7 @@ def test_a_card_before_a_year_is_still_replaced() -> None:
 LUHN_PASSING_NON_CARDS = [
     ("2021-01-10 22914", "2021011022914"),
     ("13 July 2026 12 34567 1000", "202612345671000"),
-    ("2026-07-13 06 30 1234561", "2026071306301234561"),
+    ("2026-07-13 06 39 1234562", "2026071306391234562"),
 ]
 
 
@@ -278,8 +276,6 @@ def test_a_phone_number_keeps_the_text_after_its_last_digit() -> None:
         "4111 1111 1111 1112",
         "GB82 WEST 1234 5698 7654 33",
         "HU42 1177 3016 1111 1018 0000 0001",
-        "06 30 123 4567",
-        "06301234567",
         "@anna_example is a handle",
         "write to anna@ soon",
         "anna@example",
@@ -350,7 +346,7 @@ def test_a_redaction_copies_the_mapping_it_is_given() -> None:
 def test_the_golden_set_and_the_wordings_pass_through_unchanged(
     claim_descriptions: dict[str, str], wording_texts: dict[str, str]
 ) -> None:
-    assert len(claim_descriptions) == 40
+    assert len(claim_descriptions) == 47
     assert len(wording_texts) == 4
 
     for text in [*claim_descriptions.values(), *wording_texts.values()]:
@@ -585,18 +581,6 @@ ADVERSARIAL: dict[str, list[Shape]] = {
 }
 
 
-def _best_time(text: str) -> float:
-    # The thread's CPU time, not the wall clock: under parallel workers (S054)
-    # the wall clock also counts the time this test waited for a CPU, which
-    # measured a linear run at 9 to 11 times.
-    best = float("inf")
-    for _ in range(RUNS):
-        started = time.thread_time()
-        redact(text)
-        best = min(best, time.thread_time() - started)
-    return best
-
-
 @pytest.mark.parametrize(
     "shape",
     [
@@ -610,6 +594,6 @@ def test_an_adversarial_text_is_redacted_in_linear_time(shape: Shape) -> None:
     assert len(small) >= SMALL_LENGTH - 20
     assert len(large) >= LARGE_LENGTH - 20
 
-    growth = _best_time(large) / _best_time(small)
+    grown = growth(redact, small, large)
 
-    assert growth < MAX_GROWTH
+    assert grown < MAX_GROWTH

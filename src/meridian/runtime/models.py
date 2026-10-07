@@ -28,7 +28,8 @@ def _input_is_small(value: dict[str, Any]) -> dict[str, Any]:
     return value
 
 
-# A run's input and a resume's value are held to the same size.
+# A run's input is held to a size; a resume's value must be empty, which is
+# smaller still.
 BoundedInput = Annotated[dict[str, Any], AfterValidator(_input_is_small)]
 
 
@@ -39,13 +40,23 @@ class RunRequest(WireModel):
     input: BoundedInput
 
 
+def _input_is_empty(value: dict[str, Any]) -> dict[str, Any]:
+    # The text names the rule and nothing of the value (T-03).
+    if value:
+        raise ValueError("a resume delivers no value: send {}")
+    return value
+
+
 class ResumeRequest(WireModel):
     """Resume a run that paused; ``tenant`` and ``reference`` must be the run's
-    own, and ``input`` is the value the graph's pause reads."""
+    own. A resume delivers no value (S069): a workload reads the decision from
+    its own record, as the triage's pause does (T-31), so ``input`` must be the
+    empty object. LangGraph may replay the value of a failed resumed leg at the
+    next resume, so a value a caller sent could be read as a later decision."""
 
     tenant: BoundedEntityId
     reference: Reference
-    input: BoundedInput
+    input: Annotated[dict[str, Any], AfterValidator(_input_is_empty)]
 
 
 class RunResponse(WireModel):

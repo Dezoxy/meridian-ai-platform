@@ -120,7 +120,9 @@ class TriageProposal(WireModel):
     def _check_model_call(self) -> None:
         # An unavailable assessment may follow a call or not: a user message
         # over the gateway's limit is never sent, a guardrail stops the call
-        # and a filtered one gets no answer.
+        # and a filtered one gets no answer. A filtered one that was a refused
+        # prompt has no drafter; one whose completion the filter withheld has,
+        # as the provider ran (S069).
         if self.assessment == "not_needed" and self.drafted_by is not None:
             raise ValueError("drafted_by is empty when no assessment was needed")
         if self.assessment in ASSESSED and self.drafted_by is None:

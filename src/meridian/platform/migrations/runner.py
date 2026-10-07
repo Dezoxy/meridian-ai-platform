@@ -8,6 +8,7 @@ so a change goes in a new file.
 import hashlib
 import re
 from importlib import resources
+from typing import NamedTuple
 
 import psycopg
 from psycopg.pq import TransactionStatus
@@ -27,9 +28,86 @@ CREATE TABLE IF NOT EXISTS public.meridian_migrations (
 """
 
 
+SWEEP_ROLE = "claims_sweep"
+UPKEEP_ROLE = "gateway_upkeep"
+# The roles that reach ``claims_sweep`` through any chain of grants (``members``)
+# and the roles it reaches (``memberships``). UNION, not UNION ALL, so a role
+# reached twice is counted once. A role that does not exist has no rows.
+#
+# A grant counts as a member only when it grants something: its ``inherit_option``
+# or its ``set_option`` is true (PostgreSQL 16 and later). A row with ADMIN only,
+# which a role with CREATEROLE leaves for itself when it creates a role, gives its
+# holder no use of the role's grants, so on a managed database it must not fail
+# every migrate. SET counts although a ``SET ROLE`` session is confined by name
+# (its current user is the sweep's): that is the fail-closed reading. The other
+# direction (``memberships``) counts every row on purpose: a row of any kind
+# hands the sweep's role another role's standing, and the options are ignored.
+# ``upkeep_memberships`` uses that direction too.
+SWEEP_MEMBERSHIP_QUERY = """
+WITH RECURSIVE
+members(oid) AS (
+    SELECT m.member FROM pg_auth_members m
+    JOIN pg_roles r ON r.oid = m.roleid
+    WHERE r.rolname = %(role)s AND (m.inherit_option OR m.set_option)
+    UNION
+    SELECT m.member FROM pg_auth_members m JOIN members ON m.roleid = members.oid
+    WHERE m.inherit_option OR m.set_option
+),
+memberships(oid) AS (
+    SELECT m.roleid FROM pg_auth_members m
+    JOIN pg_roles r ON r.oid = m.member WHERE r.rolname = %(role)s
+    UNION
+    SELECT m.roleid FROM pg_auth_members m
+    JOIN memberships ON m.member = memberships.oid
+)
+SELECT (SELECT count(*) FROM members), (SELECT count(*) FROM memberships)
+"""
+
+
+class SweepMemberships(NamedTuple):
+    """How many roles are members of the sweep's role, and how many roles the
+    sweep's role is a member of (T-77)."""
+
+    members: int
+    memberships: int
+
+
 class MigrationError(Exception):
     """An applied migration no longer matches the file in the package, or the
     connection was not in a state the runner can rely on."""
+
+
+def sweep_memberships(
+    conn: psycopg.Connection, role: str = SWEEP_ROLE
+) -> SweepMemberships:
+    """Count the roles that are members of ``role``, directly or through a
+    chain, and the roles ``role`` is a member of.
+
+    The sweep's triggers confine a session by the session user's and the current
+    user's NAME, so a login made a member of ``claims_sweep`` holds its grants
+    and is not confined; ``meridian db migrate`` calls this last and fails on a
+    finding. A role that does not exist is no finding. It reads the catalog
+    only and leaves the transaction to the caller.
+    """
+    # An aggregate query returns exactly one row.
+    [(members, memberships)] = conn.execute(
+        SWEEP_MEMBERSHIP_QUERY, {"role": role}
+    ).fetchall()
+    return SweepMemberships(members=members, memberships=memberships)
+
+
+def upkeep_memberships(conn: psycopg.Connection, role: str = UPKEEP_ROLE) -> int:
+    """Count the roles ``role`` is a member of, directly or through a chain.
+
+    The audit table's trigger (0028) lets a removal through for a session whose
+    session user is ``gateway_upkeep`` and whose current user is the table's
+    owner; no such session exists while the upkeep role is a member of no role.
+    0020's guard holds that when the file is applied and ``meridian db migrate``
+    calls this last, at every run. Members OF the role are no finding: they fail
+    closed at the trigger. A role that does not exist is no finding. It reads the
+    catalog only and leaves the transaction to the caller.
+    """
+    return sweep_memberships(conn, role).memberships
 
 
 def _packaged_files() -> list[tuple[str, str]]:
@@ -94,8 +172,17 @@ def _checksum(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def apply_migrations(conn: psycopg.Connection) -> list[str]:
+def apply_migrations(
+    conn: psycopg.Connection, files: list[tuple[str, str]] | None = None
+) -> list[str]:
     """Apply every migration not yet applied; return the names applied.
+
+    ``files`` is for the tests' template builder alone: a list of
+    ``(name, SQL text)`` pairs, applied in the order given, so a test that
+    patches ``migration_files`` cannot change what the template holds.
+    ``meridian db migrate`` passes none, and nothing outside the tests may: a
+    caller's list could apply files the package does not hold. ``None`` reads
+    the packaged files through ``migration_files``.
 
     Raises ``MigrationError`` when an applied file's checksum changed or the
     connection has a transaction open (``conn.transaction()`` would then open
@@ -105,7 +192,10 @@ def apply_migrations(conn: psycopg.Connection) -> list[str]:
     """
     if conn.info.transaction_status != TransactionStatus.IDLE:
         raise MigrationError("the connection has an open transaction; pass an idle one")
-    files = migration_files()
+    if files is None:
+        files = migration_files()
+    else:
+        _refuse_shared_numbers(files)
     with conn.transaction():
         # The lock comes first: two runners on an empty database would
         # otherwise race in CREATE TABLE IF NOT EXISTS and one would fail.

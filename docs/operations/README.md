@@ -87,8 +87,9 @@ needs it, never to clear a fault nobody has looked at.
   provider.
 - [Budget exhaustion](runbooks/budget-exhaustion.md): a tenant is refused
   for its token budget or its cost quota; also how `meridian gateway`
-  closes a reservation a dead process left, credits a tenant and expires
-  old ledger rows.
+  closes a reservation a dead process left, credits a tenant, expires old
+  ledger rows and expires old audit rows (no period is set and nothing is
+  scheduled).
 - [Database failure](runbooks/database-failure.md): the Platform Database
   is not ready or is lost; also where a stale sweep leads.
 - [Rollback](runbooks/rollback.md): a release or a registry change made
@@ -99,6 +100,8 @@ needs it, never to clear a fault nobody has looked at.
   close to its end and was not renewed, or is not Ready.
 - [Telemetry missing](runbooks/telemetry-missing.md): a service's metrics
   stopped arriving while it does the work they count (S064).
+- [Knowledge store](runbooks/knowledge-store.md): `meridian knowledge verify`
+  names a stored policy clause that is not the manifest's wording (S067).
 - [Rate store](runbooks/rate-store.md): the store of the Model Gateway's rate
   windows is down or refuses the gateway, so every model call is answered 503
   `rate-store-unavailable`; also a script that hangs there and a rotated

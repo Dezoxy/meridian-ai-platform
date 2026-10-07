@@ -9,6 +9,7 @@ from servicesupport import REPO_ROOT
 from typer.testing import CliRunner
 
 from meridian.platform.cli import app
+from meridian.platform.cli import db as db_command
 from meridian.platform.cli.db import (
     MIGRATIONS_DATABASE_URL_ENV,
     SEED_DATABASE_URL_ENV,
@@ -56,6 +57,27 @@ def test_migrate_prints_each_applied_name_then_reports_up_to_date(
     assert second.exit_code == 0, second.output
     assert second.stdout.splitlines() == ["migrations: up to date"]
     assert empty_database.passwords[OWNER] not in first.output + second.output
+
+
+def test_migrate_calls_the_runner_with_the_connection_alone(
+    monkeypatch: pytest.MonkeyPatch, empty_database: DatabaseHandle
+) -> None:
+    monkeypatch.setenv(MIGRATIONS_DATABASE_URL_ENV, empty_database.dsn(OWNER))
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def spy(*args: object, **kwargs: object) -> list[str]:
+        calls.append((args, kwargs))
+        return []
+
+    monkeypatch.setattr(db_command, "apply_migrations", spy)
+
+    result = runner.invoke(app, ["db", "migrate"])
+
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert len(args) == 1
+    assert kwargs == {}
 
 
 def test_seed_policies_without_the_variable_exits_1_and_names_it(
@@ -109,10 +131,10 @@ def test_seed_policies_prints_the_two_counts_and_commits(
     second = runner.invoke(app, ["db", "seed-policies", "--from", source])
 
     assert first.exit_code == 0, first.output
-    assert first.stdout.splitlines() == ["policies: 50", "claim history: 44"]
-    assert second.stdout.splitlines() == ["policies: 50", "claim history: 44"]
+    assert first.stdout.splitlines() == ["policies: 56", "claim history: 51"]
+    assert second.stdout.splitlines() == ["policies: 56", "claim history: 51"]
     with connect(fresh_database.dsn(OWNER), "test") as conn:
-        assert conn.execute("SELECT count(*) FROM policy.policies").fetchone() == (50,)
+        assert conn.execute("SELECT count(*) FROM policy.policies").fetchone() == (56,)
     assert fresh_database.passwords[SEED_ROLE] not in first.output + second.output
 
 
@@ -125,7 +147,7 @@ def test_seed_policies_defaults_to_data_synthetic(
     result = runner.invoke(app, ["db", "seed-policies"])
 
     assert result.exit_code == 0, result.output
-    assert result.stdout.splitlines() == ["policies: 50", "claim history: 44"]
+    assert result.stdout.splitlines() == ["policies: 56", "claim history: 51"]
 
 
 def test_seed_policies_refuses_a_source_that_is_not_synthetic_and_writes_nothing(

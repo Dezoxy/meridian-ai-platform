@@ -308,20 +308,69 @@ def test_an_approved_claim_whose_proposal_has_no_amount_is_paid_nothing(
 
 @pytest.mark.parametrize(
     "state",
-    ["submitted", "triaging", "awaiting_adjuster", "documents_requested", "withdrawn"],
+    [
+        "submitted",
+        "triaging",
+        "triage_failed",
+        "awaiting_adjuster",
+        "documents_requested",
+    ],
 )
-def test_a_claim_that_is_not_decided_is_not_an_entry(
+def test_a_claim_that_is_still_open_is_an_entry_paid_nothing(
     world: World, server: Any, state: str
 ) -> None:
-    add_decided(world, "CLM-0002", state, paid=500)
+    # S067: claims filed before any is decided count towards frequent_claims.
+    # The proposal's amount is not an open claim's payment.
+    add_decided(world, "CLM-0002", state, loss_date="2026-06-01", paid=500)
+
+    assert history(server, world.run_id, POLICY) == {
+        "entries": [
+            {
+                "history_id": "CLM-0002",
+                "loss_date": "2026-06-01",
+                "peril": "storm",
+                "paid_amount": 0,
+                "status": state,
+            }
+        ],
+        "truncated": False,
+    }
+
+
+def test_a_withdrawn_claim_is_not_an_entry(world: World, server: Any) -> None:
+    add_decided(world, "CLM-0002", "withdrawn", paid=500)
 
     assert history(server, world.run_id, POLICY) == {"entries": [], "truncated": False}
 
 
-def test_a_claim_whose_triage_failed_is_not_an_entry(world: World, server: Any) -> None:
-    add_decided(world, "CLM-0002", "triage_failed")
+def test_an_open_claim_of_another_tenant_or_policy_or_the_run_s_own_is_not_an_entry(
+    world: World, server: Any
+) -> None:
+    add_decided(world, "CLM-0002", "submitted", tenant=OTHER_TENANT)
+    add_decided(world, "CLM-0003", "submitted", policy_number="POL-0002")
+    with connect(world.db.dsn(OWNER), "test-seed") as conn:
+        conn.execute(
+            "UPDATE claims.claims SET state = 'triaging' WHERE claim_id = %s",
+            (world.claim_id,),
+        )
 
-    assert history(server, world.run_id, POLICY)["entries"] == []
+    assert history(server, world.run_id, POLICY) == {"entries": [], "truncated": False}
+
+
+def test_open_and_decided_claims_are_in_one_order_newest_loss_first(
+    world: World, server: Any
+) -> None:
+    add_decided(world, "CLM-0002", "approved", loss_date="2026-05-01", paid=5)
+    add_decided(world, "CLM-0003", "documents_requested", loss_date="2026-06-01")
+    add_decided(world, "CLM-0004", "triaging", loss_date="2026-04-01")
+
+    entries = history(server, world.run_id, POLICY)["entries"]
+
+    assert [(e["history_id"], e["status"]) for e in entries] == [
+        ("CLM-0003", "documents_requested"),
+        ("CLM-0002", "approved"),
+        ("CLM-0004", "triaging"),
+    ]
 
 
 def test_a_decided_claim_of_another_tenant_on_the_same_policy_is_not_an_entry(
@@ -427,6 +476,7 @@ def test_an_entry_of_a_decided_claim_holds_no_word_of_the_claimant(
 ) -> None:
     add_decided(world, "CLM-0002", "approved", paid=500)
     add_decided(world, "CLM-0003", "rejected")
+    add_decided(world, "CLM-0004", "awaiting_adjuster")
 
     result = run_call(
         server,
@@ -436,17 +486,17 @@ def test_an_entry_of_a_decided_claim_holds_no_word_of_the_claimant(
     )
 
     entries = result.structured_content["entries"]
-    assert len(entries) == 2
+    assert len(entries) == 3
     assert all(set(entry) == ENTRY_KEYS for entry in entries)
     carried = text_of(result) + json.dumps(result.structured_content)
     for canary in (CANARY_NAME, CANARY_EMAIL, CANARY_DESCRIPTION, "CANARY"):
         assert canary not in carried
 
 
-def test_a_decided_claim_without_a_loss_date_is_left_out_and_the_history_truncated(
+def test_a_claim_without_a_loss_date_is_left_out_and_the_history_truncated(
     world: World, server: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
-    add_decided(world, "CLM-0002", "approved", loss_date="not a date")
+    add_decided(world, "CLM-0002", "submitted", loss_date="not a date")
     add_decided(world, "CLM-0003", "approved", paid=7)
 
     with caplog.at_level(logging.WARNING, logger=tools.__name__):
@@ -457,7 +507,7 @@ def test_a_decided_claim_without_a_loss_date_is_left_out_and_the_history_truncat
     # One warning: the run and the count, nothing of the row (T-03).
     (record,) = [r for r in caplog.records if r.name == tools.__name__]
     assert f"run {world.run_id}" in record.getMessage()
-    assert "left out 1 decided claim" in record.getMessage()
+    assert "left out 1 claims of the claims store" in record.getMessage()
     assert "CLM-0002" not in caplog.text
     assert "not a date" not in caplog.text
 

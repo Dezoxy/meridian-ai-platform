@@ -151,6 +151,490 @@
 {"expect":"none","command":"grep -n state.sh README.md"}
 {"expect":"none","command":"cd infra/terraform && shellcheck state.sh"}
 {"expect":"none","command":"make azure-state-of-the-art"}
+{"expect":"deny","command":"make aws-destroy"}
+{"expect":"deny","command":"make -C . aws-destroy"}
+{"expect":"deny","command":"make -n aws-destroy"}
+{"expect":"deny","command":"gmake aws-destroy"}
+{"expect":"deny","command":"make 'aws-destroy'"}
+{"expect":"deny","command":"make \"aws-destroy\""}
+{"expect":"deny","command":"make aws-validate aws-destroy"}
+{"expect":"deny","command":"yes | make aws-destroy"}
+{"expect":"deny","command":"env FOO=1 make aws-destroy"}
+{"expect":"deny","command":"time make aws-destroy"}
+{"expect":"deny","command":"bash -c \"make aws-destroy\""}
+{"expect":"deny","command":"sh -c 'cd . && make aws-destroy'"}
+{"expect":"deny","command":"infra/terraform/aws.sh destroy"}
+{"expect":"deny","command":"bash infra/terraform/aws.sh destroy"}
+{"expect":"deny","command":"cd infra/terraform && ./aws.sh destroy"}
+{"expect":"deny","command":"cd infra/terraform && bash aws.sh destroy"}
+{"expect":"deny","command":"bash -c \"infra/terraform/aws.sh destroy\""}
+{"expect":"deny","command":"env AWS_REGION=eu-central-1 infra/terraform/aws.sh destroy"}
+{"expect":"deny","command":"echo | xargs infra/terraform/aws.sh destroy"}
+{"expect":"deny","command":"infra/terraform/aws.sh \"destroy\""}
+{"expect":"none","command":"make aws-destroyx"}
+{"expect":"none","command":"make aws-destroy-notes"}
+{"expect":"none","command":"grep -n aws-destroy Makefile"}
+{"expect":"none","command":"grep -n destroy infra/terraform/aws.sh"}
+{"expect":"none","command":"shellcheck infra/terraform/aws.sh infra/terraform/common.sh"}
+{"expect":"none","command":"bash -n infra/terraform/aws.sh"}
+{"expect":"none","command":"git commit -m \"deny make aws-destroy and aws.sh destroy\""}
+{"expect":"none","command":"git commit -m x -m \"the owner runs make aws-destroy\""}
+{"expect":"none","command":"gh pr create --title t --body \"make aws-destroy is the owner's: infra/terraform/aws.sh destroy\""}
+{"expect":"deny","command":"script -qec 'make aws-apply' /dev/null"}
+{"expect":"deny","command":"unbuffer make aws-plan"}
+{"expect":"deny","command":"expect -c 'spawn infra/terraform/aws.sh plan'"}
+{"expect":"deny","command":"setsid -w infra/terraform/aws.sh apply"}
+{"expect":"deny","command":"socat - EXEC:'make aws-apply',pty"}
+{"expect":"deny","command":"python3 -c \"import pty; pty.spawn(['make', 'aws-destroy'])\""}
+{"expect":"deny","command":"python3 -c \"import pty; pty.spawn(['infra/terraform/aws.sh', 'plan'])\""}
+{"expect":"none","command":"uv run pytest tests/meridian/test_aws_script.py -q -n 3"}
+{"expect":"none","command":"bash infra/terraform/aws.sh validate"}
+{"expect":"none","command":"python3 -c \"import pty\""}
+{"expect":"deny","command":"bash -x infra/terraform/aws.sh validate"}
+{"expect":"deny","command":"bash -xv infra/terraform/aws.sh plan"}
+{"expect":"deny","command":"bash -v infra/terraform/aws.sh validate"}
+{"expect":"deny","command":"sh -x ./infra/terraform/aws.sh validate"}
+{"expect":"deny","command":"bash -ex infra/terraform/aws.sh validate"}
+{"expect":"deny","command":"bash -o xtrace infra/terraform/aws.sh validate"}
+{"expect":"deny","command":"set -x; make aws-validate"}
+{"expect":"deny","command":"set -o xtrace && make aws-scan"}
+{"expect":"deny","command":"SHELLOPTS=xtrace make aws-validate"}
+{"expect":"deny","command":"BASH_XTRACEFD=2 make aws-scan"}
+{"expect":"deny","command":"BASH_ENV=/tmp/stand-in.sh make aws-validate"}
+{"expect":"deny","command":"env BASH_ENV=/tmp/stand-in.sh make aws-scan"}
+{"expect":"deny","command":"ENV=/tmp/stand-in.sh sh infra/terraform/aws.sh validate"}
+{"expect":"deny","command":"PS4='+ ' bash infra/terraform/aws.sh validate"}
+{"expect":"deny","command":"export SHELLOPTS=xtrace && make aws-validate"}
+{"expect":"none","command":"bash -n infra/terraform/aws.sh && echo ok"}
+{"expect":"none","command":"set -eu; make aws-validate"}
+{"expect":"none","command":"set +x; make aws-validate"}
+{"expect":"none","command":"bash -c 'make aws-validate'"}
+{"expect":"none","command":"shellcheck -x infra/terraform/aws.sh"}
+{"expect":"none","command":"bash -x some-other-script.sh"}
+{"expect":"none","command":"ENV=prod ./deploy-docs.sh"}
+{"expect":"deny","command":"TF_LOG=trace make aws-validate"}
+{"expect":"deny","command":"TF_CLI_ARGS=-lock=false make aws-scan"}
+{"expect":"deny","command":"TF_VAR_node_count=5 make aws-plan"}
+{"expect":"deny","command":"TF_CLI_ARGS_plan=-lock=false infra/terraform/aws.sh plan"}
+{"expect":"deny","command":"TF_WORKSPACE=w terraform -chdir=infra/terraform/aws plan"}
+{"expect":"deny","command":"TF_LOG=debug terraform plan"}
+{"expect":"deny","command":"env TF_DATA_DIR=/tmp/x terraform init"}
+{"expect":"deny","command":"TF_CLI_CONFIG_FILE=/tmp/x tofu validate"}
+{"expect":"deny","command":"AWS_ENDPOINT_URL=http://127.0.0.1:1 aws sts get-caller-identity"}
+{"expect":"deny","command":"AWS_ENDPOINT_URL_STS=http://127.0.0.1:1 make aws-plan"}
+{"expect":"deny","command":"export TF_LOG=TRACE && make aws-plan"}
+{"expect":"deny","command":"TF_VAR_x=1 bash infra/terraform/aws.sh validate"}
+{"expect":"none","command":"AWS_REGION=eu-central-1 aws sts get-caller-identity"}
+{"expect":"none","command":"AWS_PROFILE=stand-in aws sts get-caller-identity"}
+{"expect":"none","command":"echo TF_LOG=1"}
+{"expect":"none","command":"git commit -m \"TF_LOG=1 terraform plan is refused\""}
+{"expect":"none","command":"TF_DIR=x ls infra/terraform/aws docs"}
+{"expect":"none","command":"env | grep TF_VAR"}
+{"expect":"deny","command":"terraform -chdir=infra/terraform/aws apply"}
+{"expect":"deny","command":"terraform -chdir=./infra/terraform/aws apply aws.tfplan"}
+{"expect":"deny","command":"terraform -chdir=infra/terraform/aws destroy"}
+{"expect":"deny","command":"terraform -chdir=infra/terraform/aws plan -out=x.tfplan"}
+{"expect":"deny","command":"terraform -chdir=infra/terraform/aws plan -input=false -out x.tfplan"}
+{"expect":"deny","command":"terraform -chdir=infra/terraform/aws import aws_vpc.main vpc-0abc"}
+{"expect":"deny","command":"terraform -chdir=infra/terraform/aws state mv a b"}
+{"expect":"deny","command":"terraform -chdir=infra/terraform/aws state rm aws_vpc.main"}
+{"expect":"deny","command":"terraform -chdir=infra/terraform/aws state push x.tfstate"}
+{"expect":"deny","command":"terraform -chdir=infra/terraform/aws force-unlock 1234"}
+{"expect":"deny","command":"terraform -chdir=infra/terraform/aws workspace new w1"}
+{"expect":"ask","command":"terraform -chdir=infra/terraform/aws workspace select default"}
+{"expect":"deny","command":"cd infra/terraform/aws && terraform apply"}
+{"expect":"deny","command":"cd infra/terraform/aws; terraform apply -auto-approve"}
+{"expect":"deny","command":"cd /srv/x/infra/terraform/aws && terraform workspace new x"}
+{"expect":"deny","command":"cd infra/terraform && terraform -chdir=aws apply"}
+{"expect":"deny","command":"cd infra/terraform && cd aws && terraform state rm x"}
+{"expect":"deny","command":"tofu -chdir=infra/terraform/aws apply"}
+{"expect":"deny","command":"cd infra/terraform/aws && tofu import a b"}
+{"expect":"deny","command":"terraform -chdir=\"infra/terraform/aws\" apply"}
+{"expect":"none","command":"terraform -chdir=infra/terraform/aws validate"}
+{"expect":"none","command":"terraform -chdir=infra/terraform/aws fmt -check -recursive"}
+{"expect":"none","command":"terraform -chdir=infra/terraform/aws init -backend=false -lockfile=readonly"}
+{"expect":"none","command":"terraform -chdir=infra/terraform/aws providers lock -platform=linux_amd64 -platform=darwin_arm64"}
+{"expect":"none","command":"terraform -chdir=infra/terraform/foundation plan -out=x.tfplan"}
+{"expect":"ask","command":"terraform -chdir=infra/terraform/foundation apply"}
+{"expect":"ask","command":"terraform -chdir=infra/terraform/azure/envs/demo apply"}
+{"expect":"ask","command":"terraform -chdir=infra/terraform/azure/envs/demo import a b"}
+{"expect":"ask","command":"make aws-plan"}
+{"expect":"ask","command":"make -C . aws-plan"}
+{"expect":"ask","command":"make aws-apply"}
+{"expect":"ask","command":"gmake aws-apply"}
+{"expect":"ask","command":"make 'aws-apply'"}
+{"expect":"ask","command":"make aws-validate aws-plan"}
+{"expect":"ask","command":"env FOO=1 make aws-apply"}
+{"expect":"ask","command":"time make aws-plan"}
+{"expect":"ask","command":"bash -c \"make aws-apply\""}
+{"expect":"ask","command":"infra/terraform/aws.sh plan"}
+{"expect":"ask","command":"bash infra/terraform/aws.sh apply"}
+{"expect":"ask","command":"cd infra/terraform && ./aws.sh apply"}
+{"expect":"ask","command":"cd infra/terraform && bash aws.sh plan"}
+{"expect":"ask","command":"sh -c './aws.sh apply'"}
+{"expect":"ask","command":"make aws-scan TRIVY_IMAGE=stand-in/trivy:1"}
+{"expect":"ask","command":"make TRIVY_IMAGE=stand-in/trivy:1 aws-scan"}
+{"expect":"ask","command":"gmake aws-scan TRIVY_IMAGE=stand-in/trivy:1"}
+{"expect":"ask","command":"make alerts PROMTOOL_IMAGE=stand-in/promtool:1"}
+{"expect":"none","command":"make aws-validate"}
+{"expect":"none","command":"make aws-scan"}
+{"expect":"none","command":"make -C . aws-validate aws-scan"}
+{"expect":"none","command":"make alerts"}
+{"expect":"none","command":"TRIVY_IMAGE=stand-in/trivy:1 make aws-scan"}
+{"expect":"none","command":"infra/terraform/aws.sh validate"}
+{"expect":"none","command":"cd infra/terraform && ./aws.sh validate"}
+{"expect":"none","command":"make aws-planx"}
+{"expect":"none","command":"git commit -m \"make aws-apply asks, make aws-plan asks\""}
+{"expect":"none","command":"git diff --stat -- infra/terraform/aws.sh docs/plan"}
+{"expect":"none","command":"grep -n plan infra/terraform/aws.sh"}
+{"expect":"none","command":"wc -l infra/terraform/aws.sh plan.md"}
+{"expect":"none","command":"git add infra/terraform/aws infra/terraform/aws.sh Makefile"}
+{"expect":"none","command":"git log --oneline -- infra/terraform/aws.sh"}
+{"expect":"none","command":"make azure-plan"}
+{"expect":"ask","command":"make azure-apply"}
+{"expect":"ask","command":"terraform -chdir=infra/terraform/aws state list"}
+{"expect":"ask","command":"terraform -chdir=infra/terraform/aws state show aws_vpc.main"}
+{"expect":"ask","command":"terraform -chdir=infra/terraform/aws state pull"}
+{"expect":"ask","command":"terraform -chdir=infra/terraform/aws output -json"}
+{"expect":"ask","command":"terraform -chdir=infra/terraform/aws show aws.tfplan"}
+{"expect":"ask","command":"terraform -chdir=infra/terraform/aws console"}
+{"expect":"ask","command":"terraform -chdir=infra/terraform/aws refresh"}
+{"expect":"ask","command":"cd infra/terraform/aws && terraform output"}
+{"expect":"ask","command":"cd infra/terraform/aws && tofu show aws.tfplan"}
+{"expect":"ask","command":"terraform show ~/.local/state/meridian-aws/aws.tfstate"}
+{"expect":"ask","command":"terraform -chdir=infra/terraform/foundation plan -auto-approve"}
+{"expect":"ask","command":"tofu -chdir=infra/terraform/foundation plan -auto-approve"}
+{"expect":"none","command":"terraform -chdir=infra/terraform/foundation output -json"}
+{"expect":"none","command":"terraform -chdir=infra/terraform/foundation state list"}
+{"expect":"none","command":"terraform show x.tfplan"}
+{"expect":"deny","command":"aws iam create-access-key --user-name stand-in"}
+{"expect":"deny","command":"aws iam create-service-specific-credential --user-name stand-in --service-name x"}
+{"expect":"deny","command":"aws iam reset-service-specific-credential --service-specific-credential-id x"}
+{"expect":"deny","command":"aws rds generate-db-auth-token --hostname stand-in --port 5432 --username u"}
+{"expect":"deny","command":"aws kms decrypt --ciphertext-blob fileb://x --output text"}
+{"expect":"deny","command":"aws sso get-role-credentials --role-name r --account-id 111111111111 --access-token t"}
+{"expect":"deny","command":"aws --region eu-central-1 kms decrypt --ciphertext-blob fileb://x"}
+{"expect":"deny","command":"AWS_REGION=eu-central-1 aws kms decrypt --ciphertext-blob fileb://x"}
+{"expect":"deny","command":"docker run --rm amazon/aws-cli kms decrypt --ciphertext-blob fileb://x"}
+{"expect":"deny","command":"docker run --rm public.ecr.aws/aws-cli/aws-cli:2.1.0 iam create-access-key"}
+{"expect":"deny","command":"uvx --from awscli aws kms decrypt --ciphertext-blob fileb://x"}
+{"expect":"none","command":"aws kms decrypt --help"}
+{"expect":"none","command":"aws iam list-access-keys --user-name stand-in"}
+{"expect":"deny","command":"aws eks delete-cluster --name stand-in"}
+{"expect":"deny","command":"aws eks delete-nodegroup --cluster-name stand-in --nodegroup-name n"}
+{"expect":"deny","command":"aws --region eu-central-1 eks delete-cluster --name stand-in"}
+{"expect":"deny","command":"aws rds delete-db-instance --db-instance-identifier stand-in --skip-final-snapshot"}
+{"expect":"deny","command":"aws rds modify-db-instance --db-instance-identifier stand-in --skip-final-snapshot"}
+{"expect":"deny","command":"aws ec2 terminate-instances --instance-ids i-0abc"}
+{"expect":"deny","command":"aws s3 rm s3://stand-in --recursive"}
+{"expect":"deny","command":"aws s3 rb s3://stand-in --force"}
+{"expect":"deny","command":"aws ecr batch-delete-image --repository-name stand-in --image-ids imageTag=x"}
+{"expect":"deny","command":"aws secretsmanager delete-secret --secret-id stand-in --force-delete-without-recovery"}
+{"expect":"deny","command":"aws secretsmanager rotate-secret --secret-id stand-in --force-delete-without-recovery"}
+{"expect":"deny","command":"aws ecr delete-repository --repository-name stand-in --force"}
+{"expect":"deny","command":"aws sqs purge-queue --queue-url stand-in"}
+{"expect":"deny","command":"aws ssm force-delete-x --name stand-in"}
+{"expect":"deny","command":"AWS_PROFILE=stand-in aws ec2 delete-vpc --vpc-id vpc-0abc"}
+{"expect":"deny","command":"docker run --rm amazon/aws-cli eks delete-cluster --name stand-in"}
+{"expect":"deny","command":"uvx --from awscli aws s3 rb s3://stand-in"}
+{"expect":"deny","command":"x=$(aws eks delete-cluster --name stand-in)"}
+{"expect":"none","command":"aws eks delete-cluster --help"}
+{"expect":"none","command":"aws eks describe-cluster --name stand-in --query cluster.status"}
+{"expect":"none","command":"aws ec2 describe-vpcs --filters Name=tag:Name,Values=delete-me"}
+{"expect":"none","command":"git add infra/terraform/aws delete-notes.md"}
+{"expect":"none","command":"git commit -m \"deny aws eks delete-cluster and aws s3 rb\""}
+{"expect":"ask","command":"aws ec2 run-instances --instance-type p5.48xlarge --count 10"}
+{"expect":"none","command":"aws s3 ls"}
+{"expect":"none","command":"aws s3 ls s3://stand-in --recursive"}
+{"expect":"none","command":"aws configure get region"}
+{"expect":"none","command":"aws ssm get-parameter --name stand-in"}
+{"expect":"none","command":"aws ssm get-parameters-by-path --path /stand-in"}
+{"expect":"none","command":"aws secretsmanager get-secret-value -h"}
+{"expect":"ask","command":"aws s3 cp x s3://stand-in/x"}
+{"expect":"ask","command":"aws s3 sync x s3://stand-in"}
+{"expect":"ask","command":"aws eks update-kubeconfig --name stand-in"}
+{"expect":"ask","command":"aws ec2 create-vpc --cidr-block 10.0.0.0/16"}
+{"expect":"ask","command":"aws iam attach-role-policy --role-name r --policy-arn x"}
+{"expect":"ask","command":"aws --region eu-central-1 rds create-db-instance --db-instance-identifier stand-in"}
+{"expect":"ask","command":"aws --profile stand-in --output json ec2 run-instances --count 1"}
+{"expect":"ask","command":"aws --region=eu-central-1 cloudformation deploy --template-file t"}
+{"expect":"ask","command":"aws configure set region eu-central-1"}
+{"expect":"ask","command":"aws configure"}
+{"expect":"none","command":"aws sso logout"}
+{"expect":"none","command":"bash -c \"aws sts get-caller-identity\""}
+{"expect":"none","command":"echo \"AWS Cost Explorer | AWS Health Dashboard\""}
+{"expect":"none","command":"grep -rn aws-cli docs"}
+{"expect":"none","command":"grep -n awscli pyproject.toml"}
+{"expect":"ask","command":"aws iam enable-mfa-device --user-name stand-in"}
+{"expect":"ask","command":"aws secretsmanager rotate-secret --secret-id stand-in"}
+{"expect":"ask","command":"aws kms schedule-key-deletion --key-id stand-in"}
+{"expect":"ask","command":"aws --query 'x y' ec2 run-instances --count 1"}
+{"expect":"ask","command":"AWS_PROFILE=stand-in aws ec2 run-instances --count 1"}
+{"expect":"ask","command":"env AWS_REGION=eu-central-1 aws ec2 run-instances --count 1"}
+{"expect":"ask","command":"time aws s3 cp x y"}
+{"expect":"ask","command":"sudo aws s3 cp x y"}
+{"expect":"ask","command":"cd /tmp && aws s3 cp x y"}
+{"expect":"ask","command":"bash -c \"aws s3 cp x y\""}
+{"expect":"ask","command":"x=$(aws s3 cp x y)"}
+{"expect":"ask","command":"if aws s3 cp x y; then echo ok; fi"}
+{"expect":"ask","command":"aws ec2 describe-instances | head; aws s3 cp x y"}
+{"expect":"ask","command":"echo $(aws ec2 describe-instances) $(aws s3 cp x y)"}
+{"expect":"ask","command":"aws"}
+{"expect":"ask","command":"docker run --rm amazon/aws-cli s3 cp x y"}
+{"expect":"ask","command":"docker run --rm -v ~/.aws:/root/.aws amazon/aws-cli:2.1.0 ec2 run-instances --count 1"}
+{"expect":"ask","command":"uvx --from awscli aws s3 cp x y"}
+{"expect":"ask","command":"python3 -c \"import boto3; boto3.client('s3').list_buckets()\""}
+{"expect":"ask","command":"uv run python -c 'import botocore'"}
+{"expect":"ask","command":"uv run --with awscli python x.py"}
+{"expect":"ask","command":"uv run --with boto3 python x.py"}
+{"expect":"none","command":"aws sts get-caller-identity"}
+{"expect":"none","command":"aws sts get-caller-identity --query Account --output text"}
+{"expect":"none","command":"aws --region eu-central-1 ec2 describe-instances"}
+{"expect":"none","command":"aws --region eu-central-1 --output json eks list-clusters"}
+{"expect":"none","command":"aws eks describe-cluster --name stand-in --query cluster.status"}
+{"expect":"none","command":"aws iam list-roles"}
+{"expect":"none","command":"aws ec2 describe-instances --output json | jq '.Reservations'"}
+{"expect":"none","command":"aws --version"}
+{"expect":"none","command":"aws help"}
+{"expect":"none","command":"aws ec2 help"}
+{"expect":"none","command":"aws ec2 run-instances --help"}
+{"expect":"none","command":"aws s3 ls --help"}
+{"expect":"none","command":"aws sso login --profile stand-in"}
+{"expect":"none","command":"aws configure list"}
+{"expect":"none","command":"aws configure list-profiles"}
+{"expect":"none","command":"AWS_REGION=eu-central-1 aws ec2 describe-instances"}
+{"expect":"none","command":"aws ec2 describe-instances; aws sts get-caller-identity"}
+{"expect":"none","command":"docker run --rm amazon/aws-cli ec2 describe-instances"}
+{"expect":"none","command":"uvx --from awscli aws ec2 describe-instances"}
+{"expect":"none","command":"git add infra/terraform/aws docs"}
+{"expect":"none","command":"ls infra/terraform/aws"}
+{"expect":"none","command":"cd infra/terraform/aws && ls"}
+{"expect":"none","command":"cat infra/terraform/aws/README.md"}
+{"expect":"none","command":"git diff -- infra/terraform/aws"}
+{"expect":"none","command":"git commit -m \"aws s3 ls and aws ec2 run-instances ask\""}
+{"expect":"none","command":"uv run pytest tests/meridian/test_aws_scan.py -q"}
+{"expect":"none","command":"python3 -c \"import json\""}
+{"expect":"none","command":"uv pip install ruff"}
+{"expect":"deny","command":"grep -n ACCOUNT infra/terraform/local.env-aws"}
+{"expect":"deny","command":"sed -n 1,5p infra/terraform/local.env-aws"}
+{"expect":"deny","command":"awk -F= '{print $2}' infra/terraform/local.env-aws"}
+{"expect":"deny","command":"cp infra/terraform/local.env-aws /tmp/x"}
+{"expect":"deny","command":"source infra/terraform/local.env-aws; echo $MERIDIAN_AWS_ACCOUNT_ID"}
+{"expect":"deny","command":"cd infra/terraform && grep -c . local.env-aws"}
+{"expect":"deny","command":"jq . ~/.local/state/meridian-aws/aws.tfstate"}
+{"expect":"deny","command":"less ~/.local/state/meridian-aws/aws.tfstate"}
+{"expect":"deny","command":"grep -r password ~/.local/state/meridian-aws"}
+{"expect":"deny","command":"strings infra/terraform/aws/aws.tfplan"}
+{"expect":"deny","command":"od -c infra/terraform/aws/aws.tfplan.meta"}
+{"expect":"deny","command":"perl -ne print infra/terraform/aws/aws.tfplan"}
+{"expect":"deny","command":"cat infra/terraform/aws/terraform.tfstate"}
+{"expect":"deny","command":"cat infra/terraform/aws/terraform.tfstate.backup"}
+{"expect":"deny","command":"diff a infra/terraform/aws/terraform.tfstate.d/w1/terraform.tfstate"}
+{"expect":"deny","command":"jq . infra/terraform/aws/x.tfvars.json"}
+{"expect":"deny","command":"grep a infra/terraform/aws/terraform.tfvars"}
+{"expect":"deny","command":"python3 -c \"print(open('infra/terraform/aws/terraform.tfstate').read())\""}
+{"expect":"deny","command":"cat ~/.aws/credentials"}
+{"expect":"deny","command":"cat ~/.aws/config"}
+{"expect":"deny","command":"cat ~/.aws/sso/cache/stand-in.json"}
+{"expect":"deny","command":"grep -r token ~/.aws/cli/cache"}
+{"expect":"deny","command":"tar cf - ~/.aws"}
+{"expect":"deny","command":"rg . ~/.aws/"}
+{"expect":"deny","command":"head -5 ~/.terraformrc"}
+{"expect":"deny","command":"cat /home/stand-in/.terraformrc"}
+{"expect":"deny","command":"cat ~/.terraform.d/credentials.tfrc.json"}
+{"expect":"deny","command":"bash -c \"grep a infra/terraform/local.env-aws\""}
+{"expect":"deny","command":"echo x > ~/.terraformrc"}
+{"expect":"deny","command":"echo x >> ~/.gitconfig"}
+{"expect":"deny","command":"echo x | tee ~/.aws/config"}
+{"expect":"deny","command":"echo x | tee -a ~/.config/git/config"}
+{"expect":"deny","command":"sed -i s/a/b/ ~/.gitconfig"}
+{"expect":"deny","command":"cp x ~/.config/git/config"}
+{"expect":"deny","command":"mv x ~/.terraformrc"}
+{"expect":"deny","command":"echo default > infra/terraform/aws/.terraform/environment"}
+{"expect":"deny","command":"cp x infra/terraform/aws/aws.tfplan"}
+{"expect":"deny","command":"printf x | tee infra/terraform/aws/aws.tfplan.meta"}
+{"expect":"deny","command":"printf 'x' > $HOME/.gitconfig"}
+{"expect":"none","command":"ls -l infra/terraform/local.env-aws"}
+{"expect":"none","command":"test -f infra/terraform/local.env-aws"}
+{"expect":"none","command":"stat -c %a ~/.local/state/meridian-aws"}
+{"expect":"none","command":"git check-ignore -v infra/terraform/local.env-aws"}
+{"expect":"none","command":"grep -n tfstate .gitignore"}
+{"expect":"none","command":"jq '.env' .claude/settings.json"}
+{"expect":"none","command":"cat infra/terraform/aws/variables.tf"}
+{"expect":"none","command":"cp infra/terraform/aws/variables.tf /tmp/scratch-copy.tf"}
+{"expect":"none","command":"cat infra/terraform/aws/terraform.tfvars.example"}
+{"expect":"none","command":"cat ~/.gitconfig"}
+{"expect":"none","command":"git config --global --get user.name"}
+{"expect":"none","command":"diff ~/.gitconfig /tmp/x"}
+{"expect":"none","command":"cat ~/.aws-sam/stand-in"}
+{"expect":"none","command":"cat infra/terraform/aws/.terraform.lock.hcl"}
+{"expect":"none","command":"git diff -- infra/terraform/aws/.terraform.lock.hcl"}
+{"expect":"ask","command":"terraform -chdir=infra/terraform/aws plan"}
+{"expect":"ask","command":"tofu -chdir=infra/terraform/aws plan"}
+{"expect":"ask","command":"cd infra/terraform/aws && terraform plan"}
+{"expect":"ask","command":"cd infra/terraform/aws && tofu plan -input=false"}
+{"expect":"ask","command":"terraform -chdir=infra/terraform/aws plan -var-file=stand-in.json"}
+{"expect":"none","command":"tofu -chdir=infra/terraform/foundation plan"}
+{"expect":"none","command":"cd infra/terraform/foundation && terraform plan"}
+{"expect":"none","command":"cat infra/terraform/aws/plan.md"}
+{"expect":"none","command":"terraform -chdir=infra/terraform/aws validate -no-color"}
+{"expect":"deny","command":"TF_VAR_x=1 terraform -chdir=infra/terraform/foundation validate"}
+{"expect":"deny","command":"tofu destroy"}
+{"expect":"deny","command":"tofu -chdir=infra/terraform/foundation destroy"}
+{"expect":"ask","command":"tofu apply"}
+{"expect":"ask","command":"tofu -chdir=infra/terraform/foundation apply"}
+{"expect":"ask","command":"terraform -chdir=infra/terraform/aws workspace select default"}
+{"expect":"ask","command":"cd infra/terraform/aws && terraform workspace select default"}
+{"expect":"deny","command":"terraform -chdir=infra/terraform/aws workspace select default; terraform -chdir=infra/terraform/aws workspace new x"}
+{"expect":"deny","command":"terraform -chdir=infra/terraform/aws workspace delete x"}
+{"expect":"deny","command":"terraform -chdir=infra/terraform/aws workspace select stand-in"}
+{"expect":"deny","command":"tofu -chdir=infra/terraform/aws workspace select stand-in"}
+{"expect":"ask","command":"terraform -chdir=infra/terraform/aws workspace show"}
+{"expect":"none","command":"terraform -chdir=infra/terraform/aws workspace list"}
+{"expect":"deny","cwd":"/srv/stand-in/infra/terraform/aws","command":"terraform apply"}
+{"expect":"deny","cwd":"/srv/stand-in/infra/terraform/aws","command":"tofu apply"}
+{"expect":"deny","cwd":"/srv/stand-in/infra/terraform/aws","command":"terraform workspace new x"}
+{"expect":"deny","cwd":"/srv/stand-in/infra/terraform/aws","command":"terraform workspace select stand-in"}
+{"expect":"deny","cwd":"/srv/stand-in/infra/terraform/aws","command":"terraform plan -out=x.tfplan"}
+{"expect":"deny","cwd":"/srv/stand-in/infra/terraform/aws","command":"tofu destroy"}
+{"expect":"deny","cwd":"/srv/stand-in/infra/terraform/aws","command":"tofu import a b"}
+{"expect":"deny","cwd":"/srv/stand-in/infra/terraform/aws","command":"tofu state rm a"}
+{"expect":"deny","cwd":"/srv/stand-in/infra/terraform/aws","command":"terraform state push x"}
+{"expect":"deny","cwd":"/srv/stand-in/infra/terraform/aws/.terraform","command":"terraform apply"}
+{"expect":"ask","cwd":"/srv/stand-in/infra/terraform/aws","command":"terraform plan"}
+{"expect":"ask","cwd":"/srv/stand-in/infra/terraform/aws","command":"tofu plan"}
+{"expect":"ask","cwd":"/srv/stand-in/infra/terraform/aws","command":"terraform state list"}
+{"expect":"ask","cwd":"/srv/stand-in/infra/terraform/aws","command":"terraform show"}
+{"expect":"ask","cwd":"/srv/stand-in/infra/terraform/aws","command":"terraform output"}
+{"expect":"ask","cwd":"/srv/stand-in/infra/terraform/aws","command":"tofu output -json"}
+{"expect":"ask","cwd":"/srv/stand-in/infra/terraform/aws","command":"terraform console"}
+{"expect":"ask","cwd":"/srv/stand-in/infra/terraform/aws","command":"terraform workspace select default"}
+{"expect":"none","cwd":"/srv/stand-in/infra/terraform/aws","command":"terraform validate"}
+{"expect":"none","cwd":"/srv/stand-in/infra/terraform/aws","command":"terraform fmt -check"}
+{"expect":"none","cwd":"/srv/stand-in/infra/terraform/aws","command":"terraform init -backend=false"}
+{"expect":"none","cwd":"/srv/stand-in/infra/terraform/aws","command":"ls"}
+{"expect":"none","cwd":"/srv/stand-in/infra/terraform/aws","command":"make aws-validate"}
+{"expect":"none","cwd":"/srv/stand-in/infra/terraform/foundation","command":"terraform state list"}
+{"expect":"none","cwd":"/srv/stand-in/infra/terraform/foundation","command":"terraform output -json"}
+{"expect":"none","cwd":"/srv/stand-in/infra/terraform/foundation","command":"terraform plan"}
+{"expect":"ask","cwd":"/srv/stand-in/infra/terraform/foundation","command":"terraform apply"}
+{"expect":"ask","cwd":"/srv/stand-in/infra/terraform/foundation","command":"tofu apply"}
+{"expect":"none","cwd":"/srv/stand-in/infra/terraform/aws-notes","command":"terraform state list"}
+{"expect":"none","cwd":"/srv/stand-in/infra/terraform","command":"terraform state list"}
+{"expect":"ask","cwd":"/srv/stand-in","command":"terraform apply"}
+{"expect":"none","cwd":"","command":"terraform state list"}
+{"expect":"ask","command":"echo terraform; bash -cm 'gh auth token'"}
+{"expect":"ask","command":"echo tofu; sh -cm \"gh auth token\""}
+{"expect":"ask","command":"bash -cm 'gh auth token'"}
+{"expect":"deny","command":"bash -cm 'make aws-destroy'"}
+{"expect":"ask","command":"sh -cm \"make aws-apply\""}
+{"expect":"deny","command":"echo terraform; bash -lcm 'kubectl get secret x -o yaml'"}
+{"expect":"deny","command":"echo tofu; bash -ecm 'aws kms decrypt --ciphertext-blob fileb://x'"}
+{"expect":"none","command":"echo terraform; git commit -am \"make aws-destroy\""}
+{"expect":"none","command":"echo terraform; git commit -m \"gh auth token\""}
+{"expect":"none","command":"echo terraform; git commit -qm \"kubectl get secret x -o yaml\""}
+{"expect":"none","command":"echo tofu; git commit --message \"make aws-apply\""}
+{"expect":"ask","command":"echo terraform; gh pr create --body \"$(gh auth token)\""}
+{"expect":"ask","command":"echo tofu; git commit -m \"$(aws sts get-session-token)\""}
+{"expect":"ask","command":"echo terraform; bash -c 'gh auth token' --message x"}
+{"expect":"deny","command":"echo terraform; bash -c 'kubectl get secret x -o yaml' -m 'x'"}
+{"expect":"ask","command":"aws \"ec2\" run-instances --image-id list-x"}
+{"expect":"ask","command":"aws 'ec2' run-instances --image-id list-x"}
+{"expect":"ask","command":"aws ec2 'run-instances' list-x"}
+{"expect":"ask","command":"aws \"\" run-instances list-x"}
+{"expect":"ask","command":"aws ec2 run-instances --image-id list-x"}
+{"expect":"ask","command":"aws ec2 run-instances list-x"}
+{"expect":"none","command":"aws \"ec2\" describe-instances"}
+{"expect":"none","command":"aws ec2 'describe-instances'"}
+{"expect":"none","command":"aws \"sts\" \"get-caller-identity\""}
+{"expect":"deny","note":"false alarm by design: a search for a word is read as a use of it; search with the Grep tool","command":"grep -rn \"local.env\" docs"}
+{"expect":"deny","note":"false alarm by design: a search for a word is read as a use of it; search with the Grep tool","command":"grep -rn \"aws.tfplan\" Makefile infra"}
+{"expect":"deny","note":"false alarm by design: a search for a word is read as a use of it; search with the Grep tool","command":"grep -rn \"meridian-aws\" docs infra"}
+{"expect":"deny","note":"false alarm by design: a search for a word is read as a use of it; search with the Grep tool","command":"grep -rn \".aws\" docs"}
+{"expect":"deny","note":"false alarm by design: a search for a word is read as a use of it; search with the Grep tool","command":"grep -n '\\.tfstate' .gitignore"}
+{"expect":"ask","note":"false alarm by design: a search for a word is read as a use of it; search with the Grep tool","command":"grep -rn \"aws iam\" docs"}
+{"expect":"none","command":"grep -rn --include='*.md' \"tfstate\" docs"}
+{"expect":"deny","note":"false alarm by design: a search for a word is read as a use of it; search with the Grep tool","command":"grep -rn -i \"local.env\" docs"}
+{"expect":"ask","note":"false alarm by design: a search for a word is read as a use of it; search with the Grep tool","command":"rg \"aws \" docs"}
+{"expect":"ask","note":"false alarm by design: a search for a word is read as a use of it; search with the Grep tool","command":"git grep -n \"aws ec2\""}
+{"expect":"ask","note":"false alarm by design: a search for a word is read as a use of it; search with the Grep tool","command":"egrep -rn 'aws (ec2|s3)' docs"}
+{"expect":"ask","note":"false alarm by design: a search for a word is read as a use of it; search with the Grep tool","command":"fgrep -n \"make aws-apply\" Makefile"}
+{"expect":"none","command":"ag \"kms decrypt\" docs"}
+{"expect":"none","command":"cd docs && grep -rn \"aws-destroy\" ."}
+{"expect":"deny","note":"false alarm by design: the pseudo-terminal words are read anywhere in a command that names the wrapper","command":"grep -n script infra/terraform/aws.sh"}
+{"expect":"deny","note":"false alarm by design: the pseudo-terminal words are read anywhere in a command that names the wrapper","command":"grep -n expect infra/terraform/aws.sh"}
+{"expect":"deny","note":"false alarm by design: the pseudo-terminal words are read anywhere in a command that names the wrapper","command":"grep -n \"script\" infra/terraform/aws.sh"}
+{"expect":"deny","note":"false alarm by design: the pseudo-terminal words are read anywhere in a command that names the wrapper","command":"echo script infra/terraform/aws.sh"}
+{"expect":"none","command":"grep -rn aws docs"}
+{"expect":"deny","command":"grep x ~/.aws/credentials"}
+{"expect":"deny","command":"grep \"x\" ~/.aws/credentials"}
+{"expect":"deny","command":"grep x \"~/.aws/credentials\""}
+{"expect":"deny","command":"grep -rn \"x\" ~/.local/state/meridian-aws"}
+{"expect":"deny","command":"rg \"x\" infra/terraform/local.env-aws"}
+{"expect":"deny","command":"grep -n \"x\" infra/terraform/aws/terraform.tfstate"}
+{"expect":"deny","command":"grep \"aws ec2\" docs; make aws-destroy"}
+{"expect":"ask","command":"grep \"aws ec2\" docs; aws ec2 run-instances --count 1"}
+{"expect":"deny","command":"grep \"x\" docs; aws eks delete-cluster --name stand-in"}
+{"expect":"deny","command":"script -c \"make aws-apply\""}
+{"expect":"deny","command":"sudo script -c \"make aws-apply\""}
+{"expect":"deny","command":"X=1 expect -c 'spawn make aws-plan'"}
+{"expect":"deny","command":"bash -c \"unbuffer make aws-plan\""}
+{"expect":"deny","command":"python3 -c \"import pty; x = pty.spawn(['make', 'aws-apply'])\""}
+{"expect":"deny","note":"finding 1: a command substitution in a search pattern runs","command":"grep \"$(make aws-destroy)\" f"}
+{"expect":"deny","note":"finding 1","command":"grep \"x$(make aws-destroy)y\" f"}
+{"expect":"deny","note":"finding 1","command":"grep \"$(cat ~/.aws/credentials)\" f"}
+{"expect":"deny","note":"finding 1","command":"rg \"$(make aws-destroy)\" f"}
+{"expect":"deny","note":"finding 1","command":"git grep \"$(make aws-destroy)\""}
+{"expect":"deny","note":"finding 2: a fake grep inside a literal hides the next real command","command":"echo ';grep \"'; make aws-destroy; echo '\"'"}
+{"expect":"deny","note":"finding 2","command":"echo ';grep \"'; aws iam delete-user --user-name stand-in; echo '\"'"}
+{"expect":"deny","note":"finding 2","command":"echo ';grep \"'; cat ~/.aws/credentials; echo '\"'"}
+{"expect":"deny","note":"finding 2","command":"echo ';grep \"'; infra/terraform/aws.sh destroy; echo '\"'"}
+{"expect":"ask","note":"finding 2","command":"echo '|rg \"'; make aws-apply; echo '\"'"}
+{"expect":"deny","note":"finding 3: a file operand after -e or -f","command":"grep --regexp=aws \"$HOME/.aws/credentials\""}
+{"expect":"deny","note":"finding 3","command":"grep -eaws \"$HOME/.aws/credentials\""}
+{"expect":"deny","note":"finding 3","command":"rg -eaws \"$HOME/.aws/credentials\""}
+{"expect":"deny","note":"finding 3","command":"grep -f \"$HOME/.aws/credentials\" x"}
+{"expect":"deny","note":"finding 3","command":"grep --regexp=x \"infra/terraform/local.env-aws\""}
+{"expect":"deny","note":"finding 5: a wrapper with an option before a pseudo-terminal tool","command":"timeout 9 script -qc \"make aws-apply\" /dev/null"}
+{"expect":"deny","note":"finding 5","command":"nice script -qc \"make aws-apply\" /dev/null"}
+{"expect":"deny","note":"finding 5","command":"sudo -u stand-in script -qc \"make aws-apply\" /dev/null"}
+{"expect":"deny","note":"finding 5","command":"stdbuf -o0 script -qc \"make aws-apply\" /dev/null"}
+{"expect":"deny","note":"finding 5","command":"timeout 5 unbuffer make aws-plan"}
+{"expect":"ask","note":"finding 4: a quoted ssm get-parameter with --with-decryption is not a listed read","command":"aws \"ssm\" \"get-parameter\" --name x --with-decryption"}
+{"expect":"ask","note":"finding 4","command":"aws \"ssm\" get-parameter --name x --with-decryption"}
+{"expect":"ask","note":"finding 4","command":"aws ssm \"get-parameter\" --name x --with-decryption"}
+{"expect":"ask","note":"finding 4","command":"aws ssm get-parameter --name x \"--with-decryption\""}
+{"expect":"ask","note":"finding 4: a quoted configure get of a secret or a token","command":"aws \"configure\" \"get\" aws_secret_access_key"}
+{"expect":"ask","note":"finding 4","command":"aws configure get \"aws_session_token\""}
+{"expect":"ask","note":"finding 4","command":"aws --profile stand-in configure get aws_secret_access_key"}
+{"expect":"deny","note":"finding 4, the unquoted twin (S075)","command":"aws ssm get-parameter --name x --with-decryption"}
+{"expect":"ask","note":"finding 4, the unquoted twin (S075)","command":"aws configure get aws_secret_access_key"}
+{"expect":"none","note":"finding 4, both ways","command":"aws \"ssm\" get-parameter --name x"}
+{"expect":"none","note":"finding 4, both ways","command":"aws \"configure\" \"get\" region"}
+{"expect":"none","note":"finding 4, both ways","command":"aws ssm get-parameter --name x --no-with-decryption"}
+{"expect":"deny","note":"finding 6: default followed by more is another name","command":"terraform -chdir=infra/terraform/aws workspace select default2"}
+{"expect":"deny","note":"finding 6","command":"terraform -chdir=infra/terraform/aws workspace select defaults"}
+{"expect":"deny","note":"finding 6","command":"terraform -chdir=infra/terraform/aws workspace select default-prod"}
+{"expect":"deny","note":"finding 6","command":"terraform -chdir=infra/terraform/aws workspace select default_x"}
+{"expect":"deny","note":"finding 6","command":"terraform -chdir=infra/terraform/aws workspace select defaultx"}
+{"expect":"deny","note":"finding 6","command":"tofu -chdir=infra/terraform/aws workspace select default2"}
+{"expect":"deny","note":"finding 6","command":"terraform -chdir=infra/terraform/aws workspace select default; terraform -chdir=infra/terraform/aws workspace select default2"}
+{"expect":"deny","note":"finding 6","command":"terraform -chdir=infra/terraform/aws workspace select default2; terraform -chdir=infra/terraform/aws workspace select default"}
+{"expect":"ask","note":"finding 6 and 12: two blanks and a quoted default ask as the plain form does","command":"terraform -chdir=infra/terraform/aws workspace select  default"}
+{"expect":"ask","note":"finding 12","command":"terraform -chdir=infra/terraform/aws workspace select \"default\""}
+{"expect":"ask","note":"finding 12","command":"terraform -chdir=infra/terraform/aws workspace select 'default'"}
+{"expect":"ask","note":"finding 6, both ways","command":"terraform -chdir=infra/terraform/aws workspace select default && echo done"}
+{"expect":"deny","note":"finding 7: a backtick ends a target","command":"`make aws-destroy`"}
+{"expect":"deny","note":"finding 7","command":"x=`infra/terraform/aws.sh destroy`"}
+{"expect":"ask","note":"finding 7","command":"`make aws-apply`"}
+{"expect":"ask","note":"finding 7","command":"echo `make aws-plan`"}
+{"expect":"ask","note":"finding 7","command":"x=`infra/terraform/aws.sh apply`"}
+{"expect":"deny","command":"grep -n x infra/terraform/aws/.terraform/terraform.tfstate"}
+{"expect":"deny","command":"echo \"make aws-destroy\""}
+{"expect":"deny","command":"git commit -m x && make aws-destroy"}
+{"expect":"none","command":"gh pr create --title \"TF_LOG terraform\" --body \"TF_LOG=1 terraform plan, then make aws-plan\""}
+{"expect":"none","command":"echo x > /tmp/scratch.txt"}
+{"expect":"none","command":"git commit -m \"deny cat of aws.tfstate and writes to ~/.terraformrc\""}
 {"expect":"ask","command":"az lock delete --name lock-tfstate --resource-group rg-meridian-tfstate"}
 {"expect":"ask","command":"az storage account delete --name stmeridiantfabc123"}
 {"expect":"ask","command":"az role assignment delete --ids /subscriptions/x"}
@@ -1033,7 +1517,7 @@
 {"expect":"none","command":"aws s3 ls"}
 {"expect":"none","command":"aws ecr describe-repositories"}
 {"expect":"none","command":"aws eks describe-cluster --name x"}
-{"expect":"none","command":"aws eks update-kubeconfig --name x"}
+{"expect":"ask","command":"aws eks update-kubeconfig --name x"}
 {"expect":"none","command":"gh auth status"}
 {"expect":"none","command":"gh pr list"}
 {"expect":"none","command":"gcloud auth list"}

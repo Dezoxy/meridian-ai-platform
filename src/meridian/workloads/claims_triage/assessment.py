@@ -15,12 +15,14 @@ model's text or the claim (T-03).
 Three guardrails (S047) make the assessment unavailable without an answer, each
 a condition of the claim's own data and so a claim for a person, never a failed
 run (T-67): a description that holds special-category data (``special-data``),
-a description that addresses the model (``injection-suspected``), and a request
-the provider's content filter refuses (``filtered``). The first two make no call
-at all. A candidate clause that addresses the model is different: the wording is
-platform data, so the run fails (``GraphFailure``) and is loud. The call carries
-the data class ``personal``, and the rationale is redacted before it is
-returned: the model saw only redacted text, but it can make an identifier up.
+a description that addresses the model (``injection-suspected``: in the run's
+copy, or as it was posted, which the Claims API screens and sends as a flag,
+S067), and a request the provider's content filter refuses (``filtered``). The
+first two make no call at all. A candidate clause that addresses the model is
+different: the wording is platform data, so the run fails (``GraphFailure``) and
+is loud. The call carries the data class ``personal``, and the rationale is
+redacted before it is returned: the model saw only redacted text, but it can
+make an identifier up.
 
 The answer is asked for by schema (S051), which makes its shape likely and
 nothing else: it is read as strictly as before. A model can still answer in a
@@ -33,7 +35,7 @@ import json
 import logging
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from typing import Any
 
@@ -114,7 +116,8 @@ class Assessed:
     assessment: Assessment
     rationale: str | None  # set only for none_applies and applies
     # None means no answer: no call was made (a guardrail or too-long) or the
-    # provider's content filter refused it.
+    # provider's content filter refused the prompt. A completion it withheld
+    # has its drafter (S069): the provider ran and billed it.
     drafted_by: DraftedBy | None
     unavailable_because: UnavailableBecause | None  # set only for unavailable
 
@@ -202,6 +205,26 @@ def _without_an_answer(reason: UnavailableBecause) -> Assessed:
     return Assessed(assessment, rationale, None, because)
 
 
+def _filtered(filtered: ModelCallFilteredError) -> Assessed:
+    """The assessment of a call the provider's content filter stopped. A prompt
+    it refused had no drafter: nothing ran. A completion it withheld was drafted
+    and billed, so the deployment the gateway named is on record, as for any
+    answer; with none named (a header lost) there is none to record."""
+    answered = _without_an_answer("filtered")
+    if filtered.drafter is None:
+        return answered
+    drafter = filtered.drafter
+    return replace(
+        answered,
+        drafted_by=DraftedBy(
+            deployment=drafter.deployment,
+            provider=drafter.provider,
+            mode=drafter.mode,
+            prompt=PROMPT_VERSION,
+        ),
+    )
+
+
 def _unfenced(text: str) -> str:
     stripped = text.strip()
     fenced = FENCE.fullmatch(stripped)
@@ -285,6 +308,8 @@ def assess(
     product: str,
     wording_version: str,
     candidates: Sequence[Clause],
+    *,
+    posted_text_addresses_the_model: bool = False,
 ) -> Assessed:
     """Ask the model once, unless a guardrail or the length limit stops the call:
     then none is made and the assessment is unavailable, in this order, because
@@ -297,13 +322,21 @@ def assess(
     before any call. Raises ``ValueError`` without candidates (the caller asks
     only when there is one); any other error of the model client propagates.
 
+    ``posted_text_addresses_the_model`` is the Claims API's screen of the
+    description as it was posted, before the claimant's name was replaced (S067:
+    a name that holds the screened words hides them from this function's own
+    screen of the run's copy). True is read as a hit of that own screen, after
+    the special-category one, which still wins. It is read only here, so a claim
+    that is not asked about (a lapsed policy, no candidate clause) reads it
+    nowhere, as it runs no screen.
+
     The special-category screen is for the claimant's words only: the wordings
     themselves name an injury."""
     if not candidates:
         raise ValueError("there is no candidate exclusion clause to assess")
     if holds_special_category(claim.description):
         return _without_an_answer("special-data")
-    if addresses_the_model(claim.description):
+    if posted_text_addresses_the_model or addresses_the_model(claim.description):
         return _without_an_answer(INJECTION_SUSPECTED)
     if any(
         addresses_the_model(c.title) or addresses_the_model(c.body) for c in candidates
@@ -322,8 +355,8 @@ def assess(
             data_class=PERSONAL_DATA,
             response_schema=ANSWER_SCHEMA,
         )
-    except ModelCallFilteredError:
-        return _without_an_answer("filtered")
+    except ModelCallFilteredError as filtered:
+        return _filtered(filtered)
     assessment, rationale, because = read_answer(
         result.text, result.finish_reason, candidates
     )

@@ -20,6 +20,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 )
 from psycopg.types.json import Jsonb
 from servicesupport import (
+    REPO_ROOT,
     assert_spans_hold_no_exception_and_no_canary,
     claim_with_id,
     database_error,
@@ -39,6 +40,7 @@ from meridian.workloads.claims_triage.models import (
     Claimant,
     ClaimFacts,
 )
+from meridian.workloads.claims_triage.posted_text import POSTED_TEXT_FLAG
 from meridian.workloads.claims_triage.settings import ClaimsSettings
 from meridian.workloads.claims_triage.triaging import description_for_run
 
@@ -271,7 +273,11 @@ def test_a_claim_is_stored_triaged_and_answered_201(
         "tenant": "claims-triage",
         "reference": "CLM-9101",
         # The runtime gets what the graph needs: not the claimant's name or email.
-        "input": {"claim": {k: v for k, v in claim.items() if k != "claimant"}},
+        # Beside the claim, one boolean: the screen of the text as posted (S067).
+        "input": {
+            "claim": {k: v for k, v in claim.items() if k != "claimant"},
+            POSTED_TEXT_FLAG: False,
+        },
     }
     assert claim["claimant"]["name"] not in request.content.decode()
     assert claim["claimant"]["email"] not in request.content.decode()
@@ -316,6 +322,54 @@ def test_a_description_naming_the_claimant_reaches_the_run_without_the_name(
         fresh_database, "SELECT submission FROM claims.claims"
     )
     assert submission["description"] == description
+
+
+def name_masked_claim(case_id: str) -> dict[str, Any]:
+    """A claim of the injection suite whose claimant's name holds screened words."""
+    path = REPO_ROOT / "data" / "synthetic" / "injection" / "cases.json"
+    (case,) = [
+        c for c in json.loads(path.read_text(encoding="utf-8")) if c["case"] == case_id
+    ]
+    return case["claim"]
+
+
+@pytest.mark.parametrize("case_id", ["CLM-1053", "CLM-1054"])
+def test_a_claim_whose_name_hides_an_instruction_is_sent_with_the_flag_set(
+    fresh_database: DatabaseHandle, case_id: str
+) -> None:
+    claim = name_masked_claim(case_id)
+    runtime = Runtime()
+    client = make_client(claims_dsn(fresh_database), runtime)
+
+    response = client.post("/claims", json=claim)
+
+    assert response.status_code == 201
+    (request,) = runtime.requests
+    body = json.loads(request.content)
+    assert body["input"][POSTED_TEXT_FLAG] is True
+    assert body["input"]["claim"]["description"] != claim["description"]
+    assert not addresses_the_model(body["input"]["claim"]["description"])
+    # Neither the posted text nor the name travels: the run is sent the copy.
+    sent = request.content.decode("utf-8")
+    assert claim["description"] not in sent
+    assert claim["claimant"]["email"] not in sent
+    assert "claimant" not in body["input"]["claim"]
+    description = body["input"]["claim"]["description"].lower()
+    for part in claim["claimant"]["name"].split():
+        assert part.lower() not in description
+
+
+def test_a_clean_claim_is_sent_with_the_flag_false(
+    fresh_database: DatabaseHandle,
+) -> None:
+    runtime = Runtime()
+    client = make_client(claims_dsn(fresh_database), runtime)
+
+    response = client.post("/claims", json=claim_with_id("CLM-9121"))
+
+    assert response.status_code == 201
+    (request,) = runtime.requests
+    assert json.loads(request.content)["input"][POSTED_TEXT_FLAG] is False
 
 
 def test_a_word_that_only_contains_a_name_part_is_not_replaced() -> None:
@@ -538,7 +592,7 @@ def test_identifiers_in_the_description_are_redacted_too() -> None:
 def test_no_golden_description_names_its_claimant_or_holds_an_identifier() -> None:
     claims = synthetic_claims()
 
-    assert len(claims) == 40
+    assert len(claims) == 47
     for claim in claims:
         claimant = Claimant.model_validate(claim["claimant"])
         assert (

@@ -192,7 +192,7 @@
       ],
       "groupName": "terraform",
       "prBodyNotes": [
-        "CI does not run Terraform. Before merging, run `make azure-plan` and read the plan."
+        "CI does not run Terraform. Before merging, run `make azure-plan` and read the plan, and for the AWS module `make aws-validate` and `make aws-scan` (neither needs an account)."
       ]
     },
     {

@@ -1,16 +1,14 @@
 """How the Claims API triages a claim (moved from ``app.py``, S048).
 
 The request that moves a claim to ``triaging`` owns its triage: it posts the
-run's facts to the Agent Runtime, then closes the triage in one transaction,
+run's input to the Agent Runtime, then closes the triage in one transaction,
 storing the proposal and moving the claim on. A failure moves the claim to
 ``triage_failed`` and answers 502, 503 or 504 with the claim's ID (and the
-run's, when there is one). The facts the run is sent carry neither the
-claimant's name nor e-mail address (S047).
+run's, when there is one). The run input carries neither the claimant's name
+nor e-mail address (S047).
 """
 
 import logging
-import re
-import unicodedata
 from collections.abc import Collection, Mapping, Sequence
 from datetime import datetime
 from typing import Any, NamedTuple
@@ -23,13 +21,12 @@ from fastapi.responses import JSONResponse
 from opentelemetry.trace import Span
 from psycopg.types.json import Jsonb
 from pydantic import ValidationError
-from pydantic_core import ErrorDetails
 
 from meridian.platform.common.db import connect
 from meridian.platform.common.http import database_failure, error_answer
 from meridian.platform.common.telemetry import mark_error, set_span_attributes
-from meridian.platform.guardrails import EMAIL_PLACEHOLDER, PLACEHOLDERS, redact
 from meridian.runtime.models import RunResponse, RunState
+from meridian.workloads.claims_triage.claimant_name import description_for_run
 from meridian.workloads.claims_triage.lifecycle import (
     AGENT as AGENT,
 )
@@ -52,15 +49,23 @@ from meridian.workloads.claims_triage.lifecycle import (
     RUNTIME_TIMEOUT_SECONDS as RUNTIME_TIMEOUT_SECONDS,
 )
 from meridian.workloads.claims_triage.meters import ClaimsMeters
+
+# ``invalid_fields`` and ``DATA_KEY`` moved to ``models`` (S069) so that
+# ``runtime_calls``, which this module imports, can log with them; this module
+# still offers ``DATA_KEY``, as it offered it before.
 from meridian.workloads.claims_triage.models import (
-    Claimant,
+    DATA_KEY as DATA_KEY,
+)
+from meridian.workloads.claims_triage.models import (
     ClaimFacts,
     ClaimResponse,
     ClaimSubmission,
     DecisionFailure,
     ProposalSummary,
     Route,
+    invalid_fields,
 )
+from meridian.workloads.claims_triage.posted_text import input_for_run
 from meridian.workloads.claims_triage.proposal import TriageProposal
 
 # The calls to the runtime moved to ``runtime_calls`` (S037); this module still
@@ -116,11 +121,6 @@ RUN_OUTCOMES: Mapping[tuple[RunState, Route], Transition] = {
 
 logger = logging.getLogger(__name__)
 
-# What stands for a key of the data in a location: ``extra="forbid"`` puts the
-# key an unknown field was sent under in the error's location, and the key is
-# the caller's (or the stored row's), not the model's.
-DATA_KEY = "*"
-
 
 def claim_database_failure(exc: psycopg.Error, claim_id: str) -> tuple[int, str]:
     """``database_failure`` for a failure that has a claim: the same answer, and
@@ -133,99 +133,6 @@ def claim_database_failure(exc: psycopg.Error, claim_id: str) -> tuple[int, str]
         exc.sqlstate or "none",
     )
     return database_failure(exc)
-
-
-def invalid_fields(exc: ValidationError) -> tuple[tuple[str, str], ...]:
-    """What failed to validate, as ``(dotted location, error type)`` pairs and
-    nothing else: never the message, the input or the context, which quote the
-    claimant's values. A list index is kept (``documents.3``); a key of the data
-    is replaced (``DATA_KEY``). No model of the workload has a free-keyed
-    mapping, so the keys of the data come only from an undeclared field."""
-    errors = exc.errors(include_url=False, include_input=False, include_context=False)
-    return tuple((_dotted(error), error["type"]) for error in errors)
-
-
-def _dotted(error: ErrorDetails) -> str:
-    parts = [str(part) for part in error["loc"]]
-    if error["type"] == "extra_forbidden" and parts:
-        parts[-1] = DATA_KEY
-    return ".".join(parts)
-
-
-NAME_PLACEHOLDER = "[name]"
-# The shortest part of a name that is replaced on its own: a shorter one ("Li",
-# "Jr.") is also an ordinary word or an initial.
-MIN_NAME_PART_LETTERS = 3
-
-
-CURLY_APOSTROPHE = chr(0x2019)
-# The characters a name is split on into the parts that are replaced on their
-# own: white space, hyphens, apostrophes (straight and curly) and dots.
-NAME_PART_SEPARATORS = re.compile(r"[\s\-'" + CURLY_APOSTROPHE + r".]+")
-# A name is matched as a whole word: bounded by letters and digits only, so an
-# underscore or a square bracket next to it is not a boundary that protects it.
-NAME_BOUNDARY_BEFORE = r"(?<![^\W_])"
-NAME_BOUNDARY_AFTER = r"(?![^\W_])"
-# The exact placeholders, tried first at every position: a part that is a
-# placeholder's word ("Name", "Email") must not turn "[name]" into "[[name]]".
-PLACEHOLDER_PATTERN = "|".join(
-    re.escape(placeholder) for placeholder in (*PLACEHOLDERS.values(), NAME_PLACEHOLDER)
-)
-
-
-def _name_alternatives(name: str) -> list[str]:
-    """The patterns for a claimant's name, the longest first: the full name (any
-    white space between its words), then each part, each with at least three
-    letters. No alternative is empty: an empty one matches at every boundary.
-    The minimum also bounds the copy's growth: a one-letter name would turn
-    every "A" into ``[name]``."""
-    alternatives = (
-        [r"\s+".join(re.escape(word) for word in name.split())]
-        if sum(char.isalpha() for char in name) >= MIN_NAME_PART_LETTERS
-        else []
-    )
-    parts = {part for part in NAME_PART_SEPARATORS.split(name) if part}
-    alternatives += [
-        re.escape(part)
-        for part in sorted(parts, key=len, reverse=True)
-        if sum(char.isalpha() for char in part) >= MIN_NAME_PART_LETTERS
-    ]
-    return [alternative for alternative in alternatives if alternative]
-
-
-def description_for_run(description: str, claimant: Claimant) -> str:
-    """The description the run is sent (S047), in three steps: the claimant's
-    e-mail address, ignoring case, becomes ``[email]``; ``redact`` replaces what
-    it finds (so a third party's address that shares the claimant's surname is
-    one address, not cut by a name); then the full name and each part of it of
-    at least three letters become ``[name]``, each as a whole word and ignoring
-    case, bounded by letters and digits only (a square bracket or an underscore
-    next to it does not protect it). A pattern cannot find a name, and this API
-    is the one place that knows it. The claimant's values are escaped: they are
-    matched, never read as a pattern. One pass finds the exact placeholders
-    first and keeps each as it is, then the name, so no placeholder is cut or
-    nested. The description and the name are compared in Unicode form NFC, and
-    the copy is NFC. The copy can be longer than the submission
-    (``MAX_RUN_DESCRIPTION_CHARS``)."""
-    emailless = re.sub(
-        re.escape(claimant.email),
-        EMAIL_PLACEHOLDER,
-        unicodedata.normalize("NFC", description),
-        flags=re.IGNORECASE,
-    )
-    redacted = unicodedata.normalize("NFC", redact(emailless).text)
-    alternatives = _name_alternatives(unicodedata.normalize("NFC", claimant.name))
-    if not alternatives:
-        return redacted
-    whole = "(?:" + "|".join(alternatives) + ")"
-    pattern = re.compile(
-        f"({PLACEHOLDER_PATTERN})|{NAME_BOUNDARY_BEFORE}{whole}{NAME_BOUNDARY_AFTER}",
-        flags=re.IGNORECASE,
-    )
-    return pattern.sub(
-        lambda match: match.group(1) or NAME_PLACEHOLDER,
-        redacted,
-    )
 
 
 def facts_for_run(
@@ -257,6 +164,16 @@ def facts_for_run(
     return facts
 
 
+def triage_run_input(
+    submission: ClaimSubmission, arrived: Sequence[str] = ()
+) -> dict[str, Any]:
+    """The whole input of a triage run, built here and nowhere else: the claim's
+    facts (``facts_for_run``) and, beside them, the screen of the description as
+    posted (``posted_text.input_for_run``, S067). ``start_run`` sends it as it
+    is, so the claim is under ``claim`` once."""
+    return input_for_run(submission, facts_for_run(submission, arrived))
+
+
 def arrived_documents(conn: psycopg.Connection, claim_id: str) -> tuple[str, ...]:
     """The names of the documents that arrived for the claim, on the caller's
     connection (so inside its transaction)."""
@@ -279,7 +196,15 @@ def triage_outcome(run: RunResponse) -> tuple[TriageProposal, Transition]:
     runtime answered is outside the contract."""
     try:
         proposal = TriageProposal.model_validate(run.output)
-    except ValidationError:
+    except ValidationError as exc:
+        # The fields and their error types, never a value: the output carries
+        # the model's rationale and a clause's text.
+        logger.warning(
+            "the runtime's output of run %s is not a triage proposal: %s %s",
+            run.run_id,
+            type(exc).__name__,
+            invalid_fields(exc),
+        )
         raise RuntimeCallError(
             "the runtime's output is not a triage proposal",
             run_id=run.run_id,
@@ -540,7 +465,8 @@ def triage_claim(
     """Take the claim's triage, run it and close it. ``span`` is the caller's
     open span; the run's ID is set on it. A refusal (409) is raised as
     ``HTTPException``; a failure is answered with the claim's ID. The run is
-    sent the submission's facts and the documents that arrived for the claim.
+    sent the submission's facts and the documents that arrived for the claim, and
+    the screen of its description as posted (``triage_run_input``).
     ``meters`` counts the proposal when it is stored (see ``run_taken_triage``)."""
     try:
         taken_at, found_in, arrived, old_run = take_triage(dsn, tenant, claim_id)
@@ -560,7 +486,7 @@ def triage_claim(
         http,
         span,
         claim_id,
-        facts_for_run(submission, arrived),
+        triage_run_input(submission, arrived),
         taken_at,
         meters=meters,
     )
@@ -575,7 +501,7 @@ def run_taken_triage(
     http: httpx.Client,
     span: Span,
     claim_id: str,
-    facts: dict[str, Any],
+    run_input: dict[str, Any],
     taken_at: datetime,
     *,
     meters: ClaimsMeters | None = None,
@@ -588,13 +514,38 @@ def run_taken_triage(
     span; the run's ID is set on it. Every triage passes here, whichever route
     took it, so this is where ``meters`` counts it, once, by how it ended (the
     words are in ``meters.py``); a failure no branch expected is counted
-    ``unexpected`` and raised, the 409 excepted: it is counted where it is raised."""
+    ``unexpected`` and raised, the 409 excepted: it is counted where it is raised.
+    A proposal is counted ``stored`` when it is stored (``_run_triage``); the
+    answer is built after that and outside the count, so an answer that cannot
+    be built is raised (a 500) and is not a second count for a triage that
+    stored its proposal."""
     try:
-        return _run_triage(dsn, tenant, http, span, claim_id, facts, taken_at, meters)
+        outcome = _run_triage(
+            dsn, tenant, http, span, claim_id, run_input, taken_at, meters
+        )
     except Exception as exc:
         if meters is not None and not isinstance(exc, HTTPException):
             meters.triage_failed("unexpected")
         raise
+    if isinstance(outcome, DecisionFailure):
+        return outcome
+    run, proposal, transition = outcome
+    return ClaimResponse(
+        claim_id=claim_id,
+        state=transition.target,
+        run_id=run.run_id,
+        run_status=run.status,
+        proposal=ProposalSummary(route=proposal.route, drafted_by=proposal.drafted_by),
+    )
+
+
+class _Stored(NamedTuple):
+    """A triage that stored its proposal, already counted: what the answer is
+    built from."""
+
+    run: RunResponse
+    proposal: TriageProposal
+    transition: Transition
 
 
 def _run_triage(
@@ -603,12 +554,12 @@ def _run_triage(
     http: httpx.Client,
     span: Span,
     claim_id: str,
-    facts: dict[str, Any],
+    run_input: dict[str, Any],
     taken_at: datetime,
     meters: ClaimsMeters | None,
-) -> ClaimResponse | DecisionFailure:
+) -> _Stored | DecisionFailure:
     try:
-        run = start_run(http, tenant, claim_id, facts)
+        run = start_run(http, tenant, claim_id, run_input)
         proposal, transition = triage_outcome(run)
     except RuntimeCallError as exc:
         logger.error(
@@ -656,13 +607,6 @@ def _run_triage(
         if meters is not None:
             meters.triage_taken_over()
         raise HTTPException(409, TAKEN_OVER_DETAIL)
-    response = ClaimResponse(
-        claim_id=claim_id,
-        state=transition.target,
-        run_id=run.run_id,
-        run_status=run.status,
-        proposal=ProposalSummary(route=proposal.route, drafted_by=proposal.drafted_by),
-    )
     if meters is not None:
         meters.proposal_stored(proposal)
-    return response
+    return _Stored(run, proposal, transition)

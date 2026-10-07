@@ -33,7 +33,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from test_kind_manifests import (
+from kindsupport import (
     SMOKE_SH,
     function_definition,
     one_line_function,

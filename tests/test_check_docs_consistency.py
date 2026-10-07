@@ -820,6 +820,80 @@ class Twins(TreeCase):
                 self.assertIn(f"{missing} is missing", found[0])
 
 
+class ThreatIds(TreeCase):
+    """check_ids for the threat family: T-NN and, from the hundredth row, T-NNN."""
+
+    THREAT_MODEL = "docs/architecture/security/threat-model.md"
+
+    def setUp(self):
+        super().setUp()
+        # ID_OWNERS was built from the real repository when the module loaded;
+        # keep its real threat pattern and point only the owning file at the tree.
+        threat = self.arch / "security" / "threat-model.md"
+        self.check.ID_OWNERS = {
+            pattern: threat
+            for pattern in self.check.ID_OWNERS
+            if pattern.startswith(r"\bT-")
+        }
+        self.write(
+            self.THREAT_MODEL,
+            """
+            ## Threats
+
+            | ID | Threat |
+            |---|---|
+            | T-42 | A two-digit row. |
+            | T-100 | A three-digit row. |
+            """,
+        )
+
+    def failures(self):
+        return self.run_check(self.check.check_ids)
+
+    def test_a_cited_three_digit_threat_that_is_defined_passes(self):
+        self.write("docs/notes.md", "The budget guard is T-100.\n")
+        self.assertEqual(self.failures(), [])
+
+    def test_a_cited_three_digit_threat_that_is_not_defined_is_reported(self):
+        self.write("docs/notes.md", "The budget guard is T-101.\n")
+
+        found = self.failures()
+
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("docs/notes.md cites T-101", found[0])
+
+    def test_a_cited_two_digit_threat_that_is_defined_passes(self):
+        self.write("docs/notes.md", "The budget guard is T-42.\n")
+        self.assertEqual(self.failures(), [])
+
+    def test_a_cited_two_digit_threat_that_is_not_defined_is_reported(self):
+        self.write("docs/notes.md", "The budget guard is T-43.\n")
+
+        found = self.failures()
+
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("docs/notes.md cites T-43", found[0])
+
+    def test_a_threat_defined_by_a_heading_of_three_digits_passes(self):
+        self.write(
+            self.THREAT_MODEL,
+            """
+            ### T-102 A heading row
+
+            Text.
+            """,
+        )
+        self.write("docs/notes.md", "See T-102.\n")
+        self.assertEqual(self.failures(), [])
+
+    def test_four_digits_and_one_digit_are_not_threat_ids(self):
+        # Neither shape is an ID, so neither is checked, as before: T-1000 is
+        # not read as T-100 (defined) or as an undefined T-10, and T-1 is not
+        # an undefined ID either.
+        self.write("docs/notes.md", "Not IDs: T-1000 and T-1 and T-10000.\n")
+        self.assertEqual(self.failures(), [])
+
+
 class ShippedExamples(unittest.TestCase):
     """The base's own example documents must model the correct convention."""
 

@@ -89,6 +89,8 @@ NOT_A_CHARTS_TAG = {
     "structurizr/structurizr": "documentation tooling, no chart",
     "pandoc/extra": "documentation tooling, no chart",
     "minlag/mermaid-cli": "documentation tooling, no chart",
+    # The configuration scan of the AWS module (make aws-scan, S036): no chart.
+    "ghcr.io/aquasecurity/trivy": "the policy scan's image, no chart",
 }
 IMAGE_NAME = r"[a-z0-9][a-z0-9./-]*"
 DIGEST_LINE = rf"^[A-Z][A-Z0-9_]*=({IMAGE_NAME}):[\w.-]+@sha256:[a-f0-9]{{64}}"
@@ -475,6 +477,25 @@ class Readers(unittest.TestCase):
         for name in [*charts, *NOT_A_CHARTS_TAG]:
             with self.subTest(name=name):
                 self.assertFalse(any(fnmatch.fnmatchcase(name, p) for p in patterns))
+
+    def test_the_terraform_note_names_the_checks_of_both_modules(self) -> None:
+        rules = self.config["packageRules"]
+
+        (group,) = [r for r in rules if r.get("groupName") == "terraform"]
+        note = " ".join(group["prBodyNotes"])
+
+        for words in (
+            "CI does not run Terraform",
+            "`make azure-plan`",
+            "`make aws-validate`",
+            "`make aws-scan`",
+        ):
+            with self.subTest(words=words):
+                self.assertIn(words, note)
+        for target in ("aws-validate", "aws-scan"):
+            with self.subTest(target=target):
+                makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+                self.assertIn(f"\n{target}:", makefile)
 
     def test_the_terraform_lock_refresh_is_off_and_the_others_are_not(self) -> None:
         terraform = self.config["terraform"]

@@ -12,7 +12,10 @@ is one ``failed`` leg, the run's own status notwithstanding: the leg is what is
 counted. The leg's own end is counted, not the stored status that a sweep may
 have written over it, unless nothing could be written: then the leg is
 ``failed`` with ``not-saved``. A run the database refused before its first leg
-(or a resume it refused to claim) is one ``failed`` count with ``not-started``.
+(or a resume it refused to read or to claim) is one ``failed`` count with
+``not-started``; a resume that could not read its run has no agent label, as the
+run's agent was not read. A leg is counted whatever ends its settling: one that
+ends in an error nobody classified is ``failed``, ``unexpected``.
 A meter never raises into the work it counts (``counted_safely``).
 
 ``meridian.runtime.model_calls`` counts each call a graph asks of the model
@@ -134,23 +137,20 @@ class RuntimeMeters:
         self._runs.add(1, metric_attributes(attributes))
 
     @counted_safely
-    def not_started(self, tenant: str, agent: str) -> None:
+    def not_started(self, tenant: str | None, agent: str | None) -> None:
         """Count a run the database refused before a leg existed. The tenant
-        and the agent are ones the registry holds: the caller checked them."""
-        self._runs.add(
-            1,
-            metric_attributes(
-                {
-                    "meridian.tenant": tenant,
-                    "meridian.agent": agent,
-                    "meridian.outcome": "failed",
-                    "meridian.reason": NOT_STARTED,
-                }
-            ),
-        )
+        and the agent are ones the registry holds: the caller checked them. A
+        resume that could not read its run knows no agent, and a tenant the
+        registry lacks is no label: a label that is not known is left out."""
+        attributes = {"meridian.outcome": "failed", "meridian.reason": NOT_STARTED}
+        if tenant is not None:
+            attributes["meridian.tenant"] = tenant
+        if agent is not None:
+            attributes["meridian.agent"] = agent
+        self._runs.add(1, metric_attributes(attributes))
 
     @contextmanager
-    def start_counted(self, tenant: str, agent: str) -> Iterator[None]:
+    def start_counted(self, tenant: str | None, agent: str | None) -> Iterator[None]:
         """Count a database error in the block as a run that did not start,
         and let it go on to its answer."""
         try:

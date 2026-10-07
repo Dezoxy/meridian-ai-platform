@@ -378,6 +378,176 @@ a file with `kind export kubeconfig` instead). Also:
   this chart does not have (a chart that renders a value into its notes
   would print it; that is a fact about this chart, not about Helm).
 
+The AWS environment (S036; the rules are implemented and tested, and the
+module they guard, `infra/terraform/aws/`, is checked and not applied
+anywhere). The guard stops a session from doing
+by reflex what only the owner should do there, and it is not the barrier for
+the second half of the step: with credentials on the machine a session
+reaches every call below by a variable, a quote in the middle of a word, a
+script file, `python3`, `uv` or a container. The barrier is where the
+credentials are, a machine or an operating-system user where no session runs
+and no credential file is readable by one
+(`infra/terraform/aws/README.md`, "What stops a session, and what does
+not"). The rules read the command with prose blanked, so a commit message
+(`-m`, `--message`) or a pull request body (`--body`) that names one passes.
+Nothing else is blanked: the guard reads a quoted word as a use of what it
+names (a search, an `echo`, a commit message given with `-b`, `-t` or
+`--subject`), so search with the Grep tool and write a message to a file.
+The searches and pseudo-terminal rows marked "false alarm by design" in
+`tests/guard-bash-cases.jsonl` hold this.
+
+Denied:
+
+- `make aws-destroy` and `infra/terraform/aws.sh destroy`, in the runner
+  forms the Azure rules read (`bash`, `./`, a path, after `cd … &&`, in
+  `bash -c`, behind `env`, `time`, `xargs` before the script, `gmake`; a
+  backtick after the target ends it). Not read: a variable or stdin that holds
+  the target (`for t in aws-destroy; do make $t; done`,
+  `echo aws-destroy | xargs make`);
+- `aws.sh` or `make aws-plan|apply|destroy` in a command that also names a
+  pseudo-terminal tool (`script`, `unbuffer`, `expect`, `socat`, `setsid`,
+  `pty`) anywhere, because the wrapper's terminal check is `[[ -t 0 ]]` and a
+  pseudo-terminal passes it. A search for the word in the wrapper
+  (`grep -n script infra/terraform/aws.sh`) is denied too, a false alarm by
+  design;
+- `aws.sh` or `make aws-*` run traced (`bash -x`, `-v`, `-xv`, `-o xtrace`,
+  `sh -x`, `set -x`, `set -o xtrace`) or with `SHELLOPTS=`, `BASH_XTRACEFD=`,
+  `BASH_ENV=`, `ENV=` or `PS4=` set, which print what the script keeps out of
+  its output or run code before its first line;
+- a `TF_*` or `AWS_ENDPOINT_URL*` assignment in a command that runs
+  `terraform`, `tofu`, `aws`, `aws.sh` or `make aws-*`. This holds for the
+  Azure foundation too: `TF_VAR_x=1 terraform -chdir=infra/terraform/foundation
+  validate` is denied;
+- `terraform` or `tofu` by hand where the module is, which is where the same
+  command names it (`-chdir=…/aws`, a `cd` into it in the same command, or the
+  name of its state directory, state file or plan), or where the working
+  directory the harness passes in the hook's input (`cwd`) is the module's or
+  under it. Whether that `cwd` follows a `cd` made by an earlier Bash call is
+  not verified, so a `cd` in one call and `terraform apply` in the next may
+  pass. The verbs are `apply`, `destroy`, `plan -out`, `import`,
+  `state mv|rm|push`, `force-unlock` and `workspace new|delete|select` of
+  another name than `default` (`default2`, `defaults`, `default-prod` and
+  `default_x` are other names); `validate`, `fmt` and `init -backend=false`
+  pass. A bare
+  `tofu destroy` is denied as `terraform destroy` is, and a bare `tofu apply`
+  asks as `terraform apply` does;
+- the `aws` CLI (also the `amazon/aws-cli` image and `uvx --from awscli aws`)
+  for `iam create-access-key`, `create-service-specific-credential` and
+  `reset-service-specific-credential`, `rds generate-db-auth-token`,
+  `kms decrypt`, `sso get-role-credentials`, any `delete-*`, `terminate-*` or
+  `purge-*` operation (also `batch-` and `force-`), `s3 rm` and `s3 rb`, and
+  the flags `--skip-final-snapshot` and `--force-delete-without-recovery`;
+  `--help` passes. The secret readers and the session, role, registry and
+  cluster token printers are S075's rules above, which already deny or ask;
+- a reader (`cat`, `grep`, `rg`, `sed`, `awk`, `cut`, `od`, `nl`, `tac`,
+  `diff`, `jq`, `cp`, `tar`, `python3`, `perl`, `source` and the rest of the
+  list in the hook) of the local file `local.env*`, a `.tfstate`, `.tfplan` or
+  `.tfplan.meta` file, `terraform.tfstate.d`, `meridian-aws` (the state's
+  directory), `~/.aws`, `~/.terraformrc`, `~/.terraform.d` and `.tfvars` or
+  `.tfvars.json` (a `.tfvars.example` passes); `ls`, `stat`, `test` and `git
+  check-ignore` of them pass;
+- a write (`>`, `>>`, `tee`, `cp`, `mv`, `install`, `ln`, `dd`, `rsync`,
+  `truncate`, `sed -i`) to `~/.terraformrc`, `~/.gitconfig`,
+  `~/.config/git/`, `~/.aws/`, `.terraform/environment` or `aws.tfplan*`.
+
+Asked:
+
+- `make aws-plan` and `aws.sh plan`, which sign in with the owner's
+  credentials; and `make aws-apply` and `aws.sh apply`, whose text says that
+  it costs money and that the owner runs it from where no session holds the
+  credentials;
+- `make … TRIVY_IMAGE=` and `PROMTOOL_IMAGE=`, which replace a pinned image
+  (the Makefile's `:=` yields to the command line, not to the environment);
+- `terraform` or `tofu` where the module is (as above, the same command or
+  the `cwd`) with `plan` (it signs in with the owner's credentials), `show`,
+  `output`, `console`, `refresh`, `state list|show|pull` and
+  `workspace select default` (the README's way back to the default workspace,
+  also with two blanks or a quoted `"default"`; `workspace show` asks too, as a
+  `show`), and `-auto-approve` anywhere. The
+  Azure foundation's `terraform output`, `state list` and `plan` pass, as
+  before. The settings add an ask for the bare `terraform plan` and for `-chdir`
+  into the module, which holds in Claude Code only (Codex reads no settings;
+  the hook's own ask for `plan` above is what Codex has);
+- any `aws` call whose operation is not on the read list: `describe-*`,
+  `list-*`, `sts get-caller-identity`, `help`, `--version`, `sso login` and
+  `logout`, `configure list` and `get`, `s3 ls` and the `ssm get-parameter`
+  family (S075's cases pass those). S075 denies `--with-decryption` and asks
+  for `configure get` of a secret key or a token when they are typed plain;
+  the quotes are stripped here, so `aws "ssm" get-parameter --with-decryption`
+  and `aws "configure" "get" aws_secret_access_key` are not listed reads and
+  ask. The `get-*` operations other than those ask, on purpose (fail
+  closed). `aws` is read
+  where a command starts, after `VAR=value`, `env`, `time`, `nohup`, `exec`,
+  `command`, `sudo`, `nice` or `xargs` (each with no option of its own), `if`,
+  `do`, a bracket or a quote, in the `amazon/aws-cli` image and after `uvx
+  --from awscli`; a path that ends in `aws` is not a call. A quoted service or
+  operation is read without its quotes (`aws "ec2" run-instances` asks), and a
+  token of nothing but quotes asks. A call after more than 256 bytes of what
+  stands before it, and a ninth call in one command, ask unread. `--help`
+  passes. `eks update-kubeconfig` asks, because it writes `~/.kube/config`;
+- `python3` or `uv run` that names `boto3`, `botocore` or `awscli`.
+
+Passes unasked: `make aws-validate`, `make aws-scan`,
+`infra/terraform/aws.sh validate`, `shellcheck` and `bash -n` of the wrapper,
+and every Azure command as before (`make azure-plan` and `azure-smoke` pass,
+`azure-state` and `azure-apply` ask).
+
+The settings add a second layer for the removal: `Bash(make aws-destroy*)`,
+`Bash(infra/terraform/aws.sh destroy*)` and the `./` form are denied there, so
+a hook that timed out or crashed does not let it through in Claude Code
+(`Bash(make *)` is allowed).
+
+Not seen, once, for this family (nothing below is built; each is a way past a
+guard for habits, and the barrier is where the credentials are):
+
+- Wrappers before `aws` that the ask does not read: `timeout`, `nice -n`,
+  `watch`, `stdbuf`, `env -i`, `sudo -u`, `xargs -I{}`, `find -exec`, a brace
+  group `{ aws …; }`, a path prefix (`~/.local/bin/aws`, `$HOME/…`, `./aws`)
+  and `uv run aws`. The delete and credential denies read the same shapes
+  anywhere in the command and still deny them.
+- The `hashicorp/terraform` image run, `terragrunt` (except `-auto-approve`)
+  and `terraform state replace-provider` and `login`.
+- Readers after a `cd` into a credentials directory (`cd ~/.aws && cat
+  credentials`), through `find … -exec cat`, a redirect (`< file`, `while read
+  … < file`), a glob (`cat ~/.a*/credentials`, `cat infra/terraform/lo*`), a
+  recursive search of the home or of `infra/terraform` (`grep -r AKIA ~`), or
+  `python3` with `pathlib`.
+- `git config --global` and `--system` (a write of `~/.gitconfig` through git),
+  with a key that runs a program (`core.fsmonitor`, `alias.x '!…'`,
+  `include.path`, `core.sshCommand`); `git add -f` of the local file.
+- The session's own start-up files under the home directory (`~/.bashrc`,
+  `~/.profile`, `~/.local/bin/*`): the home-file list above is by name and not
+  complete, and when the owner's shell shares the home directory those steer as
+  strongly as `~/.gitconfig`.
+- The wrapper or its removal named in a variable (`T=destroy; aws.sh $T`) or
+  in a script file; a pseudo-terminal made inside a script file; the `aws` CLI
+  through `python3` that is not `boto3`, through a container that is not
+  `amazon/aws-cli`, or through `uvx awscli` and `pipx run awscli`.
+- `AWS_PROFILE`, `AWS_CONFIG_FILE`, `AWS_SHARED_CREDENTIALS_FILE`,
+  `GIT_CONFIG*` and `GIT_DIR` assignments (they point at other files; the
+  contract lists only `TF_*` and `AWS_ENDPOINT_URL*`); `make SHELL=` and
+  `.SHELLFLAGS=`.
+- The settings: `Read`, `Edit` and `Write` are denied for the paths in
+  `.claude/settings.json`, and whether the bare `Grep` and `Glob` tools obey the
+  `Read` denies is not verified; the `./` patterns are relative to the
+  session's directory, and whether they match a file reached by an absolute
+  path from another checkout is not verified; Codex reads no settings and runs
+  this hook through `.codex/hooks`, a link to `.claude/hooks`.
+- The two generic rules for the removal verb (`terraform` and `tofu` followed
+  by `destroy`, and by `apply` for the ask) read the whole command, not the
+  command with prose blanked: a commit message or a pull request body that
+  names `terraform destroy` or `tofu destroy` is denied for both tools (write
+  the message to a file and pass the file).
+- The second tool's bare state-surgery verbs (`tofu state rm`, `import`,
+  `force-unlock`) answer none where `terraform`'s ask, unless the module is
+  named or is the working directory.
+- `gh … -b`, `-t` and `gh pr merge --subject` are not blanked as `--body` and
+  `--title` are, so a body given with `-b` that names `make aws-destroy` is
+  denied.
+- A working directory that reaches the module only through `..` or a link
+  (`…/foundation/../aws`) is not seen; one that ends in `/..` counts as the
+  module, and fails closed.
+
 Timeouts. A hook that runs past its timeout does not block the call, so
 the guard cannot be allowed to run long. The bounds below do not prevent
 that for every shape (the first ones were measured on one-word segments
@@ -472,9 +642,11 @@ Not seen:
 - Anything that is not typed as a command: a file the harness reads, a
   tool call that is not Bash.
 - The guard's own files. The permission rules allow `Edit` and `Write`
-  on `.claude/hooks/guard-bash.sh` and `.claude/settings.json` (only
-  `.env` and `*.tfvars` are denied), so a session can change or switch
-  off the guard. A deny rule on them is the owner's decision; it is
+  on `.claude/hooks/guard-bash.sh` and `.claude/settings.json` (`.env`,
+  `*.tfvars` and, since S036, the AWS wrapper's closed files and the
+  home-directory files that steer Terraform, git and the aws CLI are
+  denied, these two are not), so a session can change or switch off the
+  guard. A deny rule on them is the owner's decision; it is
   recorded here and not built.
 - The cloud consoles, and the cloud CLI's other ways to a value than
   the ones listed.

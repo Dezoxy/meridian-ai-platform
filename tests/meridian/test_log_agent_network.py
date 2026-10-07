@@ -10,7 +10,7 @@ pod label. Nothing here needs a cluster, and none of it has run on one.
 
 import yaml
 from chartsupport import NAMESPACE_LABEL, peers, rules
-from test_kind_manifests import KIND_DIR, UP_SH
+from kindsupport import KIND_DIR, UP_SH
 from test_kind_namespace_policies import (
     header_of,
     pods,

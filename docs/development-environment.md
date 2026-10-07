@@ -54,7 +54,10 @@ pins in `infra/kind/pins.env`, the `Makefile` and the workflows:
 - `gitleaks` (the secret scan before a push) and `shellcheck`;
 - Node.js, for the edit and session hooks under `.claude/hooks/node/` and
   the MCP server in `.mcp.json`;
-- `terraform` and `az` only for the Azure steps (S007, S020).
+- `terraform` and `az` only for the Azure steps (S007, S020), and `terraform`
+  with Docker for `make aws-validate` and `make aws-scan` (S036), which need
+  no account; the `aws` CLI is the owner's, for a plan or an apply, and a
+  session holds no credential for it.
 
 Three things the laptop never showed, and what the virtual machine
 answered on 2026-10-06:
@@ -81,6 +84,7 @@ clone plus the tools above is a working environment. What is not in git:
 |---|---|---|
 | Private notes | `.context/` (ignored) | Copy by hand; never commit, never quote in a tracked file |
 | Azure state settings | `infra/terraform/local.env` (ignored) | What `make azure-state` wrote. Copy by hand, or let that target write it again when S020 opens; never into a tracked file |
+| AWS pin and settings | `infra/terraform/local.env-aws` (ignored, mode 600) | Four `KEY=value` lines the owner writes by hand (the account number, the Region, an address and an e-mail address), read and never run by `infra/terraform/aws.sh`; the module's README lists them. The state is under `~/.local/state/meridian-aws/`, not in the checkout, and moves only if it is copied |
 | Local permission answers | `.claude/settings.local.json` (ignored) | Leave behind; the assistant asks again |
 | The kind cluster | Docker, on the old machine | Do not move. `make up`, then `make deploy`, rebuild it from the charts; `make smoke` and `make demo` prove it. The owner runs `make down` on the old machine |
 | Cluster credentials | `infra/kind/kubeconfig` (ignored) | `make up` writes a new one |
@@ -158,7 +162,12 @@ For the virtual machine both are recorded below.
   the other ways to a Secret's value (the secret-rotation runbook lists
   them, and what the guard does not see: it is a guard for habits, and
   the session can edit the guard's own files, which is the owner's to
-  decide). A known limit, older than this
+  decide). Since S036 it also denies the AWS module's removal and the
+  by-hand changes of its state (`make aws-destroy`, the wrapper's `destroy`,
+  `apply`, `import`, `state` writes), and asks before `make aws-plan`,
+  `make aws-apply`, a `terraform plan` of that module and an `aws` call that
+  is not a read (the same runbook's section on the AWS environment lists what
+  it does not see). A known limit, older than this
   change: the hook has ten seconds, and with the machine loaded (a load
   average near 70) a command that carries a 70 KB heredoc, or one of
   4,000 segments, took it that long (1.3 s when idle), and Claude Code
@@ -335,6 +344,18 @@ reason to ask for a larger one.
 - **What the cluster holds.** The kind node alone is 3.3 GiB, and the cluster
   with six services and five agents at work left 5.7 GB available (above). A
   test database keeps its PostgreSQL data in memory.
+- **`/tmp` is memory.** On the development machine `/tmp` is a tmpfs, so
+  every file there is RAM. Found on 2026-10-07 at 06:26 UTC, after the four
+  overloads: the session's scratch directory there held 2.9 GB that finished
+  agents had left (one copy of a Terraform module with its provider was 1.6
+  GB), and pytest's temporary directories 0.8 GB more. Removing five leftover
+  directories gave 2.2 GB back at once (the swap in use fell from 4.1 to 2.5
+  GB), and the next whole suite ran at six workers in 3 min 29 s with 5 GB
+  still available. So large scratch (a provider's download, a virtual
+  environment, a schema dump) goes on disk, an agent removes what it made
+  when it ends, and `df -h /tmp` is read before a suite. The overloads below
+  were measured before this was found; how much of them it explains was not
+  measured.
 - **What an overload did to it.** At 04:51 UTC on 2026-10-07 the load was 156
   (177 over five minutes), the swap was full (4,095 of 4,095 MB) and 134 MB
   were free. Eight pods of the cluster were not Ready, among them
@@ -393,3 +414,43 @@ database built from every migration. Measured on 2026-10-06 beside the
 deployed cluster, the whole suite: 3 min 00 s before and 2 min 11 s after
 with 4 workers, and 1 min 52 s after with 10, which is what the suite took
 alone before. Still to measure: what it saves in CI.
+
+Since S074 the template is built from the list of migrations that
+`tests/meridian/dbsupport.py` read when it was imported. `apply_migrations`
+takes an optional `files` argument that only that builder passes, so a test
+that patches the runner's file list, or rebinds the support module's public
+name, cannot change the template, and the template's ledger is compared with
+the imported list before it is used. `meridian db migrate` passes no list.
+
+### Tests that hold under load
+
+A test that passes alone and fails on a busy machine rests on a speed. S074
+made the ones it found hold by construction, and what it did not measure is
+listed in its section of the plan.
+
+- **A stack test does not rest on the product's ten seconds for a tool
+  call.** `build_stack` gives the runtime's tool client and the tool server's
+  call clamp a bound of 30 seconds (both names: the client sends the smaller
+  of its budget and its constant, and the server clamps that again), and a
+  fixture puts the product's values back after each test. A run makes at most
+  16 tool calls, so a hung one costs at most 16 times 30, 480 seconds, which is
+  inside the 600-second lease and CI's 15-minute job; at 60 seconds it was 960,
+  inside neither. Tests of the bound itself build no stack. There is no
+  pytest-level timeout: nothing else ends a hung test before the job does.
+- **A CPU-time test uses the one helper, `tests/meridian/cputime.py`.** It
+  compares a call's thread CPU time on an input with that on one four times
+  larger (linear is 4, the limit 8). A busy machine slows a window of tens of
+  milliseconds, so a ratio at or above the limit is measured again, up to four
+  times, and the least counts; a ratio at twice the limit is not measured
+  again. What that costs: at a load of 9 to 12 it passes most growth of n^1.5
+  and catches roughly n^1.7 and worse. A small run under 0.1 ms is an error,
+  not a skip.
+- **No test parameter or ID comes from the clock, a random source or a path.**
+  Under xdist every worker collects the tests itself, and the workers must
+  collect the same ones, or the run stops. A value that differs from one
+  process to the next belongs inside a test or a fixture, not in a
+  parametrization or an ID.
+- **A poll that waits on bash's clock is counted in readings.** The demo
+  tests replace the poll's `sleep` with a step of the script's own `SECONDS`,
+  so a trace that must time out costs no real time and one that must settle
+  needs a few readings, not seconds.

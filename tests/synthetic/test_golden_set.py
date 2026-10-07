@@ -56,6 +56,7 @@ HISTORY_FIELDS = [
     "paid_amount",
     "status",
 ]
+FIRST_CLAIMS = 40  # the frozen first set; the claims after it are test_golden_extra's
 SCENARIO_MIX = {
     "within_threshold": 8,
     "over_threshold": 6,
@@ -64,6 +65,17 @@ SCENARIO_MIX = {
     "policy_inactive": 6,
     "missing_documents": 6,
 }
+# The first forty and the seven claims after them: three on a fraud indicator's
+# boundary, three one day off it, one on a policy number no policy has.
+WHOLE_MIX = {
+    "within_threshold": 11,
+    "over_threshold": 6,
+    "fraud_indicator": 9,
+    "excluded": 8,
+    "policy_inactive": 6,
+    "missing_documents": 6,
+    "policy_not_found": 1,
+}
 ROUTE_AND_RECOMMENDATION = {
     "within_threshold": ("auto_approve", "approve"),
     "over_threshold": ("adjuster", "approve"),
@@ -71,6 +83,7 @@ ROUTE_AND_RECOMMENDATION = {
     "excluded": ("adjuster", "reject"),
     "policy_inactive": ("adjuster", "reject"),
     "missing_documents": ("request_documents", None),
+    "policy_not_found": ("adjuster", None),
 }
 AUTO_APPROVAL_LIMIT = 2500
 REFERENCE_DATE = date(2026, 9, 1)
@@ -117,9 +130,10 @@ def test_the_manifest_names_the_workload_the_set_belongs_to(manifest):
 
 # -- label invariants ---------------------------------------------------------
 def test_the_reason_counts_match_the_scenario_mix(outcomes, manifest):
-    assert Counter(o["reason"] for o in outcomes) == SCENARIO_MIX
-    assert manifest["reasons"] == SCENARIO_MIX
-    assert len(outcomes) == 40
+    assert Counter(o["reason"] for o in outcomes[:FIRST_CLAIMS]) == SCENARIO_MIX
+    assert Counter(o["reason"] for o in outcomes) == WHOLE_MIX
+    assert manifest["reasons"] == WHOLE_MIX
+    assert len(outcomes) == 47
 
 
 def test_route_and_recommendation_follow_from_the_reason(outcomes):
@@ -188,8 +202,8 @@ def test_the_threshold_separates_within_from_over(outcomes):
     assert {AUTO_APPROVAL_LIMIT, AUTO_APPROVAL_LIMIT + 1} <= payables
 
 
-def test_fraud_cases_are_isolated_two_per_indicator(outcomes):
-    fraud = [o for o in outcomes if o["reason"] == "fraud_indicator"]
+def test_the_first_forty_fraud_cases_are_isolated_two_per_indicator(outcomes):
+    fraud = [o for o in outcomes[:FIRST_CLAIMS] if o["reason"] == "fraud_indicator"]
     counts = Counter(tuple(o["fraud_indicators"]) for o in fraud)
     assert counts == {
         ("early_loss",): 2,
@@ -205,10 +219,11 @@ def test_no_other_reason_carries_a_fraud_indicator(outcomes):
 
 
 def test_payable_amount_is_the_capped_claim_less_the_deductible(
-    outcomes, claims, policies
+    policy_outcomes, policy_claims, policies
 ):
-    claim_of, policy_of = by_key(claims, "claim_id"), by_key(policies, "policy_number")
-    for outcome in outcomes:
+    claim_of = by_key(policy_claims, "claim_id")
+    policy_of = by_key(policies, "policy_number")
+    for outcome in policy_outcomes:
         if outcome["payable_amount"] is None:
             continue
         claim = claim_of[outcome["claim_id"]]
@@ -218,16 +233,17 @@ def test_payable_amount_is_the_capped_claim_less_the_deductible(
     assert any(
         claim_of[o["claim_id"]]["claimed_amount"]
         > policy_of[claim_of[o["claim_id"]]["policy_number"]]["limit"]
-        for o in outcomes
+        for o in policy_outcomes
     ), "one claim should exceed its limit"
 
 
 def test_the_limit_clause_is_cited_exactly_when_the_limit_caps_the_claim(
-    outcomes, claims, policies
+    policy_outcomes, policy_claims, policies
 ):
-    claim_of, policy_of = by_key(claims, "claim_id"), by_key(policies, "policy_number")
+    claim_of = by_key(policy_claims, "claim_id")
+    policy_of = by_key(policies, "policy_number")
     capped = []
-    for outcome in outcomes:
+    for outcome in policy_outcomes:
         claim = claim_of[outcome["claim_id"]]
         limit = policy_of[claim["policy_number"]]["limit"]
         clauses = [c["clause"] for c in outcome["citations"]]
@@ -241,9 +257,12 @@ def test_the_limit_clause_is_cited_exactly_when_the_limit_caps_the_claim(
     assert capped, "one claim should exceed its limit"
 
 
-def test_fraud_indicators_agree_with_the_raw_data(outcomes, claims, policies, history):
-    claim_of, policy_of = by_key(claims, "claim_id"), by_key(policies, "policy_number")
-    for outcome in outcomes:
+def test_fraud_indicators_agree_with_the_raw_data(
+    policy_outcomes, policy_claims, policies, history
+):
+    claim_of = by_key(policy_claims, "claim_id")
+    policy_of = by_key(policies, "policy_number")
+    for outcome in policy_outcomes:
         claim = claim_of[outcome["claim_id"]]
         policy = policy_of[claim["policy_number"]]
         loss, reported = day(claim["loss_date"]), day(claim["reported_on"])
@@ -263,9 +282,12 @@ def test_fraud_indicators_agree_with_the_raw_data(outcomes, claims, policies, hi
         assert outcome["fraud_indicators"] == found, outcome["claim_id"]
 
 
-def test_policy_inactive_matches_the_policy_dates(outcomes, claims, policies):
-    claim_of, policy_of = by_key(claims, "claim_id"), by_key(policies, "policy_number")
-    for outcome in outcomes:
+def test_policy_inactive_matches_the_policy_dates(
+    policy_outcomes, policy_claims, policies
+):
+    claim_of = by_key(policy_claims, "claim_id")
+    policy_of = by_key(policies, "policy_number")
+    for outcome in policy_outcomes:
         claim = claim_of[outcome["claim_id"]]
         policy = policy_of[claim["policy_number"]]
         loss = day(claim["loss_date"])
@@ -279,32 +301,38 @@ def test_policy_inactive_matches_the_policy_dates(outcomes, claims, policies):
             assert cited == [clause], outcome
     causes = Counter(
         "lapsed" if o["citations"][0]["clause"] == "6.2" else "period"
-        for o in outcomes
+        for o in policy_outcomes
         if o["reason"] == "policy_inactive"
     )
     assert set(causes) == {"lapsed", "period"}, "expired and lapsed both appear"
 
 
-def test_one_lapsed_policy_was_still_in_force_at_the_loss(claims, policies, outcomes):
-    claim_of, policy_of = by_key(claims, "claim_id"), by_key(policies, "policy_number")
+def test_one_lapsed_policy_was_still_in_force_at_the_loss(
+    policy_claims, policies, policy_outcomes
+):
+    claim_of = by_key(policy_claims, "claim_id")
+    policy_of = by_key(policies, "policy_number")
     traps = [
         o
-        for o in outcomes
+        for o in policy_outcomes
         if o["reason"] != "policy_inactive"
         and policy_of[claim_of[o["claim_id"]]["policy_number"]]["status"] == "lapsed"
     ]
     assert traps
 
 
-def test_the_variants_the_readme_promises_exist(claims, policies, outcomes):
-    claim_of, policy_of = by_key(claims, "claim_id"), by_key(policies, "policy_number")
+def test_the_variants_the_readme_promises_exist(
+    policy_claims, policies, policy_outcomes
+):
+    claim_of = by_key(policy_claims, "claim_id")
+    policy_of = by_key(policies, "policy_number")
     rows = [
         (
             o,
             claim_of[o["claim_id"]],
             policy_of[claim_of[o["claim_id"]]["policy_number"]],
         )
-        for o in outcomes
+        for o in policy_outcomes
     ]
     inactive = [(c, p) for o, c, p in rows if o["reason"] == "policy_inactive"]
 
@@ -356,7 +384,7 @@ def test_claims_carry_no_label_fields(claims, outcomes):
 def test_claims_and_outcomes_have_the_same_claim_ids(claims, outcomes):
     claim_ids = [c["claim_id"] for c in claims]
     assert claim_ids == [o["claim_id"] for o in outcomes]
-    assert claim_ids == [f"CLM-{n:04d}" for n in range(1, 41)]
+    assert claim_ids == [f"CLM-{n:04d}" for n in range(1, 48)]
 
 
 def test_descriptions_do_not_use_label_vocabulary(claims):
@@ -409,7 +437,7 @@ def test_descriptions_are_two_to_four_sentences(claims):
 def test_a_late_report_gives_a_reason_for_the_delay(claims, outcomes):
     claim_of = by_key(claims, "claim_id")
     late = [o for o in outcomes if "late_report" in o["fraud_indicators"]]
-    assert len(late) == 2
+    assert len(late) == 3  # two of the first forty, and the one on the boundary
     for outcome in late:
         description = claim_of[outcome["claim_id"]]["description"].lower()
         assert re.search(r"delay|earlier|so quickly|could not|not realise", description)
@@ -443,9 +471,9 @@ def test_no_phone_numbers_bank_accounts_or_birth_dates_appear(policies, claims):
         assert "phone" not in record["holder"]
 
 
-def test_the_claimant_is_the_policy_holder(claims, policies):
+def test_the_claimant_is_the_policy_holder(policy_claims, policies):
     policy_of = by_key(policies, "policy_number")
-    for claim in claims:
+    for claim in policy_claims:
         holder = policy_of[claim["policy_number"]]["holder"]
         assert claim["claimant"] == {"name": holder["name"], "email": holder["email"]}
 
@@ -518,9 +546,9 @@ def test_history_is_never_dated_after_the_term_or_on_or_after_a_lapse(
             assert dated < day(policy["lapsed_on"]), entry["history_id"]
 
 
-def test_claimed_amounts_exceed_the_deductible(claims, policies):
+def test_claimed_amounts_exceed_the_deductible(policy_claims, policies):
     policy_of = by_key(policies, "policy_number")
-    for claim in claims:
+    for claim in policy_claims:
         policy = policy_of[claim["policy_number"]]
         assert claim["claimed_amount"] > policy["deductible"]
 
@@ -531,22 +559,31 @@ def test_documents_are_in_catalogue_order(claims):
         assert claim["documents"] == sorted(claim["documents"], key=order.index)
 
 
-def test_fifty_policies_forty_with_a_claim_and_history_of_closed_claims(
-    policies, claims, history
+def test_fifty_six_policies_forty_six_with_a_claim_and_closed_history(
+    policies, claims, policy_claims, history
 ):
-    assert len(policies) == 50
+    # The first fifty are POL-0001 to POL-0050 (forty with a claim); the six
+    # after them each have one of the extra claims. A seventh extra claim names
+    # a policy number no policy has.
+    assert [p["policy_number"] for p in policies] == [
+        f"POL-{n:04d}" for n in range(1, 57)
+    ]
     claimed = [c["policy_number"] for c in claims]
-    assert len(set(claimed)) == 40
-    assert set(claimed) <= {p["policy_number"] for p in policies}
+    assert len(claims) == 47
+    assert len(set(claimed)) == 47
+    assert len(policy_claims) == 46
+    assert set(claimed) - {p["policy_number"] for p in policies} == {
+        c["policy_number"] for c in claims if c not in policy_claims
+    }
     assert all(h["status"] == "closed" for h in history)
     assert {h["policy_number"] for h in history} <= {
         p["policy_number"] for p in policies
     }
 
 
-def test_every_product_appears_in_the_claims(claims, policies):
+def test_every_product_appears_in_the_claims(policy_claims, policies):
     policy_of = by_key(policies, "policy_number")
-    counts = Counter(policy_of[c["policy_number"]]["product"] for c in claims)
+    counts = Counter(policy_of[c["policy_number"]]["product"] for c in policy_claims)
     assert set(counts) == {"MOTOR-TPL", "MOTOR-COMP", "HOME-STD", "HOME-PLUS"}
     assert min(counts.values()) >= 5
 

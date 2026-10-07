@@ -5,7 +5,7 @@ the sweep's CronJob, and a live cluster adopts its objects with
 ``--take-ownership``: a selector or a name that changed would not be adopted, it
 would be refused or duplicated. These tests render the chart (``helm template``;
 tests/meridian/chartsupport.py) and pin that, and that no credential is in a
-value. What each object says is pinned in test_kind_manifests.py.
+value. What each object says is pinned in the test_kind_*.py files.
 """
 
 import re
@@ -438,7 +438,7 @@ def test_make_helm_lint_lints_the_chart_strictly_with_kinds_values_and_every_job
 # service, a pinned image and the one-replica rule of the gateway.
 # ---------------------------------------------------------------------------
 
-USER_ID = 10001  # the Dockerfile's USER; test_kind_manifests.py ties them
+USER_ID = 10001  # the Dockerfile's USER; test_kind_image_and_roles.py ties them
 TMP_SIZE_LIMIT = "16Mi"
 SHA256_HEX_DIGITS = 64
 DIGEST_PREFIX_LENGTH = 12

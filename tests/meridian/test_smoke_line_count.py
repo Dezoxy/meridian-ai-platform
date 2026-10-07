@@ -22,19 +22,17 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from test_certificate_refused_request import run_check as run_refused_request_check
-from test_certificate_smoke import run_policy_check
-from test_helm_identity import GOOD, run_identity_check
-from test_kind_database_policy_address import run_database_policy_check
-from test_kind_manifests import (
-    SMOKE_SH,
+from kindharness import (
     SWEEP_FINISHED,
-    function_body,
-    requires_jq,
     run_cost_panel,
     run_sweep_check,
     sweep_job,
 )
+from kindsupport import SMOKE_SH, function_body, requires_jq
+from test_certificate_refused_request import run_check as run_refused_request_check
+from test_certificate_smoke import run_policy_check
+from test_helm_identity import GOOD, run_identity_check
+from test_kind_database_policy_address import run_database_policy_check
 from test_smoke_alert_rules import SMOKE_LINES_AFTER_DEPLOY, run_alert_rules
 from test_smoke_database_certificates import healthy_certificate_lines
 from test_smoke_log_agent import healthy_log_agent_lines

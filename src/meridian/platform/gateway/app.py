@@ -21,13 +21,15 @@ called (QA-12). A candidate whose circuit is open, or that the deadline leaves
 no time for, is skipped; a deployment's own failure moves the walk to the next
 candidate; a rejected request ends it, and so does a request the provider's
 content filter refuses, which the gateway answers 400 with the
-``X-Meridian-Refusal`` header (T-67); a reservation the
+``X-Meridian-Refusal`` header (T-67), with a second header and the deployment
+named when the completion was withheld after the provider ran; a reservation the
 tenant's budget refuses ends it too (429, or the earlier attempt's answer).
 Every candidate touched leaves one audit row, except that a refusal, whether
 policy's 403 or a tenant limit's 429 or 413, leaves at most one row per tenant
 and reason per minute, and that row says how many refusals it stands in for, so
-a flood cannot fill the log, and the count of a flood's last window is written
-once the flood has been quiet for two minutes, or at shutdown (T-49). The audit
+a flood cannot fill the log, and the count of a flood's last window, of these
+refusals and of the caller check's, is written once the flood has been quiet
+for two minutes, or at shutdown (T-49). The audit
 write is part of the answer, so a call that cannot be recorded returns no
 output (QA-05). There is no retry of one deployment: the next candidate is the
 retry. The limits apply in replay mode as in live mode: replay simulates the
@@ -52,7 +54,7 @@ import time
 import uuid
 from collections.abc import Callable, Mapping
 from datetime import date
-from typing import Annotated, Any, NoReturn
+from typing import Annotated, Any, NoReturn, get_args
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from opentelemetry.sdk.metrics import MeterProvider
@@ -81,6 +83,7 @@ from meridian.platform.common.identity import (
 from meridian.platform.common.logformat import configure_logging
 from meridian.platform.common.logredaction import install_log_redaction
 from meridian.platform.common.metrics import make_meter_provider
+from meridian.platform.common.refusal_summary import write_ended_summaries
 from meridian.platform.common.telemetry import set_span_attributes, start_span
 from meridian.platform.common.throttle import RefusalAuditThrottle
 from meridian.platform.gateway.budget import (
@@ -113,6 +116,7 @@ from meridian.platform.gateway.ratelimit import (
 from meridian.platform.gateway.redaction import redact_chat, redact_embeddings
 from meridian.platform.gateway.refusals import (
     LIMIT_ANSWERS,
+    MODEL_CALL_EVENT,
     RATE_STORE_RETRY_SECONDS,
     LimitRefusalReason,
     RefusalAudit,
@@ -120,7 +124,7 @@ from meridian.platform.gateway.refusals import (
 from meridian.platform.gateway.replay import ReplayProvider
 from meridian.platform.gateway.resilience import CircuitBreaker
 from meridian.platform.gateway.routing import RefusalReason, decide
-from meridian.platform.gateway.settings import GatewaySettings
+from meridian.platform.gateway.settings import GatewayMode, GatewaySettings
 from meridian.platform.gateway.startup import (
     AZURE_KIND as AZURE_KIND,  # re-exported: the tests import it from here
 )
@@ -159,9 +163,23 @@ SERVICE_NAME = "model-gateway"
 HTTP_BAD_REQUEST = 400
 # The mark of the gateway's own 400: FastAPI answers 400 too, for a body it
 # cannot decode, and the runtime must not read that as a content-filter refusal.
-# ``runtime/model_client.py`` keeps a copy of both (a test compares them).
+# ``runtime/model_client.py`` keeps a copy of every constant of this block (a
+# test compares them). ``X-Meridian-Refusal: content-filter`` is on every
+# filtered answer: the provider's filter refused the prompt, or the provider ran
+# and its completion was withheld. A withheld one, billed with the reservation
+# kept (the filter withheld the completion, or the model's own refusal of a
+# structured request: billed either way), carries a second header of its own,
+# ``X-Meridian-Completion: withheld``, and names the deployment in three more,
+# each a registry ID or a closed word and never a provider's text (S069). A
+# refused prompt carries none of the four. A runtime that knows only the refusal
+# header still reads a withheld completion as a filtered call.
 REFUSAL_HEADER = "X-Meridian-Refusal"
 REFUSAL_CONTENT_FILTER = "content-filter"
+COMPLETION_HEADER = "X-Meridian-Completion"
+COMPLETION_WITHHELD = "withheld"
+DEPLOYMENT_HEADER = "X-Meridian-Deployment"
+PROVIDER_HEADER = "X-Meridian-Provider"
+MODE_HEADER = "X-Meridian-Mode"
 HTTP_BAD_GATEWAY = 502
 HTTP_SERVICE_UNAVAILABLE = 503
 HTTP_GATEWAY_TIMEOUT = 504
@@ -202,7 +220,23 @@ RunHeader = Annotated[uuid.UUID, Header(alias="X-Meridian-Run")]
 DataClassHeader = Annotated[DataClass | None, Header(alias="X-Meridian-Data-Class")]
 
 
-def _unanswered(result: Unanswered) -> NoReturn:
+def _filtered_headers(result: Unanswered, mode: str) -> dict[str, str]:
+    """The headers of the content filter's 400: the refusal mark always; for a
+    withheld completion also its own mark and the deployment that drafted it:
+    its registry ID, its provider's registry ID and the gateway's mode."""
+    deployment = result.withheld_by
+    if deployment is None:
+        return {REFUSAL_HEADER: REFUSAL_CONTENT_FILTER}
+    return {
+        REFUSAL_HEADER: REFUSAL_CONTENT_FILTER,
+        COMPLETION_HEADER: COMPLETION_WITHHELD,
+        DEPLOYMENT_HEADER: deployment.id,
+        PROVIDER_HEADER: deployment.provider,
+        MODE_HEADER: mode,
+    }
+
+
+def _unanswered(result: Unanswered, mode: str) -> NoReturn:
     """The status when no candidate answered: the last attempt's kind (400 for a
     content filter, 504 for a timeout, 502 for the rest), or 503 when none was
     called. Never a word of the provider's (T-18)."""
@@ -214,7 +248,7 @@ def _unanswered(result: Unanswered) -> NoReturn:
         raise HTTPException(  # the one 400 the gateway gives, marked by its header
             status_code=HTTP_BAD_REQUEST,
             detail=PROVIDER_FILTERED,
-            headers={REFUSAL_HEADER: REFUSAL_CONTENT_FILTER},
+            headers=_filtered_headers(result, mode),
         )
     if result.last_attempt_kind == "not-recorded":
         raise HTTPException(status_code=HTTP_BAD_GATEWAY, detail=NOT_RECORDED)
@@ -293,13 +327,24 @@ def create_app(
         )
 
     refusals = RefusalAudit(RefusalAuditThrottle(clock=clock), audit)
+    # The caller check's own throttle: its keys are a service and a word, not a
+    # tenant and a reason. Its floods are summarised by the same writer.
+    caller_throttle = RefusalAuditThrottle(clock=clock)
+
+    def write_ended(*, everything: bool = False) -> None:
+        """The counts of the floods that ended, of model-call refusals and of
+        the caller check's; neither writer raises an ``Exception``."""
+        refusals.write_ended(everything=everything)
+        write_ended_summaries(
+            caller_throttle, audit, MODEL_CALL_EVENT, everything=everything
+        )
 
     def close_all() -> None:
         """Only what this function built: an injected provider is its caller's.
         The counts of refusal floods are written first; with the database
         unreachable they are lost with the process, and the shutdown goes on."""
         try:
-            refusals.write_ended(everything=True)
+            write_ended(everything=True)
             if close is not None:
                 close()
         finally:
@@ -337,7 +382,7 @@ def create_app(
         app,
         policy,
         audited_refusals(
-            RefusalAuditThrottle(clock=clock),  # its own: not summarised
+            caller_throttle,
             lambda reason, who, carried: audit(
                 "model.call",
                 "refused",
@@ -472,10 +517,45 @@ def create_app(
                 REFUSAL_HEADER: {
                     "description": (
                         "Marks this 400 as the content filter's refusal; a 400 "
-                        "without it is not."
+                        "without it is not. The one value, on every filtered "
+                        "answer, whether the prompt was refused or a "
+                        "completion was withheld."
                     ),
                     "schema": {"type": "string", "enum": [REFUSAL_CONTENT_FILTER]},
-                }
+                },
+                COMPLETION_HEADER: {
+                    "description": (
+                        "Beside the refusal header, only when the provider ran "
+                        "and the completion was withheld, billed either way: "
+                        "a completion the filter withheld, or the model's own "
+                        "refusal of a structured request. A refused prompt "
+                        "(nothing billed) does not carry it."
+                    ),
+                    "schema": {"type": "string", "enum": [COMPLETION_WITHHELD]},
+                },
+                DEPLOYMENT_HEADER: {
+                    "description": (
+                        "With the completion header only: the registry ID of "
+                        "the deployment that drafted the completion."
+                    ),
+                    "schema": {"type": "string"},
+                },
+                PROVIDER_HEADER: {
+                    "description": (
+                        "With the completion header only: the registry ID of "
+                        "that deployment's provider."
+                    ),
+                    "schema": {"type": "string"},
+                },
+                MODE_HEADER: {
+                    "description": (
+                        "With the completion header only: the gateway's mode."
+                    ),
+                    "schema": {
+                        "type": "string",
+                        "enum": list(get_args(GatewayMode)),
+                    },
+                },
             },
         }
         return responses
@@ -565,7 +645,7 @@ def create_app(
         the app has no check (and then a policy refuses every name). The count
         of a flood that ended is written first, with this request of any
         tenant."""
-        refusals.write_ended()
+        write_ended()
         record = meters.call_record()
         try:
             with start_span(tracer, span_name) as span:
@@ -667,7 +747,7 @@ def create_app(
             # The reason is the last attempt's kind, a fixed word and never the
             # provider's text; no candidate called is "unavailable".
             record.end("failed", result.last_attempt_kind or NOT_CALLED_REASON)
-            _unanswered(result)
+            _unanswered(result, settings.mode)
         return result
 
     return app

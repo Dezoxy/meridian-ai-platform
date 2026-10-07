@@ -87,6 +87,7 @@ from meridian.workloads.claims_triage.models import (
     ClaimMoveRequest,
     ClaimSubmission,
     DecisionFailure,
+    invalid_fields,
 )
 from meridian.workloads.claims_triage.moves import (
     RECORD_OUTCOME_SQL,
@@ -361,7 +362,15 @@ def _output_of(run: RunResponse, *, resumed: bool) -> BriefOutput:
         )
     try:
         return BriefOutput.model_validate(run.output)
-    except ValidationError:
+    except ValidationError as exc:
+        # The fields and their error types, never a value: the output is the
+        # model's text.
+        logger.warning(
+            "the runtime's output of run %s is not a brief: %s %s",
+            run.run_id,
+            type(exc).__name__,
+            invalid_fields(exc),
+        )
         raise RuntimeCallError(
             "the runtime's output is not a brief", run_id=run.run_id
         ) from None
@@ -454,7 +463,10 @@ def start_brief(
             mark_error(span, exc)
             return DecisionFailure(500, INTERNAL_ERROR)
         try:
-            run = start_run(http, tenant, claim_id, taken.facts, agent=BRIEF_AGENT)
+            # The workflow reads the input's ``claim`` (``facts.read_claim``).
+            run = start_run(
+                http, tenant, claim_id, {"claim": taken.facts}, agent=BRIEF_AGENT
+            )
             output = _output_of(run, resumed=False)
         except RuntimeCallError as exc:
             return _fail_first_leg(dsn, span, claim_id, taken.brief_id, exc)

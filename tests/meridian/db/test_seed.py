@@ -82,14 +82,14 @@ def assert_nothing_written(db: DatabaseHandle) -> None:
     assert table(db, SELECT_HISTORY) == []
 
 
-def test_the_real_synthetic_data_loads_fifty_policies_and_forty_four_rows(
+def test_the_real_synthetic_data_loads_fifty_six_policies_and_fifty_one_rows(
     fresh_database: DatabaseHandle,
 ) -> None:
     counts = seed(fresh_database, REAL_SOURCE)
 
-    assert counts == SeedCounts(policies=50, claim_history=44)
-    assert len(table(fresh_database, SELECT_POLICIES)) == 50
-    assert len(table(fresh_database, SELECT_HISTORY)) == 44
+    assert counts == SeedCounts(policies=56, claim_history=51)
+    assert len(table(fresh_database, SELECT_POLICIES)) == 56
+    assert len(table(fresh_database, SELECT_HISTORY)) == 51
 
 
 def test_the_limit_goes_to_cover_limit_and_a_lapsed_policy_keeps_its_date(
@@ -138,12 +138,12 @@ def test_a_changed_record_is_updated_in_place(
 
     counts = seed(fresh_database, source(raise_the_limit))
 
-    assert counts == SeedCounts(policies=50, claim_history=44)
+    assert counts == SeedCounts(policies=56, claim_history=51)
     assert table(
         fresh_database,
         "SELECT cover_limit FROM policy.policies WHERE policy_number = 'POL-0001'",
     ) == [(999,)]
-    assert len(table(fresh_database, SELECT_POLICIES)) == 50
+    assert len(table(fresh_database, SELECT_POLICIES)) == 56
     assert table(
         fresh_database,
         "SELECT paid_amount FROM policy.claim_history WHERE history_id = 'HIST-0001'",
@@ -169,7 +169,7 @@ def test_a_policy_removed_from_the_source_is_removed_with_its_history(
 
     counts = seed(fresh_database, source(shrink))
 
-    assert counts == SeedCounts(policies=49, claim_history=44 - len(gone_history))
+    assert counts == SeedCounts(policies=55, claim_history=51 - len(gone_history))
     assert table(
         fresh_database,
         "SELECT count(*) FROM policy.policies WHERE policy_number = %s",
@@ -180,8 +180,8 @@ def test_a_policy_removed_from_the_source_is_removed_with_its_history(
         "SELECT count(*) FROM policy.claim_history WHERE policy_number = %s",
         (gone,),
     ) == [(0,)]
-    assert len(table(fresh_database, SELECT_POLICIES)) == 49
-    assert len(table(fresh_database, SELECT_HISTORY)) == 44 - len(gone_history)
+    assert len(table(fresh_database, SELECT_POLICIES)) == 55
+    assert len(table(fresh_database, SELECT_HISTORY)) == 51 - len(gone_history)
 
 
 def test_a_history_row_removed_from_the_source_is_removed_and_its_policy_stays(
@@ -194,12 +194,12 @@ def test_a_history_row_removed_from_the_source_is_removed_and_its_policy_stays(
 
     counts = seed(fresh_database, source(drop_first_history))
 
-    assert counts == SeedCounts(policies=50, claim_history=43)
+    assert counts == SeedCounts(policies=56, claim_history=50)
     assert table(
         fresh_database,
         "SELECT count(*) FROM policy.claim_history WHERE history_id = 'HIST-0001'",
     ) == [(0,)]
-    assert len(table(fresh_database, SELECT_POLICIES)) == 50
+    assert len(table(fresh_database, SELECT_POLICIES)) == 56
 
 
 def test_a_source_that_fails_validation_removes_nothing(
@@ -215,8 +215,8 @@ def test_a_source_that_fails_validation_removes_nothing(
     with pytest.raises(SeedError):
         seed(fresh_database, source(shrink_and_break))
 
-    assert len(table(fresh_database, SELECT_POLICIES)) == 50
-    assert len(table(fresh_database, SELECT_HISTORY)) == 44
+    assert len(table(fresh_database, SELECT_POLICIES)) == 56
+    assert len(table(fresh_database, SELECT_HISTORY)) == 51
 
 
 def test_no_column_holds_a_holders_name_email_or_street(
@@ -235,7 +235,7 @@ def test_no_column_holds_a_holders_name_email_or_street(
         "SELECT row_to_json(t)::text FROM policy.policies t "
         "UNION ALL SELECT row_to_json(h)::text FROM policy.claim_history h",
     )
-    assert len(rows) == 50 + 44
+    assert len(rows) == 56 + 51
     for needle in personal:
         assert needle
         assert not [row for (row,) in rows if needle in row], needle

@@ -43,6 +43,8 @@ from meridian.platform.common.metrics import make_meter_provider
 from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.platform.gateway import app as gateway_app
 from meridian.platform.gateway.app import (
+    COMPLETION_HEADER,
+    COMPLETION_WITHHELD,
     PROVIDER_FAILED,
     REFUSAL_CONTENT_FILTER,
     REFUSAL_HEADER,
@@ -533,7 +535,11 @@ def test_a_models_refusal_of_a_structured_request_is_the_400_with_no_fallback(
     response, _ = gateway.post(SCHEMA_BODY)
 
     assert response.status_code == 400
+    # The model ran and answered with a refusal and no content: the ledger
+    # keeps its reservation, so the wire marks it as a withheld completion
+    # beside the filter's own mark (S069).
     assert response.headers[REFUSAL_HEADER] == REFUSAL_CONTENT_FILTER
+    assert response.headers[COMPLETION_HEADER] == COMPLETION_WITHHELD
     assert gateway.provider.called == [FIRST]
 
 

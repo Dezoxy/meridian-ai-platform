@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 import test_smoke_network_policy as network
 from chartsupport import peers
-from test_kind_manifests import (
+from kindsupport import (
     SMOKE_SH,
     function_body,
     function_definition,

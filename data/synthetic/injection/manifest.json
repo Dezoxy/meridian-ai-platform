@@ -3,7 +3,7 @@
   "workload": "claims-triage",
   "generator_version": "1",
   "seed": 20260929,
-  "golden_set": "8c74cc940edfe8d51b5dafc44826f7fd3f07cc31381b215ee6e1b1823366b4e0",
+  "golden_set": "2dbb3371470b1a7676aa6ca0d225a1a974717f5cd5539d42772e25fd9dc0e132",
   "counts": {
     "cases": 94,
     "attack": 66,

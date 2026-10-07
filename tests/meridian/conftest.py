@@ -57,6 +57,8 @@ from psycopg.conninfo import make_conninfo
 from redissupport import RateKeys
 
 from meridian.platform.common.logformat import HELD_AT_WARNING, UVICORN_LOGGERS
+from meridian.platform.toolserver import wire
+from meridian.runtime import tool_client
 
 # (file name, text to find, replacement); the first occurrence is replaced.
 Edit = tuple[str, str, str]
@@ -137,6 +139,19 @@ def _keep_the_logging_configuration() -> Iterator[None]:
             logger.handlers[:] = handlers
             logger.setLevel(level)
             logger.propagate = propagate
+
+
+@pytest.fixture(autouse=True)
+def _keep_the_tool_bounds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``stacksupport.build_stack`` gives the stack's tool calls a bound of its
+    own (S074): it sets the runtime's and the server's. Record the product's
+    values before every test, so the monkeypatch puts them back after it, and a
+    test of the product's bound (``runtime/test_tool_client``) never sees the
+    stack's."""
+    monkeypatch.setattr(
+        tool_client, "TOOL_TIMEOUT_SECONDS", tool_client.TOOL_TIMEOUT_SECONDS
+    )
+    monkeypatch.setattr(wire, "MAX_CALL_SECONDS", wire.MAX_CALL_SECONDS)
 
 
 @pytest.fixture(scope="session")

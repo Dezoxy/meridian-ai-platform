@@ -24,6 +24,7 @@ from meridian.workloads.claims_triage.lifecycle import (
     RUNTIME_WRITE_TIMEOUT_SECONDS,
 )
 from meridian.workloads.claims_triage.meters import TriageFailure
+from meridian.workloads.claims_triage.models import invalid_fields
 
 # Ending a run is best effort (the claim's move stands), and ``add_documents``
 # and ``triage_again`` run a new triage after it, one after the other, inside
@@ -124,8 +125,21 @@ def _call_runtime(
             run_status=_run_status_in(response),
         )
     try:
-        return RunResponse.model_validate(response.json())
-    except (ValueError, ValidationError):
+        body = response.json()
+    except ValueError as exc:
+        # Nothing of the body: its text is the runtime's, and may quote the run.
+        logger.warning("the runtime's answer is not JSON (%s)", type(exc).__name__)
+        raise RuntimeCallError(
+            "the runtime answered outside its contract", failure="bad-output"
+        ) from None
+    try:
+        return RunResponse.model_validate(body)
+    except ValidationError as exc:
+        logger.warning(
+            "the runtime's answer is not a run: %s %s",
+            type(exc).__name__,
+            invalid_fields(exc),
+        )
         raise RuntimeCallError(
             "the runtime answered outside its contract", failure="bad-output"
         ) from None
@@ -135,11 +149,13 @@ def start_run(
     http: httpx.Client,
     tenant: str,
     reference: str,
-    facts: dict[str, Any],
+    run_input: dict[str, Any],
     agent: str = AGENT,
 ) -> RunResponse:
-    """Start a run of ``agent`` (the triage's, unless one is named) over the
-    claim's facts."""
+    """Start a run of ``agent`` (the triage's, unless one is named) with
+    ``run_input`` as the run's whole input, sent as it is given: each caller
+    builds its own (the triage's is ``triaging.triage_run_input``, the brief's is
+    ``{"claim": …}``), as the two workflows read different fields."""
     return _call_runtime(
         http,
         "/runs",
@@ -147,7 +163,7 @@ def start_run(
             "agent": agent,
             "tenant": tenant,
             "reference": reference,
-            "input": {"claim": facts},
+            "input": run_input,
         },
     )
 

@@ -429,7 +429,9 @@ def test_only_the_owner_the_ingestion_and_the_servers_column_grant_touch_the_chu
 ) -> None:
     # Migration 0006 (S046) gave knowledge_mcp a SELECT on ten columns; the
     # table's own ACL names the owner and, since 0022 (S063), the ingestion's
-    # role (test_job_roles_migration.py holds what it may do).
+    # role (test_job_roles_migration.py holds what it may do), and since 0026
+    # (S067) the ingestion's role also reads seven columns, for `verify`
+    # (test_knowledge_verify_migration.py holds which).
     table_grantees = owner_run(
         migrated_database,
         "SELECT DISTINCT a.grantee::regrole::text "
@@ -444,4 +446,7 @@ def test_only_the_owner_the_ingestion_and_the_servers_column_grant_touch_the_chu
     )
 
     assert {grantee for (grantee,) in table_grantees} == {OWNER, "knowledge_ingest"}
-    assert column_grants == [("knowledge_mcp", "SELECT")]
+    assert sorted(column_grants) == [
+        ("knowledge_ingest", "SELECT"),
+        ("knowledge_mcp", "SELECT"),
+    ]
