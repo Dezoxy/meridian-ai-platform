@@ -907,6 +907,7 @@ that day; the rest stand as their step recorded them.
 | A `ClaimResponse` that cannot be built after the proposal is stored ends as a 500 with no second count and no second triage; the state is consistent and a retry of `POST /claims` answers 409, but on the documents route (`moves.py`, `add_documents`) the exception escapes the `except HTTPException`, so the documents and the proposal are stored and the caller sees a 500; theoretical, since the response is built from parts already validated | S069 (boundary review, low) | open; low | S070 |
 | S069's tests that stop short: the takeover tests call the real claim from inside leg A's node and end leg B with a direct `finish_run`, so the guard is proven against PostgreSQL and no aged `updated_at` goes through two requests to `/resume`; the four throttle tests, the `SystemExit` test of `run_leg` and the guard's relaxation over `Any` were not red first, because they pin behaviour that already held (F1 mutated nothing to prove they can fail) | S069 (python review, F1, E5) | open | S074 |
 | S069's small ends, all low: `ModelCallFilteredError.withheld` is read by nothing in `src`; `except (Exception, SystemExit)` stands twice in `common/entry_points.py` where a named tuple would keep them equal; the userinfo cut takes the `y` out of a plain path with an empty segment (`/files/x//y@z` gives `//z`, logs only); `ResumeRequest.input` is a required field that must be `{}`; a `GeneratorExit` from a coroutine closed by the garbage collector is counted `unexpected`, where `cancelled` is arguable; the sweep's import tests deny named prefixes only, so a web stack arriving through `uvicorn`, `mcp` or `anyio` alone would pass; `test_tool_client.py` is 1,091 lines, `test_runtime_app.py` 3,143 and `test_tool_server.py` 2,433, and `test_claims_meters.py` about 790; the helpers `State`, `Clock`, `make_client`, `summaries` and `summary_write_fails` are copied across the new test files, and `make_client` of `test_runtime_leg_counts.py` hard-codes `raise_server_exceptions=False` | S069 (python and boundary reviews, E4, E5) | open | S074 |
+| The knowledge service's embedding client (`knowledge_mcp/embedding_client.py`) posts with a buffered call, so the whole reply of the gateway, 2xx or not, is held in memory before the client reads it, and nothing caps its size (the timeout is per read); the runtime's client got a streamed read with a cap in this step, and the same change is owed here | S073 (its contract K6 stopped on it, 2026-10-07) | open; low: the gateway is a peer behind mutual TLS | S069 |
 | No real withheld completion and no real refusal of a structured request has been seen from a real provider, so `drafted_by` for a withheld completion rests on a mocked transport and a scripted provider, and the evaluation baseline's `model_asked` has not moved (no recorded or scripted case is one); the measurement costs money and the owner says yes first (T-67) | S069 (E6, boundary review) | open; S071's done-when already names the refusal of a structured request, and this adds the withheld completion | S071 |
 | Not seen on a cluster after S069's first half: any of its code. A kind run would show the 400's four headers on a withheld completion, the 422 for a resume that carries a value, one `suppressed` row from each service after a flood and from a tool server after a shed call with its run named, a takeover of a run left `Running` past the lease (`stale-running`) with the late leg's end matching nothing, the access log's path of a request with an encoded address, and the metric `not-started` of a resume that could not read its run | S069 (the step's evidence) | open; the second half of S069 holds the cluster and deploys this code | S069 |
 
@@ -12426,8 +12427,9 @@ read-only map that came before the design.
     only a 2xx body is read, so a refusal's body is not.
   - E5: `triaging` still offers `invalid_fields` and `DATA_KEY`, re-exported
     from `models`, so six importing files stay unchanged; the guard of the
-    logged models allows a mapping with free keys only over `Any`; the lines
-    are WARNING, the brief's included.
+    logged models allows a mapping with free keys only over `Any` (since F2:
+    and only when the key is a string); the lines are WARNING, the brief's
+    included.
   - E6: the three provenance values are checked against the registry's ID
     pattern and the three modes, and one failure drops all three.
   - F1: a per-call bound is the larger of the two paths, not their sum.
@@ -12504,9 +12506,8 @@ on 2026-10-06 side by side; E3 waited for E2 (both edit the runtime's
 - **F1** (f804dc5): the seven items above.
 - **E5** (bb8a80a): R1 and B16 part 4 in the Claims API.
 - **E6 and E6b** (e204db5): R4, the withheld completion's wire and drafter.
-- **F2**, beside this contract and not on the branch when this section was
-  written: the boundary review's three medium findings and four of its low
-  ones. (1) The guard's relaxation holds for string keys only (a
+- **F2** (cc5b8ea): the boundary review's three medium findings and four of
+  its low ones. (1) The guard's relaxation holds for string keys only (a
   `dict[UUID, Any]` puts the key in an error's location). (2) A reply the
   gateway compressed is refused as too large before any chunk is decoded
   (the review's probe decoded 64 MB in one chunk before the cap was checked),
@@ -12562,7 +12563,13 @@ on 2026-10-06 side by side; E3 waited for E2 (both edit the runtime's
   guard tests, and one E4 group that pinned behaviour that did not change.
 - **The whole suite on the final tree:** FINAL-SUITE-RESULT
 - **The evaluation's free replay on the final tree:** REPLAY-RESULT
-- **F2, the last fix contract:** F2-RESULT
+- **F2, the last fix contract:** its own run of the gateway's, the runtime's
+  and the workload's tests with a database printed `6300 passed, 6 skipped in
+  145.24s`; lint, `make docs` and `make test` ended 0 (its report). Red
+  first: the two key-type cases, the seven coded replies, the eight replies
+  whose IDs do not fit and the canary test; the mode-enum test could not be
+  seen to fail (it guards a fourth mode). No recorded reply carries a
+  deployment or a provider, so the replay did not move.
 - **A kind run would show** the withheld completion's four headers on the
   400, the 422 text "a resume delivers no value: send {}", one `suppressed`
   row from each service after a flood and a shed tool call's row with its run
@@ -13201,4 +13208,4 @@ on 2026-10-06 side by side; E3 waited for E2 (both edit the runtime's
   open for its second half, the server's certificate read once (the cluster
   lane) and the ingestion's tenant (the owner, at S020). T-03, T-10, T-14,
   T-31, T-40, T-49, T-67, T-93 and T-98 changed, no new threat; ADR 9 gains a
-  note. Twelve backlog rows closed, five closed in part, sixteen new.
+  note. Twelve backlog rows closed, five closed in part, seventeen new.
