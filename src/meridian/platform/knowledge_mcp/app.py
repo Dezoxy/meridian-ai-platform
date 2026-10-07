@@ -97,7 +97,7 @@ def create_app(
 
 
 def create_app_from_env() -> Starlette:
-    """The ASGI app, for ``uvicorn --factory``."""
+    """The ASGI app, for the ``--factory`` of the TLS start module (S069)."""
     install_log_redaction()
     configure_logging(SERVICE_NAME)
     return create_app(KnowledgeServerSettings.from_env()).app

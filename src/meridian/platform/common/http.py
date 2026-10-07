@@ -352,7 +352,8 @@ def create_service_app(
     declared body over the limit (see ``BodyLimitMiddleware``). No server span
     keeps a query string (see ``drop_query_from_span``).
 
-    The certificate ``environ`` names is loaded here (S056, T-89). Inside its
+    The certificate ``environ`` names is loaded here (S056, T-89), unless the
+    TLS start module handed over the one it serves (S069). Inside its
     margin, ``/healthz`` reads the file again: it answers 503 when the file
     holds a newer certificate (the container is restarted and loads it) or the
     loaded one has ended, and 200 while the file is not renewed (see

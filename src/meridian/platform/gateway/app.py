@@ -754,7 +754,8 @@ def create_app(
 
 
 def create_app_from_env() -> FastAPI:
-    """The factory S041 runs under ``uvicorn --factory``."""
+    """The factory S041 runs under the ``--factory`` of the TLS start module
+    (S069), which calls uvicorn."""
     install_log_redaction()
     configure_logging(SERVICE_NAME)
     settings = GatewaySettings.from_env()

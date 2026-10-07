@@ -1,9 +1,10 @@
 """Every caller presents its certificate and verifies the server's (S055).
 
-Real TLS: the services run under uvicorn with the platform's flags
-(``tlsserver.serve_tls``) and the callers' own clients, built from their own
-settings, call them. What each service does with the identity is proved in
-process in ``test_service_identity.py``; this proves the path between.
+Real TLS: a stand-in for the services, uvicorn with the platform's flags
+(``tlsserver.serve_tls``; the services themselves start through ``tlsstart``)
+and the callers' own clients, built from their own settings, call them. What
+each service does with the identity is proved in process in
+``test_service_identity.py``; this proves the path between.
 """
 
 import json
