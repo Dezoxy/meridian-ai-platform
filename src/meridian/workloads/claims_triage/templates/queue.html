@@ -6,11 +6,11 @@
 <p>Oldest first, {{ limit }} to a page: claims waiting for a decision, and claims whose triage failed.</p>
 <table>
 <thead>
-<tr><th scope="col">Claim</th><th scope="col">State</th><th scope="col">Since</th><th scope="col">Peril</th><th scope="col">Claimed amount</th><th scope="col">Reason of the latest proposal</th></tr>
+<tr><th scope="col">Claim</th><th scope="col">State</th><th scope="col">Since</th><th scope="col">Peril</th><th scope="col">Claimed amount</th><th scope="col">Reason of the latest proposal</th><th scope="col">Recommendation rests on</th></tr>
 </thead>
 <tbody>
 {% for row in rows %}
-<tr><td><a href="/adjuster/claims/{{ row.claim_id }}">{{ row.claim_id }}</a></td><td>{{ row.state }}</td><td>{{ row.since }}</td><td>{{ row.peril }}</td><td>{{ row.amount }}</td><td>{{ row.reason }}{% if row.overdue %} <em>Documents overdue</em>{% endif %}</td></tr>
+<tr><td><a href="/adjuster/claims/{{ row.claim_id }}">{{ row.claim_id }}</a></td><td>{{ row.state }}</td><td>{{ row.since }}</td><td>{{ row.peril }}</td><td>{{ row.amount }}</td><td>{{ row.reason }}{% if row.overdue %} <em>Documents overdue</em>{% endif %}</td><td>{{ row.rests_on }}</td></tr>
 {% endfor %}
 </tbody>
 </table>
