@@ -8,7 +8,15 @@ import psycopg
 import typer
 
 from meridian.platform.common.db import connect
-from meridian.platform.migrations.runner import MigrationError, apply_migrations
+from meridian.platform.migrations.runner import (
+    SWEEP_ROLE,
+    UPKEEP_ROLE,
+    MigrationError,
+    SweepMemberships,
+    apply_migrations,
+    sweep_memberships,
+    upkeep_memberships,
+)
 from meridian.platform.policy_mcp.seed import SeedError, seed_policies
 
 # The owner role's DSN, read by `db migrate` alone. Services read
@@ -31,9 +39,67 @@ def _fail(message: str) -> NoReturn:
     raise typer.Exit(code=1)
 
 
+def _sweep_finding(found: SweepMemberships) -> str:
+    """The one sentence for a role that is a member of the sweep's role or the
+    reverse (T-77). It counts and names no role: the catalog is the operator's
+    to read, with the query in the migrations' README."""
+    parts = []
+    if found.members:
+        parts.append(f"{found.members} role(s) are members of {SWEEP_ROLE}")
+    if found.memberships:
+        parts.append(f"{SWEEP_ROLE} is a member of {found.memberships} role(s)")
+    return (
+        "the migrations were applied and stay applied, but "
+        + " and ".join(parts)
+        + ", and the sweep's triggers confine a session by its name, not by its "
+        "membership; list and remove the membership as the migrations' README "
+        'says under "The sweep\'s role has no members"'
+    )
+
+
+def _upkeep_finding(memberships: int) -> str:
+    """The one sentence for the upkeep role being a member of another role
+    (T-25). It counts and names no role, as the sweep's does."""
+    return (
+        "the migrations were applied and stay applied, but "
+        f"{UPKEEP_ROLE} is a member of {memberships} role(s), and the audit "
+        "table's trigger lets a removal through for the owner's rights under "
+        "that login; list and take back the membership as the migrations' "
+        'README says under "The upkeep role has no memberships"'
+    )
+
+
+def _error_text(exc: psycopg.Error) -> str:
+    """The error's class and only the server's own message: libpq's text can echo
+    part of a bad DSN."""
+    detail = exc.diag.message_primary or "no server message (connection failed?)"
+    return f"{type(exc).__name__}: {detail}"
+
+
+def _memberships(dsn: str) -> tuple[SweepMemberships, int]:
+    """The two membership checks, on a connection of their own after the files
+    are applied and their names printed. A check whose own query fails is not a
+    failed migration: the sentence says the files stay applied and the check did
+    not run, so the deploy stops (an unchecked confinement is not a clean one)."""
+    try:
+        with connect(dsn, APPLICATION_NAME) as conn:
+            return sweep_memberships(conn), upkeep_memberships(conn)
+    except psycopg.Error as exc:
+        _fail(
+            "the migrations were applied and stay applied, but the membership "
+            f"check did not run ({_error_text(exc)}); run `meridian db migrate` "
+            "again"
+        )
+
+
 @app.command()
 def migrate() -> None:
-    """Apply the SQL migrations that are not yet applied."""
+    """Apply the SQL migrations that are not yet applied.
+
+    Last, it reads the catalog and fails if a role is a member of
+    ``claims_sweep`` or the reverse, or if ``gateway_upkeep`` is a member of
+    any role; the files stay applied.
+    """
     dsn = os.environ.get(MIGRATIONS_DATABASE_URL_ENV)
     if not dsn:
         _fail(f"{MIGRATIONS_DATABASE_URL_ENV} is not set")
@@ -43,13 +109,21 @@ def migrate() -> None:
     except MigrationError as exc:
         _fail(str(exc))
     except psycopg.Error as exc:
-        # Only the server's own message: libpq's text can echo part of a bad DSN.
-        detail = exc.diag.message_primary or "no server message (connection failed?)"
-        _fail(f"migration failed ({type(exc).__name__}): {detail}")
+        _fail(f"migration failed ({_error_text(exc)})")
     for name in applied:
         typer.echo(name)
     if not applied:
         typer.echo("migrations: up to date")
+    found, upkeep_found = _memberships(dsn)
+    findings = []
+    if found.members or found.memberships:
+        findings.append(_sweep_finding(found))
+    if upkeep_found:
+        findings.append(_upkeep_finding(upkeep_found))
+    for finding in findings[:-1]:
+        typer.echo(f"ERROR {finding}", err=True)
+    if findings:
+        _fail(findings[-1])
 
 
 @app.command("seed-policies")

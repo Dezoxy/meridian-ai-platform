@@ -85,8 +85,9 @@ needs it, never to clear a fault nobody has looked at.
   provider.
 - [Budget exhaustion](runbooks/budget-exhaustion.md): a tenant is refused
   for its token budget or its cost quota; also how `meridian gateway`
-  closes a reservation a dead process left, credits a tenant and expires
-  old ledger rows.
+  closes a reservation a dead process left, credits a tenant, expires old
+  ledger rows and expires old audit rows (no period is set and nothing is
+  scheduled).
 - [Database failure](runbooks/database-failure.md): the Platform Database
   is not ready or is lost; also where a stale sweep leads.
 - [Rollback](runbooks/rollback.md): a release or a registry change made

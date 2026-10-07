@@ -3,7 +3,8 @@
 # decision 8): `make gateway-upkeep ARGS="reservations --older-than 15"`. The
 # command is `meridian gateway` (src/meridian/platform/cli/gateway.py): it lists
 # the open reservations, closes one a dead process left, credits a tenant and
-# expires old months, as the database role gateway_upkeep, whose Secret
+# expires old ledger months and audit rows, as the database role gateway_upkeep,
+# whose Secret
 # gateway-upkeep-db no workload of the release holds. This script is how a Job
 # gets it, for one run. Needs `make up` (the Secret) and `make deploy` (the image).
 #   1. the words of ARGS, checked before the cluster is asked anything: split on
@@ -32,14 +33,19 @@
 #      UPKEEP_LOOKS looks. Its output (the pod's log) is printed through
 #      printable_ascii, however it ends
 # Exit code: 0 when the Job succeeded; 1 when it failed (the command exits 1 on a
-# refusal, `ERROR GUnnn`, which changes nothing, and on a failure of its own, and
-# 2 on a usage error: each is a Failed Job and none is retried, backoffLimit 0),
-# when it did not finish, and when a precondition was not met. (`make` itself
-# returns 2 for a recipe that failed, where this script exits 1.) Only a failed Job
-# whose output holds the command's own `ERROR GUnnn` line promises that nothing
-# was changed: every other failure, and a Job that did not finish, says the change
-# MAY have been applied and to read the reservations or the audit rows before a
-# rerun, because a credit is a new row on every run.
+# refusal, `ERROR GUnnn`, and on a failure of its own, and 2 on a usage error:
+# each is a Failed Job and none is retried, backoffLimit 0), when it did not
+# finish, and when a precondition was not met. (`make` itself returns 2 for a
+# recipe that failed, where this script exits 1.) What a failed Job promises
+# depends on its output. The two expiries remove in batches, each its own
+# transaction, and a failure (a refusal of the ledger's, a lost connection) can
+# follow batches that committed: the command then prints, after its error, a line
+# that says what it removed "before the failure", and the script says that stays
+# removed and that running the command again continues. Without that line, a
+# refusal, the command's own `ERROR GUnnn` line, changed nothing. Every other
+# failure, and a Job that did not finish, says the change MAY have been applied
+# and to read the reservations or the audit rows before a rerun, because a credit
+# is a new row on every run.
 # The Job and its output are kept for a day (ttlSecondsAfterFinished), so
 # `kubectl -n meridian logs job/<name>` still reads them the next morning.
 set -euo pipefail
@@ -82,7 +88,7 @@ split_arguments() {
     die "ARGS holds a newline; give the subcommand and its arguments on one line: ${USAGE}"
   IFS=$' \t' read -r -a words <<<"${text}"
   ((${#words[@]} > 0)) ||
-    die "ARGS is empty; name the subcommand (reservations, close, credit or expire) and its arguments: ${USAGE}"
+    die "ARGS is empty; name the subcommand (reservations, close, credit, expire or expire-audit) and its arguments: ${USAGE}"
   for word in "${words[@]}"; do
     [[ "${word}" =~ ${WORD_PATTERN} ]] && continue
     shown="$(printf '%s' "${word}" | printable_ascii | cut -c "1-${SHOWN_LENGTH}")"
@@ -147,10 +153,19 @@ print_job_output() {
 }
 
 # The command's refusal is a line of its own that starts `ERROR GU` and three
-# digits (src/meridian/platform/cli/gateway.py), and it changes nothing. Any other
-# failure may have come after the commit.
+# digits (src/meridian/platform/cli/gateway.py). Any other failure may have come
+# after the commit.
 job_output_is_a_refusal() {
   grep -Eq '^ERROR GU[0-9]{3}( |$)' <<<"${job_output}"
+}
+
+# A refusal changed nothing only when no batch ran before it. The two expiries
+# remove in batches, each its own transaction, and when a failure follows some,
+# the command prints a line of its own after the error: `removed N usage rows in
+# B batch(es) before the failure ...` (`audit rows` for expire-audit). That line
+# is read first: with it the state is known, whatever the error above it was.
+job_output_has_removals_before_the_failure() {
+  grep -Eq '^removed [0-9]+ (usage|audit) rows in [0-9]+ batch\(es\) before the failure' <<<"${job_output}"
 }
 
 split_arguments
@@ -182,6 +197,9 @@ case "${verdict}" in
     log "job ${job} failed; its output:"
     read_job_output
     print_job_output
+    if job_output_has_removals_before_the_failure; then
+      die "the upkeep job ${job} failed after batches that had committed: the line above that says 'before the failure' tells how much the command removed, and that stays removed; running it again continues from there once the cause above is dealt with. The Job and its output stay for a day: kubectl -n ${NAMESPACE} logs job/${job}"
+    fi
     if job_output_is_a_refusal; then
       die "the upkeep job ${job} failed with a refusal of the command (an ERROR GUnnn line above): a refusal changed nothing, so fix the arguments and run it again. The Job and its output stay for a day: kubectl -n ${NAMESPACE} logs job/${job}"
     fi
