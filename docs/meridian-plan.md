@@ -15275,7 +15275,11 @@ redaction, the name or the assessor):
   times from 20,000 to 80,000 characters on ten shapes, as before the cut,
   and up to about 2.6 times the matcher before the cut in absolute time on
   the densest shape; the new adversarial case probably pins little.
-- **The whole suite on the final tree:** FINAL-SUITE-RESULT
+- **The whole suite on the final tree** (`main` with S068, S078 and S073's
+  first half merged in; c572e5a): `make test` (343 tests), `make docs` (14
+  checks) and `make lint` ended 0; the whole suite at six workers beside the
+  kind cluster and no other run with a database: 17,998 passed, 8 skipped (3
+  min 43 s). The commit after it fills this line.
 
 - **Documents (D1), as run:** `make docs`, `make check` and `make test`, each
   read by its exit status, are in the report of that contract.
