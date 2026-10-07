@@ -223,10 +223,13 @@ namespace; Meridian's file does not repeat them.
   `meridian.runtime.model_calls` reaches Prometheus as
   `meridian_runtime_model_calls_total`, by `meridian_outcome` (`completed`
   or `failed`) and, for a failure, `meridian_reason`: `unreachable` (no
-  answer at all), `timeout`, `refused` (a 429 or a 403), `filtered` (the
-  provider's content filter), `error` (any other status, an answer
-  outside the contract, another HTTP error such as a decoding error, or
-  an exception that is not HTTP's) and `limit` (a call the run's own
+  answer at all), `timeout` (a wait that ran out, or, since S069, a call
+  that took more than its deadline of 30 s as a whole), `refused` (a 429 or
+  a 403), `filtered` (the provider's content filter, a withheld completion
+  included), `error` (any other status, an answer outside the contract, a
+  reply of more than 1 MiB after decoding, another HTTP error such as a
+  decoding error, or an exception that is not HTTP's; S069, in tests) and
+  `limit` (a call the run's own
   limit stopped before it was sent). The runs have
   `meridian_runtime_runs_total`, one count for each leg of a run (a start
   and each resume), made after the leg's status is written, by
@@ -259,7 +262,9 @@ namespace; Meridian's file does not repeat them.
   refusal or a failure, `meridian_tool` (the server's registry tool; a
   name no registry tool has is counted with no tool label) and, once the
   kit has read the run's record, `meridian_tenant` and `meridian_agent`.
-  The knowledge server's `gateway-unavailable` and `timed-out` (failed),
+  A call that ends with no result is `failed` with `cancelled` only when
+  it was cancelled and with `unexpected` for any other exit (S069, in
+  tests). The knowledge server's `gateway-unavailable` and `timed-out` (failed),
   `gateway-busy` and `gateway-refused` (refused) are series of it:
   `gateway-unavailable` is any gateway that gave no vector for a call with
   time left, which includes one that could not be reached and one that
