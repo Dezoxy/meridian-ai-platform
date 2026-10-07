@@ -274,3 +274,23 @@ def argument_name(line: str) -> str | None:
     """The name left of the equals sign of an ``name = value`` line, or ``None``."""
     found = re.match(r"\s*([A-Za-z_][\w-]*)\s*=", line)
     return found.group(1) if found else None
+
+
+# ── what the identities' contract (Z4) reads ─────────────────────────────────
+
+
+def role_assignments_everywhere() -> dict[str, str]:
+    """Every role assignment of the whole module, keyed ``type.name``: a file a
+    later contract adds is read too, so no assignment hides in it."""
+    return {
+        name: body
+        for name, body in resources().items()
+        if name.startswith("azurerm_role_assignment.")
+    }
+
+
+def argument_names(body: str) -> list[str]:
+    """The name left of the equals sign of every ``name = value`` line of a
+    block's text, nested blocks included, in the order written."""
+    names = (argument_name(line) for line in body.splitlines())
+    return [name for name in names if name is not None]

@@ -91,6 +91,12 @@ resource "azurerm_kubernetes_cluster" "main" {
   # which a demo day does not earn.
   private_cluster_enabled = false
 
+  # Run command is off. It is on by default, and it goes through Azure's
+  # management API, so the authorised ranges below may not limit who can use it
+  # (an Azure role is still needed). The second half's bootstrap does not use it:
+  # its Job runs inside the cluster.
+  run_command_enabled = false
+
   api_server_access_profile {
     authorized_ip_ranges = var.api_server_authorized_ip_ranges
   }
