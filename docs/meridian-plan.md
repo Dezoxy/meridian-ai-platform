@@ -15924,7 +15924,15 @@ reading, below, changed the second and the fourth):
 8. **Tokens: Tempo's off (the row) and Loki's too** (the same unused token,
    found by the render; two keys).
 
-**Advisor:** consulted once, before the first contract (08:53 UTC, the
+**Advisor:** consulted twice. The second time before the first pull request,
+because F1 had reached the branch after the review: its reading was that F1
+is the review's own prescription applied (the URI it named, the assertion it
+said to flip, the two evaluations and the multi-pod case), seen red first and
+held by mutations, so a second review would review the reviewer, and the
+consultation stands in for the second read; and that the pull request may
+merge with nothing of it seen on kind, as the first halves of S036, S069 and
+S073 did, if it says that the next `make up` from `main` is the first to see
+T, L, P and F1's URI. The first time, before the first contract (08:53 UTC, the
 design point). It changed three things. (a) The session's reason for
 accepting the CloudNativePG operator's reach was backwards: confined, the
 operator's rule set is a Role in `meridian` only, strictly less than today's
