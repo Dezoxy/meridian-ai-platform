@@ -80,7 +80,10 @@ ORDER BY connections DESC;
 
 A statement is cut off after 10 seconds and a connection attempt after 5,
 so a pile-up is traffic, not a hung query. Stop the traffic; the
-connections close with their requests.
+connections close with their requests. A session that holds a row lock and sits
+idle inside its transaction (`state` is `idle in transaction`) is ended after 60
+seconds (migration 0031, implemented and tested, not run on a cluster); a session
+can lift that for itself, so a holder that stays is deliberate, not forgotten.
 
 ### The data is lost
 

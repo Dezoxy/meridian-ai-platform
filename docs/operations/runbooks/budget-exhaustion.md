@@ -302,7 +302,10 @@ millions of rows.
   admits and charges a call in the current period the same). Run it once, to
   its end, and do not run two at once: a row another session holds is skipped
   and, when only held rows are left, the call is refused (`GU306`, nothing
-  changed); run the command again.
+  changed); run the command again. A session that holds a row and goes idle
+  inside its transaction is ended after 60 seconds (migration 0031), so a row
+  that stays held is held by a session that is working or that lifted the limit
+  for itself.
 - **A half-finished run stays finished as far as it went.** A failure after
   some batches says how many usage rows were removed and that they stay removed
   (each batch has its audit row); running the command again continues from the

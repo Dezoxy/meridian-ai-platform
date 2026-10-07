@@ -133,6 +133,40 @@ the closing call; nothing the gateway decides reads a past period. The role's
 functions are now five: `close_reservation`, `credit_tenant`,
 `expire_ledger_batch`, `expire_audit_events` and `count_audit_events_before`.
 
+The last file of S068 so far is
+[`0031_idle_timeout_pg_temp.sql`](0031_idle_timeout_pg_temp.sql). Implemented and
+tested, not run on a cluster. It does two things and changes no table. It sets
+`idle_in_transaction_session_timeout` to 60 s as the database's default (an
+`ALTER DATABASE ... SET` in a `DO` block, the name from `current_database()`), so
+a session that took a row lock and went idle inside its transaction is ended and
+rolled back instead of holding the lock: 60 s sits above the services' statement
+timeout of 10 s, so it never fires before the bound every session has. It is a
+default a session can change, so it stops a forgotten transaction, not a
+deliberate one; it does not touch a session idle outside a transaction; and it
+binds the sessions that connect after the file (the services connect once per
+call, so the first call after the deploy has it). And it pins `pg_temp` last in
+the search path of the four older trigger functions that named `pg_catalog`
+alone (`audit.stamp_event`, `gateway.forbid_reopen` and the sweep's two, in
+`claims` and `runtime`), with `ALTER FUNCTION ... SET search_path`, not a
+replace: the body, the owner, the grants and `SECURITY DEFINER` stay as they are.
+Each statement takes a row lock on a catalog (`pg_db_role_setting`, `pg_proc`)
+and none on a table; the file sets a lock timeout all the same. **Not built:**
+taking the right to make temporary tables from PUBLIC (a database-level privilege
+is not copied to the test databases, and two tests use the right as their
+control). A test over the migrated catalog fails for any trigger function or
+`SECURITY DEFINER` function in the owner's schemas that does not name `pg_temp`
+last, so the next one has to carry the pin.
+
+## Database-level settings and the tests' template
+
+`ALTER DATABASE ... SET` is stored in `pg_db_role_setting`, and `CREATE DATABASE
+... TEMPLATE` copies files, not that table. Every database of the test suite is a
+copy of the template, so it does not carry a database-level setting even though
+the template does, and a green test on a copy proves nothing about the setting.
+A test of one applies the files to a database of its own (see
+`test_idle_transaction_timeout_migration.py`) or reads `pg_db_role_setting` for
+the template and the copy.
+
 ## An applied file never changes
 
 The ledger records each file's SHA-256, and the runner refuses a file whose
@@ -368,7 +402,7 @@ that asks for a `SET LOCAL lock_timeout` before ACCESS EXCLUSIVE.
 | `CREATE TRIGGER` and `CREATE OR REPLACE TRIGGER`: deliberately outside, they take SHARE ROW EXCLUSIVE and block writers, as `CREATE INDEX` does | timeout | `test_a_trigger_s_creation_is_not_in_the_timeout_rule` |
 | `DROP TABLE` of a table the same file made (a false positive: it asks for a timeout it does not need) | timeout | `test_a_drop_of_a_table_made_earlier_in_the_file_still_asks_for_a_timeout` |
 | `DROP INDEX CONCURRENTLY` and `REINDEX ... CONCURRENTLY`: a weaker lock, and they cannot run in the runner's transaction | timeout | `test_a_concurrent_index_statement_is_not_seen` |
-| A database-level `ALTER ... SET` or privilege, or one reached through `format(... current_database())` | timeout | `test_a_database_level_setting_or_privilege_is_not_seen` |
+| A database-level `ALTER ... SET` or privilege, or one reached through `format(... current_database())` (0031 is one: its header says what it locks) | timeout | `test_a_database_level_setting_or_privilege_is_not_seen` |
 | `SET LOCAL statement_timeout`: read as "not a lock timeout", and nothing refuses a file that lengthens its own statement timeout (the effect on the runner is not shown by a test) | timeout | `test_a_set_local_statement_timeout_is_not_a_lock_timeout_and_is_not_refused` |
 
 **Seen, so not on the list:** a table reached through the search path. A name
