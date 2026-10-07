@@ -9,7 +9,7 @@ locals {
   # A zonal cluster needs one zone, and a Region's zones are not always a, b and
   # c: Google's page "Regions and zones" (read 2026-10-07,
   # https://docs.cloud.google.com/compute/docs/regions-zones) lists b, c and d
-  # for europe-west1 (St. Ghislain) and a, b and c for each of the other ten.
+  # for europe-west1 (St. Ghislain) and a, b and c for each of the other nine (europe-north1 is not in the list: variables.tf says why).
   # The map holds the first zone the page lists for each Region of the list in
   # variables.tf, and the machine types the module allows (E2) are offered in
   # every zone of every one of them. There is no fallback: a Region added to the
@@ -18,7 +18,6 @@ locals {
   # after the database was made and was billing.
   zones = {
     "europe-central2"   = "europe-central2-a"
-    "europe-north1"     = "europe-north1-a"
     "europe-north2"     = "europe-north2-a"
     "europe-southwest1" = "europe-southwest1-a"
     "europe-west1"      = "europe-west1-b"
