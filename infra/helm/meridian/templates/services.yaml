@@ -104,7 +104,14 @@ spec:
             {{- if eq .name "MERIDIAN_GATEWAY_RATE_STORE_URL" }}
             {{- fail (printf "services.%s.env sets MERIDIAN_GATEWAY_RATE_STORE_URL: the rate store's address holds the gateway's password and comes from the key `uri` of the Secret rateStore.secret and from nowhere else, so no values file may carry it (with the store off the variable does not exist, and with it on the chart adds it from the Secret)" $name) }}
             {{- end }}
+            {{- if eq .name "MERIDIAN_CLAIMS_UPLOADS" }}
+            {{- fail (printf "services.%s.env sets MERIDIAN_CLAIMS_UPLOADS: the switch of the upload route comes from route.uploads.enabled and from nowhere else, which also turns on the edge's route and limits for it, so no values env item may set it" $name) }}
+            {{- end }}
             {{- include "meridian.envItem" (dict "root" $ "item" .) | nindent 12 }}
+            {{- end }}
+            {{- if and (eq $name "claims-api") $.Values.route.uploads.enabled }}
+            - name: MERIDIAN_CLAIMS_UPLOADS
+              value: "on"
             {{- end }}
             {{- if include "meridian.usesRateStore" (dict "root" $ "name" $name) }}
             {{- include "meridian.secretEnv" (dict "name" "MERIDIAN_GATEWAY_RATE_STORE_URL" "secret" (include "meridian.rateStore" $ | fromJson).secret) | nindent 12 }}

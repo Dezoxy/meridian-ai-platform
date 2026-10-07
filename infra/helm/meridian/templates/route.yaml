@@ -3,8 +3,13 @@ The only route on the edge: the Claims API, on a *.localhost name on kind. The
 Agent Runtime and the Model Gateway have none and stay reachable only in the
 cluster. A request with another Host header (127.0.0.1:8088, a rebinding page)
 matches no route and gets 404 (threat model T-01). Plain HTTP until the edge
-gets its certificates. Rendered only when `route.enabled`.
+gets its certificates. Rendered only when `route.enabled`. With
+`route.uploads.enabled` there is a second HTTPRoute for the same service, for
+the upload paths alone (below).
 */ -}}
+{{- if and .Values.route.uploads.enabled (not .Values.route.enabled) }}
+{{- fail "route.uploads.enabled is true, but route.enabled is false: the upload route is a second route on the edge and has nothing to stand beside; turn the route on (route.enabled, route.hostname, route.parentRef) or turn uploads off" }}
+{{- end }}
 {{- if .Values.route.enabled }}
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -40,4 +45,101 @@ spec:
       name: claims-api
   requestBuffer:
     limit: {{ .Values.route.requestBufferLimit }}
+{{- if .Values.route.uploads.enabled }}
+---
+{{- /*
+The upload route (S070, T-38): the same host, Gateway, Service and port as the
+route above, for POST to the two paths that take a claimant's file, and nothing
+else. Its own BackendTrafficPolicy gives it a larger request buffer and a rate
+limit; the route above keeps its 64 Ki for every other request.
+
+Which route serves an upload path. The route above has no `matches`, which the
+Gateway API reads as PathPrefix "/": every path satisfies it, the upload paths
+too. A request that matches both goes to the more specific match. The Gateway
+API's own precedence is Exact, then the longest PathPrefix, then method, headers
+and query; a RegularExpression path is an implementation-specific match type,
+and Envoy Gateway's own order of path matches (not checked against its
+sources or a running proxy yet) is Exact, then RegularExpression, then
+PathPrefix. So, if that holds, the regular
+expressions below win over the prefix "/" and an upload never meets the 64 Ki
+buffer. Only a cluster shows it (the plan's run on
+kind: a body of 100 Ki to the upload path must get through, the same body to
+/claims/CLM-0001/documents must be 413). A request that matches the regular
+expression but not the method (a GET) falls back to the first route.
+
+Why the match cannot take another path. Envoy matches the whole path (the query
+string apart) against the expression, so `^...$` is the stricter reading and not
+a different one. The expression names the claim ID's shape (CLM-, four digits:
+models.py's pattern) and the literal `/files`; `/` is only in the literal
+places, so no other segment, suffix, `..` or empty segment is inside the match
+(tests/meridian/test_helm_uploads_route.py holds a list of paths that must not
+match). A path that does not match is served by the first route, at 64 Ki. The
+second match is the HTML twin of the first, the claimant's own page (the
+documents route has /claimant/claims/{claim_id}/documents beside
+/claims/{claim_id}/documents), behind the same switch.
+
+The NetworkPolicies do not change. The Claims API's ingress from the edge
+(networkpolicy.yaml, gated on route.enabled alone) names the edge's pods and the
+chart's port, not a route: a second route to the same Service and port is the
+same traffic from the same pods. tests/meridian/test_helm_uploads_route.py
+renders the policies with uploads on and off and holds them equal.
+*/}}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: claims-api-uploads
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "meridian.labels" "claims-api" | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ .Values.route.parentRef.name }}
+      namespace: {{ .Values.route.parentRef.namespace }}
+  hostnames:
+    - {{ .Values.route.hostname }}
+  rules:
+    - matches:
+        - method: POST
+          path:
+            type: RegularExpression
+            value: ^/claims/CLM-[0-9]{4}/files$
+        - method: POST
+          path:
+            type: RegularExpression
+            value: ^/claimant/claims/CLM-[0-9]{4}/files$
+      backendRefs:
+        - name: claims-api
+          port: {{ .Values.port }}
+---
+{{- /*
+The upload route's own limits, in a policy of its own so that the first one is
+not touched. The buffer is the app's UPLOAD_BODY_LIMIT_BYTES (values.yaml says
+how the two are held equal): Envoy buffers a body up to it and answers 413 above
+it. The rate limit is Local: Envoy's own token bucket, no extra service. A rule
+with no clientSelectors applies to all traffic of the targeted route, so the
+route has one bucket for every caller, six requests a minute by default, and
+Envoy answers 429 past it. There is no caller identity to key on before
+sign-in (S021): one busy claimant can use the whole allowance, and that is the
+point, since it bounds how fast the store fills. With more than one Envoy proxy
+pod each counts for itself.
+*/}}
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: claims-api-uploads
+  namespace: {{ .Release.Namespace }}
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: claims-api-uploads
+  requestBuffer:
+    limit: {{ .Values.route.uploads.requestBufferLimit | quote }}
+  rateLimit:
+    local:
+      rules:
+        - limit:
+            requests: {{ .Values.route.uploads.rateLimit.requests }}
+            unit: {{ .Values.route.uploads.rateLimit.unit }}
+{{- end }}
 {{- end }}

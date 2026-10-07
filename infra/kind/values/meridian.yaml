@@ -88,3 +88,9 @@ route:
   parentRef:
     name: edge
     namespace: envoy-gateway-system
+  # Uploads (S070) stay off on kind: this is not set. To try them for one run,
+  # add the next two lines (a second route for the file paths, with a 1,126,400
+  # byte buffer and six requests a minute for the whole route, and the switch of
+  # the app's route). Not before sign-in (S021) on a machine others reach.
+  #   uploads:
+  #     enabled: true

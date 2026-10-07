@@ -378,6 +378,34 @@ route:
   # oversized body never reaches the Claims API. 64Ki is the app's own limit
   # (SMALL_BODY_LIMIT_BYTES); the app still enforces it for chunked bodies.
   requestBufferLimit: 64Ki
+  # The route for a claimant's file (uploads, S070, T-38): a second HTTPRoute for
+  # POST to /claims/{claim_id}/files and its page twin under /claimant/, with a
+  # request buffer and a rate limit of its own, and MERIDIAN_CLAIMS_UPLOADS=on
+  # on the Claims API. Off here and on kind, apart from `route.enabled`: turning
+  # the pages on does not turn uploads on, and the chart refuses uploads while
+  # the route is off. Not to be exposed beyond the machine before sign-in
+  # (S021): the route is as open as the pages. To turn it on for one run on
+  # kind, see infra/kind/values/meridian.yaml.
+  uploads:
+    enabled: false
+    # The buffer for this route alone, as an exact byte count in a string (a
+    # number of a million or more would render as 1.1264e+06): 1 MiB for the
+    # file and 76 KiB for the multipart envelope and the form's other field,
+    # 1,126,400. It is the app's UPLOAD_BODY_LIMIT_BYTES; a test of the app's
+    # contract or of the documents' will hold the two equal. Envoy answers 413
+    # above it, before the Claims API sees the body.
+    requestBufferLimit: "1126400"
+    # A LOCAL rate limit for the whole route, in Envoy Gateway's
+    # BackendTrafficPolicy (spec.rateLimit.local.rules[].limit): one bucket for
+    # every caller, because there is no caller identity to key on before sign-in.
+    # One busy claimant can use the whole allowance; that is the point, since
+    # what it bounds is how fast the database, the only store, fills with files.
+    # "Local" means each Envoy proxy pod counts for itself: with N proxy pods
+    # the route allows N times this. Past it Envoy answers 429. `unit` is one
+    # of Second, Minute, Hour, Day, Week, Month, Year.
+    rateLimit:
+      requests: 6
+      unit: Minute
 
 # The Jobs run to completion: the migration as the database owner role, the seed
 # and the ingestion each as a role of their own (database.*Secret above).
