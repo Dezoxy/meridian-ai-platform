@@ -6,6 +6,7 @@ or a constant out of a script, and the dashboard's readers. It holds no test.
 
 import json
 import re
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
@@ -63,12 +64,103 @@ TOOL_SERVERS = (POLICY_SERVER, CLAIMS_SERVER, KNOWLEDGE_SERVER)
 SERVER_PORT = 8000
 # The tenant whose limits the ingestion's embedding calls count against.
 INGEST_TENANT = "claims-triage"
+
+# The parts of smoke.sh (S074): ``smoke.sh`` sources each file of ``smoke.d/`` by
+# the two lines below, and ``smoke_text`` puts the script back in one text.
+SMOKE_PART_LINE = re.compile(r'^\. "\$\{KIND_DIR\}/smoke\.d/([^"/]+)"$')
+SMOKE_PART_HINT = "# shellcheck source=smoke.d/{name}"
+SMOKE_PART_FIRST_LINE = "# shellcheck shell=bash"
+SMOKE_PARAGRAPH = re.compile(r"^# {2,3}(\d+)\. \S")
+
+
+def smoke_part(kind_dir: Path, name: str) -> tuple[list[str], list[str]]:
+    """The part ``smoke.d/<name>`` as (its leading comment block, the rest of
+    it), each a list of lines with their newline. The first line of the part
+    (``# shellcheck shell=bash``) is in neither."""
+    lines = (kind_dir / "smoke.d" / name).read_text(encoding="utf-8").splitlines(True)
+    if not lines or lines[0].rstrip("\n") != SMOKE_PART_FIRST_LINE:
+        raise ValueError(f"smoke.d/{name} must start with {SMOKE_PART_FIRST_LINE!r}")
+    end = 1
+    while end < len(lines) and lines[end].startswith("#"):
+        end += 1
+    rest = lines[end:]
+    if rest and not rest[-1].endswith("\n"):
+        rest[-1] += "\n"
+    return lines[1:end], rest
+
+
+def smoke_header(header: list[str], blocks: list[list[str]]) -> list[str]:
+    """``header`` (the entry's lines before ``set -euo pipefail``) with the
+    leading comment ``blocks`` of the parts in it, as the unsplit script has
+    them: the entry's opening sentence, then the numbered paragraphs (``#   N.
+    name:``) of the entry and of the parts in the order of their numbers, then a
+    block that has no number (the shared part's), then the closing sentence (the
+    entry's last comment line before ``set -euo pipefail``, once no paragraph
+    is left in it). The numbers, and not the order of the ``.`` lines, because a
+    check still in the entry (its paragraph in the header, its code in the entry)
+    sits among the checks that moved."""
+    blocks = [block for block in blocks if block]
+    starts = [i for i, line in enumerate(header) if SMOKE_PARAGRAPH.match(line)]
+    opening, paragraphs, closing = header, [], []
+    if not starts and header[-1:] and header[-1].startswith("# "):
+        # No paragraph is left in the entry: its last comment line is the closing
+        # sentence, and it stays last as it was (line 714 of the unsplit script).
+        opening, closing = header[:-1], header[-1:]
+    if starts:
+        end = starts[-1] + 1
+        while end < len(header) and header[end].startswith("#  "):
+            end += 1
+        opening, closing = header[: starts[0]], header[end:]
+        bounds = [*starts, end]
+        paragraphs = [header[a:b] for a, b in pairwise(bounds)]
+    paragraphs.extend(blocks)
+
+    def number(paragraph: list[str]) -> float:
+        found = SMOKE_PARAGRAPH.match(paragraph[0])
+        return int(found.group(1)) if found else float("inf")
+
+    paragraphs.sort(key=number)  # stable: a block without a number stays last
+    flat = [line for paragraph in paragraphs for line in paragraph]
+    return [*opening, *flat, *closing]
+
+
+def smoke_text(kind_dir: Path) -> str:
+    """``smoke.sh`` of ``kind_dir`` as one text in the shape the script had before
+    it was split, so that the tests that cut a function, a constant or the header
+    out of it need not know where each lives. For each part the entry sources
+    (a ``. "${KIND_DIR}/smoke.d/<file>"`` line): the comment lines that follow the
+    part's first line go into the header (``smoke_header``), the rest of the part
+    stands in place of the ``.`` line, and the ``# shellcheck source=`` hint above
+    it is dropped. An entry that sources no part is returned as it is."""
+    text = (kind_dir / "smoke.sh").read_text(encoding="utf-8")
+    body: list[str] = []
+    blocks: list[list[str]] = []
+    for line in text.splitlines(True):
+        found = SMOKE_PART_LINE.match(line.rstrip("\n"))
+        if not found:
+            body.append(line)
+            continue
+        name = found.group(1)
+        if body and body[-1].rstrip("\n") == SMOKE_PART_HINT.format(name=name):
+            body.pop()
+        leading, rest = smoke_part(kind_dir, name)
+        blocks.append(leading)
+        body.extend(rest)
+    if not blocks:
+        return text
+    lines = [line.rstrip("\n") for line in body]
+    if "set -euo pipefail" not in lines:
+        raise ValueError("smoke.sh has parts and no line `set -euo pipefail`")
+    at = lines.index("set -euo pipefail")
+    return "".join([*smoke_header(body[:at], blocks), *body[at:]])
+
+
 DOCKERFILE = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
 DOCKERIGNORE = (REPO_ROOT / ".dockerignore").read_text(encoding="utf-8")
 UP_SH = (KIND_DIR / "up.sh").read_text(encoding="utf-8")
 COMMON_SH = (KIND_DIR / "common.sh").read_text(encoding="utf-8")
 DEPLOY_SH = (KIND_DIR / "deploy.sh").read_text(encoding="utf-8")
-SMOKE_SH = (KIND_DIR / "smoke.sh").read_text(encoding="utf-8")
+SMOKE_SH = smoke_text(KIND_DIR)
 DEMO_SH = (KIND_DIR / "demo.sh").read_text(encoding="utf-8")
 PLATFORM_DB = yaml.safe_load((KIND_DIR / "values" / "platform-db.yaml").read_text())
 
