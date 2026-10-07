@@ -80,7 +80,6 @@ from meridian.workloads.claims_triage.triaging import (
     run_input_with_documents,
     run_taken_triage,
     take_over_lapsed_triage,
-    unbuildable,
 )
 
 logger = logging.getLogger(__name__)
@@ -223,20 +222,16 @@ def _prepared(
 def _move_answer(
     result: ClaimResponse | DecisionFailure,
 ) -> ClaimMoveResponse | DecisionFailure:
-    """A triage's answer as the moves' answer; one the move's model refuses is
-    the failure ``triaging.unbuildable`` gives, as for the triage's own."""
+    """A triage's answer as the moves' answer."""
     if isinstance(result, DecisionFailure):
         return result
-    try:
-        return ClaimMoveResponse(
-            claim_id=result.claim_id,
-            state=result.state,
-            run_id=result.run_id,
-            run_status=result.run_status,
-            proposal=result.proposal,
-        )
-    except ValidationError as exc:
-        return unbuildable(result.claim_id, exc, result.run_id)
+    return ClaimMoveResponse(
+        claim_id=result.claim_id,
+        state=result.state,
+        run_id=result.run_id,
+        run_status=result.run_status,
+        proposal=result.proposal,
+    )
 
 
 def refuse_stale_page(page_run: str | None, run_id: UUID | None) -> None:

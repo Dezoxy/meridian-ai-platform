@@ -208,12 +208,27 @@ def test_a_page_with_three_unreadable_proposals_logs_one_record_with_the_count_3
     (record,) = warnings_of(caplog)
     assert record.name == adjuster.__name__
     assert record.getMessage() == (
-        "the queue page holds 3 stored proposals that could not be read"
+        "rows of the queue page whose stored proposal could not be read: 3"
     )
     assert record.args == (3,)
     # No claim, no field and no stored value in the line.
     assert "CLM-" not in record.getMessage()
     assert [r for r in caplog.records if r.levelno < logging.WARNING] == []
+
+
+def test_a_page_with_one_unreadable_proposal_logs_a_line_that_reads_right(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    rows = [queue_row("CLM-9401", UNREADABLE["a-missing-key"])]
+
+    with caplog.at_level(logging.DEBUG):
+        adjuster.render_queue(rows)
+
+    (record,) = warnings_of(caplog)
+    assert record.getMessage() == (
+        "rows of the queue page whose stored proposal could not be read: 1"
+    )
+    assert record.args == (1,)
 
 
 def test_a_page_with_no_unreadable_proposal_logs_nothing(

@@ -7,8 +7,11 @@ caught) used to leave the claims route with a bare 500 from the outermost
 middleware, and the documents route the same, with the names and the proposal
 stored and nothing to tell the claimant's page that they were. Now it is a
 ``DecisionFailure`` of 500 with the fixed text, marked ``stored`` where names
-were stored, one log line with the claim's ID and the error's class, no second
-triage and no second count; the state stands, so a retry is a 409.
+were stored, one log line with the claim's ID, the error's class and the fields
+that failed (never a value), no second triage and no second count; the state
+stands, so a retry is a 409. The build that can fail is the triage's
+(``run_taken_triage``, which every route passes first); the moves' own answer
+is made from that one, already built, and has no handling of its own.
 """
 
 import logging
@@ -45,13 +48,18 @@ from workloads.claims_triage.test_claims_meters import (
 
 from meridian.workloads.claims_triage import moves, triaging
 from meridian.workloads.claims_triage.models import (
-    ClaimMoveResponse,
     ClaimResponse,
     DecisionFailure,
 )
 
 CLAIM = "CLM-9101"
-BUILT_NOTHING = "the answer for claim {} could not be built: ValidationError"
+# The fields the stand-in's input lacks, in the model's order, with the error's
+# type and no value: the line names which model refused what.
+BUILT_NOTHING = (
+    "the answer for claim {} could not be built: ValidationError "
+    "(('state', 'missing'), ('run_id', 'missing'), "
+    "('run_status', 'missing'), ('proposal', 'missing'))"
+)
 INTERNAL = "internal error"
 HAS_PROPOSAL_DETAIL = "the claim already has a triage proposal"
 
@@ -154,30 +162,6 @@ def test_the_claimants_page_learns_that_the_names_were_stored(
     assert isinstance(answer, DecisionFailure)
     assert (answer.status, answer.detail, answer.stored) == (500, INTERNAL, True)
     assert answer.run_id is not None
-
-
-def test_a_move_response_that_cannot_be_built_is_a_stored_500_too(
-    fresh_database: DatabaseHandle,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    # The cap referral builds its answer from two literals after storing no
-    # proposal: a ``try`` there could not fire, and there is none.
-    waiting_for_documents(fresh_database, [])
-    monkeypatch.setattr(
-        moves,
-        "ClaimMoveResponse",
-        refuse_to_build(ClaimMoveResponse, claim_id=CANARY),
-    )
-
-    with caplog.at_level(logging.DEBUG):
-        answer = add_documents_directly(fresh_database, MoveRuntime(), ["photos"])
-
-    assert isinstance(answer, DecisionFailure)
-    assert (answer.status, answer.detail, answer.stored) == (500, INTERNAL, True)
-    (record,) = errors_of(caplog)
-    assert record.getMessage() == BUILT_NOTHING.format(MOVE_ID)
-    assert arrived_names(fresh_database, MOVE_ID) == ["photos"]
 
 
 def test_an_error_that_is_not_a_validation_error_is_still_not_caught(

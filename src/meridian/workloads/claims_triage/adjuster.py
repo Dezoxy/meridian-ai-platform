@@ -437,7 +437,7 @@ def render_queue(
     unreadable = sum(s["rests_on"] == UNREADABLE_PROPOSAL_MARK for s in shown)
     if unreadable:
         logger.warning(
-            "the queue page holds %d stored proposals that could not be read",
+            "rows of the queue page whose stored proposal could not be read: %d",
             unreadable,
         )
     return TEMPLATES.get_template("queue.html").render(

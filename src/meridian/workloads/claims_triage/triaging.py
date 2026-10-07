@@ -586,7 +586,7 @@ def run_taken_triage(
     A proposal is counted ``stored`` when it is stored (``_run_triage``); the
     answer is built after that and outside the count, so an answer that cannot
     be built (a ``ValidationError`` of the response model, and nothing else is
-    caught) is a ``DecisionFailure`` of 500 with the run's ID (``unbuildable``)
+    caught) is a ``DecisionFailure`` of 500 with the run's ID (``unbuildable_answer``)
     and is not a second count for a triage that stored its proposal."""
     try:
         outcome = _run_triage(
@@ -611,22 +611,25 @@ def run_taken_triage(
         )
     except ValidationError as exc:
         mark_error(span, exc)
-        return unbuildable(claim_id, exc, run.run_id)
+        return unbuildable_answer(claim_id, exc, run.run_id)
 
 
-def unbuildable(
+def unbuildable_answer(
     claim_id: str, exc: ValidationError, run_id: UUID | None
 ) -> DecisionFailure:
     """The answer of a request whose answer cannot be built after it stored
     something: a 500 with the fixed text and the run's ID, the same on every
     route (the claims route answers it as JSON, the documents route marks it
-    ``stored``). One log line, the claim's ID and the error's class: the error's
-    text quotes the values the model refused. Nothing is counted or triaged
-    again, and the stored state stands, so a retry meets a 409."""
+    ``stored``). One log line: the claim's ID, the error's class, and the fields
+    and error types (``invalid_fields``), so that an operator can tell which
+    model refused what; never the error's text, which quotes the values refused.
+    Nothing is counted or triaged again, and the stored state stands, so a
+    retry meets a 409."""
     logger.error(
-        "the answer for claim %s could not be built: %s",
+        "the answer for claim %s could not be built: %s %s",
         claim_id,
         type(exc).__name__,
+        invalid_fields(exc),
     )
     return DecisionFailure(500, INTERNAL_ERROR, run_id)
 

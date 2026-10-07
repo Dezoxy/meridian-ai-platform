@@ -13,13 +13,15 @@ input, once with the phone matcher frozen from before the cut
 and once with today's. An input character is hidden when a pass replaced it.
 
 Asserted: (a) no digit that the frozen matcher hid is visible in today's output;
-(b) every output of today's is the frozen matcher's or the cut's (but for the
-chain of two numbers, below). The cut's is
-today's matcher with ``_takes_the_next_prefix`` made false, which is the cut
-without its narrowing, so no third frozen file is needed; (c) the replay of
-today's passes gives the output of ``redact`` itself, so that the map follows
-the product and not a copy of it; (d) with the narrowing taken out, texts of
-every form lose digits, so the generator can see the loss it was written for.
+(b) every output of today's is the frozen matcher's or the cut's, except for the
+chain of two numbers (below), which is held instead to (e) every character that
+today's passes hide is one that the frozen matcher hid or the cut hides. The
+cut's output is today's matcher with ``_takes_the_next_prefix`` made false,
+which is the cut without its narrowing, so no third frozen file is needed; (c)
+the replay of today's passes gives the output of ``redact`` itself, so that the
+map follows the product and not a copy of it; (d) with the narrowing taken out,
+texts of every form lose digits, so the generator can see the loss it was
+written for.
 
 Three families of text were added after a review named two forms as missing,
 each written by a stream of its own (``random.Random`` seeded from ``SEED`` and
@@ -39,11 +41,11 @@ All are held to (a), (c) and (d). (b) holds for every family but the chain: the
 cut is decided for each international number, so one number may be cut and
 another not, and the output is then neither the frozen matcher's nor the cut's
 in the whole text although no digit is lost (that is (a)); a test below holds
-that the chain can write such a text. In the plain family only the ``+36``
-second number shows the loss with the narrowing out; written with "00" the
-other six spellings lose a digit in 2 of its 1,265 replayed texts (why was not
-looked into), and every spelling of the chain and of the slash-or-dot family
-shows it; a test below holds which spellings do.
+that the chain can write such a text, and (e) holds what (b) cannot. In the
+plain family only the ``+36`` second number shows the loss with the narrowing
+out; written with "00" the other six spellings lose a digit in 2 of its 1,265
+replayed texts (why was not looked into), and every spelling of the chain and of
+the slash-or-dot family shows it; a test below holds which spellings do.
 
 The frozen matcher replaces only the international phone pass. The national
 pass and the other passes are today's, which the cut did not touch.
@@ -197,7 +199,9 @@ def _written(generator: random.Random) -> Written:
     return Written("".join(parts + tail), form)
 
 
-def _joined(generator: random.Random, parts: list[str], separators: tuple[str, ...]):
+def _joined(
+    generator: random.Random, parts: list[str], separators: tuple[str, ...]
+) -> str:
     """The parts with a separator drawn for each joint, so one number mixes."""
     joined = parts[0]
     for part in parts[1:]:
@@ -371,6 +375,8 @@ class Outcome:
     frozen_output: str
     today_output: str
     lost: frozenset[int]  # digits the frozen matcher hid and today's leaves
+    hidden: frozenset[int]  # every offset today's passes hide
+    frozen_hidden: frozenset[int]  # every offset the frozen matcher's passes hide
 
 
 def outcomes() -> tuple[list[Outcome], int]:
@@ -386,7 +392,16 @@ def outcomes() -> tuple[list[Outcome], int]:
             continue
         digits = {i for i, char in enumerate(written.text) if char.isdecimal()}
         lost = frozenset((digits & frozen[0]) - today[0])
-        result.append(Outcome(written, frozen[1], today[1], lost))
+        result.append(
+            Outcome(
+                written,
+                frozen[1],
+                today[1],
+                lost,
+                frozenset(today[0]),
+                frozenset(frozen[0]),
+            )
+        )
     return result, skipped
 
 
@@ -501,6 +516,30 @@ def test_with_two_cuts_in_a_text_an_output_may_be_neither_and_no_digit_is_lost()
 
     assert neither, "the chain writes no text whose output is neither"
     assert not [o for o in neither if o.lost]
+
+
+def test_what_today_hides_in_a_chain_is_what_the_frozen_matcher_or_the_cut_hides() -> (
+    None
+):
+    # What (b) dropped for the chain: its output may be neither matcher's for
+    # the whole text, but each character today's passes hide must be one that
+    # the frozen matcher hid or the cut (the narrowing taken out) hides. The
+    # cut's set is the one of the replay made with the narrowing out.
+    cut = {o.written.text: o for o in without_the_narrowing()[0]}
+    chained = [o for o in today()[0] if o.written.family == TWO_INTERNATIONAL_CHAINED]
+
+    outside = [
+        o
+        for o in chained
+        if not o.hidden <= o.frozen_hidden | cut[o.written.text].hidden
+    ]
+
+    assert chained
+    assert not outside, (
+        f"{len(outside)} of {len(chained)} chain texts hide a character that "
+        "neither the matcher before the cut nor the cut hides; the shortest "
+        "five:\n" + _first_five(sorted(outside, key=lambda o: len(o.written.text)))
+    )
 
 
 def test_without_its_narrowing_the_cut_loses_digits_in_texts_of_every_form() -> None:
