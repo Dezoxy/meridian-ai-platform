@@ -174,6 +174,7 @@ def live_recording_gateway(
     *,
     inner: ModelProvider | None = None,
     clock: Callable[[], float] = time.monotonic,
+    registry_dir: Path = REGISTRY_DIR,
 ) -> LiveGateway:
     """A gateway in live mode (environment ``local``) over ``db`` whose one
     provider, under the Azure kind, is a ``RecordingProvider``. Without ``inner``
@@ -181,11 +182,16 @@ def live_recording_gateway(
     it: the endpoints and the Entra tenant come from the two variables
     ``make eval-record`` sets, the token from this ``az login``. A test brings
     its own ``inner``, and no Azure setting is read then; it may bring a clock
-    to move too (the real one by default)."""
+    to move too (the real one by default).
+
+    ``registry_dir`` is the registry the gateway loads: the committed one by
+    default, and for a paid run a copy whose tenants' monthly budgets are the
+    run's ceiling (``runceilingsupport.registry_with_ceilings``), which the
+    gateway then enforces."""
     endpoints = {} if inner is not None else json.loads(os.environ[ENDPOINTS_ENV])
     tenant_id = None if inner is not None else os.environ[TENANT_ID_ENV]
     settings = GatewaySettings(
-        registry_dir=REGISTRY_DIR,
+        registry_dir=registry_dir,
         mode="live",
         environment="local",
         database_url=db.dsn("model_gateway"),
@@ -203,7 +209,7 @@ def live_recording_gateway(
         providers={AZURE_KIND: recording},
         clock=clock,
     )
-    return LiveGateway(TestClient(app), load_registry(REGISTRY_DIR), recording, close)
+    return LiveGateway(TestClient(app), load_registry(registry_dir), recording, close)
 
 
 def _nothing() -> None:
@@ -554,11 +560,15 @@ def record_run(
     inner: ModelProvider | None = None,
     pace: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
+    registry_dir: Path = REGISTRY_DIR,
 ) -> RecordedRun:
     """Run the evaluation through a live-mode gateway that records its answers,
     pacing in real seconds (a test brings a fake ``inner`` and a ``clock`` that
-    ``pace`` moves)."""
-    gateway = live_recording_gateway(db, inner=inner, clock=clock)
+    ``pace`` moves). ``registry_dir`` is the registry that gateway loads (see
+    ``live_recording_gateway``)."""
+    gateway = live_recording_gateway(
+        db, inner=inner, clock=clock, registry_dir=registry_dir
+    )
     try:
         stack = build_stack(db, runtime_http=gateway.http)
         evaluation = run_evaluation(stack, gateway, kind="live", pace=pace)

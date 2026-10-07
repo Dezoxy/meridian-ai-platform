@@ -15,6 +15,7 @@ read them fail with the instruction to record, not with an error from a parser.
 import json
 import os
 import re
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -43,7 +44,8 @@ from evalsupport import (
     run_evaluation,
     totals_line,
 )
-from servicesupport import FakeClock, owner_rows
+from runceilingsupport import registry_with_ceilings
+from servicesupport import REGISTRY_DIR, FakeClock, owner_rows
 from stacksupport import (
     CLAIMS,
     WINDOW_SECONDS,
@@ -72,6 +74,7 @@ from meridian.platform.gateway.providers.recorded import (
     write_recording,
 )
 from meridian.platform.guardrails import holds_special_category, screen_fingerprint
+from meridian.platform.registry import load_registry
 from meridian.workloads.claims_triage import assessment
 from meridian.workloads.claims_triage.evaluation import RULE_GRADERS
 
@@ -85,6 +88,32 @@ OPT_IN = pytest.mark.skipif(
     os.environ.get(RECORD_ENV) != "1",
     reason=f"opt-in: set {RECORD_ENV}=1 (make eval-record)",
 )
+# What a paid run may cost, per tenant it charges. The Model Gateway enforces it,
+# not the session: the run builds its gateway from a registry copy in which
+# these tenants' monthly budgets are the ceiling (``runceilingsupport``), so a
+# call that would pass it is refused (429) and the run is reported incomplete.
+# The committed registry is not changed. The golden run's ceiling bounds the
+# tenants it charges, the runtime's ``claims-triage`` and the judge's
+# ``evaluation``. Each is a ceiling, not a forecast: the golden run cost EUR
+# 0.12 for its 55 chat calls on 2026-10-03.
+GOLDEN_RUN_CEILING_EUR = Decimal("0.50")
+GOLDEN_RUN_TENANTS = ("claims-triage", "evaluation")
+# The injection run (the next contract) answers 52 cases with no judge, so it
+# charges ``claims-triage`` alone: an estimate of EUR 0.12 to 0.31 (the cost
+# statement), under a ceiling the gateway holds.
+INJECTION_RUN_CEILING_EUR = Decimal("1.00")
+INJECTION_RUN_TENANTS = ("claims-triage",)
+
+
+def golden_run_registry(directory: Path) -> Path:
+    """The registry the golden run's gateway loads: the committed one with the
+    run's ceiling as the budget of the tenants it charges, written under
+    ``directory`` (never into the repository)."""
+    return registry_with_ceilings(
+        REGISTRY_DIR,
+        directory / "registry",
+        {tenant: GOLDEN_RUN_CEILING_EUR for tenant in GOLDEN_RUN_TENANTS},
+    )
 
 
 def committed_recording() -> Recording:
@@ -528,6 +557,36 @@ def test_the_prompt_comparison_is_the_diff_of_the_two_live_reports() -> None:
     check_comparison(LIVE_REPORT_PATH, VARIANT_REPORT_PATH, COMPARISON_PATH)
 
 
+def test_a_paid_runs_ceiling_is_a_budget_the_gateway_loads_and_below_the_committed_one(
+    tmp_path: Path,
+) -> None:
+    """The two ceilings are valid budgets of the tenants they name, and lower
+    than the committed ones (a ceiling that did not lower a budget would bound
+    nothing); the tenants it does not name keep theirs."""
+    committed = {
+        t.id: t.limits.cost_per_month_eur for t in load_registry(REGISTRY_DIR).tenants
+    }
+    golden = golden_run_registry(tmp_path / "golden")
+    injection = registry_with_ceilings(
+        REGISTRY_DIR,
+        tmp_path / "injection",
+        {t: INJECTION_RUN_CEILING_EUR for t in INJECTION_RUN_TENANTS},
+    )
+
+    for directory, tenants, ceiling in (
+        (golden, GOLDEN_RUN_TENANTS, GOLDEN_RUN_CEILING_EUR),
+        (injection, INJECTION_RUN_TENANTS, INJECTION_RUN_CEILING_EUR),
+    ):
+        budgets = {
+            t.id: t.limits.cost_per_month_eur for t in load_registry(directory).tenants
+        }
+        assert budgets == {
+            tenant: ceiling if tenant in tenants else was
+            for tenant, was in committed.items()
+        }
+        assert all(ceiling < committed[tenant] for tenant in tenants)
+
+
 # ── 5. what the recording runs write ────────────────────────────────────────
 # The two opt-in tests at the end call these with the repository's paths; the
 # fake-model test above calls them with its own, so they run in CI.
@@ -580,9 +639,9 @@ def save_variant(run, live_path: Path, variant_path: Path, comparison: Path) -> 
 
 @OPT_IN
 def test_record_the_golden_set_with_the_live_model(
-    fresh_database: DatabaseHandle,
+    fresh_database: DatabaseHandle, tmp_path: Path
 ) -> None:
-    run = record_run(fresh_database)
+    run = record_run(fresh_database, registry_dir=golden_run_registry(tmp_path))
 
     print_run(fresh_database, run)
     save_golden_set(run, RECORDING_PATH, LIVE_REPORT_PATH)
@@ -590,11 +649,13 @@ def test_record_the_golden_set_with_the_live_model(
 
 @OPT_IN
 def test_record_the_variant_prompt_with_the_live_model(
-    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     if not LIVE_REPORT_PATH.is_file():
         pytest.fail(f"no {LIVE_REPORT_PATH.name} to compare with: {RECORD_COMMAND}")
-    run = record_variant(fresh_database, monkeypatch)
+    run = record_variant(
+        fresh_database, monkeypatch, registry_dir=golden_run_registry(tmp_path)
+    )
 
     print_run(fresh_database, run)
     save_variant(run, LIVE_REPORT_PATH, VARIANT_REPORT_PATH, COMPARISON_PATH)
