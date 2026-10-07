@@ -31,16 +31,17 @@ database under its own role) and "Trust the authenticated caller (Recommended)"
 (the runtime passes the binding; the tool server's own read of the run and the
 claim is given up and recorded as an accepted risk). "(Recommended)" is the
 question tool's mark on the option the session recommended, copied as the
-answers file holds it. The file holds five questions in two rounds, and these
-five answers are the whole of what the owner decided.
+answers file holds it. In a sixth round the same day, about 15:30 UTC, two
+more: "Outbox per service (Recommended)" (each service writes its audit row in
+its own transaction; a relay copies rows to a central audit database that owns
+retention and serves the trail) and "Fresh baseline per database (Recommended)"
+(one baseline per database, the old files and their tests to an archive). The
+file holds seven questions about this record in three rounds, and these seven
+answers are the whole of what the owner decided.
 
-Three tiers in this record, and they are not mixed:
+Two tiers in this record, and they are not mixed:
 
-- **Decided by the owner** (above, and the four points under Decision).
-- **Recommended by the session, open to the owner:** the audit trail as an
-  outbox, and one migration tree per database from a baseline without a
-  replay. Each is a question in the plan's Part D with the default taken if the
-  owner does not answer.
+- **Decided by the owner** (above, and the six points under Decision).
 - **The session's design, not put to the owner:** everything else in "How it
   is designed", the order of the steps and the steps' contents. The owner may
   overturn any of it.
@@ -109,7 +110,8 @@ without the guarantee the other five have.
 ## Decision drivers
 
 - The owner's choices of 2026-10-07 (Status): a database per service on one
-  server, six images with independent versions, the map and this record first.
+  server, six images with independent versions, the audit trail as an outbox,
+  a baseline per database, the map and this record first.
 - [QA-05](../requirements/quality-attributes.md): every model call, tool call
   and approval decision has an audit record, and a failed audit write fails the
   call. The guarantee must not weaken without being named.
@@ -155,7 +157,7 @@ How a tool server knows which claim a call is for:
    over the network.
 10. Trust the authenticated caller, the Agent Runtime proven by mutual TLS.
 
-Where the audit trail lives (recommended, open):
+Where the audit trail lives (the owner's sixth round):
 
 11. One shared `audit` database that every service connects to.
 12. An audit table in each service's database, written in the same transaction
@@ -163,7 +165,7 @@ Where the audit trail lives (recommended, open):
     outbox.
 13. Audit events leave the database for the log pipeline (Loki).
 
-How the migrations start (recommended, open):
+How the migrations start (the owner's sixth round):
 
 14. Replay the 31 existing files into each database.
 15. One tree and one ledger per database, each from a baseline, with no replay.
@@ -172,15 +174,15 @@ How the migrations start (recommended, open):
 
 ### Decided by the owner, 2026-10-07
 
-**Options 2, 5, 8 and 10, and the order: the map and this record now, the
-building after the steps in flight are merged.**
+**Options 2, 5, 8, 10, 12 and 15, and the order: the map and this record now,
+the building after the steps in flight are merged.**
 
 1. **A database per service on one PostgreSQL server, five databases:**
    `claims`, `runtime`, `gateway`, `policy` and `knowledge`. The claims tool
    server uses the claims database under a role of its own: a database per
    domain, with its two foreign keys to `claims.claims` and its read of
    `claims.decisions` kept inside one database. Where the audit trail lives is
-   not part of this point (below).
+   point 5.
 2. **Six images with independent versions:** the Claims API, the Agent
    Runtime, the Model Gateway and the three tool servers, each an image with
    its own version and its own tag in the chart.
@@ -194,6 +196,39 @@ building after the steps in flight are merged.**
 4. **The map and this record now; the building after the steps in flight are
    merged.** Which steps are "in flight" is the session's reading: S020's code
    half and S069 to S074, the ones with a branch out on 2026-10-07.
+5. **The audit trail as an outbox (option 12)**, chosen in the sixth round,
+   about 15:30 UTC, as "Outbox per service (Recommended)". Each service's
+   database holds an audit table, written in the same transaction as the
+   business write, so "no action without its row" holds for every service that
+   has a database. A relay copies each row into a central audit database. That
+   database owns retention and serves the adjuster's trail. The central audit
+   database is a sixth database on the same server, beside the five of point 1.
+   What the owner's answer does not decide, and this record leaves to S085's
+   design: whether the Model Gateway's audit row joins its ledger's transaction
+   (today it does not, and the five services keep a guarantee the gateway
+   lacks) or stays on a separate connection, which S085 shows as a change in
+   the order of the gateway's ledger commit and its audit row if it joins; how
+   the adjuster's page reads the central trail; and what the relay's rows
+   carry.
+6. **One migration tree and one ledger per database, each from a baseline,
+   with no replay of history (option 15)**, chosen in the same round as "Fresh
+   baseline per database (Recommended)". Each tree starts from a baseline that
+   states the tables as they are. This is honest only because no environment
+   holds data that must survive: the kind cluster is disposable (CLAUDE.md,
+   hard rule 8) and the Azure database has never been created. Consequences
+   the record owns:
+   - The 31 existing files and their 59 test files move out of the package's
+     path into an archive. If they stayed, the runner would apply them. The
+     tests go with the files, and the plan's count of migrations changes. This
+     is a large deletion from the tree, and this record is where it is decided
+     to be made. The archive's place is S087's to name.
+   - **What a split with data would need instead,** in three sentences.
+     Expand: create the new database beside the old schema and keep writing to
+     the old. Copy: move the rows across, check the counts and the audit
+     table's order, remembering that a sequence is not carried by logical
+     replication, and keep the copy current until the switch. Switch, then
+     contract: point the service at the new database in one release, and drop
+     the old schema only once nothing reads it.
 
 ### Options not taken, and why
 
@@ -234,57 +269,19 @@ reasons.
   runtime calls the tool servers, and the tool servers would call the runtime
   and the Claims API, which serves no in-cluster caller and has no route that
   returns a claim's tenant and policy. The owner gave the check up.
-
-### Recommended by the session, open to the owner
-
-These are in the record as recommendations. Neither is the owner's decision.
-Until the owner answers, the default in Part D's question is what the steps
-assume.
-
-**Recommended (Part D, question 7): the audit trail as an outbox (option 12).**
-Each service's database holds an audit table, written in the same transaction
-as the business write, so "no action without its row" holds for every service
-that has a database. A relay copies each row into a central audit database.
-That database owns retention and serves the adjuster's trail. Against it:
-
-- Option 11 loses the guarantee: the audit row and the business write sit in
-  two databases and two transactions, so either an action can commit without
-  its row or every write becomes a two-step exchange.
-- Option 13 is the cheapest, but the trail an adjuster reads and the
-  insert-only guarantees would rest on a log store, which is not built to be
-  one.
-- The fact the map found applies to this choice. Under option 12 either the
-  five services keep a guarantee that the gateway lacks, or the gateway moves
-  to the outbox too, writing its audit row in the ledger's transaction. This
-  record does not choose between them: step S085's design says which, and
-  shows it as a change in the order of the gateway's ledger commit and its
-  audit row.
-- The central audit database is a sixth database on the same server, beside
-  the five decided ones. Under option 11 it would be the same. Under option
-  13 there is none.
-
-**Recommended (Part D, question 8): one migration tree and one ledger per
-database, each from a baseline, with no replay of history (option 15).** Each
-tree starts from a baseline that states the tables as they are. This is
-honest only because no environment holds data that must survive: the kind
-cluster is disposable (CLAUDE.md, hard rule 8) and the Azure database has never
-been created. Consequences the record owns:
-
-- The 31 existing files and their 59 test files move out of the package's path
-  into an archive. If they stayed, the runner would apply them. The tests go
-  with the files, and the plan's count of migrations changes. This is a large
-  deletion from the tree, and this record is where it is decided to be made.
-  The archive's place is S087's to name.
-- **What a split with data would need instead,** in three sentences. Expand:
-  create the new database beside the old schema and keep writing to the old.
-  Copy: move the rows across, check the counts and the audit table's order,
-  remembering that a sequence is not carried by logical replication, and keep
-  the copy current until the switch. Switch, then contract: point the service
-  at the new database in one release, and drop the old schema only once nothing
-  reads it.
-- Option 14 would mean rewriting history: 13 of the 31 files mix schemas, owner
-  checks span schemas, some files guard the existence of other services' roles,
-  and an applied file cannot change.
+- **Option 11, one shared `audit` database that every service connects to.**
+  It loses the guarantee: the audit row and the business write sit in two
+  databases and two transactions, so either an action can commit without its
+  row or every write becomes a two-step exchange. It would also be a sixth
+  database, as the outbox's central one is.
+- **Option 13, audit events through the log pipeline (Loki).** The cheapest,
+  and there would be no central audit database at all. But the trail an
+  adjuster reads and the insert-only guarantees would rest on a log store,
+  which is not built to be one.
+- **Option 14, a replay of the 31 files into each database.** It would mean
+  rewriting history: 13 of the 31 files mix schemas, owner checks span schemas,
+  some files guard the existence of other services' roles, and an applied file
+  cannot change.
 
 ### How it is designed
 
@@ -329,11 +326,11 @@ numbers are left out because they move.
 | 3 | The policy server reads the claims views `claims.decided_claims` and `claims.open_claims` in one UNION with its own `policy.claim_history`, on every `claim_history` | `platform/policy_mcp/tools.py` | A new internal route on the claims tool server, which already serves mutual TLS, called by the policy server | S084 |
 | 4 | The claims tool server writes `claims.notes` and `claims.approval_requests` (foreign keys to `claims.claims`) and reads `claims.decisions` | `workloads/claims_triage/mcp_server/tools.py`, migration 0004 | Nothing to cut: it uses the claims database under its own role (decided). Its code first moves out of the claims workload's package | S082, S087 |
 | 5 | All three tool servers read `runtime.runs` and `claims.claims` on every tool call and bind the call to that run's claim and tenant (T-22) | `platform/toolserver/binding.py`, `platform/toolserver/pipeline.py`, `platform/toolserver/wire.py` | The binding (run, agent, tenant, claim, policy) in the call's metadata from the authenticated runtime; the two reads go (decided; accepted risk) | S084 |
-| 6 | The Claims API reads `audit.claim_trail`, a view over claims, runs and audit events, on every adjuster page and once per queue row | `workloads/claims_triage/adjuster.py`, `workloads/claims_triage/adjuster_queue.py`, migrations 0011, 0019 | Under the recommendation: the central audit database serves the trail, selected by claim without a join into another database; the view's role-name literals are replaced. How the page reads it is S085's design | S085 |
+| 6 | The Claims API reads `audit.claim_trail`, a view over claims, runs and audit events, on every adjuster page and once per queue row | `workloads/claims_triage/adjuster.py`, `workloads/claims_triage/adjuster_queue.py`, migrations 0011, 0019 | The central audit database (point 5) serves the trail, selected by claim without a join into another database; the view's role-name literals are replaced. How the page reads it is S085's design | S085 |
 | 7 | The sweep joins runs with claims and briefs under a row lock, then updates the run, writes the audit row and deletes checkpoints in one transaction; one role spans two schemas | `workloads/claims_triage/sweep.py`, `runtime/sweep.py` | Two sweeps: the runtime's own, and the claims side asking the runtime for a run's state. The row lock across the two is lost; each half must be safe to repeat | S086 |
-| 8 | Every service but the gateway writes its audit row in its business transaction, into the one `audit.events`, whose trigger stamps the database role and sequence number | `common/audit.py` (`record_event`), `runtime/runs.py`, `workloads/claims_triage/lifecycle.py`, `platform/toolserver/pipeline.py`, `runtime/sweep.py`, `platform/knowledge_mcp/ingest.py` | Under the recommendation: an audit table in each service's database, in the same transaction, with the stamp and insert-only triggers travelling with it, and a relay to the central table | S085 |
-| 9 | Audit retention lives in the `gateway` schema (`expire_audit_events`, `count_audit_events_before`), and `gateway.upkeep_audit` inserts into `audit.events`; neither can stay in one database while the table is in another | migrations 0020, 0028; `platform/cli/gateway.py` | Under the recommendation: retention moves to the central audit database; the gateway's upkeep rows go to the gateway's own audit table | S085, S087 |
-| 10 | One migration history, one owner role, one ledger: 13 multi-schema files, owner checks across schemas, role guards for other services' roles, an `ALTER DATABASE` in 0031; and downstream, the tests' template database, the grant tests, the server's `pg_hba.conf` and database list, the Secrets' connection strings, smoke's `psql -d meridian` and the AWS module's `db_name` | `platform/migrations/runner.py`, `tests/meridian/dbsupport.py`, `infra/kind/`, `infra/terraform/aws/database.tf` | One tree and ledger per database from a baseline, no replay (recommended); the old files and tests archived; each service's role and `pg_hba.conf` line names its database | S087 |
+| 8 | Every service but the gateway writes its audit row in its business transaction, into the one `audit.events`, whose trigger stamps the database role and sequence number | `common/audit.py` (`record_event`), `runtime/runs.py`, `workloads/claims_triage/lifecycle.py`, `platform/toolserver/pipeline.py`, `runtime/sweep.py`, `platform/knowledge_mcp/ingest.py` | An audit table in each service's database (point 5), in the same transaction, with the stamp and insert-only triggers travelling with it, and a relay to the central table | S085 |
+| 9 | Audit retention lives in the `gateway` schema (`expire_audit_events`, `count_audit_events_before`), and `gateway.upkeep_audit` inserts into `audit.events`; neither can stay in one database while the table is in another | migrations 0020, 0028; `platform/cli/gateway.py` | Retention moves to the central audit database (point 5); the gateway's upkeep rows go to the gateway's own audit table | S085, S087 |
+| 10 | One migration history, one owner role, one ledger: 13 multi-schema files, owner checks across schemas, role guards for other services' roles, an `ALTER DATABASE` in 0031; and downstream, the tests' template database, the grant tests, the server's `pg_hba.conf` and database list, the Secrets' connection strings, smoke's `psql -d meridian` and the AWS module's `db_name` | `platform/migrations/runner.py`, `tests/meridian/dbsupport.py`, `infra/kind/`, `infra/terraform/aws/database.tf` | One tree and ledger per database from a baseline, no replay (point 6); the old files and tests archived; each service's role and `pg_hba.conf` line names its database | S087 |
 
 One further coupling is not in the table because it is already a call: the
 Claims API's calls to the runtime run over mutual TLS under a registry entry
@@ -344,7 +341,7 @@ Claims API imports the runtime's models instead.
 
 "Today" is the code on `main`. "After" is the designed end state, once S087 is
 merged; before S087 the same rules hold between schemas of the one database.
-The audit column is the recommendation.
+The audit tables and the relay follow point 5.
 
 | Service | Today: reaches (database `meridian`) | After: connects to | After: reaches the rest by |
 |---|---|---|---|
@@ -382,8 +379,8 @@ each service's schema, and S087 turns the schemas into databases.
 **Two checkpoints for the owner.** After S083 the images half of the choice is
 delivered: six images, each able to carry its own version, on one database. No
 independent release is safe yet, because no contract exists to hold it. After
-S087 the data half is delivered: five databases, with the audit trail as the
-owner decided by then. S088 is the last step and needs what does not exist at
+S087 the data half is delivered: five databases and the audit database, with
+the audit trail as an outbox. S088 is the last step and needs what does not exist at
 all today, a CI that builds and publishes images.
 
 ## What stays shared on purpose
@@ -443,7 +440,7 @@ Negative / accepted trade-offs:
   evaluation fingerprint moves) or an internal route. The sweep's ask of the
   runtime is a third path if the sweep gets its own certificate, which S086
   decides.
-- **A relay to run, if the recommendation stands.** It is a component that can
+- **A relay to run.** It is a component that can
   read every service's outbox, so it needs least privilege per database and an
   insert-only role at the centre. If it lags, the adjuster's trail is stale by
   that much. If it dies, the trail stops growing and retention, which lives at
@@ -514,16 +511,15 @@ Runtime may start a tool call that carries a run.
 
 ## Risks
 
-- A step is built on a recommendation the owner later turns down: the audit
-  outbox (S085) or the baselines (S087). Mitigation: Part D asks, each with a
-  default, before the step's design.
+- The baselines (S087) are right only while no environment holds data that
+  must survive. Mitigation, the session's design: S087 checks that premise
+  before it archives anything, and a database that holds such data makes it a
+  split with data (the three sentences above).
 - The split starts while steps that touch the same files are in flight.
   Mitigation: the steps start only after those are merged.
 - The relay is built, runs, and nobody watches its lag. Mitigation named, not
   built: an alert on the oldest unrelayed row, in S085.
 - The loss of the double check (above).
-- A baseline is mistaken for a pattern for a split with data. Mitigation: the
-  three sentences above say what that would need.
 
 ## Related
 
@@ -539,6 +535,7 @@ Runtime may start a tool call that carries a run.
   [4. Prove a service's identity with mutual TLS and
   cert-manager](0004-prove-service-identity-with-mutual-tls.md)
 - Plan: Part B, steps S081 to S088; Part C, S081; Part D, questions 7 and 8
+  (answered)
 - Evidence: the map of 2026-10-07 (the ownership matrix of tables and roles,
   every cross-service read and write with its code, what assumes one database,
   one image or one version), read from `main` at d1fd865 with nothing run, and

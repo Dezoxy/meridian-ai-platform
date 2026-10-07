@@ -569,7 +569,8 @@ Made on 2026-10-07 from the owner's answers of the same day (S081's section,
 and [ADR 10](architecture/decisions/0010-split-the-platform-into-services-with-a-database-each-and-their-own-releases.md)):
 a database per service on one PostgreSQL server, five databases, six images
 with independent versions, the tool servers trusting the authenticated caller,
-and the building after the steps in flight. These steps are the building. They
+the audit trail as an outbox per service, a fresh baseline per database, and
+the building after the steps in flight. These steps are the building. They
 are **designed**: nothing in S082 to S088 exists, and S081 is the record that
 decides what they are. S080 is kept for the uploads step, which another branch
 adds.
@@ -590,18 +591,20 @@ adds.
   the cluster lane's. S085 adds migrations and S087 replaces the migration
   tree: the database lane's. S084 may add or change a tool's contract and then
   moves an evaluation fingerprint. S083 and S084 may run side by side.
-- **The owner's two open questions** are Part D's 7 (the audit outbox, before
-  S085's design) and 8 (baselines without a replay, before S087's).
+- **The owner's two answers of the sixth round** are in Part D's 7 (the audit
+  outbox, for S085) and 8 (a fresh baseline per database, for S087). What they
+  leave open is the steps' own design: the gateway's audit row, how the
+  adjuster's page reads the central trail, and where the archive lives.
 
 | ID | Step | Done when | Status | Depends |
 |---|---|---|---|---|
-| S081 | The decision record for the move toward services | [ADR 10](architecture/decisions/0010-split-the-platform-into-services-with-a-database-each-and-their-own-releases.md) is accepted and indexed: it says what the owner decided (five databases on one server, six images with independent versions, the tool servers trusting the authenticated caller with the lost double check accepted as a risk, the building after the steps in flight) apart from what the session recommends (the audit outbox, baselines without a replay), lists the ten couplings with the step that replaces each, what stays shared, the consequences and the two checkpoints; this table and Part D's questions 7 and 8 exist; `make docs`, `make check` and `make test` pass. Nothing is built. `doing` until the pull request is merged, then `done` | doing | — |
+| S081 | The decision record for the move toward services | [ADR 10](architecture/decisions/0010-split-the-platform-into-services-with-a-database-each-and-their-own-releases.md) is accepted and indexed: it says what the owner decided (five databases on one server, six images with independent versions, the tool servers trusting the authenticated caller with the lost double check accepted as a risk, the audit trail as an outbox per service, a fresh baseline per database, the building after the steps in flight) apart from the session's own design, lists the ten couplings with the step that replaces each, what stays shared, the consequences and the two checkpoints; this table exists and Part D's questions 7 and 8 are answered; `make docs`, `make check` and `make test` pass. Nothing is built. `doing` until the pull request is merged, then `done` | doing | — |
 | S082 | Code in the wrong place moves; import contracts per service | With no change in behaviour and no assertion of an existing test changed: the claims tool server leaves the claims workload's package, the Claims API no longer imports the runtime's models or its sweep's constants (the models both sides use sit in a module of their own), the sweep's runtime SQL sits with the runtime, and the workloads' graphs sit in a package of their own; an import contract keeps each service's package from importing another service's; `make lint`, `make pytest` and `make smoke` pass. Designed | todo | S081, S020, S069 to S074 |
 | S083 | Six packages, six images, a tag per service | A `uv` workspace holds a common library (`common`, `registry` and `guardrails`), the tool-server library and one package per service, each with its own dependencies and version; the runtime's image installs the graphs' package; the jobs ship with the service that owns their data; one build file makes six images; the chart takes a tag per service and `make deploy` builds and loads all six; `make demo` and `make smoke` pass on kind with six images on one database. First checkpoint: the images half of the owner's choice. Designed | todo | S082 |
 | S084 | The tool servers take the binding from the caller; two reads become calls | A tool server takes a call's run, agent, tenant and claim from the Agent Runtime's authenticated call and reads neither `runtime.runs` nor `claims.claims`; a call without a binding is refused; the knowledge server asks the policy server for a policy's wording version and the policy server asks the claims tool server for a policy's other claims, each over mutual TLS under a registry entry, a chart value and a NetworkPolicy; ADR 4's one-caller rule is changed for the two paths and the change recorded; T-22 is rewritten with the accepted risk, stating what the double check caught and what is left. Designed | todo | S082 |
-| S085 | The audit outbox, the relay and the central trail | Each service writes its audit row into an audit table of its own in the transaction of its business write, with the insert-only and stamp triggers; a relay copies the rows into a central audit table that owns retention and serves the adjuster's trail by claim; a relay that lags or stops is seen by an alert, and the services keep writing; the gateway's audit row is settled in the design and said (in the ledger's transaction, or kept apart); built inside the one database, as a table per schema; the owner's answer to Part D's question 7 comes first. Designed | todo | S082 |
+| S085 | The audit outbox, the relay and the central trail | Each service writes its audit row into an audit table of its own in the transaction of its business write, with the insert-only and stamp triggers; a relay copies the rows into a central audit table that owns retention and serves the adjuster's trail by claim; a relay that lags or stops is seen by an alert, and the services keep writing; the gateway's audit row is settled in the design and said (in the ledger's transaction, or kept apart); built inside the one database, as a table per schema (the owner's decision, Part D's question 7). Designed | todo | S082 |
 | S086 | The sweep in two | The runtime sweeps its own runs and checkpoints under its own role, and the claims side asks the runtime for a run's state and moves its own claims; no statement spans runs and claims; each half is safe to run twice, and a test stops a pass between the halves; whether the claims side has an identity of its own towards the runtime is decided and recorded. Designed | todo | S082 |
-| S087 | Five databases | `claims`, `runtime`, `gateway`, `policy` and `knowledge` each have their own migration tree and ledger from a baseline, with no replay if the owner answers Part D's question 8 as recommended; the 31 files and their 59 test files are archived outside the package's path; each role and the server's rules name one database; kind, the tests' template databases, smoke, the runbooks' queries and the database lists of the Azure and AWS modules follow; the audit database exists if the outbox was chosen; `make up`, `make smoke` and `make demo` pass on a recreated kind cluster. Second checkpoint: the data half of the owner's choice. T-25 is rewritten. Designed | todo | S083, S084, S085, S086 |
+| S087 | Five databases | `claims`, `runtime`, `gateway`, `policy` and `knowledge` each have their own migration tree and ledger from a baseline, with no replay (the owner's decision, Part D's question 8); the 31 files and their 59 test files are archived outside the package's path; each role and the server's rules name one database; kind, the tests' template databases, smoke, the runbooks' queries and the database lists of the Azure and AWS modules follow; the audit database exists; `make up`, `make smoke` and `make demo` pass on a recreated kind cluster. Second checkpoint: the data half of the owner's choice. T-25 is rewritten. Designed | todo | S083, S084, S085, S086 |
 | S088 | Contracts, versions and independent release | A committed, versioned contract for the gateway, the runtime and the Claims API's routes, each side tested against it, and a rule for how long an old version is served; the registry directory has a version of its own; CI builds, tests what changed and publishes the six images to a place the step chooses and records; one service is released alone while the others stay on their versions, and the run is recorded. Designed | todo | S083, S087 |
 
 ### M3 — Reliability and operations
@@ -18959,13 +18962,14 @@ real thing):
 **Goal:** write down, before anything is built, what the owner decided about
 moving the platform toward services (a database per service on one server, six
 images with independent versions, the tool servers trusting the authenticated
-caller) apart from what the session only recommends, with the ten couplings
-that stand in the way and the eight steps that would cut them. Documents only:
+caller, the audit trail as an outbox, a fresh baseline per database) apart from
+the session's own design, with the ten couplings that stand in the way and the
+eight steps that would cut them. Documents only:
 no code, no chart, no test. Every capability in it is designed.
 
 **Decisions:**
 
-- **Decided by the owner, 2026-10-07 (the answers file, fourth and fifth
+- **Decided by the owner, 2026-10-07 (the answers file, fourth, fifth and sixth
   rounds):** "A database per service, one server (Recommended)", refined at once
   to five databases ("Five databases (Recommended)": `claims`, `runtime`,
   `gateway`, `policy`, `knowledge`; the claims tool server shares the claims
@@ -18975,24 +18979,27 @@ no code, no chart, no test. Every capability in it is designed.
   is rewritten when the code changes); "Map and decision record now, build
   after (Recommended)". The answers are copied as written, with the question
   tool's mark of the session's recommendation.
-- **Recommended by the session and open to the owner (Part D, 7 and 8), not
-  decided:** the audit trail as an outbox, against a shared audit database
-  (the guarantee "no action without its row" is lost) and against the log
-  pipeline; and one migration tree and ledger per database from a baseline,
-  with no replay, honest only because no environment holds data, with the 31
-  files and their 59 test files archived outside the package's path. The record
-  says the fact the map found: the Model Gateway already writes its audit row on
-  a separate connection, so one service of six runs without the guarantee today.
+- **Decided by the owner in the sixth round (about 15:30 UTC; Part D's
+  questions 7 and 8, answered):** "Outbox per service (Recommended)": the audit
+  trail as an outbox, against a shared audit database (the guarantee "no
+  action without its row" is lost) and against the log pipeline; and "Fresh
+  baseline per database (Recommended)": one migration tree and ledger per
+  database from a baseline, with no replay, honest only because no environment
+  holds data, with the 31 files and their 59 test files archived outside the
+  package's path. The record says the fact the map found: the Model Gateway
+  already writes its audit row on a separate connection, so one service of six
+  runs without the guarantee today. The answers do not settle whether the
+  gateway's audit row joins its ledger's transaction, nor where the archive
+  lives: S085's and S087's designs say.
 - **The session's own, not put to the owner (the owner may overturn any):** ADR
   number 10, taken now and moved if another ADR lands first (Part A: numbers are
-  taken late); status Accepted, with the two recommendations marked as such
-  inside it; no Mermaid diagram, because a table says the before and the after;
-  the new steps in a section of their own in Part B and not among the backlog
-  steps, whose preamble says they add no capability; S087 depends on S083 as
-  well as on S084 to S086, because a migration tree per database lives in a
-  package per service; S082's row names S020 and the range S069 to S074 as the
-  owner's "the steps in flight" was read, with the note that of S071 the free
-  half's pull request gates it and the paid run does not;
+  taken late); status Accepted; no Mermaid diagram, because a table says the
+  before and the after; the new steps in a section of their own in Part B and
+  not among the backlog steps, whose preamble says they add no capability; S087
+  depends on S083 as well as on S084 to S086, because a migration tree per
+  database lives in a package per service; S082's row names S020 and the range
+  S069 to S074 as the owner's "the steps in flight" was read, with the note
+  that of S071 the free half's pull request gates it and the paid run does not;
   the threat model's rows T-22, T-25 and T-97, the model's files and the root
   README are not changed (nothing is built); two backlog rows for the documents
   and the queries that name one image or one database.
@@ -19020,23 +19027,25 @@ nothing run: the ownership matrix of tables and roles from the 31 migrations,
 every cross-service read and write with its code, what assumes one database,
 one image or one version, the import contracts and the contracts between
 services; it found ten couplings. A design of eight decisions (V1 to V8) and
-eight steps, with its threat model. Five questions put to the owner in two
-rounds, three at about 14:15 UTC and two at about 14:45 UTC, with the answers
-above (an earlier count said four). This record, ADR 10, written
+eight steps, with its threat model. Seven questions put to the owner in three
+rounds, three at about 14:15 UTC, two at about 14:45 UTC and two at about 15:30
+UTC, with the answers above (an earlier count said four). This record, ADR 10, written
 through the `architecture-docs` skill; this section, the rows and Part D's two
-questions; the architecture README's index and reading paths.
+questions, answered in the sixth round; the architecture README's index and
+reading paths.
 **Result / verification:** ADR 10 exists and is indexed. The gates are run on
 the branch and their output is in the pull request.
 **Follow-ups:** S082 to S088 (rows above) start when the steps in flight are
-merged; Part D's questions 7 and 8 before S085's and S087's designs; T-22
+merged; T-22
 (S084), T-25 (S087) and T-97 (S083) are rewritten in the steps that make them
 false; the two backlog rows (documents that say "the one image", S083; queries
 and smoke lines that name one database, S087). Open for those steps and said in
 ADR 10: how the tool servers' trust applies when the caller is another tool
 server and whether the new claims route is a registry tool (an evaluation
-fingerprint), what the relay's rows carry so the trail is selected by claim,
-how the adjuster's page reads the central trail, and whether the claims sweep
-has an identity of its own.
+fingerprint), whether the gateway's audit row joins its ledger's transaction,
+what the relay's rows carry so the trail is selected by claim, how the
+adjuster's page reads the central trail, where the archive of the old
+migrations lives, and whether the claims sweep has an identity of its own.
 
 ## Part D — Open questions
 
@@ -19048,8 +19057,8 @@ has an identity of its own.
 | 4 | Licence: keep all rights reserved, or publish under MIT or Apache-2.0? **Answered 2026-09-29: Apache-2.0**, copyright Dezoxy; `NOTICE` credits the MIT-licensed ECC material | Before anyone asks to reuse the code | ~~All rights reserved~~ |
 | 5 | Should Meridian live in a dedicated work tenant instead of the trial account's default directory? It decides where S021's sign-in, roles and app registrations are created, and moving later means recreating the foundation | S021, and the upgrade to pay-as-you-go by about 2026-10-30, which is already an account change | Stay in the trial account's tenant; decide at the upgrade |
 | 6 | Should a session be stopped from editing the command guard's own files? The permission rules allow Edit and Write on `.claude/hooks/guard-bash.sh` and `.claude/settings.json`, so a session can weaken the guard that reads its commands (N4 of the third security review). Two ways: deny Edit and Write on `.claude/hooks/**` and `.claude/settings*.json`, or ask before each. The session recommends asking: a deny would also stop a session from fixing the guard when a review finds a hole, as S075 did after each of its three reviews, while an ask puts the edit in front of the owner | S075's pull request, if the owner wants it built there; no step needs it | Neither is built: the guard stays a guard for habits, and the gap is listed in the runbook and in the hook's header |
-| 7 | Should the audit trail become an outbox when the services get a database each? An audit table in each service's database, written in the same transaction as the business write (so "no action without its row" holds for every service that has a database), and a relay that copies the rows into a central audit database, which owns retention and serves the adjuster's trail. **The session's recommendation, not the owner's decision** ([ADR 10](architecture/decisions/0010-split-the-platform-into-services-with-a-database-each-and-their-own-releases.md)). The alternatives: one shared audit database (the audit row can no longer commit with the business write: the guarantee weakens or every write becomes a two-step exchange) and audit through the log pipeline (the trail the adjuster reads would rest on a log store). Its costs: a relay to run, a trail that lags by the relay's lag and stops growing if the relay dies, and a sixth database on the server. The Model Gateway already writes its audit row on a separate connection, so under the outbox it either keeps that or joins its ledger's transaction, which S085's design says | S085's design (S085 may not build the outbox before an answer) | The outbox, as ADR 10 recommends, with the gateway's choice settled in S085's design and shown to the owner |
-| 8 | Should each of the five databases start from a baseline with no replay of the 31 migration files, the old files and their 59 test files archived outside the package's path? **The session's recommendation, not the owner's decision** (ADR 10). Honest only while no environment holds data: the kind cluster is disposable and the Azure database has never been created. A split with data would need expand, copy, switch and contract instead, and a replay would mean rewriting 13 files that mix schemas, which an applied file's rule forbids. The cost: a large deletion from the tree and a change in the plan's count of migrations | S087's design (S087 builds no tree before an answer) | Baselines with no replay, as ADR 10 recommends, asked again at S087 if any environment then holds data |
+| 7 | Should the audit trail become an outbox when the services get a database each? An audit table in each service's database, written in the same transaction as the business write (so "no action without its row" holds for every service that has a database), and a relay that copies the rows into a central audit database, which owns retention and serves the adjuster's trail. **Answered 2026-10-07 (the sixth round, about 15:30 UTC): "Outbox per service (Recommended)"**, the session's recommendation, chosen as written ([ADR 10](architecture/decisions/0010-split-the-platform-into-services-with-a-database-each-and-their-own-releases.md), point 5). The alternatives not taken: one shared audit database (the audit row can no longer commit with the business write: the guarantee weakens or every write becomes a two-step exchange) and audit through the log pipeline (the trail the adjuster reads would rest on a log store). Its costs: a relay to run, a trail that lags by the relay's lag and stops growing if the relay dies, and a sixth database on the server. The Model Gateway already writes its audit row on a separate connection, so under the outbox it either keeps that or joins its ledger's transaction, which S085's design says: the one part of the question the answer does not settle | S085's design | ~~The outbox, as ADR 10 recommends, with the gateway's choice settled in S085's design and shown to the owner~~ |
+| 8 | Should each of the five databases start from a baseline with no replay of the 31 migration files, the old files and their 59 test files archived outside the package's path? **Answered 2026-10-07 (the sixth round, about 15:30 UTC): "Fresh baseline per database (Recommended)"**, the session's recommendation, chosen as written (ADR 10, point 6). Honest only while no environment holds data: the kind cluster is disposable and the Azure database has never been created. A split with data would need expand, copy, switch and contract instead, and a replay would mean rewriting 13 files that mix schemas, which an applied file's rule forbids. The cost: a large deletion from the tree and a change in the plan's count of migrations | S087's design | ~~Baselines with no replay, as ADR 10 recommends, asked again at S087 if any environment then holds data~~ |
 
 ## Part E — Changelog
 
@@ -19910,18 +19919,19 @@ has an identity of its own.
   The whole suite on the final tree: 20,058 passed, 8 skipped.
 - **v0.84, 2026-10-07:** S081, the decision record for the move toward
   services (still `doing` until its pull request merges): ADR 10, accepted,
-  designed and not built. It writes what the owner decided on 2026-10-07 (a
-  database per service on one PostgreSQL server, five databases with the claims
-  tool server in the claims database under its own role; six images with
-  independent versions; the tool servers trusting the authenticated caller,
-  with the lost double check accepted as a risk; the map and the record now and
-  the building after the steps in flight) apart from what the session
-  recommends and the owner has not answered: the audit trail as an outbox and
-  one migration tree per database from a baseline without a replay. It holds
-  the ten couplings with the step that replaces each, what stays shared, the
-  consequences and the two checkpoints. The plan gains S081 to S088 in a
-  section of Part B of their own (S080 is kept for the uploads step), S081's
-  section in Part C, Part D's questions 7 and 8 and two backlog rows (the
+  designed and not built. It writes the six decisions the owner took on
+  2026-10-07 (a database per service on one PostgreSQL server, five databases
+  with the claims tool server in the claims database under its own role; six
+  images with independent versions; the tool servers trusting the authenticated
+  caller, with the lost double check accepted as a risk; the map and the record
+  now and the building after the steps in flight; the audit trail as an outbox
+  per service, with a relay into a central audit database; a fresh baseline per
+  database, with no replay of the 31 migration files) apart from the session's
+  own design. It holds the ten couplings with the step that replaces each, what
+  stays shared, the consequences and the two checkpoints. The plan gains S081
+  to S088 in a section of Part B of their own (S080 is kept for the uploads
+  step), S081's section in Part C, Part D's questions 7 and 8, answered in the
+  owner's sixth round (about 15:30 UTC), and two backlog rows (the
   documents that say "the one image", home S083; the queries and smoke lines
   that name one database, home S087). The threat model's rows, the model's
   files and the root README are not changed: T-22, T-25 and T-97 are rewritten
