@@ -552,7 +552,7 @@ both readings the same hour ("yes both are right, go on").
 | S071 | Measurements that need a live model | Costs money (about fifty chat calls and some embedding calls; the owner says yes before any, and the amount is stated first): a real model's answers to the injection cases the screen lets through, recorded beside the golden recording; a model's refusal of a structured request seen from a real provider; retrieval measured with a real embedding, in the evaluation and in S038's one failing check; the judge compared with labels a person wrote for a sample; a held-out set for the injection screen, and a decision on what a false alarm may cost; CLM-0034's `unsure` settled by a prompt or recorded as the right answer; retrieval over a graph measured again only if the synthetic data gains something relational to find | todo | S067 |
 | S072 | The cluster outside `meridian`, second round | On kind: the Prometheus and CloudNativePG operators' reach into Secrets and ConfigMaps of every namespace is narrowed or recorded as accepted with its reason; DNS and the collector cannot carry data out unseen (T-84), or the residual is stated; writes to Prometheus and Loki pass a policy, and the three hops behind the collector are encrypted or the plan says why not; egress from `observability` and the admission webhooks' port are bounded; `cnpg-system` and `envoy-gateway-system` have Pod Security labels and a policy; the owner decides whether node-exporter stays off; Tempo mounts no API token | doing: the first part is on `main` (2026-10-07; implemented and tested, and seen on a warm cluster by run R8 in the limits the section gives: both pods run with no token, the labels applied, smoke's 46 lines and the 21 rules passed, the Certificates Ready but issued before under the old policy; the cold run R9 then approved all eight under the exact lists from nothing): Tempo's and Loki's pods mount no service-account token (three keys); the namespaces of the CloudNativePG operator and of Envoy Gateway warn and audit at Pod Security `restricted` from a render (the gateway's namespace confirmed by the API server's dry run with its proxy pod running, R9; the operator's namespace is gone); the certificate policy for the services names the eight URIs and six DNS names the chart renders, not a wildcard; an alert on the rate store's restart loop. The documents record the four accounts that read Secrets in every namespace (not two), the accepted reaches, the residuals and the one measurement (seen on kind: the API server's calls arrive from the node's address on the pod network and pass a default-deny ingress). The cluster batch is written in files, tested without a cluster and seen on kind by the cold run R9 (2026-10-07, 11:08 to 11:17 UTC, from the batch's commit; five contracts, W, E, C, N and S, and the fix contract F2; not seen: the guard, the fall-backs, a webhook failing closed, Loki's usage report refused, the four other pods of the node rule on the kubelet's port): no pod reaches the webhooks' port 10250 but Prometheus, on the operator's; egress from `observability` is denied by default and admitted by rule; the CloudNativePG operator is released into `meridian` under `config.clusterWide=false` and a policy of its own (`cnpg-system` is gone); `envoy-gateway-system` is denied by default and admitted by rule, and `make deploy` refuses a cluster without the operator's policy; smoke compares a Deployment's name as text. The infrastructure review of the batch is in (nothing critical or high; four medium findings answered by F2); left: the merge of `main`, the whole suite and the pull request, and the rows (the cluster on this machine is the one made from the batch's commit: no `make up` from `main` on it until the batch is merged); the owner decides the writes clause and node-exporter (stays off) | S064, S066 |
 | S073 | Renewals, upgrades and what smoke cannot see | On kind: a renewal is seen for the collector's certificate and the database's, and something alerts before the database's end; the services do not all restart in the same minute at a renewal; approver-policy is restarted when it hangs, and a repaired policy does not wait an hour for cert-manager's retry; a first install that fails has a way back that was tried; the chart bounds its rollback history and `make images` says what to remove; the scripts' `kubectl` calls have a request timeout; a manual sweep Job does not hide a stopped schedule; the failure paths of smoke's newer lines are seen once on a cluster with something broken on purpose; the line that reads approver-policy's wording says so when it fails; probes that time out under load have a recorded answer for the machine the cluster runs on now | doing: the first half is done (2026-10-07: the builds and the runs R0 to R4e, with the answer for the machine recorded); the second half is open: the ingestion's 503 word on a real refusal, the node paused with three deploys, certificates of one hour with all eight renewed, the cold run and a rotation of the rate store's password (the owner's to run or to accept as not seen); approver-policy's liveness probe is not built | S064, S066 |
-| S074 | Test suite and file sizes | Without the cluster: `infra/kind/smoke.sh`, `test_kind_manifests.py` and the four test files over 800 lines are split along the lines their own tests already cut; the six functions over 50 lines are under it (counted by signature plus body without the docstring, as the section says: by the whole count the row used, four of the six, `assess`, `build_report`, `build_injection_report` and `summarise`, are still over); the template-database fixture survives a test that patches the runner's file list; the tests that failed once under load (a lost connection in a parallel run, a tool server's timeout, the gateway's fallback test) are run repeatedly on the machine the suite runs on now and either hold by construction or are closed as not reproduced, with the numbers; the slowest test of the job is under ten seconds; one CPU-time helper; `unused_port()` on macOS has its answer written down; the owner decides whether CI gates on coverage | doing: the first half is done (2026-10-07; tested, none of it run on a cluster): the two upkeep test files, `test_toolserver_meters.py`, `test_claims_graph.py` and `test_kind_manifests.py` are split by moves a script proves, the template database's builder passes the list it read at import, the stack and demo tests that failed under load no longer rest on the machine's speed (argued; the measurement run, 25 loops of each beside a whole suite, has not run), the counting test takes 0.03 s alone where CI saw 47 s, and one CPU-time helper serves nine files; three questions wait for the owner (coverage in CI, a size check, a pytest-level timeout); the second half is built except what waits (2026-10-07; implemented and tested, none of it run on a cluster): S076's leftovers are closed or accepted row by row (the registry `schemas` link and `--check` line, the services edit's small ends, the scaffold's undo, the import walker's limits pinned, the golden set's workload tied to `Report` by its own validator, the claimant's closed tables read-only and three stale sentences), `run_command`, `build_report` and `render_summary` are under 50 lines by signature plus body (37, 47 and 29) with `--help`, every report and the committed summary byte for byte the same, and two of the half's own commits carried a defect that the review reproduced and a contract fixed; the third part (2026-10-07; moves a script proves, tested; seen on kind once: `make smoke` from the split as it stands printed 46 PASS, 0 FAIL, 0 SKIP, the same lines as the unsplit script's, the trace ID apart): `infra/kind/smoke.sh` is an entry of 1,185 lines and ten files under `infra/kind/smoke.d/` (`shared.sh` and nine checks, 36 to 644 lines), and checks 8 and 10 are still in the entry; the leftovers are done (2026-10-07; tested, none of it run on a cluster): the five loaders of the name-masked cases are one helper, `servicesupport.injection_case_claim`, whose missing case fails by name, and `test_redaction_hungarian.py` (858 lines) is three files and `hungariansupport.py`, the largest 368 lines, by a move a script proves with the collected count unchanged; what waits: the last cut (checks 8 and 10, after S072's cluster batch), and the rows the section's last table keeps | S064, S066, S037 |
+| S074 | Test suite and file sizes | Without the cluster: `infra/kind/smoke.sh`, `test_kind_manifests.py` and the four test files over 800 lines are split along the lines their own tests already cut; the six functions over 50 lines are under it (counted by signature plus body without the docstring, as the section says: by the whole count the row used, four of the six, `assess`, `build_report`, `build_injection_report` and `summarise`, are still over); the template-database fixture survives a test that patches the runner's file list; the tests that failed once under load (a lost connection in a parallel run, a tool server's timeout, the gateway's fallback test) are run repeatedly on the machine the suite runs on now and either hold by construction or are closed as not reproduced, with the numbers; the slowest test of the job is under ten seconds; one CPU-time helper; `unused_port()` on macOS has its answer written down; the owner decides whether CI gates on coverage | doing: the first half is done (2026-10-07; tested, none of it run on a cluster): the two upkeep test files, `test_toolserver_meters.py`, `test_claims_graph.py` and `test_kind_manifests.py` are split by moves a script proves, the template database's builder passes the list it read at import, the stack and demo tests that failed under load no longer rest on the machine's speed (argued; the measurement run, 25 loops of each beside a whole suite, has not run), the counting test takes 0.03 s alone where CI saw 47 s, and one CPU-time helper serves nine files; three questions wait for the owner (coverage in CI, a size check, a pytest-level timeout); the second half is built except what waits (2026-10-07; implemented and tested, none of it run on a cluster): S076's leftovers are closed or accepted row by row (the registry `schemas` link and `--check` line, the services edit's small ends, the scaffold's undo, the import walker's limits pinned, the golden set's workload tied to `Report` by its own validator, the claimant's closed tables read-only and three stale sentences), `run_command`, `build_report` and `render_summary` are under 50 lines by signature plus body (37, 47 and 29) with `--help`, every report and the committed summary byte for byte the same, and two of the half's own commits carried a defect that the review reproduced and a contract fixed; the third part (2026-10-07; moves a script proves, tested; seen on kind once: `make smoke` from the split as it stands printed 46 PASS, 0 FAIL, 0 SKIP, the same lines as the unsplit script's, the trace ID apart): `infra/kind/smoke.sh` is an entry of 1,185 lines and ten files under `infra/kind/smoke.d/` (`shared.sh` and nine checks, 36 to 644 lines), and checks 8 and 10 are still in the entry; the leftovers are done (2026-10-07; tested, none of it run on a cluster): the five loaders of the name-masked cases are one helper, `servicesupport.injection_case_claim`, whose missing case fails by name, and `test_redaction_hungarian.py` (858 lines) is three files and `hungariansupport.py`, the largest 368 lines, by a move a script proves with the collected count unchanged; the last cut (2026-10-07; moves a script proves, tested; seen on kind once, run R12: `make smoke` from the cut printed 46 PASS, 0 FAIL, 0 SKIP, the same lines as the run before it): checks 8 and 10 are `smoke.d/08-network-policy.sh` and `10-certificate-policy.sh`, the entry is 88 lines and every file of the script, twelve parts and the entry, is under 800 lines (the largest 647); what waits: the rows the section's last table keeps, the backlog rows with home S074 and the owner's three questions | S064, S066, S037 |
 | S075 | Harness, guard and Renovate | `make docs` notices a blank line that splits a table; the command guard's known gaps to a Secret's values and to superuser SQL are closed or listed where a session reads them, and a hook that times out has a known outcome; a rule for an implementer that edits through the shell, and a guard or a rule for `make up` and `make down` from an old checkout (both the owner's); the workflow linter knows the runner label; Renovate's week of waiting is a required check or the plan says why not (the owner's decision), an image is not proposed before the chart that installs it, and the two pgvector versions are one | done (not built: the two pgvector versions are not one, because the newest CloudNativePG image still holds 0.8.6; the owner chose package-manager holds over a required check, and uv's `exclude-newer` cannot go in before 2026-10-10; N4, the guard's own files, is the owner's open question 6; the shell-edit hook is inert until the owner sets `bashEditDiffEnabled`) | — |
 | S076 | CLI, scaffold and loader small ends | No registry entry lets the runtime name an agent that no tenant lists without a check saying so (T-81); `services_edit` refuses an alias or a merge key by itself; the scaffold says which write failed and names the line it refuses in every case; the two entry-point loaders answer a bad entry in the same fixed words; the screen's fingerprint covers what it claims to; the workload's report builders refuse another workload's manifest; `meridian registry schemas` answers an unwritable directory with a message; the scaffold can write an agent with workers, or the plan says why a second graph of subgraphs is not built. Built as: `meridian registry validate` prints one NOTE, exit code unchanged, for each graph agent the runtime may name and no tenant lists, and `load_registry` refuses nothing new, so the owner's S061 decision stands; `services_edit` itself refuses an anchor, an alias or a merge key, naming the line; a refusal about a line of the person's file names the parser's line where the parser gives one; a failed or interrupted write names its kind and the error's class, the undo puts back every file that still holds the command's own bytes and names every path it did not restore (the scaffold's write and undo are in `scaffold_writes.py`); the two loaders word a refusal in one table of fixed sentences that quote no distribution's name and no import error's text, with the registry's agent ID in front for the graphs; the screen's digest is unchanged and the documents say what it covers and does not; both report builders compare the manifest's workload with their own; `meridian registry schemas` answers a directory it cannot update with one line; a second graph of subgraphs is not built, as a decision (the section says why). Implemented and tested, not run on a cluster | done | S037 |
 
@@ -812,7 +812,7 @@ that day; the rest stand as their step recorded them.
 | Retrieval over a graph was measured on data that has nothing relational to find: no customer holds two policies and no asset is on two (S038's census). Measure again if the synthetic data gains customers with several policies or assets with several claims | S038 | open | S071 |
 | S038's one failing check (all cited clauses, rank 10) is against a fusion whose vector half is the simulated embedding, a hashed bag of words; the comparison was not run against a real embedding, which needs a paid call | S038 | open; a rerun belongs with a step that can call an embedding deployment without a laptop | S071 |
 | At a certificate renewal every service restarts in the same minute: one deploy issues the seven certificates in the same second, so each process reaches its restart margin together, and with one replica each the platform answered nothing for about a minute (seen on kind, 2026-10-06). A second replica, or a margin spread per service, would stagger it | S062 | open in part; S073 built the spread (K2: a share of the margin by a service's place in the chart's list) and the shares were seen set on the six pods (run R2, 2026-10-07); not seen: the restarts at a renewal (the one-hour watch, the second half); two replicas of one service would still restart together, not built | S073 |
-| `infra/kind/smoke.sh` is about 2,300 lines and `tests/meridian/test_kind_manifests.py` about 3,900; the checks are cut out of the script by the tests, function by function, and could be files of their own | S062 | closed in part by S074 (first half): `test_kind_manifests.py` is thirteen `test_kind_*` files and two support modules (`kindsupport.py`, `kindharness.py`); closed in part by S074 (third part, 2026-10-07; seen on kind: one `make smoke` from the split, 46 PASS like the unsplit script's): `smoke.sh` is an entry and ten files under `infra/kind/smoke.d/`, nine checks and the shared code, each under 800 lines (36 to 644); open: the entry holds checks 8 and 10 and is 1,185 lines, over the ceiling, until the last cut, after S072's cluster batch | S074 |
+| `infra/kind/smoke.sh` is about 2,300 lines and `tests/meridian/test_kind_manifests.py` about 3,900; the checks are cut out of the script by the tests, function by function, and could be files of their own | S062 | closed in part by S074 (first half): `test_kind_manifests.py` is thirteen `test_kind_*` files and two support modules (`kindsupport.py`, `kindharness.py`); closed in part by S074 (third part, 2026-10-07; seen on kind: one `make smoke` from the split, 46 PASS like the unsplit script's): `smoke.sh` is an entry and ten files under `infra/kind/smoke.d/`, nine checks and the shared code, each under 800 lines (36 to 644); closed by S074 (the last cut, 2026-10-07, commit 3efea92; seen on kind: run R12, 46 PASS equal to the run before it): checks 8 and 10 are parts too, twelve files under `smoke.d/` (36 to 647 lines) and an entry of 88 lines, so no file of the script is over the ceiling | S074 |
 | The scripts' `kubectl` calls have no request timeout of their own: a hung API server stalls a wait between two checks. Smoke's reads of the database are bounded since S062; the pgvector lines of check 2 still hide psql's message | S062 | open in part; S073 bounded every call (K1, then K9 for the calls that wait; tested with stand-ins, `make deploy` and `make smoke` ran under the request flag and the `exec` bound on kind from run R2, 2026-10-07) and the pgvector lines keep psql's first line (K4); not seen: the outer bound of K9 and a frozen API server (run R5) | S073 |
 | The chart sets no `revisionHistoryLimit`, so every earlier image stays a rollback's target for as long as its ReplicaSet is kept; `make images` lists such an image and prints no command for it, and matches only images written `repository:tag` | S062 | open in part; S073 set `revisionHistoryLimit: 2` (K2; seen on the seven Deployments, run R2, 2026-10-07) and `make images` reads a registry, a port and a digest (tested with stand-ins); not seen: the limit removing an old ReplicaSet over three deploys (run R5) and `make images` with the new reading | S073 |
 | Check 10 of `make smoke` reads approver-policy's wording (the names of the policies in a denial's message) at the pinned version; an update of the add-on is when that line would fail without a fault | S062 | open; S063: the Renovate group that carries the add-on tells whoever merges it to run `make up` and `make smoke`, which is where the line would fail; closed by S073 as recorded, not seen failing: the line is in code and tested (`test_a_denial_in_a_form_the_check_does_not_read_is_a_fail_that_prints_it_cut`), and only a new version of the add-on would fail it | S073 |
@@ -851,7 +851,7 @@ that day; the rest stand as their step recorded them.
 | Renovate proposes a chart a week after its release and an image at once (the docker datasource gives no dependable release date for quay.io and ghcr.io), so an image's tag can be proposed before the chart that installs it; a note on the pull request says to leave it | S063 (infra review) | closed by S075: one rule switches off Renovate's tag updates for the 17 images a chart installs by default and keeps digest updates, so an image is not proposed before its chart (the collector's two images are outside it until their pin and the chart's appVersion agree); the chart's pull request moves the tags by hand | S075 |
 | A renewal has not been seen for the collector's certificate (90 days), its authority (a year) or the database's three certificates (90 days), and nothing alerts on the database's: cert-manager's series do not cover CloudNativePG's | S063 | open in part; S073 built the database line of smoke (passed on the real Cluster, run R4d, 2026-10-07; no alert can read the dates, since CloudNativePG exports no series for them, read in run R0); not seen: a renewal of the collector's certificate, of its authority or of the database's three, which needs a forced renewal of the collector's certificate (not run in this half) and, for the database's, a lifetime in whole days that no run can wait out | S073 |
 | Every role of the database may create temporary tables (PUBLIC's right on the database); nothing a role can shadow with one was found | S063 (database review) | closed by S068 as decided: the right stays with PUBLIC, because taking it away is a database-level privilege that the tests' copies of the template do not carry and two tests use the right as their control; the defence is completed instead: the four older trigger functions pin `pg_temp` last in their search path (0031) and a test over the migrated catalog fails for any trigger or definer function of the owner's schemas that does not (T-101). Tested against PostgreSQL, not run on a cluster | S068 |
-| `infra/kind/smoke.sh` is near 2,900 lines; a new check would be better as a file of its own, which needs the script split first. Tempo's pod mounts an API token it does not use | S063 | closed for the mechanism by S074 (third part, 2026-10-07): a new check is a new file `smoke.d/NN-name.sh` and one source pair in the entry (`infra/kind/README.md` says how; `test_smoke_parts.py` holds the layout), and the script's size is closed in part (nine checks and the shared code are parts under 800 lines; the entry is 1,185 lines until the last cut, which is S074's and waits for S072's cluster batch); Tempo's API token is re-homed to S072, whose row names it ("Tempo mounts no API token"). Tempo's half is closed by S072 (contract T, `f690173`; implemented and tested, seen warm by R8, 2026-10-07): Tempo's and Loki's pods mount no token (Loki found by the render, with two keys); both pods were replaced, read `automountServiceAccountToken=false`, ran, and smoke's trace and log lines passed without a token | S074 |
+| `infra/kind/smoke.sh` is near 2,900 lines; a new check would be better as a file of its own, which needs the script split first. Tempo's pod mounts an API token it does not use | S063 | closed for the mechanism by S074 (third part, 2026-10-07): a new check is a new file `smoke.d/NN-name.sh` and one source pair in the entry (`infra/kind/README.md` says how; `test_smoke_parts.py` holds the layout), and the script's size is closed by the last cut (2026-10-07, commit 3efea92; seen on kind, run R12): the eleven checks and the shared code are parts under 800 lines and the entry is 88 lines; Tempo's API token is re-homed to S072, whose row names it ("Tempo mounts no API token"). Tempo's half is closed by S072 (contract T, `f690173`; implemented and tested, seen warm by R8, 2026-10-07): Tempo's and Loki's pods mount no token (Loki found by the render, with two keys); both pods were replaced, read `automountServiceAccountToken=false`, ran, and smoke's trace and log lines passed without a token | S074 |
 | No rule and no dashboard panel reads the values of S064's series: a jump in an assessment reason (`special-data`, `injection-suspected`, `filtered`), triages that fail by reason, a sweep finding that stays above zero, the tool servers' refusals, a runtime that cannot reach the gateway; and no rule reads a log line (kind's Loki runs no ruler) | S064 | open; thresholds need a measurement | S027 |
 | The log agent's own counters (its exporter's failures, the memory limiter's refusals) are scraped by nothing; a DaemonSet that does not exist leaves no series, so only smoke says the agent is gone; the kubelet's rotation can outrun the agent, and one flooding pod may stall the others' lines (not measured). The agent mounts the node's pod-log directory, so `logging` cannot be `restricted` and a compromised agent reads every pod's output on its node | S064 (infra review) | open; the second half is a stated residual (T-68). S072, 2026-10-07: the counters are not taken by the four contracts landed (an ingress rule from Prometheus to 8888, a monitor object and a rule, then a run); stays, and does not gate the step's close | S072 |
 | Not seen on a cluster after S064: any of the four telemetry alerts firing, a renewal of the telemetry authority with the log agent and the sweep as its readers, a line with an `exception` field, a run counted `not-saved` or `not-started`, a triage counted `failed`, a tool call counted `cancelled` | S064 | open; tests hold each | S073 |
@@ -984,8 +984,8 @@ that day; the rest stand as their step recorded them.
 | Smoke's check 10 asks for a Certificate in `default` with the URI `.../sa/meridian-smoke-refused`. Since contract P the services' policy lists exact URIs, so that URI is also refused inside `meridian` and the check no longer proves the namespace selector alone (the test that held it says so: `test_the_request_is_in_a_namespace_the_services_policy_does_not_select`). Either `REFUSED_URI` becomes a listed name such as the gateway's and the old assertion returns, or the weaker check is accepted and the line says what it proves | S072 (contract P) | closed by S072 (F1), tested with stand-ins and seen warm (R8, 2026-10-07: `make smoke` from `main`, 46 PASS, 0 FAIL, 0 SKIP): `REFUSED_URI` is the Claims API's listed URI, so the namespace selector is again the one reason for the refusal, and the test holds the URI, the duration and the usages against the policy's manifest; check 10's refused request was refused for its namespace | S072 |
 | `BY_HAND` in `src/meridian/platform/cli/workload.py` lists what the scaffold leaves to a person (the service entry, a chart entry with a certificate) and does not say that a service with a Certificate needs its ID, and its `<service>.meridian.svc` name where it serves TLS, in the `meridian-services` policy's two lists or the issuer refuses its certificate (`config/registry/README.md` says so since contract P). Its test is read before the line is edited | S072 (contract P) | open; the cluster batch took none of it (a change under `src/`, outside a batch of manifests, scripts and documents): it stays, does not gate the close, and the closing record re-homes it to a step that exists | S072 |
 | Loki's chart renders a ClusterRole with no rules (`loki-clusterrole`) bound to the `loki` ServiceAccount, and a `loki-memcached` ServiceAccount although memcached is off, whose token key contract T's two keys do not touch; no pod uses either, so they grant and mount nothing. Envoy Gateway's chart leaves its certgen RBAC and its topology-injector webhook configuration on the cluster after the hook ran (no delete policy on them) and renders a cluster-wide ValidatingAdmissionPolicy. A value that switches the first two off was not looked for | S072 (render) | open; noticed, harmless as rendered | S072 |
-| The three manifests that prove S074's third part (`cut-1.manifest`, `cut-2.manifest`, `cut-3.manifest`: line ranges for `scripts/shell_split_proof.py`) are in the session's handoff folder, outside the repository, so no clone can run the proofs again; the plan holds the commands and their output. Cuts 1 and 2 cannot be run again on the tip in any case: the files they name as targets changed after them | S074 (third part) | open: keep the three manifests in the repository beside the proof script (about 200 lines of text in all, each with its `--ref` in a first comment), or accept the recorded output as the evidence; the owner's decision, or the last cut's | S074 |
-| `shellcheck` has no runner, and the split made the by-hand run narrower: the earlier gates' `shellcheck infra/kind/*.sh` does not reach `infra/kind/smoke.d/`; the parts are linted through the entry alone (`shellcheck infra/kind/smoke.sh` follows each `# shellcheck source=` hint through `.shellcheckrc`; exit 0 after each cut), and a part linted by itself warns (SC2034 on `PSQL_OPTIONS`, `COLLECTOR_ENDPOINT` and `poll_error` in `shared.sh`, which checks that are not sourced then read). A runner would be a `make` target or a CI step that lints the entry; S075's row does not name it | S074 (third part) | open: not built; no step owns CI checks for shell, so S074 takes it or closes it as by hand | S074 |
+| The four manifests that prove S074's cuts of the smoke script (`cut-1.manifest` to `cut-4.manifest`: line ranges for `scripts/shell_split_proof.py`) are in the session's handoff folder, outside the repository, so no clone can run the proofs again; the plan holds the commands and their output. Cuts 1 and 2 cannot be run again on the tip in any case: the files they name as targets changed after them; nor can cut 4, whose second state changed comment, blank and directive lines in four files (run on the tip it prints four FAIL lines, read 2026-10-07) | S074 (third part) | open: keep the four manifests in the repository beside the proof script (273 lines of text in all, each with its `--ref` in a first comment), or accept the recorded output as the evidence; the owner's decision (the last cut did not take it) | S074 |
+| `shellcheck` has no runner, and the split made the by-hand run narrower: the earlier gates' `shellcheck infra/kind/*.sh` does not reach `infra/kind/smoke.d/`; the by-hand line is `shellcheck infra/kind/smoke.sh infra/kind/smoke.d/*.sh`, which ends 0 with no flag on the last cut's tree (read 2026-10-07; `shared.sh` and the parts 08 and 10 each end 0 alone, since the review's directives and the last cut's), and nothing runs it but a person (the entry alone follows each `# shellcheck source=` hint through `.shellcheckrc`). A runner would be a `make` target or a CI step that lints the entry; S075's row does not name it | S074 (third part) | open: not built; no step owns CI checks for shell, so S074 takes it or closes it as by hand | S074 |
 | `tests/meridian/test_smoke_trap.py` waits 60 s for each of its tests that runs the whole script against stubs when a part fails to source (a part missing from the scratch copy, a misnamed `.` line): the failure is slow, not fast (S074's harness contract SA, with the copy of `smoke.d/` switched off: 5 failed, 1 passed in 181 s) | S074 (third part) | open: a bound on the stub run that a failed source reaches sooner, or a test that sources the parts first; not built | S074 |
 | Loki's usage report to its vendor's statistics host is now refused by `observability`'s egress policy (contract E, `cd1d3b9`), and no value switches it off: `values/loki.yaml` has no `analytics` block, so the chart's default stands, which the contract read as on (Tempo's and Grafana's reports and update checks are off in their values). Loki should log a failed report and go on; the cold run R9 did not show it: Loki's log holds no line about the report (no attempt was logged in the run's nine minutes), so the refusal is not seen. `loki.analytics.reporting_enabled: false` is one value and one test, to be set only if the default is confirmed on | S072 (contract E) | open; the cold run's log holds no line about the report, so the default is still not confirmed on and the row stays open: the value is set in S072's close if a run shows the line, or the row is re-homed there | S072 |
 | `api_server_matches_policy` (`infra/kind/common.sh`, used by `make deploy` and `make smoke`) reads and compares the address in the database's policy alone, though `make up` fills the placeholder in five policies (the database's, cert-manager's, `observability`'s, the CloudNativePG operator's and Envoy Gateway's): a node address that changes under a running cluster (Docker restarted) shows in the other four as an operator, a webhook or the edge that stops working, and nothing compares it. Its message says "run `make up`", which is true for all five. Contracts C and N both noticed it and did not change it | S072 (contracts C and N) | open: a row of the same read and comparison for each policy, with the policy named in the message | S073 |
@@ -13187,11 +13187,11 @@ functions over 50 lines and S076's leftovers are done, closed or accepted row
 by row. A third part, after S073's first half reached `main`, split
 `infra/kind/smoke.sh` into parts under `infra/kind/smoke.d/` (its record
 follows the second half's, "The third part"). A short fourth part, "The
-leftovers", did the two things that waited for S070: the loaders' helper and
-the split of `test_redaction_hungarian.py`. What is NOT done, and keeps the
-step at `doing`: the last cut of the smoke script's split (checks 8 and 10,
-which S072's cluster batch is still editing), and the rows the second half's
-last table keeps open.
+leftovers", did the two things that waited for S070 (the loaders' helper and
+the split of `test_redaction_hungarian.py`) and, once S072's cluster batch was
+on `main`, the last cut of the smoke script's split (checks 8 and 10). What is
+NOT done, and keeps the step at `doing`: the rows the second half's last table
+keeps open, and the rows with home S074 that the backlog still lists as open.
 
 **Decisions** (the main session's unless marked; the owner may overturn any;
 the design was written from a read-only map of `main` at 0064171 before any
@@ -14408,12 +14408,14 @@ S070.
 | `infra/kind/smoke.sh` is near 2,900 lines; a new check would be better as a file of its own | Closed for the mechanism; the size closed in part | A new check is a new file under `smoke.d/` and one source pair (`infra/kind/README.md`); `test_smoke_parts.py` holds the layout; Tempo's half was S072's |
 | Sentences in `infra/` that a render showed inexact (S072's row, the comment in `smoke.sh` near line 205) | Corrected in the row | The comment is in `smoke.d/05-cost-panel.sh` now; the row says so (a one-phrase fix of a place the split made stale) |
 
-**The leftovers** (2026-10-07; tests and one comment only, no file under
-`src/`, no database in T1, none of it run on a cluster). S070's first half had
-merged (828c380), so the files that held the two things the earlier parts left
-for it were free: two contracts, each with an implementer of its own and no
-file in common, landed on this branch as e7128ec (T1) and d4a0c63 (T2); a
-third, T3, wrote this record and corrected one comment.
+**The leftovers** (2026-10-07; tests, one comment and, for the last cut, shell
+moves; no file under `src/`, no database in T1; T1 to T3 not run on a cluster,
+the last cut seen on kind once). S070's first half had merged (828c380), so the
+files that held the two things the earlier parts left for it were free: two
+contracts, each with an implementer of its own and no file in common, landed on
+this branch as e7128ec (T1) and d4a0c63 (T2); a third, T3, wrote this record
+and corrected one comment; the last cut (3efea92) and its record (T4) follow
+the T3 paragraph.
 
 **T1: `test_redaction_hungarian.py` (858 lines) is three files and a support
 module** (e7128ec). A move, proved by `scripts/split_proof.py`; no test's body,
@@ -14515,21 +14517,163 @@ from `data/synthetic/injection/cases.json` in a function of their own.
 else in that file changed. The backlog rows: the step's row and S067's "left
 by reviews" row say what is closed; two rows are new (T2's two "noticed").
 
-- **Not seen:** nothing here touches a cluster, a model or the live
-  database: the only runs are the tests named above.
+**The last cut: checks 8 and 10 are parts** (3efea92; contract SC4, record T4).
+S072's cluster batch had reached `main` (PR 120, which edited both checks), and
+`main` (3b1f42a) was merged into this branch (764159b), so the cut took its
+ranges from the entry as it stood there, 1,194 lines. Checks 8 and 10 are
+`infra/kind/smoke.d/08-network-policy.sh` (606 lines) and
+`10-certificate-policy.sh` (507); the entry `infra/kind/smoke.sh` is 88 lines
+(the preconditions, the source pairs, the trap and the run). Twelve files stand
+under `smoke.d/`, the eleven checks and `shared.sh`, and every file of the
+script is under 800 lines, the largest `04-telemetry.sh` with 647.
+
+- **What moved.** Each part is its first line, the check's paragraph from the
+  header, a blank line, its constants with their comments (the group comments
+  that stayed with their checks in the second cut move now, and with them
+  `NETWORK_OUTSIDER_NAMESPACE` and `REFUSED_NAMESPACE`), its globals
+  (`network_answer`; the `refused_*` ones that are not in `shared.sh`), its
+  banner and its functions. `network_outsider_delete`, `network_delete_pod`
+  and `refused_delete_request` are in `shared.sh` and stayed. Constants read
+  when another is defined keep their order (`NETWORK_PROBE_TIMEOUT` before
+  `NETWORK_PROBE`; `DATABASE_CERTIFICATE_RENEWAL_DAYS` before
+  `DATABASE_CERTIFICATE_MARGIN_SECONDS`). The source pairs are in file order,
+  08 between 07 and 09 and 10 between 09 and 11. Ranges, old line numbers on
+  764159b:
+
+| Part | Old ranges |
+|---|---|
+| `08-network-policy.sh` | paragraph 22-187, blank 437, constants 319-371, global `network_answer` 426, banner region 438-819 |
+| `10-certificate-policy.sh` | paragraph 188-292, blank 820, constants 372-425, globals 427-432, blank 433, banner region 821-1159 |
+
+- **State 1, the move, proved before anything else changed.**
+  `scripts/shell_split_proof.py` with the manifest `cut-4` (outside the
+  repository, in the session's handoff folder, like the first three) against
+  `--ref 764159b`. The implementer ran it, and the main session ran it again
+  from the saved first state. It ends `PROOF HOLDS` with 1,194 old lines each
+  used exactly once and six added lines (two first lines and two source
+  pairs). The implementer's run, whole:
+
+```
+python3 scripts/shell_split_proof.py --ref 764159b --manifest <folder>/cut-4.manifest --scope infra/kind/smoke.sh --scope infra/kind/smoke.d
+shell_split_proof: every line used once, every file byte for byte (NOTE: read from the working tree, which differs from HEAD in 3 files under the scopes)
+  infra/kind/smoke.sh: 6 ranges, 85 lines moved, 4 added
+  infra/kind/smoke.d/08-network-policy.sh: 22 ranges, 603 lines moved, 1 added
+  infra/kind/smoke.d/10-certificate-policy.sh: 31 ranges, 506 lines moved, 1 added
+  old infra/kind/smoke.sh: 1194 lines, each used exactly once
+added lines (6):
+  infra/kind/smoke.sh:43: # shellcheck source=smoke.d/08-network-policy.sh
+  infra/kind/smoke.sh:44: . "${KIND_DIR}/smoke.d/08-network-policy.sh"
+  infra/kind/smoke.sh:47: # shellcheck source=smoke.d/10-certificate-policy.sh
+  infra/kind/smoke.sh:48: . "${KIND_DIR}/smoke.d/10-certificate-policy.sh"
+  infra/kind/smoke.d/08-network-policy.sh:1: # shellcheck shell=bash
+  infra/kind/smoke.d/10-certificate-policy.sh:1: # shellcheck shell=bash
+notes (2):
+  NOTE infra/kind/smoke.d/08-network-policy.sh: infra/kind/smoke.sh 319-326 (manifest line 20) does not rise after 437-437 (line 19)
+  NOTE infra/kind/smoke.d/10-certificate-policy.sh: infra/kind/smoke.sh 372-378 (manifest line 44) does not rise after 820-820 (line 43)
+PROOF HOLDS
+```
+
+  Each note has the cause the third part's notes had: a part's blank after its
+  paragraph is the blank that stood before its banner, far below the
+  constants, so the constants rise only after it. In state 1 the index line
+  "Checks 08 and 10 are still in this file, below, until the last cut." was
+  still there and false: the price of a proof that proves moves only.
+- **State 2, comment, blank and directive lines only.** The second state
+  differs from the first in these lines and no others: the index line above is
+  gone (it had become false); one blank line before banner 8; one shellcheck
+  directive in part 8 above the test of `telemetry_pushed` (the only finding
+  of the linter there; `SC2154`, set by `check_telemetry` in
+  `04-telemetry.sh`); and the reasons of two older directives corrected, in
+  `shared.sh` (`COLLECTOR_ENDPOINT`) and in `04-telemetry.sh` (above
+  `telemetry_pushed=yes`), which named the entry as the holder of check 8. The
+  implementer's comparison with comment, blank and directive lines removed, of
+  the three files it touched:
+
+```
+OK   infra/kind/smoke.sh: code lines 46 -> 46
+   removed: -# Checks 08 and 10 are still in this file, below, until the last cut.
+OK   infra/kind/smoke.d/08-network-policy.sh: code lines 299 -> 299
+   added:   +
+   added:   +  # shellcheck disable=SC2154  # telemetry_pushed is set by check_telemetry (04-telemetry.sh)
+OK   infra/kind/smoke.d/10-certificate-policy.sh: code lines 258 -> 258
+COMPARISON HOLDS
+```
+
+  The definitions the entry sources, compared before and after (`declare -f`
+  and `declare -p` under `set -euo pipefail` with `env -i`, the entry up to the
+  trap with the three preconditions removed): the ref, state 1 and state 2 each
+  printed 2,808 lines, 145,814 bytes, and exit status 0; state 2 against state
+  1 and against the ref: no difference. `shellcheck infra/kind/smoke.sh
+  infra/kind/smoke.d/*.sh` ends 0 with no `-e` flag (the implementer's run, and
+  the T4 session's again on this tree), and each of `shared.sh`, `08` and `10`
+  alone ends 0. `bash -n` on all thirteen files printed nothing (no exit status
+  was captured).
+- **Sizes** (`wc -l infra/kind/smoke.sh infra/kind/smoke.d/*.sh`, run for this
+  record on this tree):
+
+```
+    88 infra/kind/smoke.sh
+    37 infra/kind/smoke.d/01-edge.sh
+   237 infra/kind/smoke.d/02-database.sh
+    36 infra/kind/smoke.d/03-tools.sh
+   647 infra/kind/smoke.d/04-telemetry.sh
+   303 infra/kind/smoke.d/05-cost-panel.sh
+    98 infra/kind/smoke.d/06-adjuster-pages.sh
+   488 infra/kind/smoke.d/07-sweep.sh
+   606 infra/kind/smoke.d/08-network-policy.sh
+   350 infra/kind/smoke.d/09-service-identity.sh
+   507 infra/kind/smoke.d/10-certificate-policy.sh
+   340 infra/kind/smoke.d/11-alert-rules.sh
+   199 infra/kind/smoke.d/shared.sh
+  3936 total
+```
+
+- **One test changed, where it reads the text.**
+  `test_smoke_says_where_the_operators_log_is_now` in
+  `tests/meridian/test_kind_cnpg_operator_confined.py` was added by PR 120 and
+  read `infra/kind/smoke.sh` directly; once check 10's text stood in a part it
+  failed (the contract gate's first run: 1 failed, 2,079 passed). It reads
+  `SMOKE_SH`, the rebuilt text from `kindsupport.py`, now: one added import
+  and one changed line. A search found no other test that reads the entry's
+  file for text that moved. The layout rules of `test_smoke_parts.py` and the
+  reader's counting test passed as they were.
+- **Gates, as run by the implementer.** The contract gate, `uv run pytest
+  tests/meridian/test_smoke_*.py tests/meridian/test_kind_*.py
+  tests/meridian/test_certificate_*.py tests/meridian/test_helm_identity.py
+  tests/meridian/test_alert_rules_telemetry.py -n 4 -q`, exit 0: `2080 passed
+  in 42.19s`. `make lint`, exit 0: `Contracts: 6 kept, 0 broken.` `make test`,
+  exit 0: `Ran 372 tests in 4.156s`, `OK`. `make docs`, exit 0: `docs
+  consistency: 14 checks passed`.
+- **Seen on kind (run R12, 2026-10-07, 12:27 to 12:28 UTC; the main session's,
+  seen).** On the cluster made at 11:08 UTC from S072's batch, with the cluster
+  checkout moved to 3efea92 for the run and put back on `main` after it:
+  `make smoke` ended 0 with 46 PASS, 0 FAIL, 0 SKIP. Its 46 PASS lines, with
+  numbers and the trace's identifier replaced, are equal to run R10's 46
+  (smoke from `main`'s tree on the same cluster): `diff` empty. Nothing else
+  was changed on the cluster.
+- **Not seen:** smoke from this tree on a cold cluster; a failing check's
+  message from a part (every check passed); the trap's cleanup after an
+  interrupted run from this tree. T1 to T3 touch no cluster, no model and no
+  database: their only runs are the tests named above.
+- **No review was sent for this cut:** it is a move proved line by line, the
+  same form the infrastructure reviewer read for the first three cuts, and the
+  second state holds comment, blank and directive lines alone.
 - **The whole suite on the final tree** (the main session fills the next line
   when it has run):
 
 FINAL-SUITE-RESULT
 
-- **What is left of S074:** the last cut of the smoke script's split, checks 8
-  and 10 (`08-network-policy.sh`, `10-certificate-policy.sh`), which waits for
-  S072's cluster batch to reach `main`, as "What is left of the smoke script's
-  split" above says; the rows the second half's last table keeps open and the
-  three questions to the owner (coverage in CI, a size check, a timeout at the
-  pytest level) are as they were. The sentence above that names the loaders'
-  helper and the split of `test_redaction_hungarian.py` as still waiting on
-  S070 is the third part's record and is out of date: both are done here.
+- **What is left of S074:** the smoke script's split is done (the entry and
+  every part under 800 lines). The rows the second half's last table keeps
+  open, the backlog rows with home S074 that are still open (the manifests
+  outside the repository, a runner for `shellcheck`, `test_smoke_trap.py`'s
+  60 s, the two rows of the leftovers and the rest of the S074 rows of the
+  table), the three questions to the owner (coverage in CI, a size check, a
+  timeout at the pytest level) and the measurement run of the load-sensitive
+  tests (25 loops beside a whole suite, not run). The sentences above that
+  name the last cut, or the loaders' helper and the split of
+  `test_redaction_hungarian.py`, as still waiting are the third part's record
+  and are out of date: all three are done here.
 
 ### S068 — Database upkeep and retention
 **Status:** done · **Started:** 2026-10-06 · **Finished:** 2026-10-07
