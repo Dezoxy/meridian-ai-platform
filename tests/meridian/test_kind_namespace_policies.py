@@ -327,14 +327,15 @@ def test_the_cert_manager_header_says_who_calls_10250_and_why_no_rule_admits_it(
 
 
 def comments_on_10250(path: Path) -> list[str]:
-    """For each rule of ``path`` that names port 10250, the comment lines right
-    above the line that opens the rule (``- from:`` or ``- ports:``), joined."""
+    """For each rule of ``path`` that names port 10250 (ingress or egress), the
+    comment lines right above the line that opens the rule (``- from:``,
+    ``- to:`` or ``- ports:``), joined."""
     lines = path.read_text(encoding="utf-8").splitlines()
     found = []
     for number, line in enumerate(lines):
         if re.fullmatch(r"\s*- port: 10250", line):
             start = number
-            while not re.match(r"\s*- (from|ports):", lines[start]):
+            while not re.match(r"\s*- (from|to|ports):", lines[start]):
                 start -= 1
             above = []
             while lines[start - 1].lstrip().startswith("#"):
@@ -355,9 +356,13 @@ def test_no_ingress_rule_of_these_two_files_admits_10250_without_a_peer() -> Non
 
 def test_a_rule_that_names_10250_carries_a_comment_that_says_why() -> None:
     # A chart bump that adds a rule on this port is asked: the rule has to say
-    # why it exists. Today one rule names it (the operator's, for Prometheus).
+    # why it exists. Three rules name it, all in observability's file: the
+    # operator's ingress rule for Prometheus, Prometheus's egress rule to the
+    # operator, and the node rule (the kubelet), whose comment is at the rule.
     assert comments_on_10250(CERT_MANAGER_FILE) == []
-    (comment,) = comments_on_10250(OBSERVABILITY_FILE)
+    comment, node, egress_to_operator = comments_on_10250(OBSERVABILITY_FILE)
+    assert "operator" in egress_to_operator and "metrics" in egress_to_operator
+    assert "node" in node and "placeholder" in node
     assert "ServiceMonitor" in comment and "Prometheus" in comment
     assert "the API server" in comment and "from the node" in comment
 
@@ -369,10 +374,9 @@ def collector_labels() -> dict[str, str]:
     return peers()["collector"]["podLabels"]
 
 
-def test_observability_denies_ingress_leaves_egress_open_and_says_so() -> None:
+def test_observability_denies_ingress_and_egress_and_says_so() -> None:
     policies = policies_of(OBSERVABILITY_FILE)
-
-    assert set(policies) == {
+    ingress_names = {
         "default-deny-ingress",
         "otel-collector",
         "tempo",
@@ -382,15 +386,22 @@ def test_observability_denies_ingress_leaves_egress_open_and_says_so() -> None:
         "prometheus-operator",
         "kube-state-metrics",
     }
+    # The egress policies are the other file of tests' (test_kind_observability_
+    # egress.py): here, that each policy has the one direction it is written for.
+    assert {
+        name
+        for name, policy in policies.items()
+        if policy["spec"]["policyTypes"] == ["Ingress"]
+    } == ingress_names
     deny_all_ingress(policies["default-deny-ingress"], "observability")
     for name, policy in policies.items():
         assert policy["metadata"]["namespace"] == "observability", name
-        assert policy["spec"]["policyTypes"] == ["Ingress"], name
-        assert "egress" not in policy["spec"], name
+        assert policy["spec"]["policyTypes"] in (["Ingress"], ["Egress"]), name
     header = header_of(OBSERVABILITY_FILE)
-    # Egress is open, and the file says why: Prometheus scrapes the kubelets and
-    # the API server at the node's address, which no selector names.
-    assert "Egress is open" in header
+    # Egress is denied by default and admitted by rule, and the file says what
+    # the rules stand on: Prometheus scrapes the kubelet and the API server at the
+    # node's address, which no selector names.
+    assert "Egress is open" not in header
     assert "kubelet" in header and "API server" in header
     assert "4317" in header  # and what no longer reaches the collector
 
@@ -740,8 +751,9 @@ def test_up_applies_each_policy_after_the_namespaces_and_before_any_release() ->
         for name in ("cert-manager", "approver-policy", "kube-prometheus-stack")
     }
 
-    # cert-manager's file holds the API server's address as a placeholder, so it
-    # is applied through `apply_api_server_policy`, as the database's is.
+    # cert-manager's file and observability's hold the API server's address as
+    # a placeholder, so they are applied through `apply_api_server_policy`, as the
+    # database's is.
     (cert_manager,) = [
         i
         for i, line in enumerate(lines)
@@ -752,11 +764,17 @@ def test_up_applies_each_policy_after_the_namespaces_and_before_any_release() ->
     assert cert_manager < releases["cert-manager"]
     assert cert_manager < releases["approver-policy"]
     assert CERT_MANAGER_FILE.is_file()
+    (observability,) = [
+        i
+        for i, line in enumerate(lines)
+        if line.startswith('apply_api_server_policy "${OBSERVABILITY_POLICY_FILE}"')
+    ]
+    assert namespaces < observability < first_release
+    assert lines[observability - 1].startswith("log ")
+    assert observability < releases["kube-prometheus-stack"]
+    assert OBSERVABILITY_FILE.is_file()
 
-    for manifest, guards in (
-        ("observability-networkpolicy.yaml", ("kube-prometheus-stack",)),
-        ("smoke-networkpolicy.yaml", ()),
-    ):
+    for manifest, guards in (("smoke-networkpolicy.yaml", ()),):
         (applied,) = [
             i for i, line in enumerate(lines) if f"manifests/{manifest}" in line
         ]
@@ -805,6 +823,12 @@ def test_the_readme_says_what_stays_open_and_that_node_exporter_is_off() -> None
     assert "except the collector's" in kind and "0.161.0" in kind
     # Egress to the API server: its address alone, not "DNS and the API server".
     assert "TCP 6443 to the API server's address alone" in kind
+    # Egress from observability: denied by default, admitted pod by pod (S072).
+    assert "Egress is open" not in kind and "Egress is open:" not in kind
+    assert "Egress from `observability` is denied by default" in kind
+    assert "Egress denied for every pod and admitted by one policy per pod" in kind
+    assert "a kubelet per node" in kind and "not seen on kind" in kind
+    assert "takes the egress policy out again" in kind
     # The webhooks' port: no pod, the node's call needs no rule, what was seen on
     # kind and what was not, and the way back.
     assert "no pod may reach that port except Prometheus" in kind

@@ -2,10 +2,10 @@
 # Create the local platform on kind: `make up`. Safe to run again; it converges.
 #   1. kind cluster "meridian" (only if absent), credentials in infra/kind/kubeconfig
 #   2. namespaces (with Pod Security labels), the NetworkPolicies, Envoy Gateway and
-#      the edge Gateway: the database's and cert-manager's (each applied with
-#      the API server's address, read from the `kubernetes` EndpointSlice in
-#      `default` on every run, so a cluster whose node got another address is
-#      repaired by running this again), the one of observability,
+#      the edge Gateway: the database's, cert-manager's and observability's (each
+#      applied with the API server's address, read from the `kubernetes`
+#      EndpointSlice in `default` on every run, so a cluster whose node got
+#      another address is repaired by running this again),
 #      the one for smoke's telemetrygen Jobs, the one that gives smoke's probe
 #      pod its egress to the rate store (S066) and the one of the log agent's
 #      namespace `logging`, all before the releases they guard,
@@ -80,6 +80,9 @@ readonly DATABASE_POLICY_FILE="${KIND_DIR}/manifests/platform-db-networkpolicy.y
 # cert-manager's policies take the same placeholder, on the one egress rule for
 # TCP 6443 (S063, contract FB); the webhooks' port 10250 has no ingress rule.
 readonly CERT_MANAGER_POLICY_FILE="${KIND_DIR}/manifests/cert-manager-networkpolicy.yaml"
+# observability's takes it on the one egress rule for the node's 6443 and 10250,
+# the API server and the kubelet, which are one address on kind (S072, contract E).
+readonly OBSERVABILITY_POLICY_FILE="${KIND_DIR}/manifests/observability-networkpolicy.yaml"
 readonly API_SERVER_PEERS_PLACEHOLDER='to: [{ipBlock: {cidr: API-SERVER-ADDRESS/32}}]'
 
 # install_release NAME NAMESPACE CHART VERSION REPO VALUES_FILE [helm args...]
@@ -147,16 +150,18 @@ api_server_policy_manifest() {
   printf '%s%s%s\n' "${before}" "to: [${peers}]" "${after}"
 }
 
-# apply_api_server_policy FILE WHOSE: apply the NetworkPolicy file FILE with the
-# API server's address (S063), on every run: a cluster whose node was given
-# another address by a Docker restart is repaired by running `make up` again.
-# WHOSE ("the database's", "cert-manager's") is what the messages call the
-# policy. The address is read and checked first (read_api_server_addresses,
-# common.sh), so a bad answer stops here with the policy as it was, and the
-# manifest is rendered whole before kubectl sees it. The database's file and
-# cert-manager's are applied through this one function.
+# apply_api_server_policy FILE WHOSE [PORTS]: apply the NetworkPolicy file FILE
+# with the API server's address (S063), on every run: a cluster whose node was
+# given another address by a Docker restart is repaired by running `make up`
+# again. WHOSE ("the database's", "cert-manager's") is what the messages call the
+# policy; PORTS is what its one rule admits at that address, for the log line
+# ("TCP 6443" unless the call says otherwise). The address is read and checked
+# first (read_api_server_addresses, common.sh), so a bad answer stops here with
+# the policy as it was, and the manifest is rendered whole before kubectl sees
+# it. The database's file, cert-manager's and observability's are applied
+# through this one function.
 apply_api_server_policy() {
-  local file=$1 whose=$2 address peers="" manifest
+  local file=$1 whose=$2 ports="${3:-TCP 6443}" address peers="" manifest
   read_api_server_addresses ||
     die "${api_server_problem}; ${whose} NetworkPolicy was not changed"
   while IFS= read -r address; do
@@ -164,7 +169,7 @@ apply_api_server_policy() {
   done <<<"${api_server_addresses}"
   manifest="$(api_server_policy_manifest "${file}" "${peers}")" || exit 1
   kctl apply --server-side --force-conflicts -f - <<<"${manifest}" >/dev/null
-  log "network: ${whose} pods may reach TCP 6443 at $(paste -sd ',' - <<<"${api_server_addresses}") alone"
+  log "network: ${whose} pods may reach ${ports} at $(paste -sd ',' - <<<"${api_server_addresses}") alone"
 }
 
 # Apply the policies for approver-policy, trying again until the API server
@@ -350,8 +355,8 @@ apply_api_server_policy "${DATABASE_POLICY_FILE}" "the database's"
 log "network: cert-manager's NetworkPolicies, with the API server's address (before cert-manager is installed)"
 apply_api_server_policy "${CERT_MANAGER_POLICY_FILE}" "cert-manager's"
 
-log "network: observability's NetworkPolicies (before Prometheus, Tempo, Loki and the collector)"
-kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/observability-networkpolicy.yaml" >/dev/null
+log "network: observability's NetworkPolicies, with the node's address (before Prometheus, Tempo, Loki and the collector)"
+apply_api_server_policy "${OBSERVABILITY_POLICY_FILE}" "observability's" "TCP 6443 and 10250"
 
 log "network: the NetworkPolicy of smoke's telemetrygen Jobs in meridian"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/smoke-networkpolicy.yaml" >/dev/null

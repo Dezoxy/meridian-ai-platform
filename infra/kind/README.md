@@ -1600,7 +1600,7 @@ first `make up` and `make smoke` after it have run on one.
 | File | Namespace | What it says |
 |---|---|---|
 | [`manifests/cert-manager-networkpolicy.yaml`](manifests/cert-manager-networkpolicy.yaml) | `cert-manager` | Ingress denied, except 9402 to the controller's metrics from Prometheus; the two webhooks' port (10250, `failurePolicy: Fail`) is admitted from no pod, and the API server, which calls from the node, needs no rule (see below). Egress: DNS and TCP 6443 to the API server's address alone (`make up` reads it from the `kubernetes` EndpointSlice and fills it in, as it does the database's; `make deploy` and `make smoke` do not compare this policy with the endpoint) |
-| [`manifests/observability-networkpolicy.yaml`](manifests/observability-networkpolicy.yaml) | `observability` | Ingress denied, except one rule per peer: the collector from the namespace `meridian` and from the log agent's pods in `logging` (namespace and pod label) on 4318; Tempo from the collector (4317) and Grafana (3200); Loki from the collector and Grafana (3100) and from its own pods (7946, its memberlist); Grafana from Prometheus (3000); Prometheus from Grafana and the collector (9090); kube-state-metrics from Prometheus (8080); and 10250 to the Prometheus operator from Prometheus alone (its webhook and its metrics share the port). Egress is open |
+| [`manifests/observability-networkpolicy.yaml`](manifests/observability-networkpolicy.yaml) | `observability` | Ingress denied, except one rule per peer: the collector from the namespace `meridian` and from the log agent's pods in `logging` (namespace and pod label) on 4318; Tempo from the collector (4317) and Grafana (3200); Loki from the collector and Grafana (3100) and from its own pods (7946, its memberlist); Grafana from Prometheus (3000); Prometheus from Grafana and the collector (9090); kube-state-metrics from Prometheus (8080); and 10250 to the Prometheus operator from Prometheus alone (its webhook and its metrics share the port). Egress denied for every pod and admitted by one policy per pod: DNS for all; the node (the API server and the kubelet: one address on kind, 6443 and 10250, filled in by `make up` as in cert-manager's) for Prometheus, the operator and its hook Jobs, kube-state-metrics and Grafana; Prometheus to its targets (Grafana, kube-state-metrics, the operator, cert-manager's controller 9402, the DNS pods 9153); Grafana to its three datasources; the collector to its three exporters; Loki to its own pods (7946); Tempo to nothing |
 | [`manifests/smoke-networkpolicy.yaml`](manifests/smoke-networkpolicy.yaml) | `meridian` | The pods of smoke's telemetrygen Jobs may reach DNS and the collector's 4318, and nothing reaches them |
 | [`manifests/smoke-rate-store-networkpolicy.yaml`](manifests/smoke-rate-store-networkpolicy.yaml) | `meridian` | The probe pod of smoke's rate store line (the pods with the label `meridian-smoke=network-probe`) may send to the rate store on 6379, so that only the store's ingress rule can stop it |
 | [`manifests/logging-networkpolicy.yaml`](manifests/logging-networkpolicy.yaml) | `logging` | Ingress and egress denied for every pod; the log agent may reach DNS and the collector's 4318 and nothing else (S064) |
@@ -1619,10 +1619,18 @@ stays as a second wall.
 
 What stays open, in one list:
 
-- Egress from `observability` is open: Prometheus scrapes the kubelet and the
-  API server, which are the node, at an address no selector names, and a
-  half-right egress policy that broke a cold `make up` would be worse. A
-  compromised pod there can still reach whatever the other namespaces admit.
+- Egress from `observability` is denied by default and admitted pod by pod
+  (S072), from a list of what each pod calls that the manifest's header holds,
+  read from the render of the pinned charts. Implemented in files and tested
+  without a cluster; not seen on kind. A cold `make up` must show every pod
+  Ready, every target up on Prometheus's Targets page and smoke's lines
+  passing. What stays: the one rule for the node gives the kubelet's port
+  10250 to every pod it selects, though only Prometheus scrapes it (the file
+  holds the placeholder once, as the function that fills it requires); a
+  cluster with more nodes has a kubelet per node, which that rule does not
+  name; and the pods may still reach the DNS pods, which answer any name. A
+  target found down is added once; a second round of surprises takes the
+  egress policy out again and states the gap.
 - The three webhooks (cert-manager's, approver-policy's, the Prometheus
   operator's) listen on 10250, and no pod may reach that port except
   Prometheus on the operator's, which serves its metrics there. No rule

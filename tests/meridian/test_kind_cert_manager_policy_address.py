@@ -234,18 +234,22 @@ def test_the_control_of_the_two_refusals_is_the_file_as_committed(
 # ── one function serves both files ───────────────────────────────────────────
 
 
-def test_one_function_applies_both_files_and_the_file_is_an_argument() -> None:
+def test_one_function_applies_the_three_files_and_the_file_is_an_argument() -> None:
     lines = UP_SH.splitlines()
     calls = [line for line in lines if line.startswith("apply_api_server_policy ")]
 
-    assert len(calls) == 2
+    assert len(calls) == 3
     assert 'apply_api_server_policy "${DATABASE_POLICY_FILE}" ' in calls[0]
     assert calls[1] == CERT_MANAGER_CALL
+    # Observability's (S072): the same function, its file an argument too.
+    assert calls[2].startswith(
+        'apply_api_server_policy "${OBSERVABILITY_POLICY_FILE}" '
+    )
     assert UP_SH.count("apply_api_server_policy() {") == 1
     assert UP_SH.count("api_server_policy_manifest() {") == 1
     body = function_body(UP_SH, "apply_api_server_policy")
     assert "manifests/" not in body
-    # The two files are applied through the function and nowhere else.
+    # The files are applied through the function and nowhere else.
     (path_lines,) = [
         line for line in lines if "manifests/cert-manager-networkpolicy.yaml" in line
     ]
@@ -296,9 +300,9 @@ def test_the_header_says_what_make_up_fills_and_what_a_stale_address_shows() -> 
     assert "Not proved" in header and "kindnet" in header
 
 
-def test_the_header_of_up_says_both_policies_get_the_address() -> None:
+def test_the_header_of_up_says_the_three_policies_get_the_address() -> None:
     header = UP_SH.split("set -euo pipefail")[0]
     flat = " ".join(line.removeprefix("#").strip() for line in header.splitlines())
 
-    assert "the database's and cert-manager's" in flat
+    assert "the database's, cert-manager's and observability's" in flat
     assert "EndpointSlice" in flat
