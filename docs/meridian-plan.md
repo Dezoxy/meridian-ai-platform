@@ -573,19 +573,24 @@ a database per service on one PostgreSQL server, five databases, six images
 with independent versions, the tool servers trusting the authenticated caller,
 the audit trail as an outbox per service, a fresh baseline per database, and
 the building after the steps in flight. These steps are the building. They
-are **designed**: nothing in S082 to S088 exists, and S081 is the record that
-decides what they are. S080 is kept for the uploads step, which another branch
-adds.
+are **designed**: nothing in S083 to S088 exists, and of S082 only its first
+two moves do (implemented and tested, not deployed: S082's section); S081 is
+the record that decides what they are. S080 is kept for the uploads step,
+which another branch adds.
 
 - **"Depends" on the steps in flight** means their pull requests are merged,
   not that the steps are `done`: S020 and S069 are not `done` when their pull
   requests merge, because S020's apply and S069's R12 wait on the owner.
-  S082's row names S020 and the range S069 to S074 as the owner's "the
+  ~~S082's row names S020 and the range S069 to S074 as the owner's "the
   steps in flight" was read. S071 is in that range and its paid run waits on
   the owner's yes: S082 waits for the pull request of S071's free half (it
   changes the tests' support code the split moves), not for the paid run,
-  which is a measurement and changes no service. This is the session's
-  reading; the owner may say otherwise.
+  which is a measurement and changes no service.~~ Superseded on 2026-10-07
+  (S082's section): that list could never clear, since S020, S073 and S074
+  stay `doing` for a long time. S082's row now names S081 and the four steps
+  that were in flight on 2026-10-07 (S071's free half, S072's client
+  certificates, S080 and S020's code half), merged; S071's paid run is still
+  not waited for. This is the session's reading; the owner may say otherwise.
 - **Two checkpoints for the owner:** after S083 the images half of the choice
   is delivered (six images, on one database, with no independent release safe
   before S088's contracts); after S087 the data half is.
@@ -601,12 +606,12 @@ adds.
 | ID | Step | Done when | Status | Depends |
 |---|---|---|---|---|
 | S081 | The decision record for the move toward services | [ADR 10](architecture/decisions/0010-split-the-platform-into-services-with-a-database-each-and-their-own-releases.md) is accepted and indexed: it says what the owner decided (five databases on one server, six images with independent versions, the tool servers trusting the authenticated caller with the lost double check accepted as a risk, the audit trail as an outbox per service, a fresh baseline per database, the building after the steps in flight) apart from the session's own design, lists the ten couplings with the step that replaces each, what stays shared, the consequences and the two checkpoints; this table exists and Part D's questions 7 and 8 are answered; `make docs`, `make check` and `make test` pass. Nothing is built. `doing` until the pull request is merged, then `done` | doing | — |
-| S082 | Code in the wrong place moves; import contracts per service | With no change in behaviour and no assertion of an existing test changed: the claims tool server leaves the claims workload's package, the Claims API no longer imports the runtime's models or its sweep's constants (the models both sides use sit in a module of their own), the sweep's runtime SQL sits with the runtime, and the workloads' graphs sit in a package of their own; an import contract keeps each service's package from importing another service's; `make lint`, `make pytest` and `make smoke` pass. Designed | todo | S081, S020, S069 to S074 |
+| S082 | Code in the wrong place moves; import contracts per service | With no change in behaviour and no assertion of an existing test changed: the claims tool server leaves the claims workload's package, the Claims API no longer imports the runtime's models or its sweep's constants (the models both sides use sit in a module of their own), the sweep's runtime SQL sits with the runtime, and the workloads' graphs sit in a package of their own; an import contract keeps each service's package from importing another service's; `make lint`, `make pytest` and `make smoke` pass. Designed | doing: the sweep's lock statement and the run's shared models and constants are moved (the first two moves, 2026-10-07; implemented and tested against PostgreSQL, **not deployed**: no chart, image or manifest changed and `make smoke` was not run) on the step's branch `s082-code-moves`, and its pull request is held until S071's free half and S072's client certificates are on `main`; the claims tool server's move waits for S072, the graphs' move for the owner's two answers (the section), and the per-service import contract comes last | S081, and the four steps that were in flight on 2026-10-07 merged (S071's free half, S072's client certificates, S080 and S020's code half): the session's reading of the owner's words, see the section |
 | S083 | Six packages, six images, a tag per service | A `uv` workspace holds a common library (`common`, `registry` and `guardrails`), the tool-server library and one package per service, each with its own dependencies and version; the runtime's image installs the graphs' package; the jobs ship with the service that owns their data; one build file makes six images; the chart takes a tag per service and `make deploy` builds and loads all six; `make demo` and `make smoke` pass on kind with six images on one database. First checkpoint: the images half of the owner's choice. Designed | todo | S082 |
 | S084 | The tool servers take the binding from the caller; two reads become calls | A tool server takes a call's run, agent, tenant and claim from the Agent Runtime's authenticated call and reads neither `runtime.runs` nor `claims.claims`; a call without a binding is refused; the knowledge server asks the policy server for a policy's wording version and the policy server asks the claims tool server for a policy's other claims, each over mutual TLS under a registry entry, a chart value and a NetworkPolicy; ADR 4's one-caller rule is changed for the two paths and the change recorded; T-22 is rewritten with the accepted risk, stating what the double check caught and what is left. Designed | todo | S082 |
 | S085 | The audit outbox, the relay and the central trail | Each service writes its audit row into an audit table of its own in the transaction of its business write, with the insert-only and stamp triggers; a relay copies the rows into a central audit table that owns retention and serves the adjuster's trail by claim; a relay that lags or stops is seen by an alert, and the services keep writing; the gateway's audit row is settled in the design and said (in the ledger's transaction, or kept apart); built inside the one database, as a table per schema (the owner's decision, Part D's question 7). Designed | todo | S082 |
 | S086 | The sweep in two | The runtime sweeps its own runs and checkpoints under its own role, and the claims side asks the runtime for a run's state and moves its own claims; no statement spans runs and claims; each half is safe to run twice, and a test stops a pass between the halves; whether the claims side has an identity of its own towards the runtime is decided and recorded. Designed | todo | S082 |
-| S087 | Five databases | `claims`, `runtime`, `gateway`, `policy` and `knowledge` each have their own migration tree and ledger from a baseline, with no replay (the owner's decision, Part D's question 8); the 31 files and their 59 test files are archived outside the package's path; each role and the server's rules name one database; kind, the tests' template databases, smoke, the runbooks' queries and the database lists of the Azure and AWS modules follow; the audit database exists; `make up`, `make smoke` and `make demo` pass on a recreated kind cluster. Second checkpoint: the data half of the owner's choice. T-25 is rewritten. Designed | todo | S083, S084, S085, S086 |
+| S087 | Five databases | `claims`, `runtime`, `gateway`, `policy` and `knowledge` each have their own migration tree and ledger from a baseline, with no replay (the owner's decision, Part D's question 8); the 32 files and their 60 test files are archived outside the package's path (31 and 59 until S080's 0032 and its test; S082's section says how they were counted); each role and the server's rules name one database; kind, the tests' template databases, smoke, the runbooks' queries and the database lists of the Azure and AWS modules follow; the audit database exists; `make up`, `make smoke` and `make demo` pass on a recreated kind cluster. Second checkpoint: the data half of the owner's choice. T-25 is rewritten. Designed | todo | S083, S084, S085, S086 |
 | S088 | Contracts, versions and independent release | A committed, versioned contract for the gateway, the runtime and the Claims API's routes, each side tested against it, and a rule for how long an old version is served; the registry directory has a version of its own; CI builds, tests what changed and publishes the six images to a place the step chooses and records; one service is released alone while the others stay on their versions, and the run is recorded. Designed | todo | S083, S087 |
 
 ### M3 — Reliability and operations
@@ -20392,6 +20397,361 @@ items); the Ingress row of `docs/architecture/overview/01-meridian-ai-platform.m
 still names Application Gateway WAF in the Azure design, which ADR 11 and the
 model no longer do.
 
+### S082 — Code in the wrong place moves; import contracts per service
+**Status:** doing · **Started:** 2026-10-07 · **Finished:** —
+**Left before it is done:** the pull request of the first two moves, held until
+S071's free half and S072's client certificates are on `main`; Move A (the
+claims tool server); Move D (the graphs), which waits for the owner; the
+per-service import contract; and `make smoke` on the cluster for Move A. Plan
+version of this part: the changelog's entry for S082.
+
+**Goal:** the code that sits in the wrong place for a split into services moves,
+with no change in behaviour and no assertion of an existing test changed, and
+an import contract keeps each service's package from importing another's.
+Labels: Moves C and B below are **implemented and tested, not deployed**; Move
+A, Move D and the per-service contract are **designed**.
+
+**What the map found** (a read-only map of `main` at ae94424; nothing was run;
+the paths and lines are those of that commit). The row reads as four lifts of
+one size. They are not:
+
+- **Move C, the sweep's runtime SQL, is one statement.** `LOCK_RUN`
+  (`claims_triage/sweep.py:138`, a lock on `runtime.runs` alone, in the claims
+  module) and a helper beside `end_abandoned_run`, whose docstring already
+  expects the caller's lock (`runtime/sweep.py:246-248`). No test names
+  `LOCK_RUN`. `ABANDONED_RUNS` and the transaction of `end_run_unless_kept`
+  span both schemas and are S086's.
+- **Move B, the Claims API's imports of the runtime, is two models and two
+  constants.** The models both sides use are exactly `RunState` and
+  `RunResponse`, in four Claims API files (`models.py:22`,
+  `runtime_calls.py:18`, `triaging.py:32`, `briefs.py:81`); the sweep's
+  constants the Claims API imports are `RUNNING_LEASE_SECONDS` (`briefs.py:82`)
+  and `ABANDONED_REASON` (`adjuster.py:53`). The other imports of the runtime
+  (`GraphFailure`, the clients, the second host's types) belong to the graph
+  and go with Move D.
+- **Move A, the claims tool server, is three files, the chart's command and an
+  image.** `mcp_server/` holds `__init__.py` (3 lines), `app.py` (40) and
+  `tools.py` (143); it imports nothing of the workload package. Its command is
+  `infra/helm/meridian/values.yaml:341`, pinned by `kindsupport.py:204-213`;
+  17 test import lines in 16 files and three strings name its path. A chart
+  change needs an image and `make smoke`.
+- **Move D, the graphs, is not a lift.** Four findings (section 0 of the map),
+  each with its evidence:
+  1. The graph's import closure and the Claims API's share six modules:
+     `lifecycle`, `models`, `posted_text`, `proposal`, `rules` and `wording`
+     (an AST walk). `claims_triage/models.py:22-23` imports both
+     `runtime.models.RunState` and `lifecycle.LifecycleState`, so the graph
+     drags the claims SQL module into its closure; `graph.py:104-106`,
+     `workers.py:44-63` and `assessment.py:51-54` import the shared modules.
+     `models.py` mixes domain types (`:25-125`) with the API's wire models
+     (`:147-204`) and must split; the shared modules need a home neither
+     service owns.
+  2. "No assertion of an existing test changed" collides with any move of a
+     path, because assertions pin dotted paths as strings:
+     `tests/meridian/runtime/test_graphs.py:326`,
+     `workloads/claims_triage/test_claims_graph_supervisor.py:316`,
+     `cli/test_scaffold_table_shapes.py:29`, `common/test_entry_points.py:387`
+     and `kindsupport.py:204-213` (compared with the chart at
+     `test_kind_services.py:124`).
+  3. `claim_brief.workflow` cannot change its dotted path without a change in
+     behaviour. A stored type name is `f"{cls.__module__}:{cls.__qualname__}"`
+     (`runtime/workflow_checkpoints.py:170`);
+     `claim_brief/test_brief_stored_shapes.py:29-44` pins the graph signature
+     and the names `meridian.workloads.claim_brief.workflow:Gathered` and
+     `:Drafted`, and its docstring (`:4-11`) says a change fails every paused
+     brief on its first resume.
+  4. Graph entry points must stay under `meridian.workloads.`:
+     `platform/common/entry_points.py:52` sets `TRUSTED_VALUE_PREFIX`, and
+     `test_entry_points.py:387` asserts it. "A package of their own" is a
+     sibling under that prefix, or the prefix and its test change.
+- **The per-service contract comes last.** Six contracts exist
+  (`pyproject.toml:137-318`) and none separates one service from another. The
+  edges that would break one are in the map's section 7; Moves B and A cure
+  two of them, Move D the rest, and the sweep's import of the runtime
+  (`claims_triage/sweep.py:46`) stays until S086.
+
+**What is built** (Moves C and B; **implemented and tested, not deployed**: no
+chart, image or manifest changed and `make smoke` was not run). On the step's
+branch `s082-code-moves`, one commit (64aca44), from the implementer's report:
+
+- `LOCK_RUN` sits in `runtime/sweep.py`, its text unchanged (`FOR UPDATE SKIP
+  LOCKED` included), with a function `lock_run(conn, run_id) -> str | None`
+  beside `end_abandoned_run` that returns the tenant, or `None` when the row is
+  gone or locked. `end_run_unless_kept` calls it; its transaction, order of
+  statements and commit are as before. `claims_triage/sweep.py` keeps
+  `STALE_CLAIMS`, `ABANDONED_RUNS`, `IS_KEPT`, `list_abandoned_runs` and
+  `end_run_unless_kept` under their names.
+- `RunState` and `RunResponse` are defined in a new
+  `platform/common/runwire.py` (17 lines; it imports only `common.wire`), and
+  `runtime/models.py` re-exports both. The four Claims API files import from
+  the new module.
+- `RUNNING_LEASE_SECONDS` and `ABANDONED_REASON` are defined in a new
+  `platform/common/runlease.py` (19 lines; it imports nothing), with their
+  comments. `runtime/sweep.py` re-exports both, `runtime/runs.py` still reads
+  the lease from `runtime/sweep.py`, and `briefs.py` and `adjuster.py` import
+  from the new module.
+- The diff against `main`: 12 files, 230 insertions and 32 deletions; ten under
+  `src/` (two new) and two new test files.
+
+Evidence (the implementer's runs, in the worktree of its contract):
+
+- **No existing test file changed.** `git diff --name-status
+  origin/main...HEAD -- tests` lists two added files and nothing else. The
+  contract made this the hard gate.
+- **The wire is the same.** `RunResponse.model_json_schema()` (sorted keys) and
+  `typing.get_args(RunState)` were dumped from `main`'s code before the first
+  edit and again after; the two files are byte for byte equal (601 bytes,
+  sha256 `95d1a7e4...f3ddba`, `cmp` printed `IDENTICAL`). The class keeps its
+  name and only its module changes; no image was built, so this stands in for
+  one.
+- **1,109 tests of 26 files passed against PostgreSQL** (`make pytest-db`, 4
+  workers, exit 0, `1109 passed in 31.14s`): the five sweep files, the seven
+  claim brief files, the two import-contract files, the ten files the contract
+  named (among them `test_runtime_sweep.py`, whose fresh-interpreter footprint
+  test holds the sweep's imports, and `test_openapi.py`) and the two new ones.
+  A first run had one failure, in the new `runlease` footprint test (`meridian`
+  itself counted as a loaded module); the test was fixed, not the code.
+- **Ten new tests, in new files only.** Six in `common/test_runwire_runlease.py`
+  (`runlease` loads exactly the three `meridian` packages above it and itself;
+  `runwire` loads no fastapi, httpx, starlette, `meridian.runtime` or
+  `common.http`; the re-exported names are the same objects; an AST check that
+  the six Claims API files import from the new modules and no longer from
+  `runtime.models` or `runtime.sweep`; the constants keep their values). Four
+  in `runtime/test_runtime_sweep_lock.py` (the statement's exact text, the
+  tenant returned, a missing row gives `None`, and a row a resume holds gives
+  `None` at once and is locked again afterwards).
+- **The missing-row case had no test before.** The locked row was covered
+  through `one_pass` (`test_sweep.py`, a run a resume has locked is left with
+  its checkpoints) and the row a claim keeps after the listing through
+  `end_run_unless_kept`; a row that is gone was covered by none.
+- **Two mutations seen red and restored.** With the `RunResponse` re-export
+  removed from `runtime/models.py`: 1 failed, 5 passed and 3 errors (the new
+  identity test, and a collection `ImportError` in three existing files,
+  `test_runtime_answer_fields.py`, `test_model_error_locations.py` and
+  `test_openapi.py`). With `SKIP LOCKED` removed from the statement: 3 failed,
+  38 passed (two of the new tests and the existing locked-row test, which
+  failed with `QueryCanceled`, sqlstate 57014).
+- **`make lint` exit 0** (last line `Contracts: 6 kept, 0 broken.`), **`make
+  test` exit 0** (`codex agents: 11 twins current`), and the file size check
+  exit 0 (844 source files, none over 800 lines without an exception).
+- **Not run:** `make smoke` (nothing it checks changed), `make pytest` and the
+  whole suite (the contract forbade them; the session runs it before the pull
+  request).
+
+**Decisions:**
+
+- **One definition of the lease, in a module that imports nothing.**
+  `runtime/sweep.py` says the runtime and the sweep must not be able to
+  disagree on the lease, so the constant is defined once and both read it. The
+  other pattern in the codebase, a duplicate held equal by a test
+  (`claim_brief/__init__.py:4-6`, `RUN_FAILED_EVENT` in `runtime/sweep.py`),
+  was not taken: a test that holds two values equal fails after the drift, a
+  single definition cannot drift. The module imports nothing because the sweep
+  job loads it, and the sweep must stay free of the web stack
+  (`runtime/test_runtime_sweep.py:65-78`).
+- **The shared models sit under `platform/common`.** The layers contract
+  (`pyproject.toml:203-207`) puts `platform` below `runtime`, and
+  `platform/common` is in every existing contract's lists, so no contract and
+  no test list changes. They are not beside the constants because
+  `runtime/models.py` imports `common.http`, which imports FastAPI: `runwire`
+  imports `common.wire` only.
+- **Re-exports, so that no test file changes.** `runtime/models.py` and
+  `runtime/sweep.py` import the names back with the `X as X  # re-exported`
+  habit of `gateway/app.py:129`; the five test imports of
+  `meridian.runtime.models` and the six of `RUNNING_LEASE_SECONDS` from
+  `meridian.runtime.sweep` stay as they are.
+- **Where the implementer's contract was silent** (the session reads them and
+  may reverse any): the helper is named `lock_run` and returns `str | None`;
+  `LOCK_RUN` sits after `UNGUARDED_DELETE`; the database tests for the missing
+  row were added because no existing test covers it; "the Claims API imports
+  from the new module" is an AST check, because identity alone cannot tell
+  where a file reads a name from.
+- **The row's dependency is a reading, not a new decision (the session's, on
+  the advisor's counsel).** The owner's words (2026-10-07, in S081's section
+  and Part D) are that building starts "after the steps in flight are merged".
+  The row listed S081, S020 and S069 to S074, and of those S020, S073 and S074
+  stay `doing` for a long time, so the list could never clear as written. The
+  row now says S081 and, in words, the four steps that were in flight on
+  2026-10-07 merged: S071's free half, S072's client certificates, S080 and
+  S020's code half. At the time of writing S020's code half (pull request 129)
+  and S080 (pull request 130) are on `main`; S071's free half and S072's client
+  certificates are on branches (`origin/s071-live-measurements`,
+  `origin/s072-writers-mtls`). The owner may say otherwise.
+- **The pull request is held, not merged first.** The session had meant to
+  merge Moves C and B before S071 and S072, because they touch no file those
+  steps edit today. The owner's words say after; the advisor counselled
+  reading them that way, and the code is built and kept on its branch until
+  the two are merged.
+- **The status cell carries the capability label.** The row's "done when" text
+  ends in "Designed" and stays; the status cell says what is implemented, what
+  is tested and that nothing is deployed.
+
+**Corrections of counts, found by the map.** The map read ADR 10's "31
+migration files" and "59 test files" at d1fd865; the tree holds more since
+S080.
+
+- S087's row said 31 files and 59 test files. The row now says 32 and 60. The
+  files: `ls src/meridian/platform/migrations/*.sql | wc -l` gives 32 (0001 to
+  0032), and `git ls-tree` on d1fd865 gave 31. The test files: ADR 10 counts
+  "59 test files under `tests/meridian/db/`", so they were counted the same
+  way, `find tests/meridian/db -name 'test_*.py' | wc -l`, which gives 60;
+  `git ls-tree -r --name-only` on d1fd865 gave 59. `git diff --name-status
+  d1fd865 origin/main` over the migrations folder and `tests/meridian/db/`
+  shows exactly one added file in each: `0032_claim_files.sql` and
+  `test_claim_files_migration.py`. 0032 names only the `claims` schema, so
+  "13 of the 31 files mix schemas" is still 13, now of 32.
+- ADR 10 is history and keeps its numbers (and Part D's question 8, and S081's
+  section, keep theirs); one dated note at the end of ADR 10 says so, in the
+  form the other records use (`Amended on ...`).
+
+**Advisor:** one consultation, on 2026-10-07 at about 18:52 UTC, at the design,
+before the first contract went out (the open decisions were written down
+first: Moves C and B in one contract, Move B's home, Move A after S072, Move D
+waiting for the owner). It changed four things. The pull request of Moves C
+and B is HELD until S071 and S072 are on `main`, where the session had meant
+to merge it first (the owner's words are "after"); the row's dependency is
+corrected in that pull request. The question on Move D goes to the owner
+before S021's routes contract, because shape (ii) below moves the files that
+contract wires. The contract got three gates it had not: no existing test file
+changed (hard), the wire schema byte-identical, two mutations seen red. And
+S087's row is corrected, with a dated note in ADR 10, in the same pull
+request. It left the design of Move B as the session had it (a module that
+imports nothing, one definition of the lease), with the reason written into
+the contract. No second consultation has been held; the code has had no
+reviewer's report recorded here.
+
+**Order of what remains:**
+
+1. **Move A, the claims tool server**, after S072 merges: S072 rewrites
+   `smoke.sh`, `deploy.sh`, `smoke.d/*` and `infra/kind/README.md` (which holds
+   the sweep's `python -m` line), and Move A changes the chart, so `make
+   smoke` runs through them. Its own pull request, with an image and a cluster
+   run. The destination is **proposed, not decided**: ADR 10 names none (it
+   says only that the code "first moves out of the claims workload's
+   package"); the candidate is `meridian.platform.claims_mcp`, beside the other
+   two tool servers. That puts it under the contract that keeps `platform` from
+   importing the agent framework (hard rule 5), and into the `source_modules`
+   of the provider-SDK contract, a list derived from the filesystem
+   (`tests/meridian/test_import_contracts.py:492-512`): an edit of
+   `pyproject.toml`, not of an assertion.
+2. **Move D, the graphs**, after the owner's answer (below), S071's free half
+   (its branch adds `injection_heldout.py` and `judge_labels.py` to the claims
+   package and tests that import `assessment`, `models` and `injection`) and
+   S021's routes contract if shape (ii) is chosen. The question goes to the
+   owner before S021's routes contract.
+3. **The per-service import contract, last and alone.** It cannot come before
+   S071: S071's branch adds `judge_labels.py`, a module of the claims workload
+   that imports a tool server's package (line 30 imports
+   `meridian.platform.knowledge_mcp.chunking`), and the contract would refuse
+   it. It also needs Moves
+   A and D (before them it passes only with ignore lines for the edges they
+   remove), S021 (`pyproject.toml`) and an `ignore_imports` line for the
+   sweep's import of the runtime until S086.
+
+**Open, for the owner** (two questions on Move D; **not answered**; the map's
+section 5 has the evidence, and the table is the map's reading of what each
+shape breaks, inferred and not run):
+
+| | (i) The triage graph leaves `claims_triage` for a sibling package under `meridian.workloads.` | (ii) The graphs keep their paths; the Claims API, the sweep and the tool server leave |
+|---|---|---|
+| Path pins changed | `pyproject.toml:50`; `test_graphs.py:37,58,298,326`; `test_claims_graph_supervisor.py:316`; `test_scaffold_table_shapes.py:29`; `test_claims_strict_msgpack.py:8`; logger pins `graphsupport.py:44,366`, `test_assessment.py:48` | `values.yaml:223`; `sweep.yaml:125`; `kindsupport.py:55,205`; `test_logredaction.py:25`; `test_import_contracts.py:554`; `test_claimant_pages.py:73-74`; `test_claim_moves.py:2359`; `claimant_errors.py:20`; `sweepsupport.py:23`; `test_sweep_meters.py:53` |
+| Test import lines edited | about 25 in 23 files | most of the 123 files that import `meridian.workloads.claims_triage` |
+| Observable output | the graph's and the workers' logger names | the `logger` field of every Claims API log line (`logformat.py:274`); a chart change, so an image and `make smoke` |
+| Entry points, trusted prefix, scaffold | the entry point changes; the prefix holds | unchanged |
+
+1. **Which shape, (i) or (ii)?** In both, `claim_brief` stays where it is
+   (finding 3) and `claims_triage/__init__.py:7` (`import meridian.runtime`)
+   can go only once the graph is out of the Claims API's package.
+2. **May "no assertion of an existing test changed" read "no assertion
+   changed but those that pin a dotted path, each listed"?** Shape (i) lists
+   the ones in its first row; shape (ii) lists the others; neither can move a
+   path with the sentence as written.
+
+The session's recommendation, which is the session's and the owner's to
+overturn: shape (i), with the second question answered yes. It is the smaller
+move (about 25 import lines against most of 123 files), it leaves the Claims
+API's log lines and the chart untouched, and it meets the row's intent: the
+graph is no longer in the Claims API's package. It asks the owner when Move D
+is the next thing to build, with a small table in the owner's two frames, and
+before S021's routes contract.
+
+**Not seen** (the map's section 10, in short):
+
+- Whether dropping `claims_triage/__init__.py:7` changes a process: today the
+  Claims API and the tool server run `runtime/__init__.py`, which writes eight
+  environment variables, and no reader was found in either. Only a run of both
+  and `test_claims_strict_msgpack.py` against the graph's new home would show.
+- Whether the image still holds `templates/` and `static/` after `adjuster.py`
+  moves (shape (ii)): `uv_build`'s package data needs an image build.
+- Whether the chart's new command starts: `values.yaml:341` and `sweep.yaml:125`
+  are checked against `kindsupport.py` without a cluster; the pod, the CronJob
+  and the role's grants are `make deploy` and `make smoke`.
+- Dashboards that select by logger name: `infra/kind/dashboards/` was not
+  searched (the alert rules were, with no hit).
+- Also unread or not run: what the five logger pins guard; whether
+  `CLAIMANT_MODULE` and `TRIAGING_MODULE` are logger names or import targets;
+  whether the evaluation baselines stay byte-identical (no fingerprint reads a
+  path, but only `make eval` shows it); whether import-linter accepts an
+  `independence` contract with an `ignore_imports` line.
+- Of the map's other unknowns, the build answered two for Moves C and B: the
+  moved `RunResponse` changes no schema (above), and the sweep's footprint
+  holds (the footprint tests passed).
+- The code of Moves C and B has not run on a cluster, and no reviewer has read
+  it according to this record.
+
+**Work log:** 2026-10-07. The map (of `main` at ae94424, read-only, nothing
+run); the open decisions, written down and put to the advisor at about 18:52
+UTC; contract CB (Moves C and B), built by an implementer in a worktree of its
+own and committed on `s082-code-moves` (64aca44); this record, written by a
+documents contract from the map, the decisions and the implementer's report,
+with the audit of the other documents (below).
+**Audit of the other documents** against the branch's diff (`docs-sync`; the
+code names `RunResponse`, `RunState`, `LOCK_RUN`, `RUNNING_LEASE_SECONDS` and
+`ABANDONED_REASON` appear in no document outside this plan; the documents say
+"the runtime's models" in prose, so they were searched for that and for the
+sweep too):
+
+- `README.md` (capability row for the scheduled sweep): names
+  `claims_triage/sweep.py` and `runtime/sweep.py`, both still true. No drift.
+- `docs/architecture/security/threat-model.md`, T-77 (the sweep): "a run is
+  ended only under its row lock" holds; the lock is now taken by a function of
+  `runtime/sweep.py` that the claims sweep calls, under the same role and with
+  the same statement. No drift.
+- `docs/operations/` (the runbooks, `README.md`, `slo.md`): they name the
+  sweep's CronJob, alerts and the reason `abandoned`; none names where the
+  lock statement or the models live. No drift.
+- `docs/architecture/model/containers.dsl` (lines 26 and 41, where it names the
+  sweep): the Claims Triage App "owns the claims-triage graph package and the
+  scheduled sweep", and no element moved; the sweep job is still in the claims
+  package and the lock is code inside it. The Structurizr model is not changed
+  by these moves.
+- `docs/architecture/decisions/0010-*.md`: history. Its Context (and the
+  paragraph at its couplings table) says the Claims API "imports the runtime's
+  models"; since these moves it imports them from `platform/common/runwire`,
+  and `runtime.models` re-exports them. The accepted point stands (no contract
+  between services, shared Python types instead). The dated note at its end
+  says both this and the corrected counts.
+- `docs/meridian-plan.md`: three sentences were made false and are corrected
+  here: the preamble of "Toward services" ("nothing in S082 to S088 exists"),
+  its bullet on S082's dependency (struck through with a note) and S087's row
+  (31 files and 59 test files). S052's section ("the runs and checkpoints in
+  `runtime/sweep.py`") is history and is still true. S081's section (its
+  Decisions bullet that says S082's row names S020 and the range S069 to S074,
+  and its "31" and "59") and Part D's question 8 keep their words, as
+  history.
+- `docs/architecture/overview/01-meridian-ai-platform.md`, the governance
+  records, `docs/architecture/deployment/azure-platform.md` and the data
+  classification: they mention the sweep or the lease in prose only. No drift.
+
+**Result / verification:** the gates of this record are `make docs` and `make
+check` (the decisions folder changed); their output is in the pull request. The
+code's evidence is the implementer's, above.
+**Follow-ups:** Moves A and D and the per-service contract (above); the two
+questions for the owner; a docstring at `briefs.py:41` says the sweep's event
+"is not (`runtime/sweep.py`)": it still describes that module truly, so it
+stays. Part D has no row for the two questions, since S082's own "done when"
+covers them.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -21369,3 +21729,22 @@ model no longer do.
   pull request 128 (14 min 0 s). Eleven backlog rows are new or narrowed, each
   with a home, and the row "Uploads (T-38)" is closed and homed at S080. Size
   check: two listed test files set to their counts, two listed.
+- **PLAN-VERSION, 2026-10-07:** S082 `doing`: the first two of its four moves,
+  built and tested on the step's branch, **not deployed** (no chart, image or
+  manifest changed; `make smoke` not run): the sweep's row lock on a run is a
+  function of `runtime/sweep.py`, `RunState` and `RunResponse` are defined in
+  `platform/common/runwire.py` and the lease and the abandoned reason in
+  `platform/common/runlease.py`, the runtime re-exports them, and the Claims
+  API imports them from the new modules. No existing test file changed; ten
+  tests are new; the schema of `RunResponse` and the values of `RunState` are
+  byte for byte the same before and after; 1,109 tests of 26 files passed
+  against PostgreSQL; two mutations seen red. The pull request is held until
+  S071's free half and S072's client certificates are on `main`. The section
+  records what a read-only map found (the graphs' move is not a lift, and the
+  claim brief's dotted path cannot change), the order of what remains, and two
+  questions for the owner on Move D, not answered. S082's dependency cell now
+  reads S081 and the four steps in flight on 2026-10-07 merged (the session's
+  reading of the owner's words, on the advisor's counsel), and the preamble
+  of "Toward services" is corrected. S087's row says 32 migration files and 60
+  test files, where it said 31 and 59 (S080's 0032 and its test); ADR 10 gets a
+  dated note and keeps its numbers. The whole suite: FINAL-SUITE-RESULT.
