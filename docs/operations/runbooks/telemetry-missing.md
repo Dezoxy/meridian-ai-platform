@@ -117,8 +117,8 @@ k() { kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meri
    NetworkPolicy has the egress rule (the chart renders it for a pod that is
    given the collector's address) and the collector's namespace admits it
    (`infra/kind/manifests/observability-networkpolicy.yaml`). Since S072 that
-   file also denies egress from `observability` by default (implemented in
-   files and tested without a cluster, not seen on kind): the collector may
+   file also denies egress from `observability` by default (tested without a
+   cluster and seen on kind in the cold run of 2026-10-07): the collector may
    reach the resolver, Tempo, Prometheus and Loki on their ports and nothing
    else, so a collector that cannot write to one of them may be refused by
    `egress-otel-collector`, not by the store. It verifies the

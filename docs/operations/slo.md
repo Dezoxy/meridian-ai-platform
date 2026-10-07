@@ -71,8 +71,8 @@ kube_deployment_status_replicas_available{namespace="meridian", deployment!="cnp
 ```
 
 The matcher leaves out the database operator's Deployment, which is in
-`meridian` since S072's cluster batch (in files, not seen on kind) and is not
-a Meridian service; it is the matcher of `MeridianServiceUnavailable` and of
+`meridian` since S072's cluster batch (seen on kind in the cold run of
+2026-10-07) and is not a Meridian service; it is the matcher of `MeridianServiceUnavailable` and of
 the health dashboard's panel. It changes what the objective measures: without
 it the operator's replica would count as a service's.
 

@@ -232,8 +232,8 @@ of their own, served by a pod that carries the collector Service's labels).
 On kind those who may write it are the cluster administrator and, by the
 rendered charts' RBAC (read, not exercised), the Prometheus operator, which
 holds ConfigMap write rights cluster-wide, and the CloudNativePG operator,
-whose rights are a Role in `meridian` since S072's cluster batch (in files,
-not seen on kind) and so reach this ConfigMap all the same; and
+whose rights are a Role in `meridian` since S072's cluster batch (seen on
+kind in the cold run of 2026-10-07) and so reach this ConfigMap all the same; and
 kube-state-metrics and Envoy Gateway's controller can read it (the render of
 2026-10-07, T-68). Treat
 the ConfigMap's write rights as part of the telemetry's trust boundary.
