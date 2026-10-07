@@ -23,7 +23,11 @@ from psycopg.types.json import Jsonb
 from pydantic import ValidationError
 
 from meridian.platform.common.db import connect
-from meridian.platform.common.http import database_failure, error_answer
+from meridian.platform.common.http import (
+    INTERNAL_ERROR,
+    database_failure,
+    error_answer,
+)
 from meridian.platform.common.telemetry import mark_error, set_span_attributes
 from meridian.runtime.models import RunResponse, RunState
 from meridian.workloads.claims_triage.claimant_name import description_for_run
@@ -581,8 +585,9 @@ def run_taken_triage(
     ``unexpected`` and raised, the 409 excepted: it is counted where it is raised.
     A proposal is counted ``stored`` when it is stored (``_run_triage``); the
     answer is built after that and outside the count, so an answer that cannot
-    be built is raised (a 500) and is not a second count for a triage that
-    stored its proposal."""
+    be built (a ``ValidationError`` of the response model, and nothing else is
+    caught) is a ``DecisionFailure`` of 500 with the run's ID (``unbuildable_answer``)
+    and is not a second count for a triage that stored its proposal."""
     try:
         outcome = _run_triage(
             dsn, tenant, http, span, claim_id, run_input, taken_at, meters
@@ -594,13 +599,39 @@ def run_taken_triage(
     if isinstance(outcome, DecisionFailure):
         return outcome
     run, proposal, transition = outcome
-    return ClaimResponse(
-        claim_id=claim_id,
-        state=transition.target,
-        run_id=run.run_id,
-        run_status=run.status,
-        proposal=ProposalSummary(route=proposal.route, drafted_by=proposal.drafted_by),
+    try:
+        return ClaimResponse(
+            claim_id=claim_id,
+            state=transition.target,
+            run_id=run.run_id,
+            run_status=run.status,
+            proposal=ProposalSummary(
+                route=proposal.route, drafted_by=proposal.drafted_by
+            ),
+        )
+    except ValidationError as exc:
+        mark_error(span, exc)
+        return unbuildable_answer(claim_id, exc, run.run_id)
+
+
+def unbuildable_answer(
+    claim_id: str, exc: ValidationError, run_id: UUID | None
+) -> DecisionFailure:
+    """The answer of a request whose answer cannot be built after it stored
+    something: a 500 with the fixed text and the run's ID, the same on every
+    route (the claims route answers it as JSON, the documents route marks it
+    ``stored``). One log line: the claim's ID, the error's class, and the fields
+    and error types (``invalid_fields``), so that an operator can tell which
+    model refused what; never the error's text, which quotes the values refused.
+    Nothing is counted or triaged again, and the stored state stands, so a
+    retry meets a 409."""
+    logger.error(
+        "the answer for claim %s could not be built: %s %s",
+        claim_id,
+        type(exc).__name__,
+        invalid_fields(exc),
     )
+    return DecisionFailure(500, INTERNAL_ERROR, run_id)
 
 
 class _Stored(NamedTuple):
