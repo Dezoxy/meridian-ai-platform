@@ -10,7 +10,11 @@ Google Cloud module, checked and never planned or applied, with no command that
 does either, is described in [gcp/README.md](gcp/README.md). The AWS module for
 a self-managed cluster, checked by `make aws-kubeadm-validate` and
 `make aws-kubeadm-scan` (through `aws.sh validate aws-kubeadm`) and not planned
-or applied, is described in [aws-kubeadm/README.md](aws-kubeadm/README.md).
+or applied, is described in [aws-kubeadm/README.md](aws-kubeadm/README.md). Its
+Google Cloud twin, checked by `make gcp-kubeadm-validate` and
+`make gcp-kubeadm-scan` (through `aws.sh validate gcp-kubeadm`) and never
+planned or applied, with no command that does either, is described in
+[gcp-kubeadm/README.md](gcp-kubeadm/README.md).
 
 The foundation is the part of Azure that stays up between demo sessions.
 Idle cost is about EUR 0 (expected, not yet measured): Azure OpenAI Standard

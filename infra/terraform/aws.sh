@@ -7,12 +7,14 @@
 #   validate  format check, init with no backend, validate. Needs no AWS
 #             credential (it is run with none) and no local file, and never
 #             calls the aws CLI. It takes the name of a module, one of aws
-#             (the default), gcp and aws-kubeadm. `validate gcp` runs the same
-#             three commands on infra/terraform/gcp (S078), and
+#             (the default), gcp, aws-kubeadm and gcp-kubeadm. `validate gcp`
+#             runs the same three commands on infra/terraform/gcp (S078),
 #             `validate aws-kubeadm` on infra/terraform/aws-kubeadm (S079, the
-#             self-managed cluster's module), with no credential of any cloud.
-#             The Google Cloud module is never planned and never applied:
-#             validate is the one command that takes the word gcp.
+#             self-managed cluster's module) and `validate gcp-kubeadm` on
+#             infra/terraform/gcp-kubeadm (S079, its Google Cloud twin), with no
+#             credential of any cloud. The Google Cloud modules are
+#             never planned and never applied: validate is the one command that
+#             takes the words gcp and gcp-kubeadm.
 #   plan      init, then plan into the module's saved plan (aws.tfplan, or
 #             aws-kubeadm.tfplan); changes nothing in AWS. Records the module,
 #             the commit, the time and the plan file's SHA-256 beside the plan,
@@ -125,15 +127,15 @@ done < <(compgen -e | grep '^TF_VAR_' || true)
 
 usage() {
   printf 'usage: %s <validate|plan|apply|destroy>\n' "$(basename "$0")" >&2
-  printf '       %s validate [aws|gcp|aws-kubeadm]  (the module to check, aws if none)\n' "$(basename "$0")" >&2
+  printf '       %s validate [aws|gcp|aws-kubeadm|gcp-kubeadm]  (the module to check, aws if none)\n' "$(basename "$0")" >&2
   printf '       %s <plan|apply|destroy> [aws-kubeadm]  (the self-managed module; the managed one if no word)\n' "$(basename "$0")" >&2
   exit 2
 }
 
-# The Google Cloud module has no path that creates anything, by the owner's
-# decision (S078): validate is the one command that takes its name.
+# The Google Cloud modules have no path that creates anything, by the owner's
+# decision (S078): validate is the one command that takes their names.
 refuse_gcp() {
-  printf 'error: the Google Cloud module is a scaffold that is never planned, applied or removed (the owner decided so in S078: no path of this script creates anything there); validate is the one command that takes the word gcp\n' >&2
+  printf 'error: the Google Cloud modules are scaffolds that are never planned, applied or removed (the owner decided so in S078: no path of this script creates anything there); validate is the one command that takes the words gcp and gcp-kubeadm\n' >&2
   exit 2
 }
 
@@ -156,7 +158,8 @@ refuse_gcp() {
 #   PLAN_REVIEW    what the owner reads in the plan before applying it
 #   MODULE_VARS    the module's variables load_aws_env gives it (an array: not
 #     read-only); each one is a variable the module declares in variables.tf
-# The gcp row has a directory and nothing else: validate is its only command.
+# The gcp and gcp-kubeadm rows have a directory and nothing else: validate is
+# their only command.
 select_module() {
   case "$1" in
     aws)
@@ -193,6 +196,21 @@ select_module() {
       MODULE_DIR="${TF_DIR}/gcp"
       MODULE_REL=infra/terraform/gcp
       MODULE_NAME=gcp
+      PLAN_FILE=
+      PLAN_RECORD_FILE=
+      STATE_DIR_UNDER_HOME=
+      STATE_FILE_NAME=
+      MODULE_README=
+      CMD_PLAN=
+      CMD_APPLY=
+      CMD_DESTROY=
+      PLAN_REVIEW=
+      MODULE_VARS=()
+      ;;
+    gcp-kubeadm)
+      MODULE_DIR="${TF_DIR}/gcp-kubeadm"
+      MODULE_REL=infra/terraform/gcp-kubeadm
+      MODULE_NAME=gcp-kubeadm
       PLAN_FILE=
       PLAN_RECORD_FILE=
       STATE_DIR_UNDER_HOME=
@@ -722,10 +740,11 @@ cmd_destroy() {
 # Every command takes at most one word after it, the name of a module from a
 # closed list, and a word that is not on the list (a path, another spelling, a
 # second word) is refused with the usage line before any program runs:
-#   validate           aws (the default), gcp or aws-kubeadm
-#   plan, apply, destroy   aws-kubeadm, or no word for the managed module; gcp is
-#                      refused with a sentence that says why, and so is the word
-#                      aws on these three (the managed module is no word at all)
+#   validate           aws (the default), gcp, aws-kubeadm or gcp-kubeadm
+#   plan, apply, destroy   aws-kubeadm, or no word for the managed module; gcp and
+#                      gcp-kubeadm are refused with a sentence that says why, and
+#                      so is the word aws on these three (the managed module is no
+#                      word at all)
 # The word is matched against literals, and each match calls select_module with a
 # literal of its own: the caller's text is never part of a path or a file name.
 case "${1-}" in
@@ -738,6 +757,7 @@ case "$1" in
       aws) select_module aws ;;
       gcp) select_module gcp ;;
       aws-kubeadm) select_module aws-kubeadm ;;
+      gcp-kubeadm) select_module gcp-kubeadm ;;
       *) usage ;;
     esac
     need_tools terraform
@@ -749,7 +769,7 @@ case "$1" in
     else
       case "$2" in
         aws-kubeadm) select_module aws-kubeadm ;;
-        gcp) refuse_gcp ;;
+        gcp | gcp-kubeadm) refuse_gcp ;;
         *) usage ;;
       esac
     fi

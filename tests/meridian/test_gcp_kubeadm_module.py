@@ -339,14 +339,14 @@ def test_what_names_the_owners_project_or_address_is_sensitive_with_no_default()
         assert has_default == (name not in secret), name
 
 
-def test_the_region_list_is_the_managed_modules_less_the_region_with_no_secrets() -> (
+def test_the_region_list_is_the_managed_modules_and_has_no_region_with_no_secrets() -> (
     None
 ):
     mine = quoted_list_in(read(VARIABLES), "var.region")
     managed = quoted_list_in(read(MANAGED_DIR / "variables.tf"), "var.region")
 
-    assert "europe-north1" in managed  # the scaffold's list, which this one trims
-    assert mine == [region for region in managed if region != "europe-north1"]
+    assert mine == managed  # both keep a regional secret, so both leave Hamina out
+    assert "europe-north1" not in mine
     assert len(mine) == 10
 
 
@@ -379,11 +379,11 @@ def zone_map(path: Path) -> dict[str, str]:
     return dict(re.findall(r'"([\w-]+)"\s*=\s*"([\w-]+)"', body))
 
 
-def test_the_zone_map_is_the_managed_modules_without_the_one_region_left_out() -> None:
+def test_the_zone_map_is_the_managed_modules_and_has_one_zone_for_each_region() -> None:
     mine = zone_map(MODULE_DIR / "main.tf")
     managed = zone_map(MANAGED_DIR / "main.tf")
 
-    assert mine == {k: v for k, v in managed.items() if k != "europe-north1"}
+    assert mine == managed
     assert set(mine) == set(quoted_list_in(read(VARIABLES), "var.region"))
 
 

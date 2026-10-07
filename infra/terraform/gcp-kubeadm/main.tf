@@ -12,11 +12,11 @@ locals {
   # One zone, as the managed module has: the nodes, and so the instances, are
   # zonal. Google's page "Regions and zones" (read 2026-10-07,
   # https://docs.cloud.google.com/compute/docs/regions-zones) lists b, c and d for
-  # europe-west1 (St. Ghislain) and a, b and c for each of the other ten. The map
+  # europe-west1 (St. Ghislain) and a, b and c for each of the other nine. The map
   # holds the first zone the page lists for each Region of the list in
-  # variables.tf, which is the managed module's list without europe-north1 (the
-  # variable's comment says why), and it is the managed module's map without that
-  # entry: a test holds the two equal. There is no fallback: a Region added to the
+  # variables.tf, which is the managed module's list (europe-north1 is in neither:
+  # the variable's comment says why), and it is the managed module's map: a test
+  # holds the two equal. There is no fallback: a Region added to the
   # list without an entry here fails the plan at the index below (and a test),
   # where a zone built from the Region's name would fail an apply at the first
   # instance.

@@ -179,6 +179,14 @@ def with_an_aws_kubeadm_directory(tree: Tree) -> Path:
     return kubeadm
 
 
+def with_a_gcp_kubeadm_directory(tree: Tree) -> Path:
+    """The Google Cloud twin's directory (S079), made by the tests that name it."""
+    twin = tree.root / "infra" / "terraform" / "gcp-kubeadm"
+    twin.mkdir()
+    (twin / "main.tf").write_text("# a stand-in module\n")
+    return twin
+
+
 def run_words(tree: Tree, *words: str, **env: str) -> subprocess.CompletedProcess[str]:
     """The script with these words exactly (tree.run takes one sub-command)."""
     return subprocess.run(
@@ -232,6 +240,26 @@ def test_validate_with_the_word_aws_kubeadm_runs_the_three_commands_on_its_direc
 
 
 @only_the_managed_module
+def test_validate_with_the_word_gcp_kubeadm_runs_the_three_commands_on_its_directory(
+    tree: Tree,
+) -> None:
+    twin = with_a_gcp_kubeadm_directory(tree)
+    with_a_gcp_directory(tree)
+
+    done = run_words(tree, "validate", "gcp-kubeadm")
+
+    assert done.returncode == 0, everything_printed(done)
+    assert tree.subcommands() == ["fmt", "init", "validate"]
+    for call in tree.calls():
+        assert f"-chdir={twin} " in call
+        assert f"-chdir={tree.module} " not in call
+    fmt, init, _ = tree.calls()
+    assert "-check" in fmt
+    assert "-backend=false" in init
+    assert "-lockfile=readonly" in init
+
+
+@only_the_managed_module
 def test_validate_with_the_word_aws_checks_the_aws_directory_as_with_no_word(
     tree: Tree,
 ) -> None:
@@ -276,6 +304,22 @@ def test_a_format_difference_in_the_aws_kubeadm_module_names_its_directory(
 
 
 @only_the_managed_module
+def test_a_format_difference_in_the_gcp_kubeadm_module_names_its_directory(
+    tree: Tree,
+) -> None:
+    with_a_gcp_kubeadm_directory(tree)
+    tree.write_stub_env({"STUB_FMT_STATUS": "3"})
+
+    done = run_words(tree, "validate", "gcp-kubeadm")
+
+    assert done.returncode != 0
+    assert "terraform -chdir=infra/terraform/gcp-kubeadm fmt" in done.stderr
+    assert "terraform -chdir=infra/terraform/aws fmt" not in done.stderr
+    assert "terraform -chdir=infra/terraform/gcp fmt" not in done.stderr
+    assert tree.subcommands() == ["fmt"]
+
+
+@only_the_managed_module
 @pytest.mark.parametrize(
     "words",
     [
@@ -308,10 +352,24 @@ def test_a_format_difference_in_the_aws_kubeadm_module_names_its_directory(
         ["validate", "infra/terraform/aws-kubeadm"],
         ["validate", "./aws-kubeadm"],
         ["validate", "kubeadm"],
-        ["validate", "gcp-kubeadm"],
         ["validate", "aws-kubeadm", "aws-kubeadm"],
         ["validate", "aws-kubeadm", "aws"],
         ["validate", "aws", "aws-kubeadm"],
+        # The Google Cloud twin's near misses, as the AWS module's above.
+        ["validate", "gcp-kubeadm/"],
+        ["validate", "gcp-kubeadm "],
+        ["validate", "gcp_kubeadm"],
+        ["validate", "GCP-KUBEADM"],
+        ["validate", "gcp-kubeadm-"],
+        ["validate", "gcp-kubeadm*"],
+        ["validate", "gcp-*"],
+        ["validate", "../gcp-kubeadm"],
+        ["validate", "infra/terraform/gcp-kubeadm"],
+        ["validate", "./gcp-kubeadm"],
+        ["validate", "gcp-kubeadm", "gcp-kubeadm"],
+        ["validate", "gcp-kubeadm", "gcp"],
+        ["validate", "gcp-kubeadm", "aws-kubeadm"],
+        ["validate", "gcp", "gcp-kubeadm"],
     ],
 )
 def test_validate_with_any_other_word_or_with_two_is_refused_before_a_program_runs(
@@ -319,6 +377,7 @@ def test_validate_with_any_other_word_or_with_two_is_refused_before_a_program_ru
 ) -> None:
     with_a_gcp_directory(tree)
     with_an_aws_kubeadm_directory(tree)
+    with_a_gcp_kubeadm_directory(tree)
 
     done = run_words(tree, *words)
 
@@ -404,7 +463,15 @@ NEAR_MISSES = [
     "./aws-kubeadm",
     "/nonexistent",
     "kubeadm",
-    "gcp-kubeadm",
+    "gcp-kubeadm/",
+    "gcp-kubeadm ",
+    "gcp_kubeadm",
+    "GCP-KUBEADM",
+    "gcp-kubeadm-",
+    "gcp-kubeadm*",
+    "gcp-*",
+    "../gcp-kubeadm",
+    "infra/terraform/gcp-kubeadm",
     "azure",
     "foundation",
     "",
@@ -437,7 +504,14 @@ def test_a_word_that_is_not_exactly_aws_kubeadm_is_refused_before_a_program_runs
 @only_the_managed_module
 @pytest.mark.parametrize("subcommand", REFUSING)
 @pytest.mark.parametrize(
-    "words", [["aws-kubeadm", "aws-kubeadm"], ["aws-kubeadm", "gcp"], ["gcp", "x"]]
+    "words",
+    [
+        ["aws-kubeadm", "aws-kubeadm"],
+        ["aws-kubeadm", "gcp"],
+        ["gcp", "x"],
+        ["gcp-kubeadm", "x"],
+        ["aws-kubeadm", "gcp-kubeadm"],
+    ],
 )
 def test_a_second_word_is_refused_before_a_program_runs(
     tree: Tree, subcommand: str, words: list[str]
@@ -455,21 +529,24 @@ def test_a_second_word_is_refused_before_a_program_runs(
 
 @only_the_managed_module
 @pytest.mark.parametrize("subcommand", REFUSING)
-def test_the_word_gcp_is_refused_by_a_sentence_that_says_why_before_a_program_runs(
-    tree: Tree, subcommand: str
+@pytest.mark.parametrize("word", ["gcp", "gcp-kubeadm"])
+def test_a_google_cloud_word_is_refused_by_a_sentence_that_says_why_before_a_run(
+    tree: Tree, subcommand: str, word: str
 ) -> None:
     with_a_gcp_directory(tree)
+    with_a_gcp_kubeadm_directory(tree)
     with_local_file(tree)
     with_saved_plan(tree)
 
-    done = run_words(tree, subcommand, "gcp")
+    done = run_words(tree, subcommand, word)
 
     assert done.returncode == 2, everything_printed(done)
     printed = everything_printed(done)
     assert "Google Cloud" in printed
     assert "scaffold" in printed
     assert "never planned, applied or removed" in printed
-    assert "validate" in printed  # the one command that takes the word
+    assert "validate" in printed  # the one command that takes the words
+    assert "gcp-kubeadm" in printed
     assert tree.calls() == []
     assert tree.aws_calls() == []
     assert (tree.module / tree.plan_file).exists()  # nothing was dropped either
@@ -483,7 +560,7 @@ def test_the_usage_line_names_the_modules_each_command_takes_and_keeps_its_old_f
 
     assert done.returncode == 2
     assert "validate|plan|apply|destroy" in done.stderr
-    assert "validate [aws|gcp|aws-kubeadm]" in done.stderr
+    assert "validate [aws|gcp|aws-kubeadm|gcp-kubeadm]" in done.stderr
     assert "<plan|apply|destroy> [aws-kubeadm]" in done.stderr
     assert tree.calls() == []
 
@@ -493,6 +570,7 @@ def test_the_scripts_header_says_which_commands_take_which_module_name() -> None
 
     assert "validate gcp" in header
     assert "validate aws-kubeadm" in header
+    assert "validate gcp-kubeadm" in header
     assert "plan aws-kubeadm" in header
     assert "apply aws-kubeadm" in header
     assert "destroy aws-kubeadm" in header
@@ -501,13 +579,20 @@ def test_the_scripts_header_says_which_commands_take_which_module_name() -> None
 
 @only_the_managed_module
 @pytest.mark.parametrize(
-    "words", [["validate"], ["validate", "gcp"], ["validate", "aws-kubeadm"]]
+    "words",
+    [
+        ["validate"],
+        ["validate", "gcp"],
+        ["validate", "aws-kubeadm"],
+        ["validate", "gcp-kubeadm"],
+    ],
 )
 def test_validate_runs_terraform_with_no_credential_name_of_any_cloud(
     tree: Tree, words: list[str]
 ) -> None:
     with_a_gcp_directory(tree)
     with_an_aws_kubeadm_directory(tree)
+    with_a_gcp_kubeadm_directory(tree)
 
     done = run_words(
         tree,

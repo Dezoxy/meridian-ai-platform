@@ -42,7 +42,6 @@ OPERATOR_CIDR = "203.0.113.7/32"
 # that are not).
 EU_REGIONS = {
     "europe-central2": "Poland",
-    "europe-north1": "Finland",
     "europe-north2": "Sweden",
     "europe-southwest1": "Spain",
     "europe-west1": "Belgium",
@@ -84,13 +83,16 @@ EU_MEMBER_STATES = {
 }
 # In Google's "Europe" and not in the EU (ADR 7): London and Zurich.
 NOT_IN_THE_EU = {"europe-west2": "England", "europe-west6": "Switzerland"}
+# In the EU, and out of the list: Google's page "Secret Manager locations" (read
+# 2026-10-07, updated 2026-09-30) says Secret Manager keeps no regional secret in
+# Hamina, and this module keeps one (identity.tf).
+NO_REGIONAL_SECRET = {"europe-north1": "Finland"}
 
 # The zones each of those Regions has, in the order Google's page "Regions and
 # zones" lists them (read 2026-10-07). St. Ghislain has no zone "a": it has b, c
 # and d, which a zone built as "<region>-a" would not find.
 PAGE_ZONES = {
     "europe-central2": ["a", "b", "c"],
-    "europe-north1": ["a", "b", "c"],
     "europe-north2": ["a", "b", "c"],
     "europe-southwest1": ["a", "b", "c"],
     "europe-west1": ["b", "c", "d"],
@@ -478,6 +480,25 @@ def test_london_and_zurich_are_not_in_the_list_of_regions(region: str) -> None:
     assert region in message
 
 
+@pytest.mark.parametrize("region", sorted(NO_REGIONAL_SECRET))
+def test_the_eu_region_with_no_regional_secret_is_not_in_the_list_of_regions(
+    region: str,
+) -> None:
+    block = variable_block("region")
+
+    assert NO_REGIONAL_SECRET[region] in EU_MEMBER_STATES  # an EU Region, left out
+    assert region not in quoted_list_in(block, "var.region")
+    assert region not in module_zones()
+    (message,) = re.findall(r"error_message\s*=\s*(.+)", block)
+    assert region in message
+    assert "no regional secrets there" in message
+    comment = squeezed(raw_text("variables.tf"))
+    assert "Secret Manager locations" in comment
+    assert "2026-09-30" in comment
+    # The reason holds only while the module keeps a regional secret.
+    assert "google_secret_manager_regional_secret" in module_text()
+
+
 def test_the_default_region_is_frankfurt_and_is_in_the_list() -> None:
     block = variable_block("region")
     (default,) = re.findall(r'^\s*default\s*=\s*"([^"]+)"$', block, re.MULTILINE)
@@ -744,7 +765,7 @@ def test_the_zone_map_has_one_entry_for_every_region_of_the_list_and_no_other() 
     zones = module_zones()
 
     assert sorted(zones) == sorted(allowed) == sorted(EU_REGIONS)
-    assert len(zones) == 11
+    assert len(zones) == 10
 
 
 def test_every_zone_of_the_map_begins_with_its_region_and_names_one_letter() -> None:
@@ -1335,6 +1356,7 @@ def test_the_values_the_module_allows_are_accepted(
         ("billing_account", "000000000000000000"),
         ("billing_account", "00000g-000000-000000"),
         ("billing_account", "01a2b3-c4d5e6-f70819"),
+        ("region", "europe-north1"),
         ("region", "europe-west2"),
         ("region", "europe-west6"),
         ("region", "us-central1"),

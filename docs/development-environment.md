@@ -57,7 +57,8 @@ pins in `infra/kind/pins.env`, the `Makefile` and the workflows:
 - `terraform` and `az` only for the Azure steps (S007, S020), and `terraform`
   with Docker for `make aws-validate` and `make aws-scan` (S036) and for
   `make gcp-validate` and `make gcp-scan` (S078) and for
-  `make aws-kubeadm-validate` and `make aws-kubeadm-scan` (S079), which need no
+  `make aws-kubeadm-validate` and `make aws-kubeadm-scan` and for
+  `make gcp-kubeadm-validate` and `make gcp-kubeadm-scan` (S079), which need no
   account and no project; the `aws` CLI is the owner's, for a plan or an apply, and a
   session holds no credential for it. Nobody plans or applies the Google Cloud
   module, so `gcloud` is nobody's tool here and no session holds a credential

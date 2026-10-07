@@ -5,15 +5,15 @@ whose control plane runs on plain Compute Engine instances and is brought up by
 kubeadm (one control-plane node, two workers, a network plugin, a join command
 passed through one Secret Manager secret). It sits beside [the managed Google
 Cloud scaffold](../gcp/README.md), which declares a GKE cluster. Status:
-**implemented as code**, validated by `terraform validate` (run by hand on a
-copy: no `make` target names this module, see "What checks this module") and
-checked by tests on its text and on its two boot scripts against stand-in
-programs; **never planned and never applied**. No command in the repository
-creates it: no `make` target, no script and no workflow plans, applies or
-removes it, and none is meant to exist until a later change builds the one that
-can, with the command guard's rules for it. It exists to show that the same
-cluster is the same work on a second cloud. The cluster that is built and
-applied once is the AWS one; this is the scaffold of its twin.
+**implemented as code**, validated by `terraform validate` (`make
+gcp-kubeadm-validate`, see "What checks this module") and checked by the scan
+(`make gcp-kubeadm-scan`) and by tests on its text and on its two boot scripts
+against stand-in programs; **never planned and never applied**. No command in
+the repository creates it: the two `make` targets of this module check it and
+nothing else, no script and no workflow plans, applies or removes it, and none
+is meant to exist: the project applies nothing in Google Cloud. It exists to
+show that the same cluster is the same work on a second cloud. The cluster that
+is built and applied once is the AWS one; this is the scaffold of its twin.
 
 Every sentence below about a control says which of three things it is: code that
 `terraform validate` accepted, a control **tested with stand-ins** (a test that
@@ -63,7 +63,7 @@ SHA-256 is the pinned one.
 | Metadata service | Version 2 with a hop limit of 1 | Nothing to set | An instance has no setting that limits a pod's reach to it (from memory: not read) |
 | User data | gzip, replaced on change | Plain `user-data`, changed in place | A metadata value may be 256 KB; no replace-on-change argument exists |
 | Budget | One, with an e-mail address | None | Kept small: the twin is never applied |
-| Regions | The managed AWS module's list | The managed Google module's list **without europe-north1** | Secret Manager keeps no regional secret there (below) |
+| Regions | The managed AWS module's list | The managed Google module's list, which leaves out **europe-north1** | Secret Manager keeps no regional secret there (below) |
 
 ## How a person reaches a node
 
@@ -126,14 +126,20 @@ new control plane does not know, make one attempt and stop.
 
 ## What checks this module
 
-- `terraform fmt -check`, `init -backend=false -lockfile=readonly` and
-  `validate` on a copy of this directory: run by hand by the session that wrote
-  the module, with the lock file unchanged after `init`. No `make` target runs
-  them for this module, and nothing in CI does.
-- The scan: Trivy's configuration scan from the repository's pinned image (`make
-  gcp-scan`'s command, with this directory mounted in place of the scaffold's),
-  run by hand, offline. "Scan findings" below lists every finding at every
-  severity. The tests read `.trivyignore` as text and never run the scanner.
+- `make gcp-kubeadm-validate` runs `infra/terraform/aws.sh validate
+  gcp-kubeadm`: `terraform fmt -check`, `init -backend=false -lockfile=readonly`
+  and `validate`, in this directory, with no project and no credential (the
+  script runs Terraform with an environment of its own). Its `init` downloads
+  the provider, which costs nothing and needs no account. Nothing in CI runs it.
+  The script takes the word `gcp-kubeadm` on `validate` only: `plan`, the
+  applying command and the removing command refuse it with the sentence the word
+  `gcp` gets, before any program runs.
+- `make gcp-kubeadm-scan`: Trivy's configuration scan from the repository's
+  pinned image (the recipe of `make gcp-scan`, with this directory mounted in
+  place of the scaffold's), offline, read-only, failing on a HIGH or CRITICAL
+  finding that `.trivyignore` does not list. "Scan findings" below lists every
+  finding at every severity. The tests read `.trivyignore` as text and never run
+  the scanner.
 - Tests on the module's text and on the scripts:
   `tests/meridian/test_gcp_kubeadm_module.py`, `test_gcp_kubeadm_bootstrap.py`,
   `test_gcp_kubeadm_same_text.py` and `test_gcp_kubeadm_scan.py`. The scripts
@@ -144,16 +150,21 @@ new control plane does not know, make one attempt and stop.
 
 ## Scan findings
 
-The scan was run on this directory with every severity. It reports no finding on
-the firewall rules, the secret, the service accounts or the network's rules, and
-these on the rest:
+The scan was run on this directory with every severity (the recipe lists HIGH
+and CRITICAL only; the unfiltered run is the scan's command with its
+`--severity` list widened). It reports no finding on the firewall rules, the
+secret, the service accounts or the network's rules, and these on the rest:
 
 | Check | Severity | Where | What it says | Here |
 |---|---|---|---|---|
-| GCP-0031 | **HIGH** | `google_compute_instance.control_plane`, `access_config` | The instance has a public IP | **Not accepted, not removed.** The control plane has an external address because the owner's one address has to reach the API server on it. This is the finding the contract said to stop on; `.trivyignore` holds no entry |
+| GCP-0031 | **HIGH** | `google_compute_instance.control_plane`, `access_config` | The instance has a public IP | **Accepted** in `.trivyignore`, with its reason (the main session's decision of 2026-10-07). The control plane has one external address because the owner's one address has to reach the API server on it; the workers have none; the one rule that admits anything from outside the subnet admits port 6443 from the owner's /32; the module is never applied. Production: no external address, reached through Identity-Aware Proxy or an internal load balancer (**designed, not built**) |
 | GCP-0029 | LOW | `google_compute_subnetwork.nodes` | The subnetwork has no VPC flow logs | Reported only. The network lives an hour and holds nothing of value; flow logs bill for the volume. Production: flow logs to a sink with a retention period |
 | GCP-0076 | MEDIUM | `google_compute_subnetwork.nodes` | The subnetwork has no flow logs | The same finding, in the newer check |
 | GCP-0033 | LOW | each of the three instances | The disk is not encrypted with a customer-managed key | Reported only. Google encrypts at rest by default; a key would be a Cloud KMS key ring that outlives the removal. Production: a customer-managed key |
+
+The three findings marked "reported only" are **not accepted and not in
+`.trivyignore`**: they are what an unfiltered run reports, and each is left for
+the reason in its row. A check is accepted only with its reason above its entry.
 
 Two findings of the first run were **removed**, and their cause is in
 `security.tf` and `nodes.tf`. GCP-0027 (CRITICAL, with GCP-0072 and GCP-0073
@@ -207,13 +218,12 @@ setting that limits it (from memory: not read).
 
 ## Regions: europe-north1 is left out
 
-The managed scaffold's list holds europe-north1 (Hamina). The page "Secret
-Manager locations" (read 2026-10-07, updated 2026-09-30) says Secret Manager
-keeps no regional secret there, and the join command is kept in one: an apply
-would fail at the secret, after the network and the address exist. This module's
-list is the scaffold's without it (a test holds that, and the zone map
-likewise). The scaffold keeps a regional secret too; whether its list is right
-is its own change.
+The page "Secret Manager locations" (read 2026-10-07, updated 2026-09-30) says
+Secret Manager keeps no regional secret in europe-north1 (Hamina), and the join
+command is kept in one: an apply there would fail at the secret, after the
+network and the address exist. This module's list leaves the Region out. The
+managed scaffold keeps a regional secret too and leaves it out as well, so the
+two lists are the same (a test holds that, and the zone maps likewise).
 
 ## What a production environment sets differently
 
@@ -371,8 +381,9 @@ Google's:
   subnet).
 - **Whether OS Login does what the instance setting says** with no role granted:
   that nobody, the owner included, gets a shell until the owner grants one.
-- **GCP-0031:** the one HIGH finding of the scan, which this module does not
-  accept (above).
+- **GCP-0031:** the one HIGH finding of the scan, accepted in `.trivyignore`
+  (above): whether the reserved address reaches the API server only from the
+  owner's /32, as the rule says, is not seen.
 
 ## Tags, and what this costs
 

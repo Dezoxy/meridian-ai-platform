@@ -8,15 +8,16 @@
 # of this file with no provider.
 
 # The Regions of Google Cloud in EU member states that the managed module
-# (../gcp/variables.tf) allows, without europe-north1 (Hamina). Google's page
-# "Secret Manager locations", read 2026-10-07 and updated 2026-09-30, at
+# (../gcp/variables.tf) allows, and the same list (a test holds the two equal):
+# without europe-north1 (Hamina). Google's page "Secret Manager locations", read
+# 2026-10-07 and updated 2026-09-30, at
 # https://cloud.google.com/secret-manager/docs/locations
 # lists, for each Region, whether a regional secret can be kept there:
 # europe-north1 is "No", and the join command
 # is kept in a regional secret (secret.tf), so an apply in that Region would fail
 # after the network and the addresses exist and bill. The other ten are "Yes" on
-# that page. (The managed module keeps a regional secret too, and its list still
-# holds europe-north1: not changed here, and said in this step's report.)
+# that page. (The managed module keeps a regional secret too, and its list left
+# the Region out for the same reason.)
 # europe-west2 (London) and europe-west6 (Zurich) are in Google's "Europe" and not
 # in the EU (ADR 7), and a test holds both out by name.
 variable "region" {
