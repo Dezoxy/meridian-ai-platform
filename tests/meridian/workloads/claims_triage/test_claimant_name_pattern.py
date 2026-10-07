@@ -159,6 +159,14 @@ def test_the_check_for_the_re_cache_can_fail() -> None:
     assert reference() is not None
 
 
+@pytest.mark.parametrize("table", ["VOWEL_FORMS", "ARCHAIC_SOUNDS"])
+def test_the_closed_tables_of_the_name_cannot_be_assigned_into(table: str) -> None:
+    mapping = getattr(claimant_name, table)
+
+    with pytest.raises(TypeError):
+        mapping["x"] = "y"
+
+
 def test_the_private_re_compiler_the_module_imports_exists_with_the_call_it_makes() -> (
     None
 ):

@@ -372,7 +372,7 @@ def _agents_edit(old: str, name: str) -> str:
         before = yaml.safe_load(old)
         expected = {**before, "agents": [*before["agents"], agent]}
         verified = yaml.safe_load(new) == expected
-    except (yaml.YAMLError, TypeError, KeyError):
+    except (yaml.YAMLError, TypeError, KeyError, RecursionError):
         # The parse error's own mark is on the line the scaffold appended, not on
         # one of the person's: the person's list is found in the old text.
         line = _agents_list_line(old)
@@ -415,7 +415,7 @@ def _agents_list_line(text: str) -> int | None:
     starts, or ``None`` when ``text`` has no such key."""
     try:
         document = yaml.compose(text, Loader=yaml.SafeLoader)
-    except yaml.YAMLError:
+    except (yaml.YAMLError, RecursionError):
         return None
     if not isinstance(document, yaml.MappingNode):
         return None

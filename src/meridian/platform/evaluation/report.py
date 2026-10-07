@@ -164,6 +164,11 @@ class Report(WireModel):
 
     @model_validator(mode="after")
     def _cases_are_canonical_and_consistent(self) -> "Report":
+        # A set that names no workload (an old report) is not a mismatch. The
+        # text names the two fields and quotes neither value.
+        named = self.fingerprints.golden_set.workload
+        if named is not None and named != self.workload:
+            raise ValueError("workload must equal fingerprints.golden_set.workload")
         ids = [case.case for case in self.cases]
         if len(set(ids)) != len(ids):
             raise ValueError("case ids must be unique")

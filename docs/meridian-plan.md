@@ -552,7 +552,7 @@ both readings the same hour ("yes both are right, go on").
 | S071 | Measurements that need a live model | Costs money (about fifty chat calls and some embedding calls; the owner says yes before any, and the amount is stated first): a real model's answers to the injection cases the screen lets through, recorded beside the golden recording; a model's refusal of a structured request seen from a real provider; retrieval measured with a real embedding, in the evaluation and in S038's one failing check; the judge compared with labels a person wrote for a sample; a held-out set for the injection screen, and a decision on what a false alarm may cost; CLM-0034's `unsure` settled by a prompt or recorded as the right answer; retrieval over a graph measured again only if the synthetic data gains something relational to find | todo | S067 |
 | S072 | The cluster outside `meridian`, second round | On kind: the Prometheus and CloudNativePG operators' reach into Secrets and ConfigMaps of every namespace is narrowed or recorded as accepted with its reason; DNS and the collector cannot carry data out unseen (T-84), or the residual is stated; writes to Prometheus and Loki pass a policy, and the three hops behind the collector are encrypted or the plan says why not; egress from `observability` and the admission webhooks' port are bounded; `cnpg-system` and `envoy-gateway-system` have Pod Security labels and a policy; the owner decides whether node-exporter stays off; Tempo mounts no API token | todo | S064, S066 |
 | S073 | Renewals, upgrades and what smoke cannot see | On kind: a renewal is seen for the collector's certificate and the database's, and something alerts before the database's end; the services do not all restart in the same minute at a renewal; approver-policy is restarted when it hangs, and a repaired policy does not wait an hour for cert-manager's retry; a first install that fails has a way back that was tried; the chart bounds its rollback history and `make images` says what to remove; the scripts' `kubectl` calls have a request timeout; a manual sweep Job does not hide a stopped schedule; the failure paths of smoke's newer lines are seen once on a cluster with something broken on purpose; the line that reads approver-policy's wording says so when it fails; probes that time out under load have a recorded answer for the machine the cluster runs on now | doing: the first half is done (2026-10-07: the builds and the runs R0 to R4e, with the answer for the machine recorded); the second half is open: the ingestion's 503 word on a real refusal, the node paused with three deploys, certificates of one hour with all eight renewed, the cold run and a rotation of the rate store's password (the owner's to run or to accept as not seen); approver-policy's liveness probe is not built | S064, S066 |
-| S074 | Test suite and file sizes | Without the cluster: `infra/kind/smoke.sh`, `test_kind_manifests.py` and the four test files over 800 lines are split along the lines their own tests already cut; the six functions over 50 lines are under it; the template-database fixture survives a test that patches the runner's file list; the tests that failed once under load (a lost connection in a parallel run, a tool server's timeout, the gateway's fallback test) are run repeatedly on the machine the suite runs on now and either hold by construction or are closed as not reproduced, with the numbers; the slowest test of the job is under ten seconds; one CPU-time helper; `unused_port()` on macOS has its answer written down; the owner decides whether CI gates on coverage | doing: the first half is done (2026-10-07; tested, none of it run on a cluster): the two upkeep test files, `test_toolserver_meters.py`, `test_claims_graph.py` and `test_kind_manifests.py` are split by moves a script proves, the template database's builder passes the list it read at import, the stack and demo tests that failed under load no longer rest on the machine's speed (argued; the measurement run, 25 loops of each beside a whole suite, has not run), the counting test takes 0.03 s alone where CI saw 47 s, and one CPU-time helper serves nine files; three questions wait for the owner (coverage in CI, a size check, a pytest-level timeout); the second half is open and waits for S073 (`infra/kind/smoke.sh`'s split, the six functions over 50 lines, S076's leftovers) | S064, S066, S037 |
+| S074 | Test suite and file sizes | Without the cluster: `infra/kind/smoke.sh`, `test_kind_manifests.py` and the four test files over 800 lines are split along the lines their own tests already cut; the six functions over 50 lines are under it (counted by signature plus body without the docstring, as the section says: by the whole count the row used, four of the six, `assess`, `build_report`, `build_injection_report` and `summarise`, are still over); the template-database fixture survives a test that patches the runner's file list; the tests that failed once under load (a lost connection in a parallel run, a tool server's timeout, the gateway's fallback test) are run repeatedly on the machine the suite runs on now and either hold by construction or are closed as not reproduced, with the numbers; the slowest test of the job is under ten seconds; one CPU-time helper; `unused_port()` on macOS has its answer written down; the owner decides whether CI gates on coverage | doing: the first half is done (2026-10-07; tested, none of it run on a cluster): the two upkeep test files, `test_toolserver_meters.py`, `test_claims_graph.py` and `test_kind_manifests.py` are split by moves a script proves, the template database's builder passes the list it read at import, the stack and demo tests that failed under load no longer rest on the machine's speed (argued; the measurement run, 25 loops of each beside a whole suite, has not run), the counting test takes 0.03 s alone where CI saw 47 s, and one CPU-time helper serves nine files; three questions wait for the owner (coverage in CI, a size check, a pytest-level timeout); the second half is built except what waits (2026-10-07; implemented and tested, none of it run on a cluster): S076's leftovers are closed or accepted row by row (the registry `schemas` link and `--check` line, the services edit's small ends, the scaffold's undo, the import walker's limits pinned, the golden set's workload tied to `Report` by its own validator, the claimant's closed tables read-only and three stale sentences), `run_command`, `build_report` and `render_summary` are under 50 lines by signature plus body (37, 47 and 29) with `--help`, every report and the committed summary byte for byte the same, and two of the half's own commits carried a defect that the review reproduced and a contract fixed; what waits: `infra/kind/smoke.sh`'s split (S073 on `main`), the loaders' helper and the split of `test_redaction_hungarian.py` (S070), and the rows the section's last table keeps | S064, S066, S037 |
 | S075 | Harness, guard and Renovate | `make docs` notices a blank line that splits a table; the command guard's known gaps to a Secret's values and to superuser SQL are closed or listed where a session reads them, and a hook that times out has a known outcome; a rule for an implementer that edits through the shell, and a guard or a rule for `make up` and `make down` from an old checkout (both the owner's); the workflow linter knows the runner label; Renovate's week of waiting is a required check or the plan says why not (the owner's decision), an image is not proposed before the chart that installs it, and the two pgvector versions are one | done (not built: the two pgvector versions are not one, because the newest CloudNativePG image still holds 0.8.6; the owner chose package-manager holds over a required check, and uv's `exclude-newer` cannot go in before 2026-10-10; N4, the guard's own files, is the owner's open question 6; the shell-edit hook is inert until the owner sets `bashEditDiffEnabled`) | — |
 | S076 | CLI, scaffold and loader small ends | No registry entry lets the runtime name an agent that no tenant lists without a check saying so (T-81); `services_edit` refuses an alias or a merge key by itself; the scaffold says which write failed and names the line it refuses in every case; the two entry-point loaders answer a bad entry in the same fixed words; the screen's fingerprint covers what it claims to; the workload's report builders refuse another workload's manifest; `meridian registry schemas` answers an unwritable directory with a message; the scaffold can write an agent with workers, or the plan says why a second graph of subgraphs is not built. Built as: `meridian registry validate` prints one NOTE, exit code unchanged, for each graph agent the runtime may name and no tenant lists, and `load_registry` refuses nothing new, so the owner's S061 decision stands; `services_edit` itself refuses an anchor, an alias or a merge key, naming the line; a refusal about a line of the person's file names the parser's line where the parser gives one; a failed or interrupted write names its kind and the error's class, the undo puts back every file that still holds the command's own bytes and names every path it did not restore (the scaffold's write and undo are in `scaffold_writes.py`); the two loaders word a refusal in one table of fixed sentences that quote no distribution's name and no import error's text, with the registry's agent ID in front for the graphs; the screen's digest is unchanged and the documents say what it covers and does not; both report builders compare the manifest's workload with their own; `meridian registry schemas` answers a directory it cannot update with one line; a second graph of subgraphs is not built, as a decision (the section says why). Implemented and tested, not run on a cluster | done | S037 |
 
@@ -777,9 +777,9 @@ that day; the rest stand as their step recorded them.
 | The scaffold's small ends: `write_plan` drops the `OSError` that says which write failed; an indented table header in `pyproject.toml` is refused without its line; a save between a file's hash check and its own replacement, followed by a failure, is put back over; four whole-command tests still pin the committed list of the runtime; `plan_workload`'s `except OSError` is reached only by a test's stand-in | S061 | closed by S076, each part: a failed write names its kind and the error's class; an indented header is followed and a refusal names the parser's line; the undo puts back every file that still holds the command's bytes and leaves and names only a person's save (the two windows that remain are rows below); the whole-command tests read the lists from the registry (two were untied by S037, the others here); the dead `except OSError` is gone and the real stat that failed is one line (exit 2) | S076 |
 | The entry-point loader's small ends: the graphs' message quotes the name of the distribution that published a duplicate and chains the import error into the log, where the evaluations' text is fixed; `_inside` resolves the file and not the root; `graphs._in_trusted_root` repeats it; its defaults are never used | S061 | closed by S076: both loaders word a refusal from one table of fixed sentences, the graphs' with the registry's agent ID in front, quoting no distribution's name and no import error's text, and the cause is the error's class; `_inside` resolves the root too; `_in_trusted_root` stays on purpose (it checks the factory's own module, which the shared check does not: T-40) and resolves its root; the defaults stay and the docstring says they are for the tests' own loaders | S076 |
 | The screen fingerprint reads source from disk, so a process that outlives an edit fingerprints the new text, and it covers neither the interpreter's Unicode database nor `re`; `test_injection_imports.py` reads `from` imports only | S061 | closed by S076, with the digest unchanged (the session's design: say what it covers, do not widen it): `data/evaluation/README.md` says what the digest covers and what it does not (the interpreter's Unicode database, `re`, the text the screens are applied to, and that a process that outlives an edit fingerprints whatever now sits at the old line numbers of the file, not the new text), a test holds the digest equal to both baselines, and the import test reads plain `import`, alias, `importlib`, `__import__`, `getattr` and star forms, scopes and annotations, and lists what it cannot see | S076 |
-| The claims workload's two report builders do not compare the manifest's workload with their own; only `eval run` does | S061 | closed by S076: both builders (`build_report` and `build_injection_report`, the second for its own manifest and for the golden manifest it names) refuse a manifest that does not name `claims-triage`, in fixed words that do not quote the value, before any file or case is read; `Report.workload` is still not tied to the manifest's by a validator (a row below) | S076 |
+| The claims workload's two report builders do not compare the manifest's workload with their own; only `eval run` does | S061 | closed by S076: both builders (`build_report` and `build_injection_report`, the second for its own manifest and for the golden manifest it names) refuse a manifest that does not name `claims-triage`, in fixed words that do not quote the value, before any file or case is read; `Report.workload` was still not tied to the manifest's by a validator (it is, since S074's second half: row 878) | S076 |
 | `meridian registry schemas` without `--check` ends in a traceback when it cannot write into the directory | S061 | closed by S076: one error line and exit 1 that name the `schemas` directory and the error's class and never its text, for a directory that cannot be made, a file that cannot be written and a `schemas` that is a file; a schema file that is a link is refused before any write, and one that is not UTF-8 counts as stale and is repaired. The write is not all-or-nothing, so the line says to fix the directory and run it again (rows below) | S076 |
-| Six functions this step touched by a line or two were over 50 lines before it (`run_command` 73, `build_report` 64, `assess` 59, `render_summary` 58, `build_injection_report` 52, `summarise` 51) | S061 | open; the Python review | S074 |
+| Six functions this step touched by a line or two were over 50 lines before it (`run_command` 73, `build_report` 64, `assess` 59, `render_summary` 58, `build_injection_report` 52, `summarise` 51: whole counts, docstring included) | S061 | closed by S074's second half under a measure it states, signature plus body without the docstring: `run_command` (62 to 37, H14), `build_report` (57 to 47) and `render_summary` (56 to 29, H15) were over and are under it; `assess` (48), `build_injection_report` (49) and `summarise` (44) were under it and are untouched. By the whole count four of the six stay over (`assess` 69, `build_injection_report` 58, `build_report` 57, `summarise` 51). The other functions over 50 are a row below with no promise | S074 |
 | The audit has no column for the calling service: a refused caller's ID is written to `reference`, which a run's rows use for the claim | S055 | open | S033 |
 | A pod's certificate Secret is mounted with the default file mode (0644, owned by root), so the key is readable by any user in the container; each container runs one process as one user. The fix is `fsGroup` in the pod's security context with `defaultMode: 0440`; `0400` alone would stop the non-root process reading it | S055 | closed by S056 (`fsGroup` and mode 0440; on the cluster the key file was mode 440, owner root, group 10001 in all six pods) | S056 |
 | `make smoke`'s 403 line reads the status alone, and the gateway answers 403 for its own policy refusals too: it would pass for the wrong reason if the `evaluation` tenant stopped being one the gateway serves. It should also read the audit row's reason, and nothing on the cluster tries a certificate from another CA (the tests over real TLS do) | S055 | closed by S056 (two more lines in check 9: the refusal's row in the audit table, by its reason and the calling service, and a certificate of another CA with the runtime's own URI, refused). The audit line accepts a row of the last two minutes, so a second run inside the gateway's minute passes on the first run's row: the row below, S062 | S056 |
@@ -875,18 +875,18 @@ that day; the rest stand as their step recorded them.
 | `test_runtime_hosts.py` (779 lines) and `test_import_contracts.py` (773) stand near the 800-line ceiling; the next tests go in new files | S037 | closed by S074 (first half) with a written rule: both sizes hold and no test was added to either file; the next tests for either go in a new file named for what it tests, its shared helpers in a support module (S074's section) | S074 |
 | `test_the_golden_set_through_the_stack_with_the_replay_gateway` failed once in a whole-suite run of S037's final tree while other steps' tests held the machine at a load of about 24 (a `wording_search` call timed out for CLM-0040 and the run ended `tool-unavailable`); the file passed alone right after (10 passed), and the same suite had passed on the tree before the documents | S037 | seen once, under load; changed by construction in S074's first half (the stack's own tool bound, 30 s, restored after each test): argued, not measured, and it closes with S074's measurement run | S074 |
 | Not seen on a cluster after S037: a brief whose run fails, a resume refused for a changed workflow, the sweep closing a brief left unfiled, a live model writing the brief, a second runtime replica, the brief's trace read in Tempo | S037 | open; tests hold each | S073 |
-| The scaffold's undo has windows that only a lock would close, and it names more than it touched: a save between a file's own check and its replacement, and a save between the undo's read and its replacement, is lost to the replacement (no lock is built: the person's editor would have to honour it); the "check by hand" list can name a path the command never touched and a temporary that is already gone; an interrupt that lands after the undo returned and before the first line is written leaves no line, and a kill the process cannot catch says nothing; an error the undo raises after an interrupt ends the command as a write error (exit 1), not as the interrupt; `_replace` leaks a descriptor if an interrupt lands inside `os.fdopen`, before it takes the descriptor over | S076 (fifth review; reports of C8, F3, F4, F5) | open; low. No step owns the command-line tool; S074 (the suite and its files, without the cluster) is the nearest that is still open | S074 |
-| The scaffold's smaller ends: header-shaped lines inside one multi-line string of `pyproject.toml` still cost one failed parse each (the review measured 2.3 s for 20,000 of them); `one_line` in `services_edit` compares the parser's lines, so a flow list with a U+2028 inside is refused as not on one line; `line_of` at the end of a text that ends with a newline names the line after the last; `yaml.compose` in `_runtime_agents` has no `RecursionError` catch, which the registry's loader makes unreachable from the command; a path left behind quotes the workload's name, which is the person's own argument | S076 (reports of C8, F3 and F4) | open; low; S074 for the reason in the row above | S074 |
-| `meridian registry schemas`: the write follows a link that is the `schemas` directory itself (`mkdir(exist_ok=True)` succeeds and the writes go through it; only a schema file that is a link is refused); `--check` on a linked file tells the person to run the command, which then refuses with `SchemaPathIsALink`; the write is not all-or-nothing | S076 (reports of C7 and F2) | open; low; S074 for the reason above | S074 |
+| The scaffold's undo has windows that only a lock would close: a save between a file's own check and its replacement, and a save between the undo's read and its replacement, is lost to the replacement (no lock is built: the person's editor would have to honour it); an interrupt that lands after the undo returned and before the first line is written leaves no line, and a kill the process cannot catch says nothing; the "check by hand" list still names a new file that was noted and never created, and every directory that was noted; a signal that lands between the opener's `os.open` and `open` taking the descriptor leaks it (the old code had the same window) | S076 (fifth review; reports of C8, F3, F4, F5) | closed in part by S074's second half (H11, H17): the list names a plan path only when the command wrote or replaced it or noted it to write, and a temporary only while it exists; an interrupt leaves the command as the interrupt (exit 130) also when the undo then fails, after the lines to check by hand; `_replace` lets `open` own its descriptor, so `os.fdopen` is gone and no `os.close` is left. What stays is accepted, as sentences in the module's docstring and in T-81's residual: low | S074 |
+| The scaffold's smaller ends: header-shaped lines inside one multi-line string of `pyproject.toml` still cost one failed parse each (the review measured 2.3 s for 20,000 of them); a path left behind quotes the workload's name, which is the person's own argument | S076 (reports of C8, F3 and F4) | closed in part by S074's second half (H10, H17): a flow list with a U+2028 inside is extended (`one_line` compares the editor's lines), `line_of` at the end of a text that ends with a newline names the last line, and `RecursionError` from `yaml.compose` and from the check after it is a refusal, in `services_edit` and in `scaffold.py`. The two that stay are accepted: the person's own file and the person's own argument; low | S074 |
+| `meridian registry schemas`: the write is not all-or-nothing (a failure part-way leaves the files already written; the line says to fix the directory and run it again) | S076 (reports of C7 and F2) | closed in part by S074's second half (H9, H17): a `schemas` directory that is a link, dangling or not, is refused with `SchemaPathIsALink` before anything is made or written; `--check` prints `schemas is a link: remove the link` for it, and a line of its own for a schema file that is a link, and no longer tells the person to run a command that refuses; an unreadable registry directory ends in one `ERROR` line, as it did before (H17, after the review found a traceback). The write's limit is accepted and stated in the docstring: a staged write is not built; low | S074 |
 | The loaders: `load_trusted_entry_point` catches `Exception`, not `BaseException`, so a `sys.exit()` or an interrupt raised at import by a module under the trusted root reaches the caller with its own message; `_loaded_in` and `_in_trusted_root` read `__file__`, which such a module can set, so they are sanity checks and not a boundary; a directory that calls itself `meridian` can still choose up to ten ID-shaped names and a count for a "known" list, and a class under the trusted root a name of up to 64 identifier characters for a cause (both need a write to the Python path or to the trusted package, T-40) | S076 (security review 2; reports of F1 and F2) | closed in part by S069 (E1): a module that exits at import, or while a parent package is located, is a failed load and an interrupt passes through (T-40). Accepted as T-40's residuals, which need a write to the Python path or the trusted package and so a compromise T-36 already names: the `__file__` checks are sanity checks and not a boundary, and the ten ID-shaped names and the 64-character class name a planted module can choose; low | S069 |
-| The claims workload's reports: `Report.workload` is not tied to the golden set's manifest by a validator, and both builders accept a hand-built `Report` workload apart from the manifest's; the golden manifest is read three or four times in one build, and a file that changes between two reads is not noticed | S076 (reports of C6 and F1) | open; low; S074 is the nearest that is still open and costs nothing (S071, which works with the reports, is the paid step) | S074 |
-| The injection import test's walker cannot see what its docstring lists (a non-literal argument of `import_module`, `__import__` or `getattr`, `builtins.__import__`, `sys.modules[...]`, an alias made by unpacking or stored on an object, a name reached by a string through `vars()`, `__dict__` or `setattr`, `global`, `nonlocal`, `eval`, `exec`), and it reports a few names that are not private uses (an alias rebound at module level, a `match` capture, a walrus inside a comprehension); it is a tripwire, not a proof | S076 (report of F2; second review) | open; low | S074 |
+| The claims workload's reports: the golden manifest is read three times in one build (the injection builder reads its own three times and the golden one twice), and a file that changes between two reads is not noticed | S076 (reports of C6 and F1) | closed in part by S074's second half (H16): `Report` refuses a report whose golden set names a workload other than its own, and passes one whose golden set names none; the read-once part is a row of its own below; low; S074 is the nearest that is still open and costs nothing (S071, which works with the reports, is the paid step) | S074 |
+| The injection import test's walker cannot see what its docstring lists (a non-literal argument of `import_module`, `__import__` or `getattr`, `builtins.__import__`, `sys.modules[...]`, an alias made by unpacking or stored on an object, a name reached by a string through `vars()`, `__dict__` or `setattr`, `global`, `nonlocal`, `eval`, `exec`), and it reports a few names that are not private uses (an alias rebound at module level, a `match` capture, a walrus inside a comprehension); it is a tripwire, not a proof | S076 (report of F2; second review) | accepted limit, pinned by S074's second half (H13): the docstring needed no correction, and each of eleven routes it cannot see and two uses it over-reports has a case in `test_injection_imports_limits.py` that fails when the walker's reach changes; it stays a tripwire, not a proof; low | S074 |
 | A merge of `main` into a step's branch was pushed after the cheap gates only and left `test_workload_new_note.py` red (S076, 842b977: S037's `claim-brief` changed a list the test pinned); Part A says the later session runs the gates again and not which, so a contract's gate does not yet say that the directories its change reaches are run after a merge | S076 (C10) | closed by S075: Part A now says that after a merge of `main` the whole suite runs on the merged tree before the branch is pushed, and that a contract's gates name every directory its change reaches | S075 |
 | On 2026-10-06 `make deploy` failed twice, a minute apart, at the ingest Job on a cluster that had been up for hours (the Model Gateway answered 503 to the embedding call: "the model gateway refused the embedding call (model gateway answered 503)"); the session's script then deleted the cluster before anyone had read the audit row's reason or the gateway's log, and a fresh cluster deployed the same commit (`make up` 299 s, `make deploy` 97 s, the Job passed). Two failures a minute apart and a pass on a fresh cluster point at the cluster's state, not at load. Candidates, none shown: the rate store not answering inside its 0.25 s read timeout or 1 s connect timeout, with no retry (`gateway/rate_store.py`; the gateway refuses, by design); the ledger's close failing (`gateway/walk.py`: a failed close answers 503; the database's pod had restarted that evening); and the ingestion not retrying a 503 (`knowledge_mcp/ingest.py` waits out a 429 and ends on any other status). The three logs of the commands are the only evidence left | S075 (the incident) | open; not explained for certain: S073 found a likely cause, not a proven one, in the rate store's probes, which left a defunct process per run until the container could not fork (run R1a, 2026-10-06: 2,024 under the Redis server, the pod not Ready, the gateway's 503 to every call; fixed by K7 and seen on kind in run R2, 2026-10-07), and built the ingestion's word for the gateway's four 503s (K6: tested with scripted replies, not seen on a real refusal, the second half); the ledger's close would show as `database-unavailable` | S073 |
 | The guard's local reader list and what its last review left: a mounted Secret or an `.env` read by `grep`, `awk`, `jq`, `cp`, `docker cp` or a glob is read by no rule (`reader_pre` and the pod's reader list name the plain readers); the pod rule for `env`, `printenv` and `set` tests only the last ` -- `; a fourth level of nested `sh -c`; secret-shaped variable names the `printenv` list does not match (`REDIS_PW`); a heredoc read by quote parity and a list of interpreters, not parsed; a hook file overwritten by a redirect; `-v=8` and `crictl inspect` read from documentation, run against no cluster. The hook's header and the runbook's section list each; S036's cloud rules edited the guard (2026-10-07) and closed none of these (they read the AWS module's names and add no reader for a mounted Secret), and S079, which reuses the wrapper and brings a second AWS module, edits it next, so it is the nearest step | S075 (third security review; F3b's and F4g's reports) | open; listed, not built; re-homed from S036, whose rules did not touch them | S079 |
 | The next rule to the command guard goes into the development base first: the base's copy is level with Meridian's since its pull request 51 (merged 2026-10-06, the guard's rounds two and three), and S036's guard rules for the AWS wrapper are the next ones, so they are now owed to the base (built here first, 2026-10-07; not yet sent). The neutral ones: the `aws` CLI's deny and ask rules with their read list, the ask for `boto3`, `botocore` and `awscli` and for `-auto-approve`, the deny of `TF_*` and `AWS_ENDPOINT_URL*` assignments before a tool, the readers of a state, a plan, `.tfvars.json`, `~/.aws`, `~/.terraformrc` and `~/.terraform.d`, the writers of `~/.terraformrc`, `~/.gitconfig`, `~/.config/git` and `~/.aws`, and the deny of tracing and start-up variables, with the fixes of the two later rounds (`-cm`, a quoted token, the backtick, the cut-out of `workspace select default`). Meridian's own stay out: whatever names `aws.sh`, a `make aws-*` target, `local.env`, `meridian-aws`, `TRIVY_IMAGE` or `PROMTOOL_IMAGE` | S075 | open; owed to the base before S079 changes the guard | S036 |
 | Not seen on a cluster after S075: `TAKE_CLUSTER=1`, a record left `changing` by a run that failed (the refusal that names it), `make up` on an existing cluster, and `make down` refused for a record at `changing`; tests with stand-in binaries hold each. Seen: the record through a deploy, a deploy refused while another runs, and `make down` refused with the record at `ok` (S075's section) | S075 | open in part; S073 saw `TAKE_CLUSTER=1 make deploy` take the record from S075 (run R2, 2026-10-07); a record left `changing` by a failed run and `make up` on an existing cluster were not seen | S073 |
-| Limits of S075's three small checks and two unverified Renovate rules. The split-table check misses rows in block quotes and rows without a closing pipe, and flags a row inside an HTML comment, a four-space-indented row and a lone header-like line; the lane check counts `--` and `n/a` in "Out now" as running, and a session in a fresh worktree has no board; the shell-edit hook is inert until the owner sets `bashEditDiffEnabled` in `~/.claude/settings.json` and may name files that `make` targets regenerate (baselines, Mermaid blocks) once it is on; Renovate has not run the new rules, so whether Docker Hub gives the Envoy chart a push date (else the chart waits indefinitely), whether the `terraform` block's `description` key is accepted and whether the `agent-framework` label is made are unseen | S075 | open | S074 |
+| Limits of S075's three small checks and two unverified Renovate rules. The split-table check misses rows in block quotes and rows without a closing pipe, and flags a row inside an HTML comment, a four-space-indented row and a lone header-like line; the lane check counts `--` and `n/a` in "Out now" as running, and a session in a fresh worktree has no board; the shell-edit hook is inert until the owner sets `bashEditDiffEnabled` in `~/.claude/settings.json` and may name files that `make` targets regenerate (baselines, Mermaid blocks) once it is on; Renovate has not run the new rules, so whether Docker Hub gives the Envoy chart a push date (else the chart waits indefinitely), whether the `terraform` block's `description` key is accepted and whether the `agent-framework` label is made are unseen | S075 | the limits of the three checks are accepted and written as sentences in S074's second half (Part C); the check's docstring and the two values of `empty()` that would state or close them, and Renovate's three unseen results, are rows of their own below | S074 |
 | A claimant can choose a name made of the words an exclusion turns on, and every such word in the description becomes `[name]` before the model reads it (since S047, for any name part of three letters or more); the posted-text boolean covers screened phrases and not this, so it is one more way to the automatic approval of a small claim, which the injection suite already measures as open (QA-09). A bound on how much of a description a name may replace, and what the adjuster is told when it is hit, is a decision of its own (T-26) | S067 (security review) | open; S070 did not build it and asks the owner: the session recommends a flag that sends a claim whose description loses more than a few words to the name to an adjuster, a new word beside `injection-suspected`, and never the name left in the clear (it touches the assessor and the proposal's vocabulary, so it waits for a yes) | S070 |
 | A true posted-text flag returns `injection-suspected` before the candidate clauses are screened, so a claimant who posts screened words hides the failure a poisoned clause would give (`wording-addresses-the-model`); a hit of the assessor's own screen did the same before S067 | S067 (security review, low) | closed by S070 as decided, in documents only: the order stays, because the claim goes to an adjuster either way and `meridian knowledge verify` compares the stored wording with its manifest without any claim; T-26 says so. The sentence in the assessor's docstring that the design promised is a code comment, which this step's documents contract could not write (the small ends row below) | S070 |
 | Forms of the claimant's name that the closed lists lack are not found (T-73): a name typed in lower case with a Hungarian ending (`kovácsnak`), the possessive on a name (`-om`, `-unk`), a part of under three letters, a consonant with an accent written without it, and a name whose first letter the text writes as another capital; a name that spells an ordinary word with an ending is replaced where it is capitalised ("Seat Leon" for a claimant named Leo). The pattern of the worst 200-character name is 12,141 characters (about 55 ms to compile, measured in F2r and pinned by a test), is compiled through `re._compiler`, a private function that fails closed if a Python release moves it, and in the claim moves is built while the claim's transaction is held (security review, low) | S067 (reviews) | closed by S070 in part: the pattern is built from a read before the claim's row is locked (A3), and only for a request the claim can go on with (A4), so the lock is not held for the compile and a refused request pays none (tested against PostgreSQL, with a second session's `FOR UPDATE NOWAIT` as the probe; not run on a cluster); a stale page and a documents post past the cap still pay one compile each (the ingress row below); `re._compiler` is named by a test that fails with a sentence if a release moves it; the pattern's size is unchanged; no form was added, by decision (taking every ending took seventeen golden words where the capital rule takes one), so the forms listed stay stated residuals in T-73 | S070 |
@@ -907,7 +907,7 @@ that day; the rest stand as their step recorded them.
 | `meridian knowledge verify` runs in the ingestion Job, which a deploy skips when the image's ingestion has already succeeded and the store is not empty, and nothing runs it on a schedule; a Job that verifies without ingesting is not built, and the runbook says when to run it by hand (T-57) | S067 | open | S073 |
 | `meridian knowledge verify` writes its counts into `audit.events.reason`, a column documented as the reason a call was refused, because it is the one free-text column; its audit row has no tenant | S067 (C4v) | open; the owner may prefer a column of its own. S068 decided to build nothing: the data classification now says that the column holds a refusal's reason and, for this command, the counts it made. The console's audit search (S033) will read the column, so that step is where a column of its own would show | S033 |
 | Tests that failed under load in S067's runs and passed alone: `test_a_scripted_model_gives_the_oracle_s_proposals` (a `wording_search` call timed out), `test_the_decisions_trace_fails_too_when_one_of_its_services_has_no_span`, and, in one final run, three that were not read (`test_sweep.py::test_importing_the_sweep_loads_no_web_stack_no_langgraph_and_no_claims_api`, `test_claims_mcp.py::test_eight_threads_sending_one_key_leave_one_row_and_all_get_its_id[add_claim_note]` and `test_evaluation_http.py::test_loading_the_claims_evaluation_brings_in_no_agent_framework`); and a first database run of C4v's with 1,338 fixture errors that nobody explained | S067 | open in part: the wording search and the decisions-trace test were changed by construction in S074's first half (the stack's tool bound; the demo polls on a virtual clock) and passed 25 of 25 runs of S074's loop alone (2026-10-07, a load up to 9); the two import tests (subprocesses with a limit of 60 s) and the claims MCP test are untouched and passed the same 25 runs, so they are not reproduced short of a machine that swaps, where an import test and the claims MCP test failed again; beside a whole suite nothing is measured (two runs with a test database do not fit beside the cluster); the 1,338 fixture errors were not looked for | S074 |
-| Left by S067's reviews, all low: `redact` is 76 lines with its docstring and `redaction.py` 792, eight under the ceiling, so any growth needs a split (the Hungarian part, in a module of its own); `test_redaction_hungarian.py` is 858 lines and `test_claims_graph.py` about 2,300; five tests load the two name-masked cases each on its own (one helper in `servicesupport` would do); `VOWEL_FORMS` and `ARCHAIC_SOUNDS` are plain dicts; no test names `re._compiler`; `test_assessment.py` asserts the `["CLM-0012", "CLM-0044"]` literal beside a derived check; four docstrings and comments say what was true before: `claimant_name.py` ("one word", where two golden descriptions hold "Leon"), the first lines of `triaging.py` ("the run's facts"), and `evalsupport.py` and `test_evaluation_stack.py` ("the 40 golden claims") | S067 (reviews) | closed in part by S074 (first half): `test_claims_graph.py` is split (ten files and `graphsupport.py`); and by S070: `redaction.py` is split (292 lines, five modules beside it) and a test names `re._compiler` (A3); the rest stays for S074's second half | S074 |
+| Left by S067's reviews, all low: `redact` is 76 lines with its docstring and `redaction.py` 792, eight under the ceiling, so any growth needs a split (the Hungarian part, in a module of its own); `test_redaction_hungarian.py` is 858 lines and `test_claims_graph.py` about 2,300; five tests load the two name-masked cases each on its own (one helper in `servicesupport` would do); `VOWEL_FORMS` and `ARCHAIC_SOUNDS` are plain dicts; no test names `re._compiler`; `test_assessment.py` asserts the `["CLM-0012", "CLM-0044"]` literal beside a derived check; four docstrings and comments say what was true before: `claimant_name.py` ("one word", where two golden descriptions hold "Leon"), the first lines of `triaging.py` ("the run's facts"), and `evalsupport.py` and `test_evaluation_stack.py` ("the 40 golden claims") | S067 (reviews) | closed in part by S074: `test_claims_graph.py` is split (first half: ten files and `graphsupport.py`); second half (H12, H17): `VOWEL_FORMS` and `ARCHAIC_SOUNDS` are read-only, a test names `re._compiler`, "one word" says that "Leon" is in two golden descriptions, and `evalsupport.py`, `test_evaluation_stack.py` and `test_claims_graph_golden.py` no longer count the golden claims by a number; the redundant literal in `test_assessment.py` is replaced by a guard. S070 split `redaction.py` (292 lines, five modules beside it), which closes `redact`'s place in a file near the ceiling, and its own test of `re._compiler` (the fuller one) replaced the second half's at the merge. Stays: the five loaders of the name-masked cases (four of the five files are free, `test_triage_run_input.py` is S070's), `test_redaction_hungarian.py` at 858 lines (split after S070), `redact`'s length (S070's branches add the modules that take it apart), and the first lines of `triaging.py`, which say "the run's input" on `main` and not the phrase the row quotes (check with S070, whose file it is) | S074 |
 | A gateway that sends its response headers a few bytes at a time, each wait under the 30 s read timeout, is bounded by no timeout (httpx has none for a whole request, and the call's deadline is first read once the headers have come), so a leg is not provably under the 600 s lease; the security review's probe, with the deadline at 2 s and the read timeout at 1 s, ran 80.7 s against a server that sent a header every 0.4 s. The gateway is first-party and sends its headers in one write (T-10) | S069 (security and boundary reviews) | open | S069 |
 | A late leg's tool calls still bind by the run's status alone, so a leg that outlived its lease can call tools until it ends; closing it needs the holder of the run at the tool servers, a column on `runtime.runs` with its grants and a migration, which the first half of S069 left out on purpose (design, decision 1; T-10) | S069 (design) | open; the database lane, so S068 is the nearest step that holds it | S068 |
 | The runtime's and the gateway's close writes of the refusal summaries still run on the event loop (the tool servers' do not), a synchronous write at shutdown | S069 (E2, F1, boundary review) | open | S069 |
@@ -958,7 +958,7 @@ that day; the rest stand as their step recorded them.
 | Rows the upkeep role wrote (every `audit.expire` and `ledger.expired` row, a credit's and a close's) are never removed by the audit expiry, so they stay for ever: a few rows for each operator action, with slugs and tenant IDs and no personal data; a period for them needs a function of their own and the owner's answer | S068 (F1) | open | S020 |
 | Migration 0031 sets a default on the database, which only the database's owner may do: on kind the migrations' role is that owner; on a managed server where it owns the schemas and not the database the file fails and the migrate Job with it (not tried on Azure). A restore without the database's own settings, or a copy made from a template, loses the default while the ledger of migrations still says 0031 is applied, and nothing looks for that drift. The upkeep command's one connection uses psycopg's server-side prepared statements from the sixth call, which a pooler in transaction mode would break (none is used) | S068 (the database re-read of U5, U5b and F2) | open; low | S020 |
 | Rules for the command guard and the settings for Google Cloud, owed on the day a credential for it could exist on a machine where a session runs: `gcloud` beyond the two verbs it reads (a secret's value, an access or identity token), `gsutil`, `~/.config/gcloud` and the `gcp-*` targets; with them a redaction for Google's identifiers (a project ID, `*.googleapis.com` names, a Cloud SQL connection name) and, if the module were ever applied by more than one careful person, a wrapper of S036's kind. None exists by decision: no credential exists, and a hand-typed `terraform plan` in the module's directory is allowed and reaches nothing. The next rule of the guard goes into the development base first | S078 (design; README) | open; not built, by design | S079 |
-| The open questions of ADR 7 that only an apply settles, and the README's list of what `validate` and the scan cannot see (the project pin never seen to refuse, the Cloud Resource Manager API that must already be on, `billing_project`'s API and role, the node role's name and its reach into Artifact Registry, Private Service Connect with `ipv4_enabled = false` and no `private_network`, the forwarding rule's empty scheme, the DNS left off, the public-range setting beside private nodes, a cluster without `network_policy` beside Dataplane V2, the generated instance name, a budget with no currency, the quota of a trial account, how long an enabled API takes, whether workload identity reads the one secret, whether the nodes' one reader grant is enough to pull the image, whether the cluster's temporary default pool is created under an organization's default-grants constraint, whether `SYSTEM_COMPONENTS` alone is accepted beside the default `logging_service`, and the instance's first disk size against the ceiling of 20 GB) | S078 (README; ADR 7) | open; the module is never applied, so nothing settles these unless the owner applies it | no step: the owner's word |
+| The open questions of ADR 7 that only an apply settles, and the README's list of what `validate` and the scan cannot see (the project pin never seen to refuse, the Cloud Resource Manager API that must already be on, `billing_project`'s API and role, the node role's name and its reach into Artifact Registry, Private Service Connect with `ipv4_enabled = false` and no `private_network`, the forwarding rule's empty scheme, the DNS left off, the public-range setting beside private nodes, a cluster without `network_policy` beside Dataplane V2, the generated instance name, a budget with no currency, the quota of a trial account, how long an enabled API takes, whether workload identity reads the one secret, whether the nodes' one reader grant is enough to pull the image, whether the cluster's temporary default pool is created under an organization's default-grants constraint, whether `SYSTEM_COMPONENTS` alone is accepted beside the default `logging_service`, and the instance's first disk size against the ceiling of 20 GB) | S078 (README; ADR 7) | open; the module is never applied, so nothing settles these unless the owner applies it. The row had no step when S078 merged ("no step: the owner's word"), against the plan's rule that every backlog row names one (the owner asked on 2026-10-07 whether any did); S079 holds the Google Cloud scaffold's other rows and writes its twin, so it judges this one at its close: kept as the list of what was never seen, or closed if the owner applies the module | S079 |
 | What the Google Cloud module leaves to production, each beside its test value in its README and none built: deletion protection and a final backup, more retained backups, a regional cluster and database, a chosen release channel and version, Cloud SQL's logging flags and subnet flow logs (the scan's six MEDIUM and one LOW finding), a private control-plane endpoint, a managed firewall at the edge, a remote state bucket, customer-managed keys, a node-pool `network_policy`, and a role per team. S079 builds a twin beside this module, so it is the step that decides which of these its own takes | S078 (scan; README) | open; not built, by design | S079 |
 | A second Google Cloud module (S079's self-managed cluster) cannot sit in `infra/terraform/gcp/`: the scan's tests hold one cluster and one subnet block to the directory because an ignore-file entry covers every resource of it, and `make gcp-validate` and `make gcp-scan` each name that one directory. The validate door takes a module's name from a closed list (`aws`, `gcp`), so a new name or a new directory, with its own scan recipe, is the shape | S078 | open | S079 |
 | The Google provider is pinned `~> 8.6` and its lock holds 8.6.0, which was published on 2026-10-06, a day before the module was written (8.5.0 a week before); no run has used it beyond `init` and `validate`. Renovate's `terraform` group moves the lock after a week and its note names `make gcp-validate` and `make gcp-scan`; the release notes of the 8 series are unread. S079's twin pins the same provider and is the next step to read them | S078 (G1's report) | open | S079 |
@@ -970,6 +970,12 @@ that day; the rest stand as their step recorded them.
 | Three small ends of the kind scripts that the infrastructure review of S073 left: `upkeep.sh` reads a `helm get` that timed out (status 124) as "the release is not installed" and says to run `make deploy`, though it stops and does no harm (L3); `smoke.sh` puts a Deployment's name unescaped into a basic regular expression, safe for a DNS label and not for a dotted name (L6); `kctl` gives a plain `delete` without `--wait=false` the request flag though it waits by default, and no call site is affected today (L7) | S073 (infrastructure review) | open | S073 |
 | The restart share is read from `MERIDIAN_TLS_RESTART_SHARE` by `certlife._restart_share`: an empty value is 0, the old behaviour, so a chart typo that renders an empty share hides itself, while a value of only whitespace refuses the start (the Python review of S073, L4); a share written with Unicode digits or padded is read as a number | S073 (Python review) | open | S073 |
 | What a new 503 of the Model Gateway would have to look like to slip past `test_gateway_503_words.py`, so that the ingestion's word for it would be `unknown`: a status that is an attribute or an imported name (`status.HTTP_503_SERVICE_UNAVAILABLE`, `HTTPStatus.SERVICE_UNAVAILABLE`), a `JSONResponse` or `Response` with no `detail=` keyword, a site under `gateway/providers/` or outside `gateway/` and `common/` (the scan's glob is not recursive), a text from a second mapping like `LIMIT_ANSWERS`, or one of the four texts reused for another cause (the test passes and the word is then ambiguous); an f-string `detail` fails loudly | S073 (Python review) | open | S069 |
+| `meridian registry contracts` ends in a traceback and exit 1 for an output directory it cannot read (`--out` with mode 600, with or without `--check`), for a contract file it cannot read (mode 000) and for one that is not UTF-8, and it follows a dangling `--out` link and creates the link's target; `contract_problems` and `write_contracts` (`platform/toolserver/contracts.py`) catch nothing and `cli/registry.py` calls them bare. It predates S074 (the file is as on `main`); the smallest fix is `except (OSError, UnicodeDecodeError)` around both calls and a line through `_fail`, as `schemas` has | S074 (the re-read of the second half, L-e) | open; low | S074 |
+| The golden manifest is read three times in one build, and a file that changes between two reads is not noticed: `check_manifest_workload`, `auto_approval_limit` and `golden_set_of` in `build_report`; the injection builder reads its own manifest three times and the golden one twice. H16's estimate of the smallest change: a private helper in `claims_triage/evaluation.py` that reads and type-checks the document once, the workload check and the limit taking the document, and a `golden_set_from(document, root)` core in `platform/evaluation/fingerprints.py` with `golden_set_of` kept as a thin wrapper; three source files, no call of `golden_set_of` (41 in `test_fingerprints.py`) moves while its signature holds. It closes the "changed between reads" part only if the core takes the document, since `golden_set_of` also hashes the listed files and walks the directory. A contract of its own, before or after any rewrite of the two builders and not beside it | S074 (second half, H16; row 878's second part) | open; low | S074 |
+| Functions over 50 lines by S074's count (signature plus body, no docstring): thirteen are not application factories, `resume_run`, `run_leg`, `tool_client_for` and `_exchange` (runtime), `create_service_app` (`common/http.py`), `_record_decision`, `_decide`, `decide` and `_run_triage` (claims workload), `answer` and `route_responses` (gateway app) and `expire` and `expire_audit` (`cli/gateway.py`), at 51 to 78 lines, and six are application factories whose body is their routes (`create_app` three times, `add_claimant_pages`, `add_adjuster_pages`, `create_tool_app`); by the whole count it is 31 functions. Counted on d2a674c with `ast`. No promise: no earlier row names them, and nothing enforces the number | S074 (second half, the count) | open; no promise | S074 |
+| S074's second half has two tests that cannot be shown to fail on the code they replace: the `_replace` descriptor test (the fix is right by construction, no `os.close` is left; the test fails when `with open` is replaced by a bare `open`, not on the old code) and the `re._compiler` test (passes on any 3.13, the import fails first). Two low points are left on purpose: `_graded_cases` takes nine parameters because it mirrors `build_report`'s, and the test that pins four committed reports fails when a fifth is committed | S074 (reviews of the second half, L-b, L3, L4, L6) | open; low; no change planned | S074 |
+| S075's checks: the split-table check's docstring (`scripts/check_docs_consistency.py`) names fences and indented tables but not block quotes, a row without a closing pipe, an HTML comment or a lone header-like line, and the lane check's header (`.claude/hooks/check-lanes.sh`) does not say that `--` and `n/a` in "Out now" count as running; the limits are accepted and written in S074's section, and the smallest fixes are a docstring sentence and a header sentence, or two more values in `empty()`, which is a change to a harness hook and the owner's to approve | S075 (S074's second half) | open; not built | S074 |
+| Renovate has not run S075's three new rules: whether Docker Hub gives the Envoy chart a push date (else the chart waits indefinitely, `.github/renovate.json`), whether the `terraform` block's `description` key is accepted and whether the `agent-framework` label is made are unseen; nothing to code, a sentence to write when Renovate next runs (S078's branch edits the same file, so it is not touched before that merge) | S075 (S074's second half) | open; after Renovate's next run | S074 |
 
 ## Part C — Step details
 
@@ -13153,11 +13159,15 @@ process or a path; the value is built inside the test (T3c).
 cut by moving whole units, and a script proves each cut was a move and not an
 edit; the tests that failed once under machine load hold by construction or
 are measured; the template database's builder, the CPU-time measurement and
-the slowest tests are fixed. The step is in two halves, as S066 was. This
-record is the first, which needs no cluster and touches no file another open
-branch edits. The second is NOT done: the split of `infra/kind/smoke.sh`
-(it waits for S073, which is editing the script), the six functions over 50
-lines, and S076's leftovers.
+the slowest tests are fixed. The step is in two halves, as S066 was. The
+first needs no cluster and touches no file another open branch edits; its
+record is the main body of this section. The second half's record follows the
+first's last question to the owner ("The second half", below): the six
+functions over 50 lines and S076's leftovers are done, closed or accepted row
+by row. What is NOT done, and keeps the step at `doing`: the split of
+`infra/kind/smoke.sh` (it waits for S073, which is editing the script), the
+loaders' helper and the split of `test_redaction_hungarian.py` (both wait for
+S070), and the rows the second half's last table keeps open.
 
 **Decisions** (the main session's unless marked; the owner may overturn any;
 the design was written from a read-only map of `main` at 0064171 before any
@@ -13181,7 +13191,10 @@ contract):
   (the row says 64), `assess` 59 and 39, `render_summary` 58 and 55,
   `build_injection_report` 58 and 38 (the row says 52), `summarise` 51 and 43.
   S067 has since changed `assess` and `build_report`, so the second half
-  counts them again; nothing in this half touched a function.
+  counts them again; nothing in this half touched a function. (The second
+  figure of each pair is the body alone, the signature and the docstring both
+  left out; it is not the count "without its docstring" that the sentence
+  names. The second half's decision says which measure rules and why.)
 - **A split is a move, proved by a script, never an edit.**
   `scripts/split_proof.py` reads the old file from a git revision and holds
   that every top-level unit of it, decorators and the comment block above it
@@ -13587,6 +13600,327 @@ says so.
     would itself be a number a loaded machine can pass. Recommendation: yes,
     with the limit set from the final suite's durations. Until answered:
     not built.
+
+**The second half (2026-10-07): what it was.** Branch `s074-second-half`,
+cut from `main` at 1019a57. A second read-only map of `main` at that commit
+quoted each backlog row the first half left open, said
+which parts were code, which a sentence already written and which an accepted
+limit, and proposed twelve contracts. Nine ran, H9 to H17, each in a worktree
+of its own and carried to the branch by the session, then two reviews and this
+record. The map's contracts 1 and 2 became one (H12); its contract 9
+(`assess`) was dropped by the count below; its contract 11 (the loaders'
+helper) waits for S070; its contract 12 (two sentences about S075's checks) is
+written here and not built. Nothing ran on a cluster, no contract started a
+test database, and no prompt, tool contract, screen or golden file changed,
+so no fingerprint moved and no baseline changed. No migration, no new threat
+ID: two threat rows (T-72, T-81) now say what the code does.
+
+**Decisions of the second half** (the main session's unless marked; the owner
+may overturn any):
+
+- **The count: signature plus body, without the docstring** (decided with the
+  advisor on 2026-10-07, before the functions' contracts went out; the
+  numbers are in "The count" below). The row's own figures were whole counts
+  (signature, docstring and body), and a whole count would split `assess`,
+  whose body is 39 lines, to serve a 21-line docstring: a docstring is not
+  logic. The first half spoke of a count "without its docstring" but its
+  figures were the body alone, so this half says the measure it used and does
+  not leave "under it" to read as a redefinition.
+- **What is accepted and not built.** Row 874's two save windows (a lock
+  would need the person's editor to honour it), the interrupt that lands
+  after the undo returned and before its first line, and a kill the process
+  cannot catch; row 875's header-shaped lines inside one multi-line string of
+  `pyproject.toml` (the person's own file; a cap would need a new refusal
+  text) and a path left behind that quotes the workload's name (the person's
+  own argument); row 876's write that is not all-or-nothing (a staged write
+  is not built). Each is already written in the code's own docstring; the
+  threat model says it too.
+- **An interrupt leaves the command as the interrupt (exit 130)**, also when
+  the undo itself then fails (H11; the docstring of `meridian workload new`
+  says so, H14). Before, that case ended as a write error with exit 1 and the
+  interrupt was lost. The lines to check by hand are printed first in both.
+  This changes what a person sees at a terminal; the owner may prefer exit 1.
+- **A `schemas` directory that is a link is refused** before anything is
+  made or written, and `registry schemas --check` prints one line, `schemas
+  is a link: remove the link`, for it, and a line of its own for a schema file
+  that is a link (H9). The wording does not say "then run the command".
+- **The model ties the golden set's workload to its own** (H16): `Report`
+  refuses a report whose `fingerprints.golden_set.workload` is set and
+  differs from `workload`, in fixed words that name both fields and quote
+  neither value; a golden set that names none passes (the two committed live
+  reports carry none). The check is first in the validator.
+- **The read-once manifest is not built.** It changes helpers that
+  `test_fingerprints.py` calls 41 times and edits the two builders the
+  length work had just changed; H16 estimated the smallest change and it is
+  a row (below) with a home.
+- **An edge depth is `SERVICES_EDIT_UNVERIFIED`, not "not YAML"** (H17):
+  `compose` had succeeded, only the check that follows overflowed, which is
+  what that code says for the tuple's other errors. `scaffold.py` took the
+  same gap: `_agents_edit` answers `AGENTS_EDIT_UNVERIFIED` and
+  `_agents_list_line` answers `None`, as for text that is not YAML.
+- **One assertion went, one guard stayed** (H12): the `["CLM-0012",
+  "CLM-0044"]` literal in `test_assessment.py` is gone and the derived check
+  stays with `assert stopped`. The literal also guarded against both sides
+  being empty; it is one line to put back.
+- **The import walker's docstring needed no correction** (H13): it sees none
+  of what it lists, and reports both false positives. The limits are pinned
+  in a new file, `test_injection_imports_limits.py`, because the old one is
+  20 lines under the ceiling.
+- **Left on purpose from the review of the eight commits** (low): the
+  `re._compiler` test
+  adds nothing the module's import does not (L3), `_graded_cases` takes nine
+  parameters because it mirrors `build_report`'s own (L4), and the test that
+  pins four committed reports will fail when a fifth is committed (L6), which
+  is its purpose.
+
+**Advisor:** the design records one consultation for this half, on the count
+(2026-10-07, the "always" point before the functions' contracts). The session
+leaned to signature plus body and three contracts, and the design records the
+outcome and not the advisor's words: the measure is signature plus body, the
+row's whole-count figures mean this section must say that the measure
+changed, and the consultation also told the session to use the free database
+slot for S078. No other consultation is recorded for the half before this
+record.
+
+**The count, said plainly.** The measure is a function's lines from its
+`def` to its last line, less the lines of its docstring when it has one
+(decorators are not counted). Counted with `ast` over every function and
+method under `src/`, nested and `async` ones included: 1,375 functions when
+the half opened (the design's figure, taken after H9's one new function; 1,374
+on 1019a57 itself), of which 32 were over 50 by the whole count and 22 by
+signature plus body. Six of the 22 are application factories whose body is
+their routes (`create_app` three times, `add_claimant_pages`,
+`add_adjuster_pages`, `create_tool_app`); the row named none of them. Of the
+six functions the row names:
+
+| Function | The row said | Whole at 1019a57 | Signature plus body then | Whole now | Signature plus body now |
+|---|---|---|---|---|---|
+| `run_command` | 73 | 73 | 62 | 48 | 37 |
+| `build_report` | 64 | 67 | 57 | 57 | 47 |
+| `render_summary` | 58 | 58 | 56 | 31 | 29 |
+| `assess` | 59 | 69 | 48 | 69 | 48 |
+| `build_injection_report` | 52 | 58 | 49 | 58 | 49 |
+| `summarise` | 51 | 51 | 44 | 51 | 44 |
+
+Three were over by this count and are under it now (`run_command` by H14's
+module-level option aliases, `build_report` and `render_summary` by H15's
+helpers). Three were already under it (`assess` 48, `build_injection_report`
+49, `summarise` 44) and are untouched, so `assess` still reads 69 by the
+whole count and keeps its 21-line docstring. **Recounted on this tree
+(d2a674c, 2026-10-07):** 1,379 functions (five new: H9's `_stale_schema_line`,
+H15's three helpers and H17's `_create_private`), 31 over 50 by the whole
+count and 19 by signature plus body. `write_plan` is the one function that
+joined the whole-count list (52 lines, H11's work; 33 by the measure used).
+The 19 are the six factories and thirteen others, listed in the backlog row
+that holds them; the row promises nothing. No helper H14 and H15 made is over
+50 by either count.
+
+**Work log of the second half** (contracts in the order they were carried to
+the branch; the counts are the reports'):
+
+- **A read-only map, the count decided, then nine contracts**, two reviews
+  and the documents.
+- **H9 (7579491): `meridian registry schemas` and links.** `write_schemas`
+  raises `SchemaPathIsALink` for a `schemas` directory that is a link, a
+  dangling one too, before `mkdir`; `--check` prints one line for a linked
+  directory and a line of its own for a linked file, where it had read through
+  the directory and said "schemas OK". The write's not-all-or-nothing limit is
+  a sentence in the docstring. Six tests red first.
+- **H10 (b6e0aa2): the services edit's small ends.** `one_line` compares the
+  editor's lines (a flow list with U+2028 in an item is extended, the parse
+  check still guards it), `line_of` at the end of a text that ends with a line
+  feed names the last line, and `yaml.compose` in `_runtime_agents` answers
+  `RecursionError` as not YAML. Four tests red first, four boundary tests.
+- **H12 (6d8f48b): the claimant's closed tables and stale words.**
+  `VOWEL_FORMS` and `ARCHAIC_SOUNDS` are `MappingProxyType`; a test names
+  `re._compiler`; "one word" (two golden descriptions hold "Leon") and "the
+  40 golden claims" (three places) say what is true without a number; one
+  redundant assertion goes. The pattern's fingerprint does not move.
+- **H11 (24efb97): the scaffold's undo.** "Check by hand" names a plan path
+  only when the command wrote or replaced it, or noted it to write, and a
+  temporary only while it exists; an interrupt leaves as the interrupt when
+  the undo then fails; `_replace` closed its descriptor when `os.fdopen` was
+  interrupted. Four of five new tests red first; the old test of the undo's
+  error was replaced by two.
+- **H13 (aac597e): the import walker's limits.** Eleven routes to a private
+  name it reports as nothing and two uses it over-reports, each pinned by a
+  case in `test_injection_imports_limits.py`.
+- **H14 (2efe0ac): `run_command`.** The eight Typer options are module-level
+  `Annotated` aliases; `meridian eval run --help` is the same byte for byte
+  (`cmp`); the docstring of `workload new` gains the sentence about exit 130.
+- **H15 (84457c5): `build_report` and `render_summary`.** `_graded_cases`,
+  `_opening` and `_count_bullets` are taken out. Three reports and three
+  summaries (scripted, recorded, live) are the same byte for byte before and
+  after, and the scripted one equals `data/evaluation/injection-summary.md`.
+- **H16 (6a6392f): `Report.workload`.** The validator above; six tests, three
+  red first, and a test that all four committed reports still load.
+- **The review of the eight commits (below), then H17 (d2a674c):** the two
+  high findings and four of the low ones. H17 appended two tests to
+  `tests/meridian/registry/test_cli.py` with a shell heredoc and not with the
+  edit tools, against the preamble's rule (its report says so); the text is
+  the same either way and it is in the diff for review.
+- **The re-read of H17 (below), then H18 (c7765cf):** three of its five low
+  findings. The scaffold's replacement handles a name collision at the `open`
+  alone, so a `FileExistsError` raised later no longer leaves the temporary
+  behind and un-noted (red first, with a probe of the re-read's own); the
+  recursion sweep asserts that the limit it measured lies inside its bounds,
+  so it fails loudly where it used to measure nothing (shown at limits of 150
+  and 3,000); and the registry option of `eval run` is `RegistryPathOption`,
+  with `--help` byte for byte the same. The 513 tests of the CLI folder and
+  the command's test file passed. Nobody reviewed H18.
+- **H19: this record** (documents only): the plan's section, rows and
+  changelog, and two threat rows.
+
+**What the reviews found.** Two reviews read the half; the first read H9,
+H10, H12, H11, H13, H14, H15 and H16 (eight commits), the second, a re-read,
+read all nine commits, H17's fix included.
+
+- **Two of this half's own commits each carried a defect that the review
+  reproduced, and H17 fixed both.** H9's `--check` guard sat before the
+  `try`, so `registry schemas --check` on a registry directory the person
+  could read and not search ended in an uncaught `PermissionError` and a
+  traceback, where `main` printed one `ERROR` line (high; the tests used
+  links only). H10's recursion catch missed one nesting depth: `compose`
+  succeeded at depth 491 and the `safe_load` after it overflowed, so a text
+  nested exactly there raised `RecursionError` (high; the depth shifts with
+  the caller's stack, so a plain sweep from the test's stack did not hit it
+  and H17's first version of the test passed against the unfixed code; the
+  test now runs each depth at two stack parities).
+- **Medium: the documents.** Plan rows 874 and 876 and T-81 still described
+  what the code no longer did. They are this record's work.
+- **Low, fixed by H17:** `_replace` closed a descriptor `fdopen` may already
+  have closed (L1: now `open` with an opener owns the descriptor and no
+  `os.close` is left), the docstring said "cause" for what is a context (L2),
+  `RegistryDirOption` was a name in two modules with two meanings (L5, now
+  `RegistryOption`), and one comment still said "the 40 golden claims" (L7).
+- **Low, left on purpose:** L3, L4 and L6 (above).
+- **The re-read of H17** found no critical, high or medium finding and said
+  the nine commits may go into a pull request. Five low: a `FileExistsError`
+  raised inside the `with` of `_replace` would un-note a temporary and leave
+  it on disk (L-a; no real input reaches it, since only `open` can raise it;
+  H18), the test of the depth sweep measures nothing at a recursion limit
+  below about 200 or above about 2,100 and passes (L-c; H18 asserts the
+  measured limit lies inside the bounds), the new alias still reads like the
+  registry's (L-d; H18 renames it, `--help` unchanged), the L1 test cannot be
+  shown red against the old code (L-b; a sentence below) and `meridian
+  registry contracts` ends in a traceback for some unreadable inputs (L-e; it
+  predates the step, a row below).
+
+**Result / verification of the second half:**
+
+- **What "tested" means here.** Code and tests under `src/` and `tests/`, no
+  cluster, no model call, no database in any contract's own run. Every
+  contract ran `ruff check`, `ruff format --check`, `lint-imports` (6 kept, 0
+  broken), `make docs` (14 checks) and `make test` (343 tests, `OK`), and read
+  the last lines. Where a report says it read no separate exit status (the
+  harness refused the joined form), the pass is read from the printed last
+  line. No contract ran `make pytest`; the whole suite is the main session's.
+- **Each contract's own run** (from its report; the scope is what the
+  contract named, so the numbers are not additive; no test database):
+
+  | Contract | Scope | Last line |
+  |---|---|---|
+  | H9 | `tests/meridian/registry` | 595 passed in 7.74s |
+  | H10 | `tests/meridian/cli`, `-k "scaffold or workload"` | 419 passed in 20.88s |
+  | H12 | the four named unit files | 637 passed in 13.15s |
+  | H11 | the same scope as H10 | 418 passed in 20.23s |
+  | H13 | the walker's two files | 104 passed in 2.37s |
+  | H14 | the five named files | 109 passed in 17.51s |
+  | H15 | the five named files, before and after | 388 passed in 6.43s; 388 passed in 5.73s |
+  | H16 | `tests/meridian/evaluation` and the manifest-workload test | 554 passed, 3 skipped in 5.22s |
+  | H17 | `tests/meridian/cli`, `registry` and `test_cli_eval.py` | 1108 passed in 23.57s |
+  | Review 1 | cli, registry, evaluation and four claims files | 1771 passed, 3 skipped in 27.05s |
+  | Review 2 | `tests/meridian/cli` and `registry` | 1026 passed in 24.24s |
+
+- **The main session's runs, after the builders' refactor:** the two stack
+  files, `test_evaluation_stack.py` and `test_injection_stack.py`, 24 passed
+  and 2 opt-in skipped; and the free replay of the recording, which printed
+  "eval compare: passed" twice, so no fingerprint and no grade moved.
+- **The whole suite on the final tree** (`main` with S078 and S073's first
+  half merged in; 7842aa0): `make test` (343 tests), `make docs` (14 checks)
+  and `make lint` ended 0; the whole suite at six workers beside the kind
+  cluster and no other run with a database: 17,732 passed, 8 skipped (3 min
+  55 s). The commit after it fills this line.
+- **Not seen:** any of this on a cluster; the exit code 130 at a terminal
+  (it was seen in scratch processes by H11, H14 and the review, and no test
+  of the command asserts it: the tests are at `write_plan`); H17's depth
+  sweep on an interpreter with another recursion limit.
+
+**What the second half's tests still do not catch:**
+
+- **The L1 test cannot be shown red against the old code, and the fix is
+  right by construction.** The old code called `os.close` after a failed
+  `os.fdopen`; the new `_replace` calls `open(..., opener=_create_private)`
+  in a `with`, so no `os.close` is left and `open` closes on every failure.
+  The failure the fix removes (a double close of a descriptor `fdopen`
+  already closed) needs a `MemoryError` to force, and the rewritten test,
+  which interrupts the write, passes on the parent commit. It fails when the
+  `with` is replaced by a bare `open` (a mutation, `DID NOT RAISE OSError`),
+  so it holds the descriptor's closing and not the absence of `os.close`.
+- **The `re._compiler` test passes on any 3.13**, and the module's own import
+  fails first if the private module goes (L3).
+- **A signal that lands between the opener's `os.open` and `open` taking the
+  descriptor leaks it.** The old code had the same window.
+- **The depth sweep's test is vacuous outside its bisect's bounds** until
+  H18's assertion is in (L-c).
+- **The walker is a tripwire, not a proof.** Its limits are pinned now, so a
+  change to what it sees fails a test, but it still sees none of them.
+
+**What the second half accepts, as sentences** (from the map, for row 885;
+the code's own docstrings carry the others above):
+
+- **The split-table check** (`scripts/check_docs_consistency.py`) misses rows
+  in block quotes and rows without a closing pipe, and flags a row inside an
+  HTML comment, a four-space-indented row and a lone header-like line; its
+  docstring names fences and indented tables only.
+- **The lane check** (`.claude/hooks/check-lanes.sh`) counts `--` and `n/a`
+  in "Out now" as running, and a session in a fresh worktree has no board.
+- **The shell-edit hook** is inert until the owner sets `bashEditDiffEnabled`
+  in `~/.claude/settings.json`, and may name files that `make` targets
+  regenerate (baselines, Mermaid blocks) once it is on.
+- **Renovate has not run the three new rules**: whether Docker Hub gives the
+  Envoy chart a push date (else the chart waits indefinitely), whether the
+  `terraform` block's `description` key is accepted and whether the
+  `agent-framework` label is made are unseen; nothing to code until it does.
+
+**The 8 backlog rows the first half left open, judged:**
+
+| Row, by its first words | Verdict | Where, or what stays |
+|---|---|---|
+| The scaffold's undo has windows (874) | Closed in part; the rest accepted | H11 and H17: "check by hand" names only what the command wrote or noted, an interrupt leaves as the interrupt (exit 130), the descriptor is closed by `open`. Accepted, as sentences in the code: the two save windows, no line for an interrupt after the undo returned, a kill nobody catches. A new file noted and never created is still named (H11's choice) |
+| The scaffold's smaller ends (875) | Closed in part; two accepted | H10 (the U+2028 flow list, `line_of` at the end of a text, the `RecursionError` catch) and H17 (the edge depth, `scaffold.py`). Accepted: header-shaped lines in one multi-line string, and a path left behind quoting the workload's name |
+| `meridian registry schemas`: the write follows a link (876) | Closed in part; one accepted | H9 and H17: the directory link refused before any write, `--check` says to remove a link, an unreadable directory ends in one line. Accepted: the write is not all-or-nothing (the docstring says so) |
+| The claims workload's reports: `Report.workload` (878) | Closed in part | H16 for the validator. Open: the golden manifest is read three times in one build, and a change between two reads is not noticed (new row, S074) |
+| The injection import test's walker (879) | Accepted limit, pinned | H13: eleven blind spots and two false positives have a test each, in a new file; the walker stays a tripwire, not a proof |
+| Limits of S075's checks and two Renovate rules (885) | Accepted limits, written above; two rows new | The sentences above. Two cheap fixes (the check's docstring, two values in `empty()`) are not built, and the Renovate results wait for its next run (new rows, S074) |
+| Left by S067's reviews, all low (899) | Closed in part | H12: the read-only tables, the `re._compiler` test, "one word", "the 40 golden claims" (and `test_claims_graph_golden.py`, H17), the redundant literal; the first half split `test_claims_graph.py`. Stays: the five loaders of the name-masked cases (one of its files is S070's), `test_redaction_hungarian.py` after S070, `redact`'s length and the first lines of `triaging.py` (S070's files) |
+| Six functions over 50 lines (778) | Closed in part by the count | `run_command`, `build_report` and `render_summary` are under 50 by signature plus body (H14, H15); `assess`, `build_injection_report` and `summarise` were under it and are untouched; the other functions over 50 are a new row with no promise |
+
+**Follow-ups of the second half:**
+
+- **In the backlog, each with its step** (the rows are new, in the table's own
+  format): `meridian registry contracts` ends in a traceback for an
+  unreadable output directory and an unreadable or non-UTF-8 contract file,
+  and follows a dangling link (S074); the golden manifest read three times
+  in one build, with H16's estimate of the smallest change (S074); thirteen
+  other functions over 50 by the count, no promise (S074); two tests that
+  cannot be shown red, and two low points left on purpose (S074); two cheap
+  fixes in S075's checks, not built (S074); Renovate's three unseen results
+  (S074, after its next run).
+- **Rows changed in this half:** 778, 874, 875, 876, 878, 885 and 899, each
+  to what is true now (the finding text keeps only what is still open or
+  accepted; the closed parts are in the status), and row 776, whose "still
+  not tied by a validator" is no longer true; rows 879 and 885 are accepted
+  limits with their tests or sentences.
+- **What waits, and for what:** `infra/kind/smoke.sh`'s split (S073 on
+  `main`: the first half's rows 811 and 850 stay open); the loaders' helper
+  (four of its five files are free, `test_triage_run_input.py` is S070's);
+  the split of `test_redaction_hungarian.py` (after S070, with
+  `scripts/split_proof.py`).
+- **For the owner** (none blocks the pull request): the exit code of an
+  interrupted `workload new` is 130 now, where it was 1 in one case (the
+  decision above); and adding `--` and `n/a` to the lane check's `empty()` is
+  a change to a harness hook, which is the owner's to approve (not built).
 
 ### S068 — Database upkeep and retention
 **Status:** done · **Started:** 2026-10-06 · **Finished:** 2026-10-07
@@ -16033,6 +16367,26 @@ that nothing is built):
   the ingestion's word on a real refusal, a rotation of the store's
   password). T-84, T-86, T-87, T-89, T-91 and T-92 changed, no new threat. Eight
   backlog rows closed, eight closed in part, six new.
+- **v0.73, 2026-10-07:** S074, second half (still `doing`): S076's
+  leftovers and the six functions over 50 lines are closed, accepted or
+  counted. `registry schemas` refuses a `schemas` directory that is a link and
+  `--check` says to remove a link; the services edit takes a U+2028 in a flow
+  list, names the last line at the end of a text and answers a text nested too
+  deep as a refusal at every depth; the scaffold's undo names to check by
+  hand only what the command wrote or noted, and an interrupt leaves as the
+  interrupt (exit 130) also when the undo fails; `Report` refuses a golden
+  set that names another workload; the import walker's limits are pinned; the
+  claimant's closed tables are read-only. `run_command`, `build_report` and
+  `render_summary` are under 50 lines by signature plus body, the measure
+  this half states (the row's figures were whole counts), with `--help`,
+  every report and the committed summary byte for byte the same; three were
+  already under it. Two of the half's own commits carried a defect a review
+  reproduced, a traceback in `registry schemas --check` and a recursion guard
+  that missed one depth, and H17 fixed both. T-72 and T-81 brought to the
+  code, no new threat. Seven backlog rows changed (none closed whole), one
+  accepted limit pinned, six new; `smoke.sh`'s split, the loaders' helper and
+  the Hungarian test's split wait for S073 and S070. Tests and documents, none
+  run on a cluster, no fingerprint moved.
 - **v0.74, 2026-10-07:** S070, first half: the adjuster's claim page
   and queue say whether a recommendation rests on a model's reading or on
   the rules alone (one function over the stored fields, no migration; an

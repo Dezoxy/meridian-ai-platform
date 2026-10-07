@@ -1,6 +1,7 @@
 """``meridian registry`` through Typer's test runner."""
 
 import json
+import os
 import re
 import shutil
 from pathlib import Path
@@ -388,7 +389,7 @@ def test_a_link_refuses_the_whole_write_before_any_other_file_is_written(
     assert other.read_text(encoding="utf-8") == "{}\n"
 
 
-def test_the_check_names_a_link_as_out_of_date_even_when_its_target_is_right(
+def test_the_check_says_to_remove_a_link_even_when_its_target_is_right(
     registry_copy: Path, tmp_path: Path
 ) -> None:
     outside = tmp_path / "outside.json"
@@ -400,7 +401,77 @@ def test_the_check_names_a_link_as_out_of_date_even_when_its_target_is_right(
     )
 
     assert result.exit_code == 1, result.output
-    assert "schemas/models.schema.json is out of date" in result.stderr
+    assert result.stderr == (
+        "ERROR schemas/models.schema.json is a link: remove the link\n"
+    )
+    assert "meridian registry schemas" not in result.output
+    assert str(outside) not in result.output
+
+
+def test_the_check_gives_a_link_and_a_stale_file_each_a_line_of_its_own(
+    registry_copy: Path, tmp_path: Path
+) -> None:
+    outside = tmp_path / "outside.json"
+    outside.write_bytes(b"outside, not a schema\n")
+    linked_to_a_file_outside(registry_copy, outside)
+    (registry_copy / "schemas" / "tools.schema.json").write_text("{}\n")
+
+    result = runner.invoke(
+        app, ["registry", "schemas", "--check", "--registry-dir", str(registry_copy)]
+    )
+
+    assert result.exit_code == 1, result.output
+    assert result.stderr.splitlines() == [
+        "ERROR schemas/models.schema.json is a link: remove the link",
+        "ERROR schemas/tools.schema.json is out of date: "
+        "run `meridian registry schemas`",
+    ]
+
+
+def link_the_schemas_directory(registry_copy: Path, outside: Path) -> None:
+    """Replace the ``schemas`` directory by a link to ``outside``."""
+    schemas = registry_copy / "schemas"
+    for file in schemas.iterdir():
+        file.unlink()
+    schemas.rmdir()
+    schemas.symlink_to(outside, target_is_directory=True)
+
+
+def test_a_schemas_directory_that_is_a_link_is_refused_and_nothing_is_written(
+    registry_copy: Path, tmp_path: Path
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    link_the_schemas_directory(registry_copy, outside)
+
+    result = runner.invoke(
+        app, ["registry", "schemas", "--registry-dir", str(registry_copy)]
+    )
+
+    assert result.exit_code == 1, result.output
+    assert result.stderr == (
+        f"ERROR {registry_copy / 'schemas'}: schemas cannot be updated: "
+        f"SchemaPathIsALink; {FIX_AND_RERUN}\n"
+    )
+    assert result.stdout == ""
+    assert list(outside.iterdir()) == []
+    assert str(outside) not in result.output
+
+
+def test_the_check_says_to_remove_a_schemas_directory_that_is_a_link(
+    registry_copy: Path, tmp_path: Path
+) -> None:
+    outside = tmp_path / "outside"
+    shutil.copytree(registry_copy / "schemas", outside)
+    link_the_schemas_directory(registry_copy, outside)
+
+    result = runner.invoke(
+        app, ["registry", "schemas", "--check", "--registry-dir", str(registry_copy)]
+    )
+
+    assert result.exit_code == 1, result.output
+    assert result.stderr == "ERROR schemas is a link: remove the link\n"
+    assert "meridian registry schemas" not in result.output
     assert str(outside) not in result.output
 
 
@@ -582,6 +653,48 @@ def test_schemas_check_on_a_registry_dir_that_cannot_be_read_ends_in_an_error_li
     assert result.exit_code == 1, result.output
     assert result.stderr == (
         f"ERROR {registry_copy}: registry directory cannot be read: PermissionError\n"
+    )
+    assert result.stdout == ""
+    assert not isinstance(result.exception, PermissionError)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="a mode does not bind root")
+def test_schemas_check_on_a_registry_dir_without_a_search_bit_ends_in_an_error_line(
+    registry_copy: Path,
+) -> None:
+    registry_copy.chmod(0o600)
+    try:
+        result = runner.invoke(
+            app,
+            ["registry", "schemas", "--check", "--registry-dir", str(registry_copy)],
+        )
+    finally:
+        registry_copy.chmod(0o700)
+
+    assert result.exit_code == 1, result.output
+    assert result.stderr == (
+        f"ERROR {registry_copy}: registry directory cannot be read: PermissionError\n"
+    )
+    assert result.stdout == ""
+    assert not isinstance(result.exception, PermissionError)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="a mode does not bind root")
+def test_the_schemas_write_on_a_registry_dir_without_a_search_bit_ends_in_an_error_line(
+    registry_copy: Path,
+) -> None:
+    registry_copy.chmod(0o600)
+    try:
+        result = runner.invoke(
+            app, ["registry", "schemas", "--registry-dir", str(registry_copy)]
+        )
+    finally:
+        registry_copy.chmod(0o700)
+
+    assert result.exit_code == 1, result.output
+    assert result.stderr == (
+        f"ERROR {registry_copy / 'schemas'}: schemas cannot be updated: "
+        f"PermissionError; {FIX_AND_RERUN}\n"
     )
     assert result.stdout == ""
     assert not isinstance(result.exception, PermissionError)

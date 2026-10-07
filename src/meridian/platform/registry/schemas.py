@@ -20,9 +20,10 @@ def render_schemas() -> dict[str, str]:
 
 
 class SchemaPathIsALink(OSError):
-    """A schema's path is a symbolic link. The write would follow it and replace
-    the file it points to, which may lie outside the registry directory, so the
-    write refuses; the class name is all the command prints of it."""
+    """The ``schemas`` directory or one schema's path is a symbolic link. The
+    write would follow it and replace files it points to, which may lie outside
+    the registry directory, so the write refuses; the class name is all the
+    command prints of it."""
 
 
 def _differs(path: Path, text: str) -> bool:
@@ -52,7 +53,7 @@ def schemas_not_updated(registry_dir: Path, exc: OSError) -> str:
     path that is a link is refused): the error's class, never its text (which
     holds a path). The write is not all-or-nothing, and a rerun repairs only what
     a failure that has passed left behind, so the line says to fix the directory
-    first."""
+    first. Not built: a staged write that replaces all the files or none."""
     return (
         f"{registry_dir / SCHEMAS_SUBDIR}: schemas cannot be updated: "
         f"{type(exc).__name__}; "
@@ -62,8 +63,11 @@ def schemas_not_updated(registry_dir: Path, exc: OSError) -> str:
 
 def write_schemas(registry_dir: Path) -> tuple[str, ...]:
     """Write every schema; return the names of the files that changed. Raise
-    ``SchemaPathIsALink`` before writing any of them when a path is a link."""
+    ``SchemaPathIsALink`` before creating or writing anything when the
+    ``schemas`` directory or a file's path is a link."""
     target = registry_dir / SCHEMAS_SUBDIR
+    if target.is_symlink():
+        raise SchemaPathIsALink
     target.mkdir(exist_ok=True)
     changed = stale_schemas(registry_dir)
     if any((target / name).is_symlink() for name in changed):
