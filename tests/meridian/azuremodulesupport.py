@@ -214,3 +214,29 @@ def evaluate(tmp_path: Path, values: dict[str, str], name: str) -> str:
         check=False,
     )
     return done.stdout + done.stderr
+
+
+# ── nested blocks of a resource ──────────────────────────────────────────────
+
+
+def nested_blocks(body: str, name: str) -> list[str]:
+    """The bodies of the blocks called ``name`` written one level inside a
+    resource's body (two spaces in: ``terraform fmt`` indents them so), in the
+    order written. A block with no body at all gives the empty string."""
+    return re.findall(
+        rf"^  {re.escape(name)} \{{(?:\}}$|\n(.*?)^  \}}$)",
+        body,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+
+
+def own_text(body: str) -> str:
+    """A resource's body with its nested blocks taken out, so that an attribute
+    read from it is the resource's own and not a nested block's of the same
+    name (``name``, ``type``, ``location``)."""
+    return re.sub(
+        r"^  \w+ \{(?:\}\n|\n.*?^  \}\n)",
+        "",
+        body + "\n",
+        flags=re.MULTILINE | re.DOTALL,
+    )

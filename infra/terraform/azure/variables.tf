@@ -70,8 +70,11 @@ variable "kubernetes_version" {
 
 # A closed list, the default and one step up: a cost ceiling. The default is 2
 # vCPU and 8 GiB a node, from what the kind cluster runs today (the design's D7).
-# FACTS: size names and their offer in the region are confirmed by the facts
-# sheet (s020/facts.md)
+# Both names are priced Linux sizes in both regions (Azure's public retail price
+# list, read 2026-10-07), and both meet AKS's minimum for a system pool (2 vCPU
+# and 4 GiB). NOT KNOWN from any page: whether a subscription is offered them in
+# a region, and its vCPU quota (a free trial cannot ask for more). That is read
+# with a sign-in before an apply. Two nodes of the default use 4 vCPU.
 variable "node_vm_size" {
   description = "Virtual machine size of the system node pool: the default (2 vCPU, 8 GiB) or the next size (4 vCPU, 16 GiB)."
   type        = string
