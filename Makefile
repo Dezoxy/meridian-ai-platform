@@ -292,7 +292,7 @@ grafana-password:
 helm-lint:
 	helm lint --strict infra/helm/meridian -f infra/kind/values/meridian.yaml --set-string image.repository=meridian --set-string image.tag=lint --set-string rateStore.image=$(PYTEST_REDIS_IMAGE) --set jobs.migrate.enabled=true --set jobs.seed.enabled=true --set jobs.ingest.enabled=true --set jobs.upkeep.enabled=true --set-string jobs.upkeep.runSuffix=lint --set-json 'jobs.upkeep.args=["reservations"]'
 
-## cert-renew      ask cert-manager to issue one Certificate of the namespace meridian again now, for after a denied or failed request when cert-manager's own wait (an hour, doubling) would otherwise hold a repaired deploy: make cert-renew CERT=<name> (the name of a Certificate, see kubectl -n meridian get certificate); it sets the Certificate's Issuing condition as cmctl renew does and changes nothing else; needs make up and make deploy; stops when another holder has the cluster unless TAKE_CLUSTER=1; tested against a stub kubectl, not yet seen on a cluster
+## cert-renew      ask cert-manager to issue one Certificate of the namespace meridian again now, for after a denied or failed request when cert-manager's own wait (an hour, doubling) would otherwise hold a repaired deploy: make cert-renew CERT=<name> (the name of a Certificate, see kubectl -n meridian get certificate); it sets the Certificate's Issuing condition as cmctl renew does and changes nothing else; needs make up and make deploy; stops when another holder has the cluster unless TAKE_CLUSTER=1; CERT=rate-store restarts the store (503 for one to three minutes); tested against a stub kubectl; seen on kind on 2026-10-07 (the refusals and one renewal of a healthy Certificate); not seen (a denied request, a 409)
 cert-renew:
 	infra/kind/cert-renew.sh
 

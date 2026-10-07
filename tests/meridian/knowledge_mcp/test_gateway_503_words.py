@@ -214,7 +214,11 @@ def test_a_known_text_with_other_fields_beside_it_still_has_its_word(
         pytest.param(lambda t: t.upper(), id="upper-case"),
         pytest.param(lambda t: t.replace("is", "was"), id="a-word-changed"),
         pytest.param(lambda t: f"error: {t}", id="the-text-inside-a-longer-one"),
-        pytest.param(lambda t: t.replace(" ", "\\u00a0"), id="non-breaking-spaces"),
+        # A real U+00A0 (detail_body writes it as the JSON escape, which parses
+        # back to the character), not a backslash-u text.
+        pytest.param(
+            lambda t: t.replace(" ", "\N{NO-BREAK SPACE}"), id="non-breaking-spaces"
+        ),
     ],
 )
 @pytest.mark.parametrize("text", list(EXPECTED))
@@ -248,13 +252,34 @@ def test_a_text_that_is_not_exactly_the_gateways_is_unknown(
         ),
         pytest.param(b'{"status":"certificate-expiring"}', id="the-healthz-body"),
         pytest.param(b'{"detail":"the rate store is unavailable"', id="cut-off"),
-        pytest.param(b"[" * 200, id="nested-brackets-inside-the-bound"),
+        pytest.param(b"[" * MAX_503_BODY_BYTES, id="brackets-up-to-the-bound"),
+        pytest.param(
+            b"[" * (MAX_503_BODY_BYTES // 2) + b"]" * (MAX_503_BODY_BYTES // 2),
+            id="closed-nesting-up-to-the-bound",
+        ),
     ],
 )
 def test_a_503_that_holds_no_known_text_is_unknown_and_does_not_raise_another_error(
     body: bytes,
 ) -> None:
     error = error_of(httpx.Response(503, content=body))
+
+    assert error.status_code == 503
+    assert error.gateway_word == "unknown"
+
+
+def test_a_parser_that_runs_out_of_stack_is_unknown_and_raises_nothing_else(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # No body inside the bound reaches this today (128-deep nesting parses), but
+    # a RecursionError is what Python's parser raises for one too deep, and it is
+    # not a ValueError: the word must not become a different error.
+    def too_deep(_: object) -> object:
+        raise RecursionError
+
+    monkeypatch.setattr(embedding_client.json, "loads", too_deep)
+
+    error = error_of(httpx.Response(503, content=b"[[[[]]]]"))
 
     assert error.status_code == 503
     assert error.gateway_word == "unknown"

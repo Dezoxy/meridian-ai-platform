@@ -693,6 +693,53 @@ def test_a_listing_that_fails_alone_is_an_error_and_prints_no_removal_command(
     assert "unused by definition" not in done.stdout
 
 
+@pytest.mark.parametrize(
+    "answers",
+    [
+        {"in_use": "this is not json"},
+        {"in_use": "{}"},
+        {"running": "this is not json"},
+        {"running": "{}"},
+    ],
+    ids=[
+        "workloads-not-json",
+        "workloads-no-items",
+        "rollout-not-json",
+        "rollout-no-items",
+    ],
+)
+def test_a_read_of_the_tags_in_use_that_cannot_be_made_stops_with_a_sentence(
+    tmp_path: Path, answers: dict[str, str]
+) -> None:
+    # The cluster answered, but not with a list the script can read. The first
+    # of the two reads in "used" ended in an empty list that no check saw, and
+    # every image printed as unused with its removal command.
+    done, _ = run_images(tmp_path, **answers)
+
+    assert done.returncode != 0
+    last = done.stderr.strip().splitlines()[-1]
+    assert last.startswith("error: ")
+    assert "cannot read the tags in use" in last
+    assert removal_commands(done.stdout) == []
+    assert "image rm" not in done.stdout
+    assert marks(done.stdout) == {}
+
+
+def test_a_list_with_no_workload_that_names_the_image_is_still_a_valid_read(
+    tmp_path: Path,
+) -> None:
+    # The guard must not turn a true empty answer into an error: a namespace
+    # whose workloads name no meridian image reads as nothing in use.
+    done, _ = run_images(
+        tmp_path,
+        in_use=json.dumps({"kind": "List", "items": []}),
+        running=json.dumps({"kind": "List", "items": []}),
+    )
+
+    assert done.returncode == 0, done.stderr
+    assert set(marks(done.stdout).values()) == {"unused"}
+
+
 def test_an_engine_that_fails_is_an_error_and_prints_no_removal_command(
     tmp_path: Path,
 ) -> None:

@@ -31,8 +31,10 @@ from test_kind_manifests import (
     sweep_job,
 )
 from test_smoke_alert_rules import (
+    RULE_COUNT,
     prometheus_answer,
     run_alert_rules,
+    tree_groups,
 )
 from test_smoke_sweep_by_hand import scheduled_job
 
@@ -101,7 +103,30 @@ def test_a_cronjob_over_the_argument_limit_is_read_too(tmp_path: Path) -> None:
 
     (line,) = run_sweep_check(tmp_path, cronjob=cronjob, jobs=jobs, now=now)[0]
 
+    assert size_of(cronjob) > ARGUMENT_LIMIT
     assert line.startswith("PASS  sweep:")
+    # The Job's name and time are read from the lists, so a line that PASSed
+    # without reading them would not carry them.
+    assert "its last finished Job, meridian-sweep-1, succeeded at " in line
+    assert SWEEP_FINISHED in line
+
+
+@requires_jq
+def test_a_cronjob_over_the_argument_limit_still_gives_the_verdict_it_carries(
+    tmp_path: Path,
+) -> None:
+    # The same oversized CronJob, now a schedule that last fired long after the
+    # Job's finish: the line is a FAIL that names the CronJob's own time.
+    fired = seconds_after(SWEEP_FINISHED, 10 * SWEEP_TOLERANCE_SECONDS)
+    cronjob = sweep_cronjob_answer(scheduled=fired)
+    cronjob["metadata"]["annotations"] = {"last-applied": "y" * (ARGUMENT_LIMIT + 1)}
+    jobs = [sweep_job("meridian-sweep-1", SWEEP_FINISHED)]
+    now = epoch_of(fired)
+
+    (line,) = run_sweep_check(tmp_path, cronjob=cronjob, jobs=jobs, now=now)[0]
+
+    assert line.startswith("FAIL  sweep:")
+    assert f"was last scheduled at {fired}" in line
 
 
 @requires_jq
@@ -159,6 +184,13 @@ def test_a_rules_answer_over_the_argument_limit_is_read_as_before(
     lines = run_alert_rules(tmp_path, answer=answer)
 
     assert [line.split()[0] for line in lines] == ["PASS"] * 4
+    # The counts are read from the answer: the first line counts the loaded
+    # rules of the file's groups only (the stack's two big groups are not
+    # Meridian's), and the second the groups and rule names it compared.
+    groups, rules = len(tree_groups()), RULE_COUNT
+    assert f"the {groups} groups of infra/kind/alerts/meridian.yaml" in lines[0]
+    assert f"all {rules} rules in them are healthy" in lines[0]
+    assert f"the same {groups} groups and {rules} rule names" in lines[1]
 
 
 def big_rules_file(path: Path) -> list[dict]:
@@ -272,6 +304,7 @@ ANSWER_VARIABLES = {
     "started",
     "status",
     "version",
+    "wait_said",
     "x",
 }
 INDIRECT = {"poll_result", "served", "targets", "file_exprs", "served_exprs"}

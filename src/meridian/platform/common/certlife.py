@@ -52,11 +52,16 @@ logger = logging.getLogger(__name__)
 # asked on the clock alone).
 RESTART_MARGIN = timedelta(hours=24)
 RESTART_FRACTION = 6
-# The chart gives each service a share of the margin, a decimal in [0, 1) from
-# its place in the list of services (place over count: the first none, the last
-# five sixths of six). The service looks at the file that share of a margin
-# EARLIER, so the services do not all restart in the same minute, and a restart
-# only ever moves earlier, by less than one margin. Absent or empty means 0.
+# A share is a fraction of one margin, a number from 0 up to, but not including,
+# 1, that moves the moment a service starts to look at the file EARLIER than the
+# margin alone would: the service looks at restart_at = end - margin * (1 +
+# share). The chart gives each service its place in the list of services over
+# the count of them (with six services: 0, 1/6, 2/6 ... 5/6, the first none and
+# the last five sixths), so the services do not all restart in the same minute,
+# and a restart only ever moves earlier, by less than one margin. Absent or
+# empty means 0, the moment the margin alone gives. Looking is all a share
+# changes: a service whose file has not been renewed stays healthy past its
+# restart_at, up to the end of its certificate.
 RESTART_SHARE_ENV = "MERIDIAN_TLS_RESTART_SHARE"
 
 Verdict = Literal["far", "ended", "not-renewed", "renewed"]
@@ -77,7 +82,11 @@ class LoadedCertificate:
     @property
     def restart_at(self) -> datetime:
         """From this moment the service looks at the file again: the margin and
-        its ``share`` of one more before the end."""
+        its ``share`` of one more before the end (a share is a fraction of one
+        margin, 0 up to, not including, 1). Looking is not restarting: the
+        service asks for a restart only when the file holds a newer certificate
+        or the certificate has ended, so a file that was never renewed stays
+        healthy after this moment, until the certificate ends."""
         lifetime = self.not_after - self.not_before
         margin = min(RESTART_MARGIN, lifetime / RESTART_FRACTION)
         return self.not_after - margin * (1 + self.share)

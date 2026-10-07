@@ -16,10 +16,13 @@
 #      DNS label (lowercase letters, digits and '-', 1 to 63 characters, a
 #      letter or digit at each end). A value that is not is not repeated.
 #   2. who holds the cluster (S075, common.sh): another holder stops this unless
-#      TAKE_CLUSTER=1; the record is written with state `changing` right before
-#      the write and with state `ok` right after it, so a write that fails
-#      leaves `changing`. A refusal below changes nothing and leaves the record
-#      as it was
+#      TAKE_CLUSTER=1. The record is written once, with state `ok`, right after
+#      the write succeeded: the one write is all this command changes, so a
+#      refusal, a write that failed and a command that stopped before it leave
+#      the record as it was (not `changing`, which says a run began to change
+#      the cluster and did not end well). A write that timed out may have been
+#      made; running the command again finds the Issuing condition True and
+#      writes nothing
 #   3. the Certificates of the namespace, one read: CERT must be one of them, or
 #      the script lists the names it found. A Certificate whose Issuing
 #      condition is already True is being issued: nothing is written
@@ -31,9 +34,18 @@
 #      place, or added; observedGeneration is the Certificate's generation, as
 #      cmctl sets it. lastFailureTime and failedIssuanceAttempts are left alone:
 #      cert-manager clears them when the issuance succeeds
+# CERT=rate-store costs a restart: the store reads its certificate once, at its
+# start, and its liveness check restarts the server when the file on the volume
+# is newer than the server. The script says so (one line, before the write):
+# every model call answers 503 for one to three minutes and the tenants' rate
+# windows are lost. The six services do not restart on a renewal by hand.
 # No Secret is read, and nothing but the one status is written. Exit code 0 when
 # the condition was written or was already True; 1 otherwise.
-# Tested against a stub kubectl and not yet seen on a cluster.
+# Tested against a stub kubectl. Seen on kind on 2026-10-07: a refusal for each
+# bad name and one renewal of a healthy Certificate (revision 1 to 2, a new
+# request Approved and Ready). Not seen: a Certificate whose request was denied,
+# a 409 in the window between the read and the write, and the rate store's
+# renewal with the line below (it was added after that run).
 set -euo pipefail
 
 # shellcheck source=common.sh
@@ -113,7 +125,9 @@ if is_issuing; then
   exit 0
 fi
 patch="$(trigger_patch)"
-record_cluster_holder changing
+if [[ "${cert}" == rate-store ]]; then
+  log "renewing the rate store's certificate restarts the store when it sees the new file: for one to three minutes every model call answers 503 and the tenants' rate windows are lost"
+fi
 kctl -n "${NAMESPACE}" patch certificate "${cert}" --subresource=status --type=merge -p "${patch}" >/dev/null ||
   die "kubectl could not write the status of the Certificate ${cert} (its error is above); if it says the object has been modified, cert-manager wrote to it meanwhile: run the command again"
 log "asked cert-manager to issue the Certificate ${cert} again: its Issuing condition is now True (reason ${TRIGGER_REASON})"

@@ -23,9 +23,20 @@ from chartsupport import (
     run_helm,
 )
 
-from meridian.platform.common.certlife import RESTART_SHARE_ENV, LoadedCertificate
+from meridian.platform.common.certlife import (
+    RESTART_SHARE_ENV,
+    LoadedCertificate,
+    _restart_share,
+)
 
 START = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def share_read(text: str) -> float:
+    """What a service makes of the rendered text: the product's own reading of
+    the variable, which refuses what it cannot use (a text that ``float`` takes
+    and the product does not would pass a bare ``float``)."""
+    return _restart_share({RESTART_SHARE_ENV: text})
 
 
 def deployments(*values: str) -> list[dict]:
@@ -114,12 +125,12 @@ def test_each_service_gets_its_place_in_the_sorted_list_over_the_count() -> None
     assert set(found) == set(SERVICES)
     for place, name in enumerate(ordered):
         # Helm prints a quotient with sixteen digits: 0.1666666666666667.
-        assert float(found[name]) == pytest.approx(place / len(ordered), abs=1e-15)
+        assert share_read(found[name]) == pytest.approx(place / len(ordered), abs=1e-15)
     assert found[ordered[0]] == "0"
 
 
 def test_the_shares_are_distinct_and_below_one() -> None:
-    values = [float(text) for text in shares().values()]
+    values = [share_read(text) for text in shares().values()]
 
     assert len(set(values)) == len(SERVICES)
     assert all(0 <= value < 1 for value in values)
@@ -153,7 +164,7 @@ def test_every_service_is_a_place_when_one_is_added() -> None:
         (container,) = document["spec"]["template"]["spec"]["containers"]
         for item in container.get("env", []):
             if item["name"] == RESTART_SHARE_ENV:
-                values[document["metadata"]["name"]] = float(item["value"])
+                values[document["metadata"]["name"]] = share_read(item["value"])
 
     assert len(values) == len(SERVICES) + 1
     assert values["aaa-extra"] == 0.0
@@ -166,7 +177,7 @@ def loaded_by(name: str, lifetime: timedelta) -> LoadedCertificate:
     return LoadedCertificate(
         not_before=START,
         not_after=START + lifetime,
-        share=float(shares()[name]),
+        share=share_read(shares()[name]),
     )
 
 

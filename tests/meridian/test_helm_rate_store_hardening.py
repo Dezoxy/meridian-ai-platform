@@ -110,7 +110,7 @@ def test_neither_probe_puts_a_credential_in_the_pods_spec(probe: str) -> None:
 def test_the_readiness_probe_keeps_its_timings() -> None:
     probe = store_container()["readinessProbe"]
 
-    assert probe["timeoutSeconds"] == 3
+    assert probe["timeoutSeconds"] == 5
     assert probe["periodSeconds"] == 5
 
 

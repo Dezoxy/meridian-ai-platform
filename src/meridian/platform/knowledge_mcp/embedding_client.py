@@ -139,7 +139,7 @@ def _gateway_word(response: httpx.Response) -> str | None:
         return UNKNOWN_GATEWAY_WORD
     try:
         payload = json.loads(body)
-    except ValueError:
+    except (ValueError, RecursionError):
         return UNKNOWN_GATEWAY_WORD
     detail = payload.get("detail") if isinstance(payload, dict) else None
     if not isinstance(detail, str):

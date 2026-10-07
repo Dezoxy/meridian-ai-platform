@@ -288,6 +288,30 @@ def test_a_second_with_a_fraction_or_a_value_that_is_not_text_cannot_be_told(
         assert "cannot tell" in line, bad
 
 
+def test_a_date_of_the_right_form_that_is_no_date_cannot_be_told_by_name(
+    tmp_path: Path,
+) -> None:
+    for number, bad in enumerate(
+        (
+            "2027-13-04 18:05:31 +0000 UTC",
+            "2027-00-04 18:05:31 +0000 UTC",
+            "2027-01-04 25:05:31 +0000 UTC",
+        )
+    ):
+        directory = tmp_path / str(number)
+        directory.mkdir()
+        expirations = all_three(90 * DAY) | {"platform-db-server": bad}
+
+        line = only_line(directory, cluster=status_of(expirations))
+
+        assert line.startswith("FAIL  "), bad
+        assert "cannot tell when platform-db-server ends" in line, bad
+        assert "not a date" in line, bad
+        # Not the line for an answer that is not JSON, and not the value.
+        assert "as JSON" not in line, bad
+        assert bad.split(" ")[0] not in line, bad
+
+
 def test_one_date_that_cannot_be_told_fails_even_when_the_others_are_far(
     tmp_path: Path,
 ) -> None:
@@ -332,6 +356,8 @@ def test_the_cluster_is_read_once_and_a_status_over_the_argument_limit_is_read(
     lines, asked = run_certificates_check(tmp_path, cluster=cluster)
 
     assert [line.split()[0] for line in lines] == ["PASS"]
+    # The padded status was read: the line names what it holds.
+    assert "the earliest of 3 is platform-db-ca, with 90 days left" in lines[0]
     (call,) = asked.splitlines()
     assert call.split() == [
         "-n",
@@ -380,16 +406,30 @@ def test_the_check_is_the_fifth_line_of_the_certificate_policy_check() -> None:
     assert calls[-1] == "check_database_certificates"
 
 
-def test_the_readme_labels_the_line_as_tested_and_not_yet_seen_on_kind() -> None:
+def the_certificate_policy_passage() -> str:
+    """The README's passage on the policy check: from its own first words to
+    the next numbered item's bold heading (found by its shape, not by a number
+    or a title that an edit may change)."""
     readme = " ".join((KIND_DIR / "README.md").read_text("utf-8").split())
+    after = readme.split("**Certificate policy.** Five lines", 1)[1]
+    return re.split(r" \d+\. \*\*", after, maxsplit=1)[0]
 
-    assert "**Certificate policy.** Five lines" in readme
-    tenth = readme.split("**Certificate policy.** Five lines")[1].split(
-        "11. **Alert rules"
-    )[0]
-    assert "CloudNativePG" in tenth
-    assert "Tested with a stand-in and the real jq" in tenth
-    assert "NOT YET SEEN" in tenth
+
+def test_the_passage_is_cut_at_the_next_item_and_not_at_a_fixed_title() -> None:
+    passage = the_certificate_policy_passage()
+
+    assert "CloudNativePG" in passage
+    assert not re.search(r"\b\d+\. \*\*", passage)
+    assert "read-only, run last" not in passage
+
+
+def test_the_readme_labels_what_was_seen_of_the_line_and_what_was_not() -> None:
+    passage = the_certificate_policy_passage()
+
+    assert "Tested with a stand-in and the real jq" in passage
+    assert re.search(r"Seen on kind on \d{4}-\d\d-\d\d", passage)
+    assert "Not seen" in passage
+    assert "NOT YET SEEN" not in passage
 
 
 def test_the_runbook_says_who_renews_the_databases_certificates_and_the_gap() -> None:

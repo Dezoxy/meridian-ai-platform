@@ -87,7 +87,7 @@ def test_the_readiness_probe_is_the_handshake_and_the_probe_users_ping_alone() -
     assert command[:2] == ["sh", "-c"]
     assert command[3:] == ["rate-store-readiness", TLS_DIRECTORY, str(PORT)]
     assert liveness_script().startswith(command[2].rstrip("\n"))
-    assert probe["timeoutSeconds"] == 3
+    assert probe["timeoutSeconds"] == 5
     assert probe["periodSeconds"] == 5
 
 
@@ -199,7 +199,7 @@ def test_a_renewal_is_acted_on_within_a_minute_of_the_kubelet_writing_it() -> No
 def test_a_hung_probe_ends_as_a_failed_one_before_the_next_starts() -> None:
     probe = store_container()["livenessProbe"]
 
-    assert probe["timeoutSeconds"] == 3
+    assert probe["timeoutSeconds"] == 5
     assert probe["timeoutSeconds"] < probe["periodSeconds"]
 
 
@@ -210,6 +210,18 @@ def test_the_header_states_the_time_and_what_a_restart_costs() -> None:
     assert "60 seconds" in header
     assert "every tenant its windows again" in header
     assert "ledger" in header
+
+
+def test_the_template_names_the_one_process_a_slow_shell_still_leaves() -> None:
+    text = (TEMPLATES / "rate-store.yaml").read_text(encoding="utf-8")
+    comment = text.split('{{- define "meridian.rateStorePing" -}}', 1)[0]
+    comment = " ".join(comment.rsplit("/*", 1)[1].split())
+
+    # The shell ends a hung redis-cli at 2 s, inside the kubelet's 5 s. Only a
+    # shell that is itself slower than the kubelet's timeout is killed by it, and
+    # it leaves one defunct process, once per overload.
+    assert "one defunct process" in comment
+    assert "slower than the kubelet's timeout" in comment
 
 
 # ── the rule, run against a directory the way the kubelet builds one ─────────

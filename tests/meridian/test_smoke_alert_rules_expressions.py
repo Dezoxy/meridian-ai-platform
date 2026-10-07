@@ -143,6 +143,8 @@ def test_a_for_of_zero_is_the_same_as_none(tmp_path: Path) -> None:
     # The API says 0 for an alert with no `for`, and for `0m`.
     line = names_line(tmp_path, durations={"MeridianModelCredentialRefused": 0})
 
+    # A PASS-only test: that the `for` is compared at all is carried by
+    # test_a_changed_for_fails_naming_the_rule_and_the_word beside it.
     assert line.startswith("PASS  alert rules: the loaded rules are the file's")
 
 
@@ -154,6 +156,8 @@ def test_a_recording_rule_has_no_for_to_compare(tmp_path: Path) -> None:
             if rule["type"] == "recording":
                 assert "duration" not in rule
 
+    # A PASS-only test: that a recording rule's expression is compared is carried
+    # by test_a_changed_recording_rule_expression_fails_naming_it below.
     assert run_alert_rules(tmp_path, answer=answer)[1].startswith("PASS")
 
 
@@ -183,6 +187,12 @@ def test_whitespace_alone_passes(tmp_path: Path, spelling) -> None:
         name: spelling(one_line(name))
         for name in (CERTIFICATE_RULE, SWEEP_RULE, "MeridianDatabaseNotReady")
     }
+    # The spelling really differs from the file's text in at least one rule
+    # (a rule with no parenthesis is the same in one of them), or the test
+    # proves nothing; that a difference of substance FAILS is carried by
+    # test_a_changed_label_value_or_window_fails_too and
+    # test_whitespace_inside_a_label_value_is_a_difference_smoke_does_not_see.
+    assert any(queries[name] != one_line(name) for name in queries)
 
     line = names_line(tmp_path, queries=queries)
 
@@ -200,6 +210,10 @@ def test_the_order_of_the_matchers_alone_passes(tmp_path: Path) -> None:
         'namespace=~"meridian|cert-manager|observability",condition!="True"',
         'condition!="True",namespace=~"meridian|cert-manager|observability"',
     )
+
+    # Reordered for real; that a changed matcher FAILS is carried by
+    # test_a_changed_label_value_or_window_fails_too.
+    assert reordered != query
 
     line = names_line(tmp_path, queries={CERTIFICATE_RULE: reordered})
 
@@ -327,6 +341,64 @@ def test_every_expression_in_the_file_is_a_literal_block_smoke_can_read_by_inden
     assert len(re.findall(r"^ +expr: \|$", text, re.MULTILINE)) == RULE_COUNT
     assert len(re.findall(r"^ +expr:", text, re.MULTILINE)) == RULE_COUNT
     assert "\t" not in text
+
+
+def rules_without_a_block_expression(text: str) -> list[str]:
+    """The rules of ``text`` (the file's indentation: a rule starts at eight
+    spaces with ``- alert:`` or ``- record:``) that do not write their expression
+    as exactly one literal block, ``expr: |`` at ten spaces with every line of
+    it at twelve, the form ``tree_exprs`` reads. The reader is not widened: an
+    inline ``expr:`` reads as empty and would be a false FAIL, so the file keeps
+    the block form and this says which rule left it."""
+    start = re.compile(r"^        - (?:alert|record): (\S+)$", re.MULTILINE)
+    found = list(start.finditer(text))
+    wrong = []
+    for index, match in enumerate(found):
+        end = found[index + 1].start() if index + 1 < len(found) else len(text)
+        body = text[match.end() : end].split("\n    - name: ", 1)[0]
+        blocks = re.findall(
+            r"^          expr: \|\n((?:            .*\n|\n)+)", body, re.M
+        )
+        keys = re.findall(r"^ *expr:", body, re.MULTILINE)
+        if len(blocks) != 1 or len(keys) != 1 or not blocks[0].strip():
+            wrong.append(match.group(1))
+    return wrong
+
+
+def test_every_rule_writes_its_expression_in_the_block_form_smoke_reads() -> None:
+    text = (KIND_DIR / "alerts" / "meridian.yaml").read_text(encoding="utf-8")
+
+    assert rules_without_a_block_expression(text) == []
+    assert len(re.findall(r"^        - (?:alert|record): ", text, re.M)) == RULE_COUNT
+
+
+def test_the_block_form_check_names_a_rule_with_a_bad_expression() -> None:
+    sample = (
+        "groups:\n"
+        "    - name: meridian.one\n"
+        "      rules:\n"
+        "        - alert: Good\n"
+        "          expr: |\n"
+        "            up == 1\n"
+        "          for: 5m\n"
+        "        - alert: Inline\n"
+        "          expr: up == 0\n"
+        "        - record: Empty\n"
+        "          expr: |\n"
+        "          labels: {}\n"
+        "        - alert: Two\n"
+        "          expr: |\n"
+        "            up\n"
+        "          expr: |\n"
+        "            down\n"
+        "    - name: meridian.two\n"
+        "      rules:\n"
+        "        - alert: AlsoGood\n"
+        "          expr: |\n"
+        "            up\n"
+    )
+
+    assert rules_without_a_block_expression(sample) == ["Inline", "Empty", "Two"]
 
 
 def test_the_header_says_what_the_expression_comparison_cannot_see() -> None:

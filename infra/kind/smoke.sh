@@ -1159,6 +1159,24 @@ skip() { printf 'SKIP  %s\n' "$*"; skips=$((skips + 1)); }
 # inject terminal escape sequences or extra lines.
 clean_lines() { printf '%s' "$1" | LC_ALL=C tr -cd '[:print:]\n' | paste -sd ';' -; }
 
+# show_wait_error TEXT: what a failed `kctl wait` printed on standard error (TEXT,
+# captured by the site), on standard error again, a line at a time and without
+# any byte that is not printable ASCII, except kubectl's own line for a wait that
+# merely ran out of time ("error: timed out waiting for the condition on ..."):
+# the FAIL line that follows says that already. Anything else is shown, so a wait
+# that was ended some other way (for example by the bound of the call, when the
+# API server did not answer, which dies with a sentence of its own) does not stop
+# smoke without a word. It does not read the wrapper's text: it filters the one
+# line it knows to be noise.
+show_wait_error() {
+  local line
+  while IFS= read -r line; do
+    line="$(printf '%s' "${line}" | LC_ALL=C tr -cd '[:print:]')"
+    [[ -n "${line}" && "${line}" != "error: timed out waiting for the condition"* ]] || continue
+    printf '%s\n' "${line}" >&2
+  done <<<"$1"
+}
+
 need_tools docker kubectl curl jq base64 openssl timeout
 require_local_docker
 need_cluster
@@ -1732,7 +1750,7 @@ clear_text_job_spec() {
 # while the collector is not deployed (`make up`); the Meridian services are not
 # needed. What the answer is is cleaned and cut like every answer from a pod.
 check_telemetry_clear_text() {
-  local found job answer code detail
+  local found job answer code detail wait_said
   if ! found="$(kctl -n observability get deployment otel-collector -o name --ignore-not-found)"; then
     fail "telemetry: could not look for deployment/otel-collector in observability (kubectl's error is above)"
     return
@@ -1747,8 +1765,9 @@ check_telemetry_clear_text() {
     fail "telemetry: could not start the clear-text probe ${job} in ${TELEMETRYGEN_NAMESPACE} ($(clean_lines "${detail}")), so the line proves nothing"
     return
   fi
-  if ! kctl -n "${TELEMETRYGEN_NAMESPACE}" wait --for=condition=complete \
-    "job/${job}" --timeout="${JOB_TIMEOUT}" >/dev/null 2>&1; then
+  if ! wait_said="$(kctl -n "${TELEMETRYGEN_NAMESPACE}" wait --for=condition=complete \
+    "job/${job}" --timeout="${JOB_TIMEOUT}" 2>&1 >/dev/null)"; then
+    show_wait_error "${wait_said}"
     fail "telemetry: the clear-text probe ${job} did not complete (kubectl -n ${TELEMETRYGEN_NAMESPACE} logs job/${job}), so the line proves nothing"
     return
   fi
@@ -1930,10 +1949,11 @@ check_telemetry() {
   start_job logs --logs
   start_job metrics --metrics
 
-  local signal
+  local signal wait_said
   for signal in traces logs metrics; do
-    if ! kctl -n "${TELEMETRYGEN_NAMESPACE}" wait --for=condition=complete \
-      "job/smoke-${signal}-${epoch}" --timeout="${JOB_TIMEOUT}" >/dev/null 2>&1; then
+    if ! wait_said="$(kctl -n "${TELEMETRYGEN_NAMESPACE}" wait --for=condition=complete \
+      "job/smoke-${signal}-${epoch}" --timeout="${JOB_TIMEOUT}" 2>&1 >/dev/null)"; then
+      show_wait_error "${wait_said}"
       fail "telemetry: telemetrygen ${signal} job did not complete (kubectl -n ${TELEMETRYGEN_NAMESPACE} logs job/smoke-${signal}-${epoch}; a Job with no egress to the collector, or one that cannot find the ConfigMap ${TELEMETRY_CA_CONFIGMAP}, is the likeliest cause on a cluster that make up has not brought up to date: it applies manifests/smoke-networkpolicy.yaml and manifests/observability-networkpolicy.yaml and makes the ConfigMap)"
       return
     fi
@@ -3469,6 +3489,8 @@ check_refused_request() {
 #   shape|NAME                        NAME's expiration is not in that form
 #                                     (another zone, RFC 3339, a fraction, not
 #                                     text): nothing is judged
+#   date|NAME                         NAME's expiration has that form and is no
+#                                     date (month 13, hour 25): nothing is judged
 #   ended|NAME|DAYS|DATE|COUNT        the earliest ended DAYS whole days ago
 #   close|NAME|DAYS|DATE|COUNT        DAYS whole days left, margin or less
 #   far|NAME|DAYS|DATE|COUNT          more than the margin left
@@ -3482,6 +3504,8 @@ database_certificates_verdict() {
     | if ($found | length) == 0 then "none"
       elif any($found[]; (.value | shaped) | not) then
         "shape|\(first($found[] | select((.value | shaped) | not)).key)"
+      elif any($found[]; (.value | try epoch catch null) == null) then
+        "date|\(first($found[] | select((.value | try epoch catch null) == null)).key)"
       else
         ($found | map({name: .key, date: .value, at: (.value | epoch)}) | sort_by([.at, .name]) | first) as $first
         | ($first.at - $now) as $left
@@ -3520,6 +3544,7 @@ check_database_certificates() {
     ended) fail "${what}: ${name} has ended ${days} ${unit} ago (${ends_at}) and was not renewed; read the operator's log in cnpg-system" ;;
     none) fail "${what}: the status of the Cluster platform-db holds no expiration (.status.certificates.expirations), so nothing is judged: the operator may have changed its status" ;;
     shape) fail "${what}: cannot tell when ${name} ends: its expiration is not in the form 'YYYY-MM-DD hh:mm:ss +0000 UTC' (another zone or another shape), so nothing is judged: has the operator changed its status?" ;;
+    date) fail "${what}: cannot tell when ${name} ends: its expiration has the form 'YYYY-MM-DD hh:mm:ss +0000 UTC' but is not a date, so nothing is judged: has the operator changed its status?" ;;
     *) fail "${what}: cannot tell: the verdict was not in a form this line reads" ;;
   esac
 }

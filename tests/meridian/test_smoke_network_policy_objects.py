@@ -43,6 +43,16 @@ def test_every_service_with_its_policy_prints_what_it_printed_before(
 
     assert [line.split()[0] for line in lines] == ["PASS"] * 4
     assert not any(LINE in line for line in lines)
+    # The probes were read, not skipped: each line names its own target.
+    targets = (
+        "agent-runtime.meridian.svc:8000",
+        "model-gateway.meridian.svc:8000",
+        "kubernetes.default.svc:443",
+        "platform-db-rw.meridian.svc:5432",
+    )
+    for line, target in zip(lines, targets, strict=True):
+        assert line.startswith("PASS  network policy: ")
+        assert f"({target})" in line
 
 
 def test_a_service_without_its_policy_object_is_named_and_only_it(

@@ -86,6 +86,7 @@ def run_telemetry_check(
             ),
             one_line_function(SMOKE_SH, "clean_lines"),
             function_definition(SMOKE_SH, "telemetry_answer"),
+            function_definition(SMOKE_SH, "show_wait_error"),
             function_definition(SMOKE_SH, "check_telemetry"),
             call,
         ]

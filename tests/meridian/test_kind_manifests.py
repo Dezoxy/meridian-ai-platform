@@ -1868,9 +1868,10 @@ DIMENSIONS = {
 }
 # The epoch second of the first settled attempt, as the stub ledger answers it.
 FIRST_SETTLED = "1790000000"
-requires_jq = pytest.mark.skipif(
-    shutil.which("jq") is None, reason="jq is not installed"
-)
+# A missing jq skips on a developer's machine and fails under
+# GITHUB_ACTIONS=true: the rule is the fixture's (jqsupport.py), since a skipif
+# mark cannot fail.
+requires_jq = pytest.mark.usefixtures("jq_installed")
 
 
 def dashboard() -> dict:

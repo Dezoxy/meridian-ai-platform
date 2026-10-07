@@ -244,7 +244,7 @@ of the chart: the script has no template expression).
 
 The bound, and what a probe leaves behind (S073, K7). A server that is frozen
 below the protocol (a stopped process) never answers, and the kubelet fails the
-probe at its own three seconds without ending what the probe started, so redis-cli
+probe at its own five seconds without ending what the probe started, so redis-cli
 must end itself inside them: the script starts it and `sleep 2` in the background
 as its own two children, `wait -n` returns when the first of them ends, and the
 script ends the other and waits for both. Every process the probe starts is then a
@@ -266,6 +266,12 @@ two minutes, the TLS handshake being outside it. The freeze was SIGSTOP on PID 1
 not `docker pause`, which stops `docker exec` too. No file is written (the root
 file system is read-only), and the only redirection is `2>/dev/null` on the
 `kill`, which complains of a client that already ended.
+What is still left (S073, review): the probe's own bound (2 seconds) fires before
+the kubelet's (`timeoutSeconds: 5`), so a hung redis-cli never reaches it. Only a
+shell that is itself slower than the kubelet's timeout (a node so overloaded that
+`sh` has not run for five seconds) is killed by the kubelet, and the `$( )`
+subshell it leaves is reparented to PID 1: one defunct process, once per such
+overload, not one per probe.
 */ -}}
 {{- define "meridian.rateStorePing" -}}
 answer=$(
@@ -298,7 +304,7 @@ exec:
     - rate-store-readiness
     - {{ include "meridian.tlsDirectory" . }}
     - {{ include "meridian.rateStorePort" . | quote }}
-timeoutSeconds: 3
+timeoutSeconds: 5
 {{- end -}}
 
 {{- /*
@@ -379,7 +385,7 @@ exec:
     - rate-store-liveness
     - {{ include "meridian.tlsDirectory" . }}
     - {{ include "meridian.rateStorePort" . | quote }}
-timeoutSeconds: 3
+timeoutSeconds: 5
 {{- end -}}
 
 {{- if .Values.rateStore.enabled }}

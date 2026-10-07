@@ -12,7 +12,8 @@ Nothing here touches a cluster. The script runs in a scratch copy of
 ``infra/kind/`` with a stub ``kubectl`` that logs every call, one word per
 field, and answers the list of Certificates from a file. What the cluster does
 with the write (cert-manager's controllers) is read from its source in the
-runbook, and was not seen.
+runbook; a real run on kind saw cert-manager act on it (the README row says
+what was seen, and what was not).
 """
 
 import json
@@ -326,8 +327,68 @@ def test_a_refused_write_fails_the_command_with_a_sentence_and_no_ok_record(
     assert done.returncode != 0
     assert done.stderr.strip().splitlines()[-1].startswith("error: ")
     assert "run the command again" in done.stderr
-    # A run that fails leaves the record at `changing`, as the other commands do.
-    assert record_states(calls) == ["changing"]
+    # Nothing was written, so the holder's record is as it was: not `changing`,
+    # which says a run began to change the cluster, and not `ok` either.
+    assert len(patches(calls)) == 1
+    assert record_states(calls) == []
+
+
+def test_a_refused_write_leaves_the_record_of_another_holder_as_it_was(
+    tmp_path: Path,
+) -> None:
+    done, calls = run_cert_renew(
+        tmp_path,
+        "model-gateway",
+        patch_fails=True,
+        record="other-holder|abc1234|2026-10-06T12:00:00Z|ok",
+        environment={"TAKE_CLUSTER": "1"},
+    )
+
+    assert done.returncode != 0
+    assert len(patches(calls)) == 1
+    assert record_states(calls) == []
+
+
+RATE_STORE_LISTING = listing(
+    certificate("rate-store", conditions=[]),
+    certificate("model-gateway", conditions=[]),
+)
+
+
+def test_the_rate_stores_name_says_what_the_renewal_costs_before_the_write(
+    tmp_path: Path,
+) -> None:
+    # The write is refused, so a line printed AFTER it would not be seen here.
+    done, calls = run_cert_renew(
+        tmp_path, "rate-store", certificates=RATE_STORE_LISTING, patch_fails=True
+    )
+
+    assert done.returncode != 0
+    assert len(patches(calls)) == 1
+    line = next(line for line in done.stdout.splitlines() if "restart" in line)
+    assert line.startswith("==> ")
+    assert "rate store" in line
+    assert "503" in line
+    assert "one to three minutes" in line
+    assert "rate windows" in line
+
+
+def test_another_name_prints_no_line_about_the_rate_store(tmp_path: Path) -> None:
+    done, _ = run_cert_renew(tmp_path, "model-gateway", certificates=RATE_STORE_LISTING)
+
+    assert done.returncode == 0, done.stderr
+    assert "rate store" not in done.stdout
+    assert "503" not in done.stdout
+
+
+def test_a_name_that_is_not_the_rate_store_is_refused_before_the_line(
+    tmp_path: Path,
+) -> None:
+    done, calls = run_cert_renew(tmp_path, "rate-stor", certificates=RATE_STORE_LISTING)
+
+    assert done.returncode != 0
+    assert "503" not in done.stdout
+    assert patches(calls) == []
 
 
 # ── the refusals ─────────────────────────────────────────────────────────────
@@ -454,14 +515,16 @@ def test_no_kubeconfig_is_the_same_refusal_as_the_other_commands(
 
 
 # ── who holds the cluster ────────────────────────────────────────────────────
-def test_it_writes_changing_before_the_patch_and_ok_after_it(tmp_path: Path) -> None:
+def test_it_writes_the_ok_record_after_the_patch_and_no_changing_one(
+    tmp_path: Path,
+) -> None:
     done, calls = run_cert_renew(tmp_path, "model-gateway")
 
     assert done.returncode == 0, done.stderr
-    assert record_states(calls) == ["changing", "ok"]
+    assert record_states(calls) == ["ok"]
     (patched,) = [i for i, call in enumerate(calls) if "patch" in call]
-    records = [i for i, call in enumerate(calls) if "create" in call]
-    assert records[0] < patched < records[-1]
+    (record,) = [i for i, call in enumerate(calls) if "create" in call]
+    assert patched < record
 
 
 def test_another_holder_stops_it_before_anything_is_changed(tmp_path: Path) -> None:
@@ -490,7 +553,7 @@ def test_take_cluster_lets_it_through_and_it_becomes_the_holder(
 
     assert done.returncode == 0, done.stderr
     assert len(patches(calls)) == 1
-    assert record_states(calls) == ["changing", "ok"]
+    assert record_states(calls) == ["ok"]
 
 
 def test_the_same_holder_goes_on(tmp_path: Path) -> None:
@@ -528,9 +591,10 @@ def test_it_reads_the_certificates_and_the_record_and_never_a_secret(
         "configmap",
         "certificates",
     }
-    # Everything it did to the cluster: one patch and the two record writes.
+    # Everything it did to the cluster: one patch and the one record write (a
+    # `create --dry-run` rendered on the client, and its server-side apply).
     changes = [call for call in calls if {"patch", "create", "apply"} & set(call)]
-    assert len(changes) == 5
+    assert len(changes) == 3
 
 
 def test_it_does_not_print_the_patch_or_the_whole_certificate(tmp_path: Path) -> None:
@@ -594,8 +658,48 @@ def test_the_readme_lists_the_target_and_the_holder_table_has_a_row_for_it() -> 
     holder = README.split("## Who holds the cluster", 1)[1]
 
     assert "| `make cert-renew CERT=<name>` |" in commands
-    assert "not yet seen on a cluster" in commands.split("`make cert-renew")[1]
     assert "| `make cert-renew` |" in holder
+
+
+def passage_labels_what_was_seen(text: str) -> bool:
+    """The label a passage carries: the date of the run that saw something, and
+    the words for the part that no run saw. Not what was seen: that is for the
+    next honest edit to change without breaking this."""
+    return bool(re.search(r"Seen on kind on \d{4}-\d\d-\d\d", text)) and (
+        "Not seen" in text
+    )
+
+
+def test_the_label_check_fails_without_a_date_or_without_the_part_not_seen() -> None:
+    assert passage_labels_what_was_seen("Seen on kind on 2026-10-07: x. Not seen: y.")
+    assert not passage_labels_what_was_seen("Seen on kind on 2026-10-07: x.")
+    assert not passage_labels_what_was_seen("Seen on kind: x. Not seen: y.")
+    assert not passage_labels_what_was_seen("Tested with a stub, not yet seen.")
+
+
+def test_the_readme_row_labels_what_was_seen_of_the_renewal_and_what_was_not() -> None:
+    row = README.split("| `make cert-renew CERT=<name>` |", 1)[1].split("\n", 1)[0]
+
+    assert passage_labels_what_was_seen(row)
+    assert "not yet seen on a cluster" not in row
+
+
+def test_the_readme_row_says_what_renewing_the_rate_store_costs() -> None:
+    after = README.split("| `make cert-renew CERT=<name>` |", 1)[1]
+    row = " ".join(after.split("\n", 1)[0].split())
+
+    assert "`CERT=rate-store`" in row
+    assert "503" in row
+    assert "one to three minutes" in row
+    assert "rate windows" in row
+
+
+def test_the_makefile_help_line_labels_what_was_seen_too() -> None:
+    (help_line,) = re.findall(r"^## cert-renew\s+(.+)$", MAKEFILE, re.MULTILINE)
+
+    assert re.search(r"seen on kind on \d{4}-\d\d-\d\d", help_line, re.I)
+    assert "not seen" in help_line.lower()
+    assert "not yet seen on a cluster" not in help_line
 
 
 def test_the_readme_says_deploy_applies_the_rules_and_not_that_it_does_not() -> None:

@@ -37,6 +37,7 @@ readonly NODE="${CLUSTER_NAME}-control-plane"
 # How containerd names an image that `kind load` took from the engine.
 readonly NODE_REPOSITORY="docker.io/library/${IMAGE_REPOSITORY}"
 readonly ENGINE_FORMAT='{{.Repository}}:{{.Tag}} {{.ID}} {{.Size}}'
+readonly CANNOT_READ_TAGS="cannot read the tags in use from the cluster's answer (jq's error is above): make images prints no listing, since an empty list that could not be read would mark every image unused"
 
 # Each line of the output of the next three functions is "image ID size".
 engine_rows() {
@@ -201,9 +202,13 @@ if [[ -f "${KUBECONFIG_FILE}" ]]; then
   # rollout that the Deployment's template does not show yet). A rollback's
   # target: only a ReplicaSet names it, the kind of one `kubectl rollout undo`
   # scales up again.
-  used="$(tags_of '.items[]' "${workloads}"
-    tags_of '.items[] | select(.kind == "Pod")' "${replicasets_and_pods}")"
-  rollback="$(tags_of '.items[] | select(.kind == "ReplicaSet")' "${replicasets_and_pods}")"
+  # Each read on its own line with its own check: two reads in one $(...) leave
+  # the status of the last, and an empty list that could not be read would mark
+  # every image unused.
+  from_templates="$(tags_of '.items[]' "${workloads}")" || die "${CANNOT_READ_TAGS}"
+  from_pods="$(tags_of '.items[] | select(.kind == "Pod")' "${replicasets_and_pods}")" || die "${CANNOT_READ_TAGS}"
+  rollback="$(tags_of '.items[] | select(.kind == "ReplicaSet")' "${replicasets_and_pods}")" || die "${CANNOT_READ_TAGS}"
+  used="${from_templates}"$'\n'"${from_pods}"
   refuse_digest_references "${used}" "${rollback}"
   node="$(node_rows)"
   report_place "${IMAGE_REPOSITORY}:* images in the Docker engine" "${engine}" "${used}" "${rollback}" unused_engine kept_engine
