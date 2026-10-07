@@ -34,6 +34,7 @@ from chartsupport import (
     run_helm,
     without_rate_store,
 )
+from kindsupport import SMOKE_SH
 from servicesupport import REGISTRY_DIR, REPO_ROOT
 
 from meridian.platform.registry import load_registry
@@ -836,7 +837,6 @@ def test_deploy_waits_for_the_certificates_before_it_waits_for_any_rollout() -> 
 
 # ── smoke.sh ─────────────────────────────────────────────────────────────────
 
-SMOKE_SH = (REPO_ROOT / "infra" / "kind" / "smoke.sh").read_text(encoding="utf-8")
 GATEWAY_HOST = f"model-gateway.{NAMESPACE}.svc"
 
 

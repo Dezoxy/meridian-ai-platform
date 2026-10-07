@@ -18,8 +18,8 @@ from typing import get_args
 import pytest
 import yaml
 from chartsupport import rendered_chart
+from kindsupport import GATEWAY_SERIES
 from servicesupport import REPO_ROOT
-from test_kind_manifests import GATEWAY_SERIES
 
 from meridian.platform.common.metrics import METRIC_ATTRIBUTE_KEYS
 from meridian.platform.gateway.budget import BudgetRefusalReason

@@ -16,14 +16,14 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from test_alert_rules_telemetry import GROUP, rules, sweep_metrics
-from test_kind_manifests import (
+from kindsupport import (
     SMOKE_SH,
     function_body,
     function_definition,
     one_line_function,
     requires_jq,
 )
+from test_alert_rules_telemetry import GROUP, rules, sweep_metrics
 
 from meridian.platform.common.telemetry import OTLP_ENDPOINT_ENV
 from meridian.workloads.claims_triage.sweep import SERVICE_NAME as SWEEP_SERVICE

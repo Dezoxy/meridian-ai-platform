@@ -14,7 +14,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from test_kind_manifests import (
+from kindsupport import (
     COMMON_SH,
     DEPLOY_SH,
     KIND_DIR,

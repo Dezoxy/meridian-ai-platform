@@ -11,19 +11,19 @@ These tests use the harness of ``test_kind_manifests.py`` (``run_sweep_check``:
 
 from pathlib import Path
 
-from test_kind_manifests import (
+from kindharness import (
     SWEEP_CREATED,
     SWEEP_FINISHED,
     SWEEP_SCHEDULED,
     SWEEP_TOLERANCE_SECONDS,
     epoch_of,
     other_job,
-    requires_jq,
     run_sweep_check,
     seconds_after,
     sweep_cronjob_answer,
     sweep_job,
 )
+from kindsupport import requires_jq
 
 SCHEDULED_AT = epoch_of(SWEEP_SCHEDULED)
 

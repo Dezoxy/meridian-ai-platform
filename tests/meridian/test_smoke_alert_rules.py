@@ -18,9 +18,9 @@ import subprocess
 from pathlib import Path
 
 import yaml
-from test_kind_manifests import (
+from kindharness import PROMETHEUS_ERROR_ANSWER
+from kindsupport import (
     KIND_DIR,
-    PROMETHEUS_ERROR_ANSWER,
     SMOKE_SH,
     function_body,
     function_definition,

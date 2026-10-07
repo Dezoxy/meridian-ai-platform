@@ -39,7 +39,7 @@ from chartsupport import (
     rendered_chart,
     rules,
 )
-from test_kind_manifests import (
+from kindsupport import (
     KIND_DIR,
     SMOKE_SH,
     function_body,
