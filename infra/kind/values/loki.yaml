@@ -45,6 +45,19 @@ singleBinary:
   # exports its logs to Loki yet.
   sidecar: false
 
+# The chart's one ClusterRole for Loki has no rules (`rules: []`) and its
+# configuration discovers nothing through the API server: one process on the
+# filesystem, and memberlist joins by a Service's DNS name. So the service
+# account's token is not mounted. Two keys, because the chart keeps two
+# places: `defaults` sets the pod's, `serviceAccount` the ServiceAccount's;
+# either alone leaves the other mounted. Whether the binary itself calls the
+# API server is not something a render shows; the cluster run is what sees the
+# pod start without the token.
+defaults:
+  automountServiceAccountToken: false
+serviceAccount:
+  automountServiceAccountToken: false
+
 # The chart still defaults these to 3 replicas; only the single binary runs.
 write:
   replicas: 0
