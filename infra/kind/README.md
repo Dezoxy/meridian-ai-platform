@@ -308,8 +308,10 @@ collector's), and approver-policy may act for no other signer
 ([`values/approver-policy.yaml`](values/approver-policy.yaml)):
 
 - `meridian-services` permits a request for the `meridian-services` issuer
-  only from the `meridian` namespace, with a URI under
-  `spiffe://meridian.kind/ns/meridian/sa/`, a `*.meridian.svc` DNS name, the
+  only from the `meridian` namespace, with a URI and DNS names out of the
+  lists of what the chart renders (no wildcard; a test holds them equal to the
+  chart's Certificates; it stops a request for a new name, not a second
+  Certificate for a listed one), the
   three usages the services use (digital signature, client auth, server auth)
   and at most 90 days; a CA, a common name or any other field is not allowed.
 - `meridian-services-ca` permits the CA certificate's own request (issuer
@@ -334,9 +336,10 @@ binding is. cert-manager's account may `use` the four policies that allow
 through a Role and RoleBinding in one namespace each, and the one that denies
 through a ClusterRoleBinding, so a request from another namespace meets only
 the policy that denies. What is left: whoever can create a `Certificate` in
-`meridian` has any service's identity issued (the policy checks the namespace
-and the URI prefix, not which service), and whoever can change a policy or its
-binding undoes the limit; on kind that is the cluster's administrator.
+`meridian` has any listed service's identity issued (the policy checks the
+namespace and the names, eight URIs and six DNS names, each listed, not which
+service), and whoever can change a policy or its binding undoes the limit; on
+kind that is the cluster's administrator.
 
 `make up` installs approver-policy and applies the policies before the CA,
 waits for the five to be Ready, and then waits for the issuer to be Ready
@@ -979,13 +982,15 @@ node image, Kubernetes components and the platform).
     brings it. The fourth line is the one request smoke makes on purpose, and
     one that the issuer must refuse (S062): a `CertificateRequest` named
     `meridian-smoke-refused-<pid>-<random>` in the namespace `default`, for the
-    issuer `meridian-services`, with a URI under the Meridian prefix and a
-    duration that policy allows, so that only its namespace refuses it: the
-    namespace selector of `meridian-services` does not list `default`, and
-    `meridian-deny-unlisted`, which selects the issuer from every namespace,
-    permits nothing. It passes when the request is Denied and the approver's
-    whole message, judged before it is cut, names `meridian-deny-unlisted` as a
-    policy that evaluated the request and does not name `meridian-services` as
+    issuer `meridian-services`, with a URI that policy lists (the Claims API's;
+    since S072 the policy lists each URI, so an unlisted one would be refused
+    in `meridian` too) and a duration and usages it allows, so that only its
+    namespace refuses it: the namespace selector of `meridian-services` does
+    not list `default`, and `meridian-deny-unlisted`, which selects the issuer
+    from every namespace, permits nothing. It passes when the request is
+    Denied and the approver's whole message, judged before it is cut, names
+    `meridian-deny-unlisted` as a policy that evaluated the request and does
+    not name `meridian-services` as
     one (the line says the reason, cut to 60 characters, and the message, cut
     to 120). The form it matches is the one approver-policy v0.28.0 wrote on
     the cluster, `No policy approved this request: [meridian-deny-unlisted:
@@ -1501,7 +1506,7 @@ What the policies do not do:
   refuse one yet (below), and on kind `audit` records nothing (no API server
   audit policy is configured) and `warn` reaches only the client that creates
   a workload, never a controller's pod. `cnpg-system` and
-  `envoy-gateway-system` carry neither labels nor a NetworkPolicy.
+  `envoy-gateway-system` carry Pod Security labels and no NetworkPolicy.
 - The Model Gateway has no rule towards a provider: on kind it calls none.
   The rule for Azure OpenAI is S020's.
 
@@ -1644,6 +1649,8 @@ Pod Security labels (`warn` and `audit`, never `enforce`, as on `meridian`):
 | `meridian` | `restricted` | nothing |
 | `cert-manager` | `restricted` | nothing: its five pods meet it as rendered |
 | `observability` | `restricted` | nothing as rendered: `tempo` and `otel-collector` set no `allowPrivilegeEscalation: false`, no `capabilities.drop: [ALL]` and no `seccompProfile`, the collector no `runAsNonRoot` either, until their values files set them (S063, tested without a cluster; the server-side dry run is repeated after `make up`); node-exporter would have stopped `restricted` too, and is off |
+| `cnpg-system` | `restricted` | nothing as rendered (2026-10-07, not confirmed by the API server) |
+| `envoy-gateway-system` | `restricted` | nothing as rendered for the controller and its Job; the proxy pods are made at run time and were read in the source, not seen |
 | `logging` | `privileged` | `baseline` is stopped by the hostPath volume (`/var/log/pods`); `restricted` by that volume alone (it allows no hostPath): the pod runs as user 10001 with `runAsNonRoot` (S064, read as `helm template` renders it, 2026-10-06, and seen on kind the same day: a server-side dry run of `enforce=restricted` warned of "restricted volume types" alone; the label warns of nothing) |
 
 The Prometheus pods are the operator's, not rendered by Helm, and were not read:
@@ -2077,17 +2084,18 @@ container, about a minute in which a one-replica service does not answer; if
 cert-manager has not renewed it, the service stays healthy until the
 certificate ends and is unhealthy from then on, but two alerts fire long
 before (21 days left; not Ready); a renewed CA still reaches a service only
-when it restarts; no certificate is revoked; nothing limits which service's name a
-request in `meridian` asks for (approver-policy lets the `meridian-services`
-issuer sign only a request from `meridian` with a URI under the Meridian
-prefix, so a request from another namespace is denied, but whoever can create
-a `Certificate` in `meridian`, or change a policy or its binding, can still
-mint any service's identity); the CA's private key is readable by the
-operators that hold a cluster-wide read of Secrets (cert-manager, cainjector,
-CloudNativePG), though by no Meridian pod; and the telemetry from the services
-to the collector is TLS only by the second authority above (S063, tested without
-a cluster), while the collector's own hops to Tempo, Prometheus and Loki are
-still plain.
+when it restarts; no certificate is revoked; nothing limits which listed
+service's name a request in `meridian` asks for (approver-policy lets the
+`meridian-services` issuer sign only a request from `meridian` with one of
+eight listed URIs and, where it names one, one of six listed DNS names, so a
+request from another namespace, or for a name not listed, is denied, but
+whoever can create a `Certificate` in `meridian`, or change a policy or its
+binding, can still mint any listed service's identity); the CA's private key
+is readable by the operators that hold a cluster-wide read of Secrets
+(cert-manager, cainjector, CloudNativePG), though by no Meridian pod; and the
+telemetry from the services to the collector is TLS only by the second
+authority above (S063, tested without a cluster), while the collector's own
+hops to Tempo, Prometheus and Loki are still plain.
 
 A cluster whose services were first applied as raw manifests (before S019)
 keeps them: Helm adopted the objects in place (`--take-ownership`) and no
@@ -2250,8 +2258,8 @@ series for the gateway's calls of the last 15 minutes), `meridian.gateway`
 `meridian.telemetry` (two recorded series of the same kind, for the
 runtime's completed model calls and the Claims API's stored triages, and
 three alerts that notice a series that is not there, and a fourth that
-notices the log agent not being ready). It holds 17 alert
-rules and three recording rules: six on the gateway, three on the workloads
+notices the log agent not being ready). It holds 18 alert
+rules and three recording rules: six on the gateway, four on the workloads
 and four on the certificates (the gateway's sixth, `MeridianRateStoreRefusing`,
 fires when, of the calls of the last 15 minutes that the rate store could have
 counted, more than 5 percent and at least 5, or more than half and at least 2,
@@ -2275,7 +2283,10 @@ for `logging` were seen on kind on 2026-10-06; a DaemonSet that does
 not exist leaves no series and so no alert, and smoke's line says it is not
 there). The CronJob of the sweep sets one instance ID
 (`service.instance.id=claims-sweep`), so its six series are the same from
-pass to pass (seen on kind on 2026-10-06). It
+pass to pass (seen on kind on 2026-10-06). The workloads' fourth alert,
+`MeridianRateStoreRestartLoop` (S072), fires on three restarts of the rate
+store's container in 15 minutes: implemented and unit-tested, loaded by `make
+up` and `make deploy`, not seen firing. It
 carries the label `release: kube-prometheus-stack`, which the chart's
 Prometheus selects rules by. Prometheus evaluates the rules; kind runs no
 Alertmanager, so nothing is notified, and the dashboard **Meridian:

@@ -29,6 +29,15 @@ tempo:
       memory: 192Mi
     limits:
       memory: 448Mi
+# The chart renders no Role, ClusterRole or binding for Tempo, and its
+# configuration discovers nothing through the API server: memberlist carries a
+# cluster label and no join list, and there is no Kubernetes discovery. So the
+# service account's token is not mounted. One key turns it off in the
+# ServiceAccount and in the pod. Whether the binary itself calls the API server
+# is not something a render shows; the cluster run is what sees the pod start
+# without the token.
+serviceAccount:
+  automountServiceAccountToken: false
 # A small volume backs /var/tempo (the chart mounts nothing there otherwise).
 persistence:
   enabled: true

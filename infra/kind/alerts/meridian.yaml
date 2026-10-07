@@ -164,13 +164,12 @@ spec:
           # fallback exists (the owner's decision). The numbers are proposals
           # nobody measured, like the group's others.
           #
-          # What it still does not see: a store that restarts in a loop while
-          # few calls come, so that each cycle refuses a few seconds of calls (a
+          # What it does not see: a store that restarts in a loop while few
+          # calls come, so that each cycle refuses a few seconds of calls (a
           # few calls a minute make fewer than 2 in 15 minutes, or a share under
-          # half) and resets every tenant's windows each time. That needs a
-          # rule on the container's restart count
-          # (kube_pod_container_status_restarts_total for the rate-store pod),
-          # which is recorded for another step.
+          # half) and resets every tenant's windows each time. That is
+          # MeridianRateStoreRestartLoop's (S072), in the workloads' group: a
+          # rule on the container's restart count.
           expr: |
             (
               sum(meridian:gateway_calls:delta15m{meridian_outcome="refused", meridian_reason="rate-store-unavailable"})
@@ -273,6 +272,45 @@ spec:
               counted from its last success or, if it never succeeded, from its
               creation (proposed threshold: 15 minutes, three missed runs).
             runbook_url: https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/database-failure.md
+
+        # The rate store restarts by design twice at most in a stretch: once
+        # for a renewed certificate (the liveness probe sees the files newer
+        # than the server, runbooks/rate-store.md) and once after a start, when
+        # the probe's six failures in a row (about 70 seconds) can restart it
+        # (the two do not add: a restart that loaded the renewed certificate is
+        # not followed by another). A loop is 3 restarts in 15 minutes: the
+        # held connection slots restart it every 70 to 90 seconds, an expired
+        # certificate about every minute, and the kubelet's back-off is at most
+        # 5 minutes, so the slowest loop makes 3 in 10 and fires too. changes(),
+        # not increase(): the counter moves one at a time, and a count of
+        # changes needs no extrapolation, which could round 2 up (a restart a
+        # sample before the window's start is not counted; a series that first
+        # appears with its first restart already in it shows that restart as no
+        # change). The `for` is 0m because the window is the wait: a third
+        # restart inside 15 minutes stays true for 15 minutes, so a `for` of 5
+        # filters nothing and only delays. `warning`: the store is Available
+        # part of each cycle and refuses only the seconds it takes to start;
+        # MeridianRateStoreRefusing is `critical` for the store that is down.
+        # Per pod, not summed: a new pod starts its counter at 0. Nothing here
+        # is measured, like the others. From kube-state-metrics.
+        - alert: MeridianRateStoreRestartLoop
+          expr: |
+            changes(kube_pod_container_status_restarts_total{namespace="meridian", container="rate-store"}[15m]) >= 3
+          for: 0m
+          labels:
+            severity: warning
+            platform: meridian
+          annotations:
+            summary: The rate store keeps restarting.
+            description: >-
+              The rate store's container {{ $labels.container }} of pod
+              {{ $labels.pod }} in {{ $labels.namespace }} restarted
+              {{ $value }} times in the last 15 minutes (proposed threshold:
+              3). One restart is by design, a renewed certificate's or a
+              start's liveness check; a loop resets every tenant's windows
+              each time, while few calls come and the refusal alert stays
+              quiet.
+            runbook_url: https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/rate-store.md
 
     # From cert-manager's controller, which manifests/cert-manager-metrics.yaml
     # has Prometheus scrape (S056). Only the three namespaces where Meridian's

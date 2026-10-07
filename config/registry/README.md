@@ -342,7 +342,11 @@ an in-memory reader; a dashboard for them is designed (S043).
   a date, never recalled ones.
 - **A service:** edit `services.yaml` with the chart's `env` (who calls whom)
   and the code (what each names) in view; validation refuses a tool server
-  without an entry.
+  without an entry. A service the chart renders with a Certificate also needs
+  its service ID, and its `<service>.meridian.svc` name if it serves TLS, in
+  the lists of `meridian-services` in
+  `infra/kind/manifests/certificate-policy.yaml`, or the issuer refuses its
+  certificate (`test_certificate_policy.py` fails until it is).
 - **A tool or an agent:** edit `tools.yaml` or `agents.yaml`. A tool that
   changes state has effect `write` and requires an idempotency key.
   `uv run meridian workload new NAME` appends a new workload's agent to
