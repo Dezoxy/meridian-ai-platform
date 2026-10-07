@@ -41,7 +41,7 @@ from meridian.platform.common.audit import (
     record_event,
     write_audit,
 )
-from meridian.platform.common.db import connect
+from meridian.platform.common.db import CONNECT_TIMEOUT_SECONDS, connect
 from meridian.platform.common.env import SettingsError
 from meridian.platform.common.refusal_summary import write_ended_summaries
 from meridian.platform.common.throttle import RefusalAuditThrottle
@@ -200,8 +200,12 @@ class Pipeline:
         waiting. None bounds nothing."""
         deadline = NEVER if deadline is None else deadline
         # A quiet moment, in a worker thread that holds a slot: the counts of
-        # floods that ended are written here, never on the event loop.
-        self.write_ended()
+        # floods that ended are written here, never on the event loop. Not for a
+        # call with less time left than the database's connect waits: with the
+        # database down the write would spend the call's time. The counts are
+        # kept for a later call (or the close).
+        if deadline.remaining() >= CONNECT_TIMEOUT_SECONDS:
+            self.write_ended()
         try:
             answer = self._decide(call, name, arguments, meta, deadline)
             if isinstance(answer, Refused):

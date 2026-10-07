@@ -2427,17 +2427,31 @@ def test_the_lease_of_a_running_run_is_ten_minutes() -> None:
 
 
 def test_the_longest_a_live_leg_can_last_is_under_the_lease() -> None:
-    # Four model calls of 30 s plus one 30 s read timeout each (a call ends at
-    # its deadline plus at most one wait for bytes) and sixteen tool calls of
-    # 10 s (the whole call is under one deadline): 240 + 160 = 400 s. A lease
-    # the longest leg could outlast would let a takeover or the sweep end a run
-    # something is still working on. This is a ceiling: no call of either client
-    # runs past its figure (before S069 the 30 s was for each phase and each
-    # wait, so a trickling reply had no ceiling at all). One case stays outside
-    # it: headers that trickle, which each wait for bytes is still the bound of.
-    model_call = (
+    # Four model calls and sixteen tool calls of 10 s (the whole call is under
+    # one deadline). A model call ends one of two ways. Before the headers: the
+    # pool wait, the connect twice over TLS, the write and one wait for the
+    # headers, 55 s. After them the clock is read: a call inside its deadline
+    # reads on, each wait at most one read timeout, and ends at the deadline plus
+    # one, 60 s; a call whose headers come later ends when they do. The longer
+    # of the two is its figure: 4 x 60 + 160 = 400 s. A lease the longest leg
+    # could outlast would let a takeover or the sweep end a run something is
+    # still working on. NOT a ceiling for one case: response HEADERS that
+    # trickle, each wait under the read timeout (httpx has no timeout for a
+    # whole request, and the clock is read only once the headers are in), so a
+    # leg is not provably under the lease; a leg that outlives it writes
+    # nothing over the run (its end matches its own claim) and its tool calls
+    # bind until it ends (T-10).
+    before_headers = (
+        runtime_app.GATEWAY_POOL_TIMEOUT_SECONDS
+        + 2 * runtime_app.GATEWAY_CONNECT_TIMEOUT_SECONDS
+        + runtime_app.GATEWAY_WRITE_TIMEOUT_SECONDS
+        + runtime_app.GATEWAY_TIMEOUT_SECONDS
+    )
+    reading = (
         model_client.MODEL_CALL_DEADLINE_SECONDS + runtime_app.GATEWAY_TIMEOUT_SECONDS
     )
+    model_call = max(before_headers, reading)
+    assert (before_headers, reading) == (55.0, 60.0)
     model_seconds = runs.MAX_MODEL_CALLS_PER_RUN * model_call
     tool_seconds = runs.MAX_TOOL_CALLS_PER_RUN * tool_client.TOOL_TIMEOUT_SECONDS
 
@@ -2687,11 +2701,14 @@ def test_pausing_after_a_failed_resume_says_whether_it_moved_the_run(
     )
 
 
-def test_a_resume_input_of_32_kib_or_more_is_refused_for_its_value_and_not_echoed(
+def test_a_resume_input_with_a_value_is_refused_whatever_its_size_and_not_echoed(
     fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The size bound that this test used to pin (32 KiB accepted, one byte more
-    # refused) is gone with the value: a resume delivers none (S069).
+    # refused) is gone with the value: a resume delivers none (S069), so any
+    # non-empty value is refused, at 32 KiB and one byte over alike. The body's
+    # size is the middleware's bound (``SMALL_BODY_LIMIT_BYTES``, 64 KiB: the
+    # 413 tests in ``tests/meridian/common/test_http.py`` hold it).
     register(monkeypatch, resumable())
     client = make_client(fresh_database)
     run_id = paused_run(client)

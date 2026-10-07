@@ -40,7 +40,7 @@ be worth reading and safe to keep:
   string, HTTP version, status) in its h11 and httptools protocols alike; the
   line keeps ``method``, ``path``, ``http_version`` and ``status``, and nothing
   of the client's address, which behind an edge is a person's. The path is cut
-  at the first ``?`` of the raw target, the userinfo of an absolute-form target
+  at the first ``?`` of the raw target, the userinfo of every ``//…@`` in it
   is cut, then it is decoded until it stops changing, the userinfo cut again
   after each round (uvicorn percent-encodes it, so an address in it would pass
   the redaction encoded; at most ``PATH_UNQUOTE_ROUNDS`` rounds, and a path
@@ -72,6 +72,7 @@ factory itself (a settings error is uvicorn's traceback on standard error).
 
 import json
 import logging
+import re
 import sys
 import traceback
 from contextlib import suppress
@@ -137,24 +138,31 @@ def _access_fields(record: logging.LogRecord) -> dict[str, Any] | None:
     }
 
 
+# What follows two slashes (or two backslashes, which some clients read as the
+# same) up to the next separator is an authority wherever it stands in the
+# target: a user name before the last "@" of it, or before the placeholder the
+# record's redaction made of an address, is cut. A plain path segment holds
+# its "@" (no two separators before it), and so does a path after the
+# authority's own slash.
+_SEPARATORS = r"[/\\]{2}"
+_USERINFO = re.compile(rf"(?<={_SEPARATORS})[^/\\?#]*@")
+_BEFORE_PLACEHOLDER = re.compile(
+    rf"(?<={_SEPARATORS})[^/\\?#]*(?={re.escape(EMAIL_PLACEHOLDER)})"
+)
+
+
 def _without_userinfo(target: str) -> str:
-    """``target`` without the ``user:word@`` of an absolute-form request target
-    (``scheme://user:word@host/path``), which names a person; any other target
-    is returned as it is. The userinfo ends at the last ``@`` of the authority,
-    which ends at the first ``/``.
+    """``target`` without the ``user:word@`` of every authority in it
+    (``scheme://user:word@host/path``, ``//user@host/path``, a URL inside a
+    path), which names a person. The userinfo ends at the last ``@`` before the
+    authority's slash. What a pattern cannot tell from a path is left: an
+    ``@`` after a slash (``http://user:pa/ss@host``: the authority is
+    ``user:pa``).
 
     The record's arguments were redacted when the record was made, so a
     ``word@host.example`` in the authority may already be ``[email]``, with the
     user name before it: the authority then starts at the placeholder."""
-    scheme, separator, rest = target.partition("://")
-    if not (separator and scheme.isascii() and scheme.isalpha()):
-        return target
-    authority, slash, path = rest.partition("/")
-    if "@" in authority:
-        authority = authority.rpartition("@")[2]
-    elif EMAIL_PLACEHOLDER in authority:
-        authority = EMAIL_PLACEHOLDER + authority.partition(EMAIL_PLACEHOLDER)[2]
-    return f"{scheme}{separator}{authority}{slash}{path}"
+    return _BEFORE_PLACEHOLDER.sub("", _USERINFO.sub("", target))
 
 
 def _path_field(target: str) -> str:
@@ -164,9 +172,9 @@ def _path_field(target: str) -> str:
     character of the path. Redacting comes before the cut, so an address that
     crosses the bound is not left in pieces.
 
-    The userinfo of an absolute-form target is cut from the raw text first and
-    again after each round of decoding (a scheme encoded hides it from the
-    first cut). The decoding repeats until the text stops changing, at most
+    The userinfo of any ``//…@`` is cut from the raw text first and again after
+    each round of decoding (a scheme encoded hides it from the first cut).
+    The decoding repeats until the text stops changing, at most
     ``PATH_UNQUOTE_ROUNDS`` times (an address encoded twice is redacted as one
     encoded once is); a text a further round would still change is
     ``PATH_OVER_ENCODED`` and nothing of it."""

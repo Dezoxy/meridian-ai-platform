@@ -42,12 +42,21 @@ CALL_REASONS: frozenset[str] = frozenset(get_args(CallReason))
 CallObserver = Callable[[CallOutcome, CallReason | None], None]
 REFUSED_STATUSES = frozenset({HTTPStatus.TOO_MANY_REQUESTS, HTTPStatus.FORBIDDEN})
 # One model call as a whole, from the send to the last byte of the answer. The
-# HTTP client's own timeout (30 s) is for each phase and each wait for bytes, so
-# a reply that trickles never trips it. The gateway bounds all its attempts at
-# 25 s (a test keeps this above that), so a call the gateway answers in time,
-# with its own 504 included, is never cut here; 30 s is also the client's wait
-# for one read, so a call ends at this deadline plus at most one read timeout.
+# HTTP client's own timeouts are for each phase and each wait for bytes (the
+# read is 30 s), so a reply that trickles never trips them. The gateway bounds
+# all its attempts at 25 s (a test keeps this above that), so a call the gateway
+# answers in time, with its own 504 included, is never cut here; 30 s is also
+# the client's wait for one read, so once the headers are in a call ends at this
+# deadline plus at most one read timeout.
+# The clock is read once the headers are in: the phases before them have their
+# own bounds (``app.GATEWAY_*_TIMEOUT_SECONDS``), and headers that trickle, each
+# wait under the read timeout, are bounded by neither.
 MODEL_CALL_DEADLINE_SECONDS = 30.0
+# The largest reply of the gateway that is read, counted on the decoded bytes.
+# The model's output is capped at 1024 tokens (a few KiB of text) and the
+# largest of the 27 recorded answers is 421 bytes as a JSON entry, so 1 MiB is
+# a bound no honest reply comes near; a reply past it is no usable answer.
+MAX_REPLY_BYTES = 1024 * 1024
 
 
 class ModelCallError(Exception):
@@ -142,6 +151,10 @@ class _DeadlinePassed(httpx.TimeoutException):
     transport's, so it is counted and answered as one. Private and message-less."""
 
 
+class _ReplyTooLarge(Exception):
+    """The reply outgrew ``MAX_REPLY_BYTES``. Private and message-less."""
+
+
 @dataclass(frozen=True, slots=True)
 class _Answer:
     """What the gateway said: the status, whether it marked a filtered 400, and
@@ -178,6 +191,10 @@ class ModelClient:
         self._calls = 0
         self._lock = threading.Lock()
         self._headers = {
+            # No content coding: a compressed reply would be counted after it
+            # is decoded, and one chunk could then hold a thousand times what
+            # arrived. The gateway is in the same cluster; nothing is saved.
+            "Accept-Encoding": "identity",
             "X-Meridian-Tenant": tenant,
             "X-Meridian-Agent": agent,
             "X-Meridian-Run": str(run_id),
@@ -266,11 +283,20 @@ class ModelClient:
                     and response.headers.get(REFUSAL_HEADER) == REFUSAL_CONTENT_FILTER
                 )
                 chunks: list[bytes] = []
+                size = 0
                 if 200 <= status < 300:
                     for chunk in response.iter_bytes():
+                        size += len(chunk)
+                        if size > MAX_REPLY_BYTES:
+                            raise _ReplyTooLarge
                         chunks.append(chunk)
                         self._check_deadline(started)
             return _Answer(status, filtered, b"".join(chunks))
+        except _ReplyTooLarge:
+            # Counted on the decoded bytes, as they come; nothing of the body
+            # is kept or named, and the response is closed on the way out.
+            self._observe("failed", "error")
+            raise ModelCallError(0) from None
         except httpx.TimeoutException:
             # Neither the transport's message nor its cause is kept.
             self._observe("failed", "timeout")

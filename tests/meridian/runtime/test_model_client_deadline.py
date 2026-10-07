@@ -13,6 +13,7 @@ from servicesupport import GATEWAY_REPLY
 
 from meridian.platform.gateway.resilience import CALL_DEADLINE_SECONDS
 from meridian.runtime.model_client import (
+    MAX_REPLY_BYTES,
     MODEL_CALL_DEADLINE_SECONDS,
     ModelCallError,
     ModelCallFilteredError,
@@ -68,8 +69,11 @@ def client_over(
     headers: dict[str, str] | None = None,
     after_headers: float = 0.0,
     calls: list[tuple[str, str | None]] | None = None,
+    requests: list[httpx.Request] | None = None,
 ) -> ModelClient:
     def respond(request: httpx.Request) -> httpx.Response:
+        if requests is not None:
+            requests.append(request)
         clock.now += after_headers
         return httpx.Response(status, headers=headers, stream=stream)
 
@@ -234,6 +238,79 @@ def test_a_filtered_answer_is_told_without_reading_its_body() -> None:
 
     assert stream.pulled == 0
     assert stream.closed
+
+
+def a_reply_of(size: int) -> list[bytes]:
+    """The gateway's reply padded with trailing white space (JSON allows it) to
+    exactly ``size`` bytes, in chunks of 64 KiB."""
+    body = BODY + b" " * (size - len(BODY))
+    chunk = 64 * 1024
+    return [body[i : i + chunk] for i in range(0, len(body), chunk)]
+
+
+def test_the_cap_on_a_reply_is_a_mebibyte_and_far_over_the_recorded_replies() -> None:
+    largest_recorded_entry = 421  # bytes: data/evaluation/recordings, 27 answers
+
+    assert MAX_REPLY_BYTES == 1024 * 1024
+    assert len(BODY) < MAX_REPLY_BYTES
+    assert largest_recorded_entry * 100 < MAX_REPLY_BYTES
+
+
+def test_a_reply_of_exactly_the_cap_is_read_and_parsed() -> None:
+    clock = FakeClock()
+    stream = TrickleStream(clock, a_reply_of(MAX_REPLY_BYTES), seconds=0.0)
+    calls: list[tuple[str, str | None]] = []
+    model = client_over(clock, stream, calls=calls)
+
+    result = model.chat(MESSAGES)
+
+    assert result.text == "drafted"
+    assert sum(len(c) for c in a_reply_of(MAX_REPLY_BYTES)) == MAX_REPLY_BYTES
+    assert calls == [("completed", None)]
+
+
+def test_a_reply_one_byte_over_the_cap_is_no_usable_answer_and_is_closed() -> None:
+    clock = FakeClock()
+    chunks = a_reply_of(MAX_REPLY_BYTES + 1)
+    stream = TrickleStream(clock, chunks, seconds=0.0)
+    calls: list[tuple[str, str | None]] = []
+    model = client_over(clock, stream, calls=calls)
+
+    with pytest.raises(ModelCallError) as raised:
+        model.chat(MESSAGES)
+
+    assert raised.value.status_code == 0
+    assert not isinstance(raised.value, ModelCallTimeoutError)
+    assert str(raised.value) == "model gateway gave no usable answer"
+    assert stream.closed
+    assert stream.pulled == len(chunks)  # the byte over was in the last chunk
+    assert calls == [("failed", "error")]
+
+
+def test_a_reply_that_passes_the_cap_is_not_read_to_its_end() -> None:
+    clock = FakeClock()
+    chunks = [b" " * (256 * 1024)] * 100  # 25 MiB on offer
+    stream = TrickleStream(clock, chunks, seconds=0.0)
+    calls: list[tuple[str, str | None]] = []
+    model = client_over(clock, stream, calls=calls)
+
+    with pytest.raises(ModelCallError):
+        model.chat(MESSAGES)
+
+    assert stream.pulled == MAX_REPLY_BYTES // (256 * 1024) + 1
+    assert stream.closed
+    assert calls == [("failed", "error")]
+
+
+def test_the_request_asks_for_no_content_encoding() -> None:
+    clock = FakeClock()
+    requests: list[httpx.Request] = []
+    model = client_over(clock, TrickleStream(clock, [BODY], 0.0), requests=requests)
+
+    model.chat(MESSAGES)
+
+    (request,) = requests
+    assert request.headers["Accept-Encoding"] == "identity"
 
 
 def test_a_streamed_body_that_is_not_json_is_no_usable_answer() -> None:

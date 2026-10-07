@@ -91,7 +91,19 @@ from meridian.runtime.tool_client import (
 )
 from meridian.runtime.tool_transport import ToolTransport
 
+# The gateway client's bound for each phase (httpx has no bound for a whole
+# request; the call's deadline is ``model_client.MODEL_CALL_DEADLINE_SECONDS``,
+# read once the headers are in). The read is each wait for bytes. The others
+# are for a first-party call inside one cluster, over mutual TLS: the pool wait
+# is for a free one of the client's hundred connections (the request threads
+# are anyio's forty, so it is free unless graphs fan out widely), the connect
+# is taken twice over TLS (the TCP connect, then the handshake), and the write
+# is a request body of some KiB. Each is a wait a healthy call spends in
+# milliseconds; a node under load needs seconds, not tens of them.
 GATEWAY_TIMEOUT_SECONDS = 30.0
+GATEWAY_POOL_TIMEOUT_SECONDS = 5.0
+GATEWAY_CONNECT_TIMEOUT_SECONDS = 5.0
+GATEWAY_WRITE_TIMEOUT_SECONDS = 10.0
 # The audit reason of a call the runtime's own allowlist refuses.
 REFUSAL_REASON: ClientRefusal = "tool-not-allowed"
 # The audit reason of a run request for a job agent, which has no graph.
@@ -196,7 +208,12 @@ def make_gateway_client(
     # trust_env=False: a proxy variable must not reroute claimant data.
     return httpx.Client(
         base_url=settings.gateway_url,
-        timeout=GATEWAY_TIMEOUT_SECONDS,
+        timeout=httpx.Timeout(
+            GATEWAY_TIMEOUT_SECONDS,
+            connect=GATEWAY_CONNECT_TIMEOUT_SECONDS,
+            write=GATEWAY_WRITE_TIMEOUT_SECONDS,
+            pool=GATEWAY_POOL_TIMEOUT_SECONDS,
+        ),
         trust_env=False,
         verify=verify,
     )
@@ -516,12 +533,15 @@ def create_app(
         # Counted once, after the write, by what the leg itself did (not what
         # settle answers for the sweep); not-saved when nothing was written.
         meters.leg_ended(identity, outcome, failure, saved=unsaved is None)
-        if settled.status in ("Completed", "Failed"):
-            # The checkpoint holds the claim; a finished run needs none,
-            # whether or not its status could be recorded. After settle: the
-            # second host's delete skips a run its row does not say has ended.
-            # Not for a run another leg holds (``Running``, after a takeover)
-            # or one paused: their checkpoints are in use.
+        if unsaved is None and settled.status in ("Completed", "Failed"):
+            # The checkpoint holds the claim; a finished run needs none. After
+            # settle: the second host's delete skips a run its row does not say
+            # has ended. Not for a run another leg holds (``Running``, after a
+            # takeover) or one paused: their checkpoints are in use. Not when
+            # the end could not be recorded (``unsaved``: the write failed, or
+            # it matched nothing and the stored status could not be read): the
+            # leg cannot tell its end from a takeover's, and the sweep removes
+            # the checkpoints of a run it ends.
             _forget(host, identity)
         set_span_attributes(span, {"meridian.run_status": settled.status})
         if unsaved is not None:

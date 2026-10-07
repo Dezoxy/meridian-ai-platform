@@ -61,8 +61,11 @@ def service_url_problem(value: str) -> str | None:
     import httpx
 
     try:
-        httpx.URL(value)
-    except httpx.InvalidURL:
+        # The host is read: ``httpx.URL`` builds an address whose host is not
+        # valid IDNA (``http://xn--/``) and raises only on that read, with an
+        # ``idna.IDNAError``, which is a ``UnicodeError`` and no ``InvalidURL``.
+        httpx.URL(value).host  # noqa: B018
+    except (httpx.InvalidURL, UnicodeError):
         # The client's own text quotes the address: it is dropped, not chained.
         return "is not a usable URL"
     return None

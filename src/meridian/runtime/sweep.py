@@ -26,7 +26,11 @@ from meridian.platform.common.audit import AuditEvent, record_event
 # that died, or whose last status write failed twice, leaves the run so. Well
 # above the longest a live leg can take (four model calls, each at most the
 # 30 s deadline plus one 30 s read timeout, and sixteen tool calls of 10 s: 400 s;
-# a test multiplies the constants), so a live leg is not taken over. The sweep
+# a test multiplies the constants), so a live leg is not taken over. Not a
+# ceiling for one case: model-call response headers that trickle (each wait
+# under the read timeout; httpx has no timeout for a whole request). A leg
+# that outlives the lease writes nothing over the run (its end matches its own
+# claim, ``runs.py``); its tool calls bind until it ends (T-10). The sweep
 # ends an unfinished run only after the same time (``runs.py`` reads it from
 # here, so the runtime and the sweep cannot disagree).
 RUNNING_LEASE_SECONDS = 600

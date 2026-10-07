@@ -21,6 +21,7 @@ from datetime import timedelta
 from typing import Any, TypedDict
 
 import httpx
+import psycopg
 import pytest
 from dbsupport import OWNER, DatabaseHandle
 from fastapi.testclient import TestClient
@@ -155,12 +156,18 @@ class Outlived:
 
 
 def resume_and_outlive_the_lease(
-    db: DatabaseHandle, monkeypatch: pytest.MonkeyPatch, fails: bool
+    db: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    fails: bool,
+    *,
+    then: Callable[[runs.RunIdentity], None] = lambda claim: None,
 ) -> Outlived:
     """Pause a run, then resume it so that, while its leg works, another request
     takes the run over (the lease is made negative for the test, so that the
     run counts as idle at once; ``claim_paused_run`` reads it where it is
-    made), and then the leg ends: by returning, or by raising when ``fails``."""
+    made), and then the leg ends: by returning, or by raising when ``fails``.
+    ``then`` is called with the takeover's identity before the leg ends: what
+    the leg that took the run over does while the first one is still working."""
     seen: list[tuple[runs.RunIdentity, tuple]] = []
     run_ids: list[str] = []
 
@@ -170,6 +177,7 @@ def resume_and_outlive_the_lease(
         )
         assert claim is not None, "the takeover did not get the run"
         seen.append((claim, stored_row(db, run_ids[0])))
+        then(claim)
         if fails:
             raise RuntimeError("planted failure")
 
@@ -258,6 +266,54 @@ def test_a_failed_leg_that_outlived_its_lease_does_not_pause_the_run_again(
     assert runs.pause_after_failed_resume(dsn, outlived.taken) is True
     assert stored_row(fresh_database, run_id)[0] == "AwaitingApproval"
     assert event_names(fresh_database, run_id)[-1] == "run.resume_failed"
+
+
+def test_a_late_leg_that_completes_after_another_completed_the_run_answers_no_output(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dsn = fresh_database.dsn("agent_runtime")
+
+    outlived = resume_and_outlive_the_lease(
+        fresh_database,
+        monkeypatch,
+        fails=False,
+        then=lambda claim: runs.finish_run(dsn, claim, "Completed"),
+    )
+
+    # The stored status is the leg's own, but the write that holds it is not:
+    # the leg answers the status and not the output it computed.
+    run_id = outlived.run_id
+    assert outlived.answer.status_code == 200
+    assert outlived.answer.json() == {
+        "run_id": run_id,
+        "status": "Completed",
+        "output": None,
+    }
+    assert "answer" not in outlived.answer.text
+    assert stored_row(fresh_database, run_id)[0] == "Completed"
+    assert event_names(fresh_database, run_id).count("run.completed") == 1
+
+
+def test_a_late_leg_that_cannot_read_the_stored_status_leaves_the_checkpoints(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def down(*_args: object, **_kwargs: object) -> None:
+        raise psycopg.OperationalError("the database is down")
+
+    outlived = resume_and_outlive_the_lease(
+        fresh_database,
+        monkeypatch,
+        fails=False,
+        then=lambda claim: monkeypatch.setattr(runs, "fetch_run", down),
+    )
+
+    # The leg cannot tell whether its end is the recorded one, and the run may
+    # be held by the leg that took it over: it forgets nothing, the sweep does.
+    assert outlived.answer.status_code == 503
+    assert outlived.answer.json()["run_id"] == outlived.run_id
+    counts = checkpoint_counts(fresh_database, outlived.row_after_takeover[1])
+    assert all(count > 0 for count in counts.values()), counts
+    assert stored_row(fresh_database, outlived.run_id) == outlived.row_after_takeover
 
 
 def test_a_leg_whose_identity_carries_no_claim_cannot_write_its_end(

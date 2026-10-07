@@ -126,6 +126,25 @@ def test_a_leg_whose_settling_raises_a_plain_error_is_still_counted_once_as_fail
     assert counted(reader) == [(UNEXPECTED | BOTH_LABELS, 1)]
 
 
+def test_a_leg_whose_settling_ends_the_process_is_counted_once_and_the_exit_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def exits(*_args: object, **_kwargs: object) -> Any:
+        raise SystemExit(3)
+
+    register(monkeypatch, ok_factory)
+    writes_succeed(monkeypatch)
+    monkeypatch.setattr(runtime_app, "settle", exits)
+    reader = InMemoryMetricReader()
+    client = TestClient(make_client(reader).app, raise_server_exceptions=True)
+
+    with pytest.raises(SystemExit) as raised:
+        client.post("/runs", json=run_body() | {"agent": "claims-triage", "input": {}})
+
+    assert raised.value.code == 3
+    assert counted(reader) == [(UNEXPECTED | BOTH_LABELS, 1)]
+
+
 def test_a_leg_that_settles_is_counted_once_not_twice(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

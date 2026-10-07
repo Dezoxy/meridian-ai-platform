@@ -149,6 +149,78 @@ def test_a_user_name_without_a_password_behind_an_encoded_scheme_is_cut(
     assert OPERATOR not in out
 
 
+USERINFO_ANYWHERE = [
+    # The security review's rows (S069 F1): the authority is not at the start.
+    ("/go/http://alice:s3cret@host/x", "/go/http://host/x"),
+    ("//alice:s3cret@host/x", "//host/x"),
+    ("http:\\\\alice:pw@host\\x", "http:\\\\host\\x"),
+    ("/x/https://alice:pw@host/y", "/x/https://host/y"),
+    # The userinfo ends at the last "@" of the segment.
+    ("/go/http://alice@bob:pw@host/x", "/go/http://host/x"),
+]
+
+
+@pytest.mark.parametrize(
+    "quoted", [False, True], ids=["as sent by a client", "as uvicorn quotes it"]
+)
+@pytest.mark.parametrize(("target", "path"), USERINFO_ANYWHERE)
+def test_a_user_name_does_not_survive_wherever_the_authority_sits(
+    capsys: pytest.CaptureFixture[str], target: str, path: str, quoted: bool
+) -> None:
+    sent = quote(target, safe="") if quoted else target
+
+    out, line = _logged(capsys, sent)
+
+    assert line["path"] == path
+    assert "alice" not in out
+    assert "s3cret" not in out
+
+
+@pytest.mark.parametrize(
+    ("quoted", "path"),
+    [
+        # The record's redaction made a placeholder of the password and the
+        # host, and the user name before it goes with the rest.
+        (False, "/go/http://[email]/x"),
+        # Quoted, the "@" is hidden from that redaction: the cut finds it.
+        (True, "/go/http://host.example/x"),
+    ],
+)
+def test_a_user_name_before_a_dotted_host_does_not_survive_either(
+    capsys: pytest.CaptureFixture[str], quoted: bool, path: str
+) -> None:
+    target = "/go/http://alice:s3cret@host.example/x"
+    sent = quote(target, safe="") if quoted else target
+
+    out, line = _logged(capsys, sent)
+
+    assert line["path"] == path
+    assert "alice" not in out
+    assert "s3cret" not in out
+
+
+def test_an_authority_that_a_slash_ends_before_the_at_sign_is_left_as_it_is(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # What a pattern cannot tell from a path with an "@" in a segment: the
+    # authority of this target is ``alice:pa`` and ``ss@host`` is a path.
+    _, line = _logged(capsys, "http://alice:pa/ss@host/x")
+
+    assert line["path"] == "http://alice:pa/ss@host/x"
+
+
+@pytest.mark.parametrize(
+    "target",
+    ["/claims/a@b", "/claims/CLM-0001/a@b/c", "/files/a@b/c@d"],
+)
+def test_an_at_sign_in_a_plain_path_segment_stays(
+    capsys: pytest.CaptureFixture[str], target: str
+) -> None:
+    _, line = _logged(capsys, target)
+
+    assert line["path"] == target
+
+
 def test_an_at_sign_in_the_path_of_an_absolute_form_target_is_not_userinfo(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

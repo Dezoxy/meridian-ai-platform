@@ -41,6 +41,7 @@ from toolsupport import (
 )
 
 from meridian.platform.common import audit
+from meridian.platform.common.db import CONNECT_TIMEOUT_SECONDS
 from meridian.platform.common.metrics import make_meter_provider
 from meridian.platform.common.throttle import (
     REFUSAL_AUDIT_SECONDS,
@@ -54,7 +55,7 @@ from meridian.platform.toolserver import server as server_module
 from meridian.platform.toolserver.meters import CALLS
 from meridian.platform.toolserver.pipeline import Call, Pipeline, build_entries
 from meridian.platform.toolserver.settings import ToolServerSettings
-from meridian.platform.toolserver.wire import META_RUN, META_WORKER
+from meridian.platform.toolserver.wire import META_RUN, META_TIMEOUT_MS, META_WORKER
 
 SERVER = "policy-mcp"
 TOOL = "policy_lookup"
@@ -153,6 +154,44 @@ def test_a_summary_is_written_once(world: World) -> None:
     a_good_call(server, world)
 
     assert len(summaries(world)) == 1
+
+
+def a_call_with_time_left(server: Any, world: World, milliseconds: int) -> None:
+    result = run_call(
+        server, TOOL, LOOKUP, run_id=world.run_id, meta={META_TIMEOUT_MS: milliseconds}
+    )
+    assert not result.is_error
+
+
+def test_a_call_with_less_time_than_the_connect_waits_skips_the_summary_write(
+    world: World,
+) -> None:
+    clock = FakeClock()
+    server = a_server(world, clock).server
+    flood(server)
+    clock.advance(REFUSAL_SUMMARY_SECONDS)
+    just_short = round(CONNECT_TIMEOUT_SECONDS * 1000) - 1
+
+    a_call_with_time_left(server, world, just_short)
+
+    # A database that is down would spend the call's time on the connect: the
+    # count waits for a call with time to spare (nothing is lost: it is kept).
+    assert summaries(world) == []
+    a_call_with_time_left(server, world, just_short + 1)
+    assert [row["suppressed"] for row in summaries(world)] == [SUPPRESSED_BY_THE_FLOOD]
+
+
+def test_a_call_with_no_bound_on_its_time_still_writes_the_summary(
+    world: World,
+) -> None:
+    clock = FakeClock()
+    server = a_server(world, clock).server
+    flood(server)
+    clock.advance(REFUSAL_SUMMARY_SECONDS)
+
+    a_good_call(server, world)
+
+    assert [row["suppressed"] for row in summaries(world)] == [SUPPRESSED_BY_THE_FLOOD]
 
 
 def test_a_flood_that_goes_on_has_its_count_in_its_own_row_and_no_summary(

@@ -45,7 +45,11 @@ def write_ended_summaries(
     write that fails puts back that count and every count not yet written, so a
     later call tries again after two windows, and logs the class of the
     exception and nothing else (T-03, T-56); a ``BaseException`` puts them back
-    and is re-raised."""
+    and is re-raised.
+
+    A summary is written at least once, not exactly once: a write that commits
+    and then raises (the acknowledgement of the commit is lost) puts its count
+    back, and a later call writes it again."""
     ended = throttle.take_ended(everything=everything)
     for written, (tenant, reason, count) in enumerate(ended):
         try:

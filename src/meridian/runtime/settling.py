@@ -11,6 +11,7 @@ test that replaces one replaces it here too.
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Literal
 
 import psycopg
@@ -33,17 +34,32 @@ def tool_of(error: Exception) -> str | None:
     return error.tool if isinstance(error, ToolError) else None
 
 
-def _record(write: Callable[[], None]) -> psycopg.Error | None:
-    """Run a status write; try twice, return the last error if both fail."""
+@dataclass(frozen=True, slots=True)
+class _Written:
+    """How a status write went: whether the run moved (the last attempt's
+    answer: ``False`` when the run was no longer ``Running``, or its
+    ``updated_at`` was not the one the leg's own claim wrote), the last error if
+    every attempt failed, and whether ANY attempt raised a database error (only
+    then could the leg's write have committed without an answer)."""
+
+    moved: bool
+    error: psycopg.Error | None
+    raised: bool
+
+
+def _record(write: Callable[[], bool]) -> _Written:
+    """Run a status write; try twice, keep the last error if both fail."""
     last: psycopg.Error | None = None
+    raised = False
     for _ in range(FINISH_ATTEMPTS):
         try:
-            write()
+            moved = write()
         except psycopg.Error as exc:
             last = exc
+            raised = True
         else:
-            return None
-    return last
+            return _Written(moved, None, raised)
+    return _Written(False, last, raised)
 
 
 def _finish(
@@ -52,35 +68,21 @@ def _finish(
     status: RunState,
     reason: str | None = None,
     tool: str | None = None,
-) -> tuple[bool, psycopg.Error | None]:
-    """Record the final status; try twice. Returns whether the run moved (the
-    last write's answer: ``False`` when the run was no longer ``Running``) and
-    the last error if both writes fail."""
-    moved = False
-
-    def write() -> None:
-        nonlocal moved
-        moved = runs.finish_run(dsn, identity, status, reason=reason, tool=tool)
-
-    error = _record(write)
-    return moved, error
+) -> _Written:
+    """Record the final status; try twice."""
+    return _record(
+        lambda: runs.finish_run(dsn, identity, status, reason=reason, tool=tool)
+    )
 
 
 def _pause_again(
     dsn: str, identity: RunIdentity, reason: str, tool: str | None
-) -> tuple[bool, psycopg.Error | None]:
+) -> _Written:
     """Record a failed resumed leg and the run's return to its pause; try
-    twice. Returns whether the run moved (the last write's answer: ``False``
-    when the run was no longer ``Running``) and the last error if both writes
-    fail."""
-    moved = False
-
-    def write() -> None:
-        nonlocal moved
-        moved = runs.pause_after_failed_resume(dsn, identity, reason=reason, tool=tool)
-
-    error = _record(write)
-    return moved, error
+    twice."""
+    return _record(
+        lambda: runs.pause_after_failed_resume(dsn, identity, reason=reason, tool=tool)
+    )
 
 
 def _record_end(
@@ -89,27 +91,24 @@ def _record_end(
     leg: Leg,
     failure: Exception | None,
     outcome: RunOutcome,
-) -> tuple[RunOutcome, bool, psycopg.Error | None]:
+) -> tuple[RunOutcome, _Written]:
     """Write how a leg ended. Returns the outcome to answer with (a resumed leg
     that failed leaves its run paused again, unless its reason is one a resume
-    can never get past: ``runs.RESUME_CANNOT_SUCCEED``, which ends the run), whether
-    the write moved the run, and the last error if it could not be written."""
+    can never get past: ``runs.RESUME_CANNOT_SUCCEED``, which ends the run) and
+    how the write went."""
     if failure is None:
-        moved, unsaved = _finish(dsn, identity, outcome.status)
-        return outcome, moved, unsaved
+        return outcome, _finish(dsn, identity, outcome.status)
     if leg == "resumed" and failure_reason(failure) not in runs.RESUME_CANNOT_SUCCEED:
-        moved, unsaved = _pause_again(
-            dsn, identity, failure_reason(failure), tool_of(failure)
-        )
-        return RunOutcome("AwaitingApproval", None), moved, unsaved
-    moved, unsaved = _finish(
+        written = _pause_again(dsn, identity, failure_reason(failure), tool_of(failure))
+        return RunOutcome("AwaitingApproval", None), written
+    written = _finish(
         dsn,
         identity,
         outcome.status,
         reason=failure_reason(failure),
         tool=tool_of(failure),
     )
-    return outcome, moved, unsaved
+    return outcome, written
 
 
 def settle(
@@ -122,17 +121,23 @@ def settle(
     """Write how a leg ended and return what it answers: the outcome, the
     failure it answers (none when someone else ended the run, as the leg itself
     did not fail), and the last error if nothing could be written."""
-    outcome, moved, unsaved = _record_end(dsn, identity, leg, failure, outcome)
-    if unsaved is not None or moved:
-        return outcome, failure, unsaved
+    outcome, written = _record_end(dsn, identity, leg, failure, outcome)
+    if written.error is not None or written.moved:
+        return outcome, failure, written.error
     # Written, but over nothing: the leg's own earlier write had committed, or
     # the run was ended by someone else while it worked.
-    outcome, ended, unsaved = _stored_outcome(dsn, identity, outcome, failure)
+    outcome, ended, unsaved = _stored_outcome(
+        dsn, identity, outcome, failure, written.raised
+    )
     return outcome, None if ended else failure, unsaved
 
 
 def _stored_outcome(
-    dsn: str, identity: RunIdentity, own: RunOutcome, failure: Exception | None
+    dsn: str,
+    identity: RunIdentity,
+    own: RunOutcome,
+    failure: Exception | None,
+    may_have_committed: bool,
 ) -> tuple[RunOutcome, bool, psycopg.Error | None]:
     """What a leg answers when its write moved nothing. Returns the outcome,
     whether someone else moved the run on (the sweep ended it, or another leg
@@ -140,11 +145,14 @@ def _stored_outcome(
     ``Running``, or what that leg has since written), and the error if the
     stored status cannot be read.
 
-    A stored status equal to the leg's own means its own write is recorded (it
-    committed and the connection dropped before the answer, so the retry found
-    the run no longer ``Running``): the leg answers as if it had moved the run.
-    Any other status is the answer, with no output. The warning has the run ID
-    and the status, nothing of the claim.
+    A stored status equal to the leg's own means its own write is recorded ONLY
+    when an attempt of the write raised a database error (``may_have_committed``:
+    it committed and the connection dropped before the answer, so the retry
+    found the run no longer ``Running``): the leg answers as if it had moved the
+    run. After a clean no-match nothing the leg wrote is there, even when the
+    status is the same (another leg ended the run alike): the leg answers that
+    status with no output of its own. Any other status is the answer, with no
+    output. The warning has the run ID and the status, nothing of the claim.
 
     A leg that failed on a run already stored as ``Failed`` answers its own
     failure, but the trail may say only the sweep's reason (``abandoned``): one
@@ -162,12 +170,23 @@ def _stored_outcome(
                 failure_reason(failure),
                 tool_of(failure),
             )
-        return own, False, None
+        elif not may_have_committed:
+            _warn_moved_on(identity, own)
+        # The failure stays the leg's own either way: it did fail.
+        return (
+            (own if may_have_committed else RunOutcome(own.status, None)),
+            False,
+            None,
+        )
+    _warn_moved_on(identity, own)
+    status = own.status if stored is None else stored.status
+    return RunOutcome(status, None), True, None
+
+
+def _warn_moved_on(identity: RunIdentity, own: RunOutcome) -> None:
     logger.warning(
         "run %s was moved on before its leg could mark it %s "
         "(ended by the sweep, or taken over by another leg)",
         identity.run_id,
         own.status,
     )
-    status = own.status if stored is None else stored.status
-    return RunOutcome(status, None), True, None
