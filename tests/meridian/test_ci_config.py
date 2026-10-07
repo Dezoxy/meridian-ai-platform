@@ -288,11 +288,21 @@ def test_ci_sets_its_own_worker_count_whatever_the_makefiles_default_is() -> Non
 
 
 def test_the_jobs_limit_is_twice_its_slowest_measured_run() -> None:
-    # 47 successful runs on 2026-10-04: 4 min 59 s to 7 min 30 s. The limit
-    # ends a job that hangs; it is not a budget, and a run near it is a
-    # finding. Change the number and the workflow's comment together.
-    assert JOB["timeout-minutes"] == 15
-    assert "7 min 30 s" in WORKFLOW_TEXT
+    # 47 successful runs on 2026-10-04: 4 min 59 s to 7 min 30 s. On 2026-10-07,
+    # before coverage, the job of five pull requests took 12 min 13 s to 14 min
+    # 29 s at the most; coverage through the monitoring core adds 2.0 % (252.52 s
+    # to 257.63 s on the development machine), so the slowest is about 14 min
+    # 47 s, and twice that is 29 min 34 s, which is 30. The limit ends a job
+    # that hangs; it is not a budget, and a run near it is a finding. Change
+    # the number and the workflow's comment together.
+    slowest_seconds = 14 * 60 + 29
+    with_coverage = slowest_seconds * 257.63 / 252.52
+
+    assert JOB["timeout-minutes"] == 30
+    assert 2 * with_coverage <= JOB["timeout-minutes"] * 60
+    assert 2 * with_coverage > (JOB["timeout-minutes"] - 1) * 60
+    for text in ("14 min 29 s", "14 min 47 s", "252.52 s", "257.63 s"):
+        assert text in WORKFLOW_TEXT
 
 
 # ── a floor under line coverage (S074) ──────────────────────────────────────
@@ -329,10 +339,35 @@ def test_the_floor_is_configured_in_one_place_and_equals_the_constant_here() -> 
         assert not re.search(r"fail[-_]under\W*\d", text)
 
 
+def test_the_suite_step_turns_coverage_on() -> None:
+    assert step_named("Tests")["env"]["COVERAGE"] == "1"
+
+
 def test_both_pytest_targets_can_turn_coverage_on() -> None:
     for target in ("pytest", "pytest-db"):
         recipe = MAKEFILE.split(f"\n{target}:\n", 1)[1].split("\n\n", 1)[0]
         assert "$(PYTEST_COVERAGE_ARGS)" in recipe
+
+
+def test_coverage_is_measured_by_the_monitoring_core_and_by_lines_only() -> None:
+    # sys.monitoring costs far less than the trace function (S074); it is set in
+    # the file every pytest-xdist worker reads, not in one process's environment.
+    # It cannot measure branches on 3.13, so a person who turns them on would
+    # make coverage.py fall back to the trace function with a warning.
+    assert COVERAGE_CONFIG["run"]["core"] == "sysmon"
+    assert not COVERAGE_CONFIG["run"].get("branch", False)
+    assert "COVERAGE_CORE" not in MAKEFILE + WORKFLOW_TEXT
+
+
+def test_the_data_files_a_coverage_run_leaves_are_ignored_by_git() -> None:
+    for name in (".coverage", ".coverage.01-host.pid123.AbCdEf"):
+        done = subprocess.run(
+            ["git", "check-ignore", "--quiet", name],
+            cwd=REPO_ROOT,
+            check=False,
+        )
+
+        assert done.returncode == 0, f"{name} is not ignored by .gitignore"
 
 
 def test_a_run_without_the_switch_measures_no_coverage_and_cannot_fail_on_it() -> None:

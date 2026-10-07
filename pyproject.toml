@@ -96,9 +96,9 @@ addopts = "--import-mode=importlib"
 # workers: the slowest test took 45.0 s, and 52.4 s with coverage on, which is
 # how CI runs it (test_a_fake_model_records_and_replays_the_whole_golden_set).
 # Ten times 52.4 s is 524 s, rounded up to 600; a loaded machine must not fail
-# a healthy test, and the limit is never under 120 s. A test slower by design carries its own
-# `pytest.mark.timeout`: the paid opt-in recordings and the live Azure test
-# carry 0, which is no limit. `signal` stops a test with an exception in the
+# a healthy test, and the limit is never under 120 s. A test slower by design
+# carries its own `pytest.mark.timeout`: the paid opt-in recordings and the
+# live Azure test carry 0, which is no limit. `signal` stops a test with an exception in the
 # worker's main thread, where pytest-xdist runs it, so the worker lives and
 # the tests after it run; `thread` would end the whole worker process. A child
 # process a test started is not stopped by it, only by the test's own cleanup.
@@ -110,14 +110,23 @@ timeout_method = "signal"
 # switch, which CI sets); see [tool.coverage.report] for the floor. The paid
 # opt-in tests are skipped in every run CI makes, and no source file is omitted
 # for them: what only they would reach counts as uncovered, inside the floor.
+# The measuring core is the interpreter's own monitoring (sys.monitoring,
+# PEP 669), which coverage.py 7.16 supports for line coverage on Python 3.12 and
+# later (it does not measure branches on 3.13, and this measures lines only, and
+# it has no dynamic contexts). It costs far less than the trace function. It is
+# set here, not in the environment, so that every pytest-xdist worker, which
+# reads this file as the main process does, uses it.
 [tool.coverage.run]
 source = ["src/meridian"]
+core = "sysmon"
 
 [tool.coverage.report]
 skip_empty = true
 # The floor: 99.11 % of 13,783 statements were covered in the whole suite on
-# 2026-10-07 (20,015 tests, six workers, the database and Redis present). That
-# rounded down is 99, and one point is taken off for the variation between runs.
+# 2026-10-07 (20,015 tests, six workers, the database and Redis present), the
+# same 122 missed lines with the trace function and with the monitoring core
+# (20,028 tests). That rounded down is 99, and one point is taken off for the
+# variation between runs.
 # pytest-cov applies it when `--cov` is given (COVERAGE=1) and not otherwise;
 # tests/meridian/test_ci_config.py compares it with a constant.
 fail_under = 98
