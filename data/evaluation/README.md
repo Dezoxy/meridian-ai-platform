@@ -16,6 +16,7 @@ Never edit a file by hand: each has a command that writes it.
 | `recordings/claims-triage-injection.json` | The answers a real model gave to the injection cases the baseline says reached the model, in the golden recording's form | `make eval-injection-record`: written by the paid run; not in the repository yet |
 | `claims-triage-injection-live.json` | The report of that run: per case the graders' reading, the finish reason, any refusal, the cost; then the totals | `make eval-injection-record`: written by the paid run; not in the repository yet |
 | `injection-live-summary.md` | That report's totals as a table, with the date, the deployment and the cost | `make eval-injection-record`: written by the paid run; not in the repository yet |
+| `injection-heldout/injection-heldout.json` and `injection-heldout-summary.md` | The injection screen measured once on 72 held-out sentences: a report, neither a fingerprint nor a baseline; `make eval` does not read it. Its own folder, because a test loads every JSON file directly here as a gate report | `python -m meridian.workloads.claims_triage.injection_heldout` |
 | `judge-labels/claims-triage.json` | A person's worksheet, neither a fingerprint nor a report: the 13 recorded judge verdicts' rationales and clauses, to label blind. The one file here edited by hand; `make eval` does not read it | `python -m meridian.workloads.claims_triage.judge_labels sheet` |
 
 ## The gate
@@ -489,3 +490,41 @@ an empty evaluation: `meridian eval run --allow-empty` says that nothing was
 evaluated, sends nothing and writes no report, and without the flag the run
 fails (T-82). Cases added later are synthetic and come from a seeded generator
 (hard rule 2), and the manifest's hash changes with them.
+
+## The screen on held-out sentences
+
+`injection-heldout/injection-heldout.json` and
+`injection-heldout/injection-heldout-summary.md` are a report, not a
+fingerprint of the gate: `make eval` does not read them and no baseline or
+fingerprint moves with them. They have a folder of their own because a test
+loads every JSON file directly under this folder as a gate report, and this is
+not one. They are the injection screen measured once on 72
+held-out sentences, 48 attacks and 24 look-alikes, that an agent wrote having
+read none of the screen, the existing cases or their summary
+(`data/synthetic/README.md`, "Held-out injection cases", says how the cases are
+built). **The rule: the screen, its patterns, the existing cases and the
+sentences are not changed after the result is read, because a set that was
+tuned on is no longer held out.**
+
+```text
+uv run python -m meridian.workloads.claims_triage.injection_heldout
+```
+
+The command applies the screen to each held-out description as the service does:
+the special-category screen first, then the injection screen, on the description
+as posted and on the run's copy with the claimant's name replaced. It needs no
+model, no database and no cluster. A test runs it into a temporary folder and
+compares the bytes with the committed files, so a change of the screen, of the
+cases or of the command shows as a failure that says the set is spent. Do not
+regenerate the files to make it pass: a changed screen needs a new blind set.
+
+The JSON holds, per case, the ID, the writer's ID, label, family, language, base
+claim and the outcome (`injection-suspected`, `special-data` or `none`), never a
+sentence or a description. The summary counts the attacks the injection screen
+stopped and the look-alikes it flagged, by family and by language, beside the
+existing set's two rates quoted from `injection-summary.md`, and lists the
+cases by ID. Read the number for what it is: the set is small (one case is two
+to four points), a model wrote it and not an attacker, and the existing set
+joins its sentences in other ways too (before a description, on a new line)
+where every held-out sentence is appended, so the two rates are not measured
+the same way.
