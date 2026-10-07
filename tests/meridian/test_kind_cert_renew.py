@@ -648,7 +648,8 @@ def test_the_runbooks_third_step_names_the_target_and_says_it_was_not_seen() -> 
 
     assert "make cert-renew CERT=<name>" in step
     assert "Issuing" in step
-    assert "not yet seen on a cluster" in step
+    assert passage_labels_what_was_seen(step)
+    assert "not yet seen on a cluster" not in step
     assert "cmctl renew" in step
     assert "where `cmctl` is installed" in step
 

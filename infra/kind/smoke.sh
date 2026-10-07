@@ -648,8 +648,10 @@
 #                 renewal cannot be seen inside one cluster run. What it does
 #                 not prove: nothing alerts between two runs of smoke; it
 #                 reads the operator's record of the dates, not the
-#                 certificate files the instances serve; and it has been
-#                 tested with a stand-in and the real jq, NOT YET SEEN on kind.
+#                 certificate files the instances serve. It was tested with a
+#                 stand-in and the real jq. Seen on kind on 2026-10-07 (S073,
+#                 run R4d): a pass on the real Cluster, naming platform-db-ca
+#                 with 89 days left. Not seen: the line failing.
 #  11. alert rules and health dashboard: four lines, read-only (S062), run
 #                 last. Three lines read Prometheus' /api/v1/rules through
 #                 Grafana's datasource proxy (the port-forward of check 4) for

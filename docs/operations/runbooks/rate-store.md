@@ -10,7 +10,9 @@ the gateway's refusal, the chart's store and its ACL, `make up`'s Secret and
 `make deploy`'s check of it. Seen on kind: the store running under that ACL and
 those probes, a real renewal of its certificate and the restart that followed
 it, the smoke line for its ingress rule and the gateway's calls counted by it
-(what each run showed, and what none did, is below). Tested without a cluster
+(what each run showed, and what none did, is below; S073's runs of
+2026-10-06 and 2026-10-07 saw the fault of the probes and their fix, under
+"What you see"). Tested without a cluster
 and not seen on one: the gateway's refusal as a 503, a frozen store restarted
 by its probe, `make deploy`'s refusal of an old Secret and a rotation. Run
 outside a cluster, against the pinned Redis image: the ACL file that `make up`
@@ -176,7 +178,10 @@ its own). The price is that this one pod stands in front of every model call.
   with the Redis server as their parent. Seen on kind on 2026-10-06 and fixed by
   S073, K7 (the probes no longer use `timeout` and leave no process behind: see
   the comment of `meridian.rateStorePing` in the chart's `rate-store.yaml`); the
-  fix tested on the pinned image, not yet seen on a cluster. The liveness probe
+  fix tested on the pinned image, and seen on kind on 2026-10-07 (run R2): the
+  store's new pod held no defunct process at five readings a minute apart and
+  after `make smoke`, six minutes in, Ready and with no restart. Not seen: the
+  store over the two hours the fault took. The liveness probe
   fails the same way, so the kubelet restarts the container after the six
   failures and the count starts again at zero: a chart from before the fix shows
   a restart about every two hours, and every window is handed out again each

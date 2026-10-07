@@ -733,7 +733,14 @@ node image, Kubernetes components and the platform).
    outcome was not read: run smoke again after the next scheduled run. After a
    by-hand run, then, the sweep lines may print two SKIP in place of two PASS
    (the findings line follows the first) until the schedule's next run. The fix
-   is tested with stand-ins, not yet seen on a cluster. Someone who edits a
+   is tested with stand-ins. Seen on kind on 2026-10-07 (run R4c): with the
+   limit of three, a by-hand Job made after one scheduled run did not evict the
+   schedule's success, and the line passed on the schedule's Job and said in
+   brackets that the newest finished Job of all was made by hand and not
+   judged; with the by-hand Job removed smoke passed again. Not seen:
+   the third case itself (a history that lacks the schedule's newest run: its
+   SKIP, and the FAIL once the schedule's time is older than the bound), which
+   the limit of three keeps from happening. Someone who edits a
    Job's annotations can pass for the schedule, and the alert
    `MeridianSweepStale` reads the CronJob's last successful time, which a
    by-hand success moves too (seen on kind on 2026-10-07): a by-hand run can
@@ -749,8 +756,12 @@ node image, Kubernetes components and the platform).
    answer of the cluster or of Prometheus goes to `jq` as an argument anywhere
    in the script: each goes in on standard input or as a file from a process
    substitution (a test reads the script for it). The fix is tested with
-   stand-ins and the real `jq`, with a list above the limit, not yet seen on a
-   cluster.
+   stand-ins and the real `jq`, with a list above the limit. Seen on kind on
+   2026-10-07 (run R4c): with 17 Jobs in the namespace, a list of 123,794
+   bytes, `make smoke` passed this line, 45 PASS and no FAIL, three times in
+   six minutes, where run R4b had failed it at 227,658 bytes. Not seen: a
+   list over 131,072 bytes again: the label leaves the namespace's size out of
+   the line, so only the test with the real `jq` holds that case.
    The second line (S064) asks Prometheus, through Grafana's datasource proxy
    as check 5 does, whether the six findings of the pass have arrived: the
    gauge `meridian_sweep_last_pass` for job `claims-sweep`, each of
@@ -883,8 +894,10 @@ node image, Kubernetes components and the platform).
    pod: what the policies do is proved for the Claims API's egress and for the
    database's, the collector's and the rate store's ingress only. When
    Deployments exist and the Claims API's is not among them, the check fails,
-   because the probes run in its pod. Tested with stand-ins, not yet seen on a
-   cluster.
+   because the probes run in its pod. Tested with stand-ins. Seen on kind on
+   2026-10-07 (runs R4, R4c and R4d): the green smoke runs, 45 PASS and then
+   46, with all seven policy objects there. Not seen: the FAIL that names a
+   service whose policy is missing.
 9. **Service identity.** Five lines, run with Python in the Agent Runtime's
    pod against the Model Gateway (the image has no curl; the Claims API's pod
    would be the better caller to refuse, but the policy of line 8 blocks it
@@ -1065,7 +1078,15 @@ node image, Kubernetes components and the platform).
     expression that holds a comma, a brace or a word like `1h`, an
     expression written another way that is the same one (a quote that is not
     a double quote; expected, not tried), the rule's labels and annotations, or
-    a `keep_firing_for`. Tested with stand-ins, not yet seen on the cluster.
+    a `keep_firing_for`. Tested with stand-ins. Seen on kind on 2026-10-07: the
+    expressions and `for` of the cluster's rules compared with the file's in
+    run R4 for the first time, all equal after the filter, and in every green
+    run after it; in run R4b a rule's `for` changed on the object (2m to 59m)
+    was named, with `make deploy` or `make up` as the remedy, and `make deploy`
+    put it back; and the `PrometheusRule` taken away was named as missing and
+    `make deploy` made it again with its five groups. Not seen: a changed
+    expression (only a `for` was changed on the cluster) and the other
+    differences the filter cannot see.
     And no alert of the Meridian
     groups is firing: a firing alert is a FAIL that names it, and a pending
     one is not a failure, so the line names it and passes. With no group of
@@ -1215,7 +1236,11 @@ In order, `make deploy`:
    registry's image of the same name is another image, and an image named by a
    digest and no tag stops the listing, because it cannot say which tag runs.
    (The reading of references is tested against stub commands and not seen on
-   a cluster; the limit is tested with the chart rendered.) In a
+   a cluster; the limit is tested with the chart rendered, and seen on kind on
+   2026-10-07, run R2: `revisionHistoryLimit: 2` on all seven Deployments and
+   20 ReplicaSets after the deploy, 13 before it. Not seen: the limit removing
+   an old ReplicaSet over three deploys, and `make images` with the new
+   reading.) In a
    checkout with no `infra/kind/kubeconfig` it asks kind for the cluster: when
    none exists every image is unused by definition, and when one does (its
    credentials are in another checkout) it says it cannot tell which images
@@ -1379,9 +1404,19 @@ directive bounds a script that writes without end, which the pod's memory limit
 ends by restarting the store, so every tenant has its windows again. Both
 probes ping as the ACL user `probe` and pass only on `PONG`, so a store frozen
 by a looping script is restarted within about a minute (every window starts
-again); their `redis-cli` runs under `timeout 2`, inside the kubelet's 3
-seconds, so a store frozen below the protocol fails the probe at once and
-leaves no client behind (proved against a paused container). Its
+again); their `redis-cli` runs beside a `sleep 2` that the script waits for
+with `wait -n`, inside the kubelet's 5 seconds, so a store frozen below the
+protocol fails the probe after 2 seconds and leaves no process behind (S073,
+K7: the image's `timeout` left one defunct process per probe, 2,024 of them
+under the Redis server after about two hours on kind on 2026-10-06, then "can't
+fork" in every probe and the gateway's 503 to every call; measured on the
+pinned image with the server stopped by `SIGSTOP`, not `docker pause`, which
+stops `docker exec` too). Seen on kind on 2026-10-07 (run R2): the store's
+new pod held no defunct process at five readings a minute apart and after
+smoke, six minutes in (the old probes had left about 90 by then), Ready with
+no restart. Not seen: the store over the two hours the fault took, a store
+frozen below the protocol on kind, and the probes at `timeoutSeconds: 5`
+(a later change). Its
 NetworkPolicy admits the Model Gateway's pods on 6379 and nobody
 else, and gives it no egress; it is the store's only control before
 authentication, so the chart refuses the store with `networkPolicy.enabled`
@@ -1927,7 +1962,10 @@ certificates and four hours apart for the default of 90 days, and never later
 than before. Two replicas of one service would still restart together, because
 they mount one Secret (not built: each service has one replica on kind). The
 spread is implemented and tested with the chart rendered and the clock
-injected; it has not been seen on a cluster. And while the
+injected. Seen on kind on 2026-10-07 (run R2): the shares on the six services,
+0, 1/6, 2/6, 3/6, 4/6 and 5/6 in name order, and none on the rate store. Not
+seen: the restarts at a renewal (the watch above, run again, shows them). And
+while the
 short certificates are in place `make smoke` fails on check 11, because a
 Meridian alert is firing (smoke itself was not run then: the failure follows
 from the firing alert and the check's rule). So the last step of the watch is
@@ -2155,7 +2193,10 @@ by-hand success evicted the schedule's, and the line failed a healthy schedule
 for one period; the history limit of three and the verdict's third case (a
 SKIP that says the schedule's newest run is not in the history, a FAIL when
 the schedule's last time is older than the bound) are the fix, tested with
-stand-ins, not yet seen on a cluster. To
+stand-ins; what run R4c saw of it on 2026-10-07 (the by-hand Job not evicting
+the schedule's success, the line passing with its note) is under check 7
+above, and the case of the history that lacks the schedule's newest run was not
+seen. To
 stop the schedule, patch `suspend` to `true` on the CronJob; `make smoke` then
 prints SKIP for the sweep until it is `false` again.
 
@@ -2208,8 +2249,9 @@ were refused because the store gave no answer, for 2 minutes: one refused call
 no longer fires it, and calls refused before the store is asked do not dilute
 it; loaded and healthy on kind on 2026-10-06 in this form, after `make up`,
 before S073 only `make up` applied the rules and `make deploy` did not; now
-`make deploy` applies the alert rules too, tested without a cluster and not
-yet seen on one; never seen firing), and, from
+`make deploy` applies the alert rules too, seen on kind on 2026-10-07: its log
+line in run R3, and in run R4b a `for` put back and the rule object made again;
+never seen firing), and, from
 S064, four on missing telemetry
 (loaded and healthy on kind on 2026-10-06, in the third run, and none seen
 firing; tested without a cluster, not seen firing on one): the Model Gateway's,
@@ -2264,9 +2306,11 @@ One plan step uses the cluster at a time (the plan's Part A). Since S075 the
 rule leaves a record that the commands read. Status: **implemented**, tested
 against stub commands, and seen on kind once (the record written
 through a deploy, a deploy refused while another ran, and `make down`
-refused with the record at `ok`). Not seen on a cluster: `TAKE_CLUSTER=1`, a
-record left `changing` by a run that failed, and `make up` on an existing
-cluster; the stub tests hold each.
+refused with the record at `ok`). Seen on kind on 2026-10-07 (run R2):
+`TAKE_CLUSTER=1 CLUSTER_HOLDER=S073 make deploy` took the record from another
+holder, S075, and left it at S073, `ok`. Not seen on a cluster: a record left
+`changing` by a run that failed, and `make up` on an existing cluster; the
+stub tests hold each.
 
 The record is the ConfigMap `meridian-cluster-holder` in `kube-system`, with
 four values and nothing else (no path, no user or host name, no address of a
