@@ -56,6 +56,8 @@ from meridian.platform.gateway.settings import GatewaySettings
 from meridian.platform.knowledge_mcp.chunking import parse_wording
 from meridian.platform.policy_mcp.seed import seed_policies
 from meridian.platform.registry import load_registry
+from meridian.platform.toolserver import wire
+from meridian.runtime import tool_client
 from meridian.runtime.app import create_app as create_runtime
 from meridian.runtime.settings import RuntimeSettings
 from meridian.workloads.claims_triage.app import create_app as create_claims_api
@@ -71,6 +73,36 @@ WINDOW_SECONDS = 61
 # The date the API stamps before a test moves it: a form posted with
 # ``submit_in_page`` sets it to the claim's own report date first.
 STAMP_AT_START = date(2026, 9, 1)
+# What one tool call of the stack may take: three times the product's ten
+# seconds. The stack runs the runtime, three tool servers and a database in one
+# process, and under machine load a call passed the product's bound with nothing
+# wrong (S074); a call that really hangs still ends the test, half a minute
+# later. A run makes at most 16 calls, so a stack test that hangs on every one
+# waits 16 x 30 = 480 s, under the runtime's lease (600 s) and CI's job limit
+# (900 s); 60 s would have been 960 s, over both. The stack's tests are not
+# about a tool's time bound: the ones that are (``runtime/test_tool_client``,
+# ``toolserver/test_tool_server`` and their neighbours) never build a stack and
+# keep the product's values.
+STACK_TOOL_SECONDS = 30.0
+
+
+def bound_the_stack_tools() -> None:
+    """Give the tool calls of this process the stack's bound.
+
+    Two places enforce a call's time, and both are module values read when a call
+    is made: the runtime's own bound (``tool_client.TOOL_TIMEOUT_SECONDS``, which
+    also is what it tells the server it will wait) and the server's maximum
+    (``wire.MAX_CALL_SECONDS``, which clamps what a caller says). One raised
+    without the other leaves the call bound where it was. Not set, and why: the
+    embedding call's five seconds (``EMBEDDING_TIMEOUT``) belongs to the HTTP
+    client the knowledge server makes for itself, and the stack hands it the
+    gateway's in-process client instead, whose transport ignores timeouts; the
+    database's statement and connect timeouts are PostgreSQL's own.
+
+    The product's constants are not edited: this sets the two names for the life
+    of the test, and the conftest's autouse fixture puts them back after it."""
+    tool_client.TOOL_TIMEOUT_SECONDS = STACK_TOOL_SECONDS
+    wire.MAX_CALL_SECONDS = STACK_TOOL_SECONDS
 
 
 def load(name: str) -> Any:
@@ -336,7 +368,9 @@ def build_stack(
     db: DatabaseHandle, *, runtime_http: httpx.Client | None = None
 ) -> Stack:
     """The whole stack over ``db``. ``runtime_http`` replaces what the runtime
-    calls the model through (the gateway itself when it is None)."""
+    calls the model through (the gateway itself when it is None). Its tool calls
+    have the stack's bound (``bound_the_stack_tools``) until the test ends."""
+    bound_the_stack_tools()
     exporter = InMemorySpanExporter()
     gateway = replay_gateway(db, exporter)
     seed_and_ingest(gateway)

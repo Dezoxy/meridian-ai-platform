@@ -15,7 +15,7 @@ charts' values name the same user.
 from pathlib import Path
 
 import yaml
-from test_kind_manifests import KIND_DIR
+from kindsupport import KIND_DIR
 
 VALUES = KIND_DIR / "values"
 COLLECTOR_FILE = VALUES / "otel-collector.yaml"

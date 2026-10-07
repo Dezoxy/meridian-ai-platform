@@ -94,8 +94,17 @@ def _checksum(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def apply_migrations(conn: psycopg.Connection) -> list[str]:
+def apply_migrations(
+    conn: psycopg.Connection, files: list[tuple[str, str]] | None = None
+) -> list[str]:
     """Apply every migration not yet applied; return the names applied.
+
+    ``files`` is for the tests' template builder alone: a list of
+    ``(name, SQL text)`` pairs, applied in the order given, so a test that
+    patches ``migration_files`` cannot change what the template holds.
+    ``meridian db migrate`` passes none, and nothing outside the tests may: a
+    caller's list could apply files the package does not hold. ``None`` reads
+    the packaged files through ``migration_files``.
 
     Raises ``MigrationError`` when an applied file's checksum changed or the
     connection has a transaction open (``conn.transaction()`` would then open
@@ -105,7 +114,10 @@ def apply_migrations(conn: psycopg.Connection) -> list[str]:
     """
     if conn.info.transaction_status != TransactionStatus.IDLE:
         raise MigrationError("the connection has an open transaction; pass an idle one")
-    files = migration_files()
+    if files is None:
+        files = migration_files()
+    else:
+        _refuse_shared_numbers(files)
     with conn.transaction():
         # The lock comes first: two runners on an empty database would
         # otherwise race in CREATE TABLE IF NOT EXISTS and one would fail.

@@ -30,13 +30,13 @@ from fnmatch import fnmatchcase
 
 import yaml
 from chartsupport import rendered_chart, without_rate_store
+from kindsupport import KIND_DIR, UP_SH
 from test_certificate_policy_up import (
     line_containing,
     line_index,
     script_lines,
     up_function,
 )
-from test_kind_manifests import KIND_DIR, UP_SH
 from test_kind_platform_images import PINS, PINS_TEXT
 
 VALUES_FILE = KIND_DIR / "values" / "log-agent.yaml"

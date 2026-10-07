@@ -24,6 +24,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from kindsupport import UP_SH, function_body, function_definition, requires_jq
 from test_kind_database_policy_address import (
     NODE,
     NOT_ADDRESSES,
@@ -35,7 +36,6 @@ from test_kind_database_policy_address import (
     slice_of,
     slices,
 )
-from test_kind_manifests import UP_SH, function_body, function_definition, requires_jq
 from test_kind_namespace_policies import CERT_MANAGER_FILE, header_of
 
 pytestmark = requires_jq

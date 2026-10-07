@@ -357,3 +357,43 @@ database built from every migration. Measured on 2026-10-06 beside the
 deployed cluster, the whole suite: 3 min 00 s before and 2 min 11 s after
 with 4 workers, and 1 min 52 s after with 10, which is what the suite took
 alone before. Still to measure: what it saves in CI.
+
+Since S074 the template is built from the list of migrations that
+`tests/meridian/dbsupport.py` read when it was imported. `apply_migrations`
+takes an optional `files` argument that only that builder passes, so a test
+that patches the runner's file list, or rebinds the support module's public
+name, cannot change the template, and the template's ledger is compared with
+the imported list before it is used. `meridian db migrate` passes no list.
+
+### Tests that hold under load
+
+A test that passes alone and fails on a busy machine rests on a speed. S074
+made the ones it found hold by construction, and what it did not measure is
+listed in its section of the plan.
+
+- **A stack test does not rest on the product's ten seconds for a tool
+  call.** `build_stack` gives the runtime's tool client and the tool server's
+  call clamp a bound of 30 seconds (both names: the client sends the smaller
+  of its budget and its constant, and the server clamps that again), and a
+  fixture puts the product's values back after each test. A run makes at most
+  16 tool calls, so a hung one costs at most 16 times 30, 480 seconds, which is
+  inside the 600-second lease and CI's 15-minute job; at 60 seconds it was 960,
+  inside neither. Tests of the bound itself build no stack. There is no
+  pytest-level timeout: nothing else ends a hung test before the job does.
+- **A CPU-time test uses the one helper, `tests/meridian/cputime.py`.** It
+  compares a call's thread CPU time on an input with that on one four times
+  larger (linear is 4, the limit 8). A busy machine slows a window of tens of
+  milliseconds, so a ratio at or above the limit is measured again, up to four
+  times, and the least counts; a ratio at twice the limit is not measured
+  again. What that costs: at a load of 9 to 12 it passes most growth of n^1.5
+  and catches roughly n^1.7 and worse. A small run under 0.1 ms is an error,
+  not a skip.
+- **No test parameter or ID comes from the clock, a random source or a path.**
+  Under xdist every worker collects the tests itself, and the workers must
+  collect the same ones, or the run stops. A value that differs from one
+  process to the next belongs inside a test or a fixture, not in a
+  parametrization or an ID.
+- **A poll that waits on bash's clock is counted in readings.** The demo
+  tests replace the poll's `sleep` with a step of the script's own `SECONDS`,
+  so a trace that must time out costs no real time and one that must settle
+  needs a few readings, not seconds.
