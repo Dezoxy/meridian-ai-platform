@@ -3,7 +3,12 @@
 # `make aws-plan`, `make aws-apply`, `make aws-destroy` (S036).
 #   validate  format check, init with no backend, validate. Needs no AWS
 #             credential (it is run with none) and no local file, and never
-#             calls the aws CLI.
+#             calls the aws CLI. It takes the name of a module, one of aws
+#             (the default) and gcp: `validate gcp` runs the same three commands
+#             on infra/terraform/gcp (S078), with no credential of any cloud.
+#             The Google Cloud module is never planned and never applied, so
+#             validate is the one command that takes a word and plan, apply and
+#             destroy refuse one.
 #   plan      init, then plan into aws.tfplan; changes nothing in AWS. Records
 #             the commit, the time and the plan file's SHA-256 beside the plan,
 #             unless the module's directory has uncommitted changes: the plan is
@@ -55,6 +60,10 @@ unset BASH_XTRACEFD PS4
 
 readonly AWS_MODULE_DIR="${TF_DIR}/aws"
 readonly AWS_LOCAL_ENV="${TF_DIR}/local.env-aws"
+# The directory tf_plain works in. Only validate moves it, to a module of its
+# closed list (aws, gcp) at the end of this file; every other command works on
+# the AWS module's.
+module_dir="${AWS_MODULE_DIR}"
 readonly PLAN_FILE=aws.tfplan
 readonly PLAN_RECORD_FILE=aws.tfplan.meta
 # A plan older than this is not applied: the account, the quotas and the
@@ -104,6 +113,7 @@ done < <(compgen -e | grep '^TF_VAR_' || true)
 
 usage() {
   printf 'usage: %s <validate|plan|apply|destroy>\n' "$(basename "$0")" >&2
+  printf '       %s validate [aws|gcp]  (the module to check, aws if none; the other commands take no word)\n' "$(basename "$0")" >&2
   exit 2
 }
 
@@ -141,7 +151,7 @@ run_clean() {
 tf_plain() {
   local sub="$1"
   shift
-  run_clean plain terraform -chdir="${AWS_MODULE_DIR}" "${sub}" -no-color "$@"
+  run_clean plain terraform -chdir="${module_dir}" "${sub}" -no-color "$@"
 }
 tf_signed() {
   local sub="$1"
@@ -432,9 +442,10 @@ file_sha256() {
 }
 
 cmd_validate() {
+  local module="$1"
   log "terraform fmt -check"
   tf_plain fmt -check -diff 2>&1 | redact ||
-    die "terraform fmt found a file to format; run: terraform -chdir=infra/terraform/aws fmt"
+    die "terraform fmt found a file to format; run: terraform -chdir=infra/terraform/${module} fmt"
   log "terraform init -backend=false"
   # readonly: the committed lock file decides the provider, and a check does not
   # rewrite it.
@@ -593,11 +604,23 @@ cmd_destroy() {
   log "removed. Look at the console for what is left: infra/terraform/aws/README.md, Removal"
 }
 
-[[ $# -eq 1 ]] || usage
+# Only validate takes a word, the name of a module from a closed list: a path,
+# or anything else, is refused with the usage line before any program runs.
+if [[ "${1-}" == validate ]]; then
+  [[ $# -le 2 ]] || usage
+else
+  [[ $# -eq 1 ]] || usage
+fi
 case "$1" in
   validate)
+    module="${2-aws}"
+    case "${module}" in
+      aws | gcp) ;;
+      *) usage ;;
+    esac
+    module_dir="${TF_DIR}/${module}"
     need_tools terraform
-    cmd_validate
+    cmd_validate "${module}"
     ;;
   plan)
     need_tools terraform aws git

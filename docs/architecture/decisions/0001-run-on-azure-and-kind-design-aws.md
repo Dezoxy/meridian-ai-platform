@@ -64,6 +64,17 @@ owner says yes. Until that run the decision stands as written: Azure is the
 deployed cloud, AWS has no billing account (C-05) and no deployment on AWS
 is claimed.
 
+Amended on 2026-10-07 (S078): Google Cloud now sits beside AWS. Its mapping is
+[ADR 7](0007-map-the-azure-platform-to-google-cloud.md), and a Terraform module
+for it exists under `infra/terraform/gcp/`, validated and scanned offline and
+**never planned and never applied**. The owner's word of 2026-10-06 was "gcp
+just scafold", so the sentence of the note above that the module will be
+applied does not carry over to this cloud: no step applies it, no project or
+billing account exists, no command here plans, applies or removes it, and no
+deployment on Google Cloud is claimed. The decision stands as written: Azure is
+the deployed cloud, and AWS and Google Cloud are designed mappings, each with
+code that has not met an account or a project.
+
 ## Consequences
 
 Positive:

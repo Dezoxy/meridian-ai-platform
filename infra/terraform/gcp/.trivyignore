@@ -1,0 +1,16 @@
+# Findings of `make gcp-scan` that are accepted for this module (S078). None: on
+# the pinned image the module has no HIGH or CRITICAL finding, so this file holds
+# no entry. The module is a scaffold that is checked and never planned or
+# applied; nothing is hidden here: its MEDIUM and LOW findings are reported for
+# the module's README, which the step's documents contract writes.
+#
+# An entry would be one Trivy check ID per line, exactly `GCP-` and four digits
+# and nothing after it (no expiry, no file name, no wildcard, not the older
+# AVD- spelling), and on the line directly above it the reason: what the check
+# says, why it holds here, and what a production environment would do instead,
+# in a handful of words at least. tests/meridian/test_gcp_scan.py fails on an
+# entry that breaks any of this, on an entry at all that its list does not name,
+# on an inline ignore comment in a .tf file, on a Trivy configuration or YAML
+# ignore file in this directory, and on a second cluster or subnet block: an
+# entry here applies to EVERY resource of the directory, not to one. A finding
+# fixed in the module is deleted from here.
