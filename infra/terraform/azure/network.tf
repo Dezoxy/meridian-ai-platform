@@ -72,16 +72,24 @@ resource "azurerm_subnet" "postgres" {
   }
 }
 
-# The database's group: TCP 5432 from the nodes' range, which is where the pods
-# leave the cluster from (overlay pods are translated to their node's address
-# when they reach another subnet: NOT read from a page, see README), and nothing
-# else inbound. Azure's default rules allow every address of the virtual network
-# in, so the explicit deny at the end of the list is what makes "nothing else"
-# true. No outbound rule is written: the service's paths to Storage and to
-# Microsoft Entra stay on Azure's default rules. NOT read: what Microsoft
-# requires of a group on a flexible server's subnet, and whether the deny also
-# shuts a path the service itself uses (Azure's load balancer probe tag comes
-# after it in Azure's order); only the first apply shows.
+# The database's group. What Microsoft's page on private access says about a
+# group on this subnet (the facts sheet, round 1, E-net, read 2026-10-07): none
+# is required to exist, and if one denies traffic it must allow port 5432 inside
+# the subnet and outbound to the Storage and Microsoft Entra service tags; a rule
+# that names an application security group is not supported. So:
+#   - 100: TCP 5432 from the nodes' range AND the pod range. Overlay pods are
+#     probably translated to their node's address when they reach another subnet
+#     (recalled by a reviewer, NOT read from a page), so the nodes' range should
+#     be the source; the pod range is there in case they are not.
+#   - 110: anything from the subnet to itself (the page's "inside the subnet"; a
+#     standby or a component of the service would need it).
+#   - 4096: deny from the VirtualNetwork tag, not from everything. That refuses
+#     exactly what Azure's default rule 65000 (everything in the virtual network)
+#     allows, and leaves the default rule for the load balancer's tag (65001)
+#     and the default deny (65500) as they are.
+# No outbound rule is written: Azure's default outbound rules carry the Storage
+# and Entra paths the page names. Whether the service takes this group at all is
+# only seen by the first apply.
 resource "azurerm_network_security_group" "postgres" {
   name                = "nsg-${local.name_prefix}-postgres"
   location            = azurerm_resource_group.platform.location
@@ -99,7 +107,21 @@ resource "azurerm_network_security_rule" "postgres_allow_nodes" {
   protocol                    = "Tcp"
   source_port_range           = "*"
   destination_port_range      = "5432"
-  source_address_prefix       = local.nodes_subnet_cidr
+  source_address_prefixes     = [local.nodes_subnet_cidr, local.pod_cidr]
+  destination_address_prefix  = local.postgres_subnet_cidr
+}
+
+resource "azurerm_network_security_rule" "postgres_allow_subnet" {
+  name                        = "allow-within-subnet"
+  resource_group_name         = azurerm_resource_group.platform.name
+  network_security_group_name = azurerm_network_security_group.postgres.name
+  priority                    = 110
+  direction                   = "Inbound"
+  access                      = "Allow"
+  protocol                    = "*"
+  source_port_range           = "*"
+  destination_port_range      = "*"
+  source_address_prefix       = local.postgres_subnet_cidr
   destination_address_prefix  = local.postgres_subnet_cidr
 }
 
@@ -113,15 +135,23 @@ resource "azurerm_network_security_rule" "postgres_deny_other_inbound" {
   protocol                    = "*"
   source_port_range           = "*"
   destination_port_range      = "*"
-  source_address_prefix       = "*"
+  source_address_prefix       = "VirtualNetwork"
   destination_address_prefix  = "*"
 }
 
+# The association waits for the group's rules, so that the deny exists before the
+# service is injected into the subnet, and the server waits for the association
+# (database.tf), so that the subnet is not being changed while the server is
+# being created in it. The same order, reversed, is what a removal does.
 resource "azurerm_subnet_network_security_group_association" "postgres" {
   subnet_id                 = azurerm_subnet.postgres.id
   network_security_group_id = azurerm_network_security_group.postgres.id
 
-  depends_on = [azurerm_resource_group.platform]
+  depends_on = [
+    azurerm_network_security_rule.postgres_allow_nodes,
+    azurerm_network_security_rule.postgres_allow_subnet,
+    azurerm_network_security_rule.postgres_deny_other_inbound,
+  ]
 }
 
 # The endpoints' subnet holds the two private endpoints and nothing else. Nothing
@@ -130,11 +160,11 @@ resource "azurerm_subnet_network_security_group_association" "postgres" {
 # and on the delegated subnet Microsoft says the private-subnet setting does not
 # apply). The provider sends the argument whatever its value, and its default is
 # true. The private endpoint network policy is set so that the group below
-# applies to traffic to an endpoint. The schema's validator names four values
-# (Disabled, Enabled, NetworkSecurityGroupEnabled, RouteTableEnabled), and the
-# one written is the one named for exactly this; that it makes the group apply
-# to endpoint traffic is read from the value's name, not from a page, and only
-# an apply shows it.
+# applies to traffic to an endpoint: Microsoft's page on the setting (the facts
+# sheet, round 1, section F) lists the values Disabled, NetworkSecurityGroupEnabled,
+# RouteTableEnabled and Enabled and says the setting exists to enable support for
+# groups and routes on endpoint traffic. That it takes effect as intended is only
+# seen by an apply.
 resource "azurerm_subnet" "endpoints" {
   name                              = "snet-endpoints"
   resource_group_name               = azurerm_resource_group.platform.name
@@ -144,8 +174,9 @@ resource "azurerm_subnet" "endpoints" {
   private_endpoint_network_policies = "NetworkSecurityGroupEnabled"
 }
 
-# The endpoints' group: HTTPS from the nodes' range to the two endpoints, and
-# nothing else inbound (the explicit deny, for the reason above).
+# The endpoints' group: HTTPS from the nodes' range and the pod range (the same
+# reason as the database's) to the two endpoints, and nothing else inbound (the
+# explicit deny, for the reason above).
 resource "azurerm_network_security_group" "endpoints" {
   name                = "nsg-${local.name_prefix}-endpoints"
   location            = azurerm_resource_group.platform.location
@@ -163,7 +194,7 @@ resource "azurerm_network_security_rule" "endpoints_allow_nodes" {
   protocol                    = "Tcp"
   source_port_range           = "*"
   destination_port_range      = "443"
-  source_address_prefix       = local.nodes_subnet_cidr
+  source_address_prefixes     = [local.nodes_subnet_cidr, local.pod_cidr]
   destination_address_prefix  = local.endpoints_subnet_cidr
 }
 
@@ -181,9 +212,14 @@ resource "azurerm_network_security_rule" "endpoints_deny_other_inbound" {
   destination_address_prefix  = "*"
 }
 
+# As the database's: the association waits for the rules, and both private
+# endpoints wait for the association (endpoints.tf).
 resource "azurerm_subnet_network_security_group_association" "endpoints" {
   subnet_id                 = azurerm_subnet.endpoints.id
   network_security_group_id = azurerm_network_security_group.endpoints.id
 
-  depends_on = [azurerm_resource_group.platform]
+  depends_on = [
+    azurerm_network_security_rule.endpoints_allow_nodes,
+    azurerm_network_security_rule.endpoints_deny_other_inbound,
+  ]
 }

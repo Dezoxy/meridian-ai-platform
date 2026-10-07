@@ -130,7 +130,14 @@ resource "azurerm_postgresql_flexible_server" "main" {
   administrator_password_wo         = ephemeral.random_password.database_administrator.result
   administrator_password_wo_version = 1
 
-  depends_on = [azurerm_private_dns_zone_virtual_network_link.postgres]
+  # The zone's link, because the service needs the zone to resolve at creation,
+  # and the subnet's security group, so that the group and its rules are in place
+  # before the service is injected into the subnet and the subnet is not being
+  # changed while the server is created in it (a removal runs the order back).
+  depends_on = [
+    azurerm_private_dns_zone_virtual_network_link.postgres,
+    azurerm_subnet_network_security_group_association.postgres,
+  ]
 
   # No zone is named, so Azure picks one and the provider reads it into the state.
   # The argument is neither computed nor a replacement trigger in azurerm 5.8.0,
@@ -140,30 +147,6 @@ resource "azurerm_postgresql_flexible_server" "main" {
   # offers ignore_changes for the zone.
   lifecycle {
     ignore_changes = [zone]
-  }
-}
-
-# Where the server's own log goes: this module's workspace, the same one that
-# holds the cluster's audit log, so that a connection or a checkpoint outlives
-# the server's own copy of it. The category is the provider's category group
-# that takes every log category the server offers, because no page read names
-# the server's categories and the provider's schema carries no list of them: NOT
-# ESTABLISHED, and that Azure takes the group for a flexible server is not read
-# from a page either. A value Azure refuses stops the apply at this resource and
-# changes nothing else. Taking every category can send more than the connection
-# log into the workspace's daily cap (variables.tf), which also holds the
-# cluster's audit log: once the server's categories are read, name the one that
-# holds the connection log and no other.
-#
-# The two parameters below wait for this setting: without a destination, what
-# they make the server log goes nowhere that outlives the server.
-resource "azurerm_monitor_diagnostic_setting" "database" {
-  name                       = "server-log-to-log-analytics"
-  target_resource_id         = azurerm_postgresql_flexible_server.main.id
-  log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
-
-  enabled_log {
-    category_group = "allLogs"
   }
 }
 
@@ -180,68 +163,46 @@ resource "azurerm_postgresql_flexible_server_configuration" "extensions" {
   value     = "vector"
 }
 
-# The two server parameters that say what the server writes to its log, set to on
-# under the names Microsoft's page for them gives (log_connections and
-# log_checkpoints). For PostgreSQL 17 the page's default for each is on already,
-# so this changes nothing the server does: it writes the setting down, where a
-# scan and a reader can see it, and it waits for the diagnostic setting above, so
-# that the log it asks for has a destination. The provider takes one lock per
-# server for a configuration or a database, so these never run at the same time
-# as each other or as the database below inside one apply; the database also
-# waits for every one of them, in its depends_on, for the same reason in the
-# text. Whether the service answers "busy" to two changes made together from
-# outside the lock is not on any page read.
-resource "azurerm_postgresql_flexible_server_configuration" "log_connections" {
-  name      = "log_connections"
-  server_id = azurerm_postgresql_flexible_server.main.id
-  value     = "on"
-
-  depends_on = [azurerm_monitor_diagnostic_setting.database]
-}
-
-resource "azurerm_postgresql_flexible_server_configuration" "log_checkpoints" {
-  name      = "log_checkpoints"
-  server_id = azurerm_postgresql_flexible_server.main.id
-  value     = "on"
-
-  depends_on = [azurerm_monitor_diagnostic_setting.database]
-}
-
-# Connection throttling: unlike the two above, this one is OFF by default (the
-# page's default is off, its values on and off, and the parameter is dynamic), so
-# this DOES change what the server does: after repeated failed logins from one
-# address it throttles that address for a while. The name is the flexible
-# server's (connection_throttle.enable), not the older connection_throttling that
-# the scan's title shows; the scan accepts this name. Derived, not read: if the
-# pods reach the server from their node's address, a pod that fails to log in
-# over and over could slow the logins of the others on that node. NOT read: how
-# long the throttle lasts or what it counts.
-resource "azurerm_postgresql_flexible_server_configuration" "connection_throttle" {
-  name      = "connection_throttle.enable"
-  server_id = azurerm_postgresql_flexible_server.main.id
-  value     = "on"
-}
+# DELIBERATELY NOT BUILT for the first apply: the server's logging. What billed
+# data services need at create must not hang on a value nobody has read, and what
+# only satisfies a scanner changes nothing, so these wait for the first sign-in.
+#   - A diagnostic setting for the server's own log. The category (or category
+#     group) Azure takes for a flexible server is on no page read and the schema
+#     lists none; a refusal would stop the apply, and an accepted setting that
+#     takes every category would send the connection lines of any pod's login
+#     attempts into the workspace's daily cap, which also holds the cluster's
+#     audit log. Before it is built, the first sign-in must list the server's log
+#     categories, and the setting should name the one that holds the connection
+#     log, in a workspace of its own or under a cap of its own.
+#   - The parameters log_connections and log_checkpoints. On PostgreSQL 17 the
+#     page's default for each is on already (the facts sheet, round 2, section 7),
+#     so writing them changes nothing, and each is one more unretried write to the
+#     server right after it is created and one more at its removal. They belong
+#     with the setting above, once there is somewhere for the log to go.
+#   - The parameter connection_throttle.enable (the flexible server's name; the
+#     scan's title shows the older connection_throttling). Its default is off, so
+#     turning it on does change the server: after repeated failed logins from one
+#     address it throttles that address, and the pods reach the server from their
+#     nodes' addresses (probably), so the first deploy's bootstrap Job could be
+#     slowed behind its neighbours' failed logins. Turn it on after the bootstrap.
+# The scan lists the three checks (AZU-0019, AZU-0021, AZU-0024) until they are.
 
 # The database the chart's services use, as it is called on kind. Kind's chart
 # values name no collation for it, so the provider's default is left, and this
 # resource sets only the encoding. On kind the owner is meridian_owner; here the
 # administrator creates it, and the second half hands it over with the roles.
-# It waits for the server's three configurations: Microsoft's own template makes
-# one configuration wait for another without saying why, and a change of
-# parameters and the creation of a database are two writes to one server.
+# It waits for the allow-list of extensions only: the provider takes one lock per
+# server for a configuration or a database, so the two never run together inside
+# one apply, and Microsoft's own template makes one configuration wait for
+# another without saying why. Whether the service answers "busy" to two writes
+# made together from outside the lock is not on any page read.
 resource "azurerm_postgresql_flexible_server_database" "meridian" {
   name      = "meridian"
   server_id = azurerm_postgresql_flexible_server.main.id
   charset   = "UTF8"
 
-  depends_on = [
-    azurerm_postgresql_flexible_server_configuration.extensions,
-    azurerm_postgresql_flexible_server_configuration.log_connections,
-    azurerm_postgresql_flexible_server_configuration.log_checkpoints,
-    azurerm_postgresql_flexible_server_configuration.connection_throttle,
-  ]
+  depends_on = [azurerm_postgresql_flexible_server_configuration.extensions]
 }
-
 # The administrator's password, in the FOUNDATION's vault (the vault is read in
 # main.tf; this module makes none), for the second half's Job to read. The value
 # is the same ephemeral one the server got, through the write-only argument.

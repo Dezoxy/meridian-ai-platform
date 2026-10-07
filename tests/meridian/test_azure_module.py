@@ -75,6 +75,7 @@ NETWORK_RESOURCES = [
     "azurerm_network_security_rule.endpoints_allow_nodes",
     "azurerm_network_security_rule.endpoints_deny_other_inbound",
     "azurerm_network_security_rule.postgres_allow_nodes",
+    "azurerm_network_security_rule.postgres_allow_subnet",
     "azurerm_network_security_rule.postgres_deny_other_inbound",
     "azurerm_subnet.endpoints",
     "azurerm_subnet.nodes",
@@ -405,10 +406,12 @@ def test_the_postgres_subnet_alone_is_delegated_and_says_where_the_name_came_fro
     assert "FACTS:" not in comments
 
 
-def test_network_says_the_nodes_subnet_has_no_group_and_why() -> None:
+def test_network_no_longer_says_no_group_exists_yet() -> None:
     # Z6 replaced the sentence "No network security group exists yet", which the
     # module's own database and endpoints groups made false: the two other subnets
-    # have one each, and the nodes' subnet has none, on purpose.
+    # have one each, and the nodes' subnet has none, on purpose. (Z6b: the reasons
+    # in the comment are prose and are not pinned; the groups are, structurally,
+    # in test_azure_module_fixes.py.)
     comments = comments_of("network.tf")
     groups = resources_in("network.tf")
     associated = [
@@ -419,9 +422,6 @@ def test_network_says_the_nodes_subnet_has_no_group_and_why() -> None:
 
     assert "No network security group exists yet" not in comments
     assert "in the changes that add those services" not in comments
-    assert "The nodes' subnet has none, on purpose" in comments
-    assert "AKS applies no group to its subnet" in comments
-    assert "blocking traffic inside the subnet is not supported" in comments
     assert sorted(a or "" for a in associated) == [
         "azurerm_subnet.endpoints.id",
         "azurerm_subnet.postgres.id",

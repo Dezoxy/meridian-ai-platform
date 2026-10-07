@@ -60,6 +60,10 @@ resource "azurerm_private_endpoint" "key_vault" {
     name                 = "default"
     private_dns_zone_ids = [azurerm_private_dns_zone.key_vault.id]
   }
+
+  # The subnet's security group is attached first (network.tf), so that the
+  # subnet is not being changed while the endpoint is created in it.
+  depends_on = [azurerm_subnet_network_security_group_association.endpoints]
 }
 
 # The account's zone. Microsoft's page for private endpoint DNS lists three zones
@@ -105,4 +109,7 @@ resource "azurerm_private_endpoint" "openai" {
     name                 = "default"
     private_dns_zone_ids = [azurerm_private_dns_zone.openai.id]
   }
+
+  # As the vault's endpoint above.
+  depends_on = [azurerm_subnet_network_security_group_association.endpoints]
 }

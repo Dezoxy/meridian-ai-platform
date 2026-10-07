@@ -35,12 +35,8 @@ from azuremodulesupport import (
 
 DATABASE_RESOURCES = [
     "azurerm_key_vault_secret.database_administrator",
-    "azurerm_monitor_diagnostic_setting.database",
     "azurerm_postgresql_flexible_server.main",
-    "azurerm_postgresql_flexible_server_configuration.connection_throttle",
     "azurerm_postgresql_flexible_server_configuration.extensions",
-    "azurerm_postgresql_flexible_server_configuration.log_checkpoints",
-    "azurerm_postgresql_flexible_server_configuration.log_connections",
     "azurerm_postgresql_flexible_server_database.meridian",
     "azurerm_private_dns_zone.postgres",
     "azurerm_private_dns_zone_virtual_network_link.postgres",
@@ -278,11 +274,8 @@ def test_the_administrator_login_is_letters_only_and_none_of_the_reserved_names(
     assert re.fullmatch(r"[a-z]{1,63}", name)
     assert name not in RESERVED_LOGINS
     assert not name.startswith("pg_")
-    comments = comments_of("database.tf")
-    assert "FACTS (the facts sheet, round 2, section 3" in comments
-    assert "so the name is letters alone" in comments
-    assert "no page shows whether the service refuses an underscore" in comments
-    assert "The schema holds no validation text" not in comments
+    # (Z6b: the comment's reasons are prose and are not pinned; the sentence that
+    # was false is pinned absent in test_azure_module_fixes.py.)
 
 
 def test_no_file_of_the_module_names_the_old_login_with_an_underscore() -> None:
@@ -296,9 +289,12 @@ def test_no_file_of_the_module_names_the_old_login_with_an_underscore() -> None:
 def test_the_server_waits_for_the_dns_zones_link() -> None:
     body = server()
 
-    assert re.search(
-        rf"^\s*depends_on\s*=\s*\[{re.escape(LINK)}\]$", body, flags=re.MULTILINE
+    # Z6b: the list also names the association of the subnet's security group
+    # (test_azure_module_fixes.py pins both elements).
+    (waits,) = re.findall(
+        r"^  depends_on\s*=\s*\[(.*?)\]", body, flags=re.MULTILINE | re.DOTALL
     )
+    assert LINK in waits
     assert "resolve at creation" in squeezed(raw_text("database.tf"))
 
 
@@ -350,11 +346,9 @@ def test_the_allow_list_holds_exactly_vector_in_the_case_the_page_shows() -> Non
     assert attribute(body, "name") == '"azure.extensions"'
     assert attribute(body, "server_id") == f"{SERVER}.id"
     assert attribute(body, "value") == '"vector"'
-    comments = comments_of("database.tf")
-    assert "FACTS (the facts sheet, round 2, section 7" in comments
-    assert "lower case (vector)" in comments
-    assert "which no Microsoft page supports" in comments
-    assert "The provider's example is followed: upper case" not in comments
+    assert "The provider's example is followed: upper case" not in comments_of(
+        "database.tf"
+    )
 
 
 def test_the_database_is_meridian_in_utf8_with_the_providers_default_collation() -> (

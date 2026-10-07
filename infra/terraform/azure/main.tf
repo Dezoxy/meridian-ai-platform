@@ -1,8 +1,10 @@
 # The Azure platform module (S020): the environment of one demo day, made to be
 # created and removed with its own state, beside the persistent foundation
-# (infra/terraform/foundation), which this module reads and never changes. Written
-# so far: the names, the pin, the resource group and the network. It has never
-# been planned and never applied (README.md).
+# (infra/terraform/foundation), which this module reads and never changes. This
+# file holds the names, the pin and the resource group; the network, the cluster,
+# the registry, the database, the identities, the endpoints, the budgets and the
+# logs are the other files. It has never been planned and never applied
+# (README.md).
 #
 # The foundation is read by data source, by its fixed names, and never through
 # its remote state: a reader of a state can read every output and secret in it.

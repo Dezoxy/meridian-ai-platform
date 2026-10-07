@@ -1,13 +1,17 @@
-"""The Azure platform module's fixes after its two reviews (S020, Z6).
+"""The Azure platform module's fixes after its two reviews (S020, Z6 and Z6b).
 
 An infrastructure review and a security review read ``infra/terraform/azure`` at
-the end of Z1 to Z5, and a second facts sheet read what the first review only
-recalled. Each test below pins one fix to the argument that makes it, read from
-the comment-stripped text: nothing is planned and nothing is applied, so what
+the end of Z1 to Z5, a second facts sheet read what the first review only
+recalled, and a second infrastructure review read Z6's fixes (Z6b answers it).
+Each test below pins one fix to the argument that makes it, read from the
+comment-stripped text: nothing is planned and nothing is applied, so what
 ``terraform validate`` cannot check (that Azure accepts a value, what an apply
-makes of it) is the README's list, not proved here. The places where the facts
-sheet said NOT ESTABLISHED are pinned too, as the conservative form and the
-comment that says so.
+makes of it) is the README's list, not proved here.
+
+A test that reads a comment does so only where the sentence IS the requirement:
+the rule about the password's version (the wrapper and the README rely on it),
+the comment that says what is deliberately not built, and the absence of
+sentences that were false. Every other comment is prose and can be reworded.
 """
 
 import re
@@ -37,8 +41,12 @@ CLUSTER = "azurerm_kubernetes_cluster.main"
 VAULT = "data.azurerm_key_vault.foundation"
 ACTION_GROUP = "data.azurerm_monitor_action_group.budget"
 NODES_CIDR = "local.nodes_subnet_cidr"
+POD_CIDR = "local.pod_cidr"
+POSTGRES_CIDR = "local.postgres_subnet_cidr"
 CONFIGURATION = "azurerm_postgresql_flexible_server_configuration"
 SUBNET_NSG = "azurerm_subnet_network_security_group_association"
+RULE = "azurerm_network_security_rule"
+LINK = "azurerm_private_dns_zone_virtual_network_link.postgres"
 
 
 def provider() -> str:
@@ -52,37 +60,35 @@ def depends_on_list(body: str) -> list[str]:
     return sorted(re.findall(r"[a-z_]+\.[a-z_]+(?:\.[a-z_]+)?", " ".join(found)))
 
 
+def list_items(value: str | None) -> list[str]:
+    """The items, as written, of a one-line list such as ``[a, b]``."""
+    assert value is not None and value.startswith("[") and value.endswith("]"), value
+    return [item.strip() for item in value[1:-1].split(",") if item.strip()]
+
+
 # ── the workspace (infrastructure HIGH-1, security H1) ───────────────────────
 
 
-def test_the_provider_purges_a_removed_workspace_and_the_comment_says_why() -> None:
+def test_the_provider_purges_a_removed_workspace() -> None:
     assert re.search(
         r"^\s*log_analytics_workspace \{\n\s*permanently_delete_on_destroy\s*=\s*true\n"
         r"\s*\}$",
         provider(),
         flags=re.MULTILINE,
     )
-    comment = squeezed(comments_of("providers.tf"))
-
-    assert "14 days" in comment
-    assert "the OLD one given back" in comment
-    assert "so every demo day starts empty" in comment
 
 
-def test_the_workspace_takes_no_shared_key_and_settings_go_by_resource_id() -> None:
+def test_the_workspace_takes_no_shared_key_and_names_none() -> None:
     body = resources_in("logs.tf")[WORKSPACE]
-    comment = squeezed(comments_of("logs.tf"))
 
     assert attribute(body, "local_authentication_enabled") == "false"
-    assert "Shared-key sign-in is off" in comment
-    assert "send by the workspace's resource id" in comment
-    assert "provider writes both into the Terraform state" in comment
-    # Nothing reads a key: the two computed attributes are named nowhere.
+    # Nothing reads a key: the two computed attributes are named nowhere. (That
+    # they are absent from the state is not shown by a text: the README's list.)
     assert "primary_shared_key" not in module_text()
     assert "secondary_shared_key" not in module_text()
 
 
-# ── the vault's and the server's logs (security M4, M5) ──────────────────────
+# ── the vault's audit log (security M4) ──────────────────────────────────────
 
 
 def test_the_foundation_vault_sends_audit_events_to_this_modules_workspace() -> None:
@@ -94,57 +100,45 @@ def test_the_foundation_vault_sends_audit_events_to_this_modules_workspace() -> 
     assert attribute(log, "category") == '"AuditEvent"'
     assert nested_blocks(body, "enabled_metric") == []
     assert attribute(body, "depends_on") == f"[{PLATFORM_GROUP}]"
-    comment = squeezed(comments_of("logs.tf"))
-    assert "nothing recorded who read it" in comment
-    assert "the vault itself is not changed" in comment
 
 
-def test_the_server_sends_its_log_to_the_same_workspace_by_category_group() -> None:
-    body = resources_in("database.tf")["azurerm_monitor_diagnostic_setting.database"]
-    (log,) = nested_blocks(body, "enabled_log")
+# ── the server's logging, taken back out for the first apply (Z6b) ──────────
 
-    assert attribute(body, "target_resource_id") == f"{SERVER}.id"
-    assert attribute(body, "log_analytics_workspace_id") == f"{WORKSPACE}.id"
-    assert attribute(log, "category_group") == '"allLogs"'
-    assert not has_attribute(log, "category")
-    # NOT ESTABLISHED by any page or by the schema: the comment says so, and says
-    # what the cost of taking every category is.
+
+def test_the_server_has_no_log_destination_and_only_the_extensions_parameter() -> None:
+    # What billed data services need at create must not hang on a value nobody
+    # has read: the server's category group, the two logging parameters (the
+    # defaults of PostgreSQL 17) and the connection throttle wait for the first
+    # sign-in. Only the allow-list of extensions is written.
+    kinds = sorted(name for name in resources() if name.startswith(CONFIGURATION))
+    targets = [
+        attribute(body, "target_resource_id")
+        for name, body in resources().items()
+        if name.startswith("azurerm_monitor_diagnostic_setting.")
+    ]
+
+    assert kinds == [f"{CONFIGURATION}.extensions"]
+    assert sorted(t or "" for t in targets) == sorted([f"{CLUSTER}.id", f"{VAULT}.id"])
+    for word in ("category_group", "connection_throttle", "log_connections"):
+        assert word not in module_text(), word
+    assert "log_checkpoints" not in module_text()
+
+
+def test_the_database_waits_for_the_extensions_configuration_only() -> None:
+    body = resources_in("database.tf")[
+        "azurerm_postgresql_flexible_server_database.meridian"
+    ]
+
+    assert depends_on_list(body) == [f"{CONFIGURATION}.extensions"]
+
+
+def test_one_comment_says_what_is_not_built_and_what_the_first_sign_in_lists() -> None:
     comment = squeezed(comments_of("database.tf"))
-    assert "NOT ESTABLISHED" in comment
-    assert "takes the group for a flexible server is not read" in comment
-    assert "name the one that holds the connection log and no other" in comment
 
-
-@pytest.mark.parametrize("name", ["log_connections", "log_checkpoints"])
-def test_a_logging_parameter_is_on_and_waits_for_the_log_destination(
-    name: str,
-) -> None:
-    body = resources_in("database.tf")[f"{CONFIGURATION}.{name}"]
-
-    assert attribute(body, "name") == f'"{name}"'
-    assert attribute(body, "server_id") == f"{SERVER}.id"
-    assert attribute(body, "value") == '"on"'
-    assert depends_on_list(body) == ["azurerm_monitor_diagnostic_setting.database"]
-
-
-def test_connection_throttling_is_on_under_the_flexible_servers_own_name() -> None:
-    body = resources_in("database.tf")[f"{CONFIGURATION}.connection_throttle"]
-
-    assert attribute(body, "name") == '"connection_throttle.enable"'
-    assert attribute(body, "value") == '"on"'
-    assert '"connection_throttling"' not in module_text()
-    comment = squeezed(comments_of("database.tf"))
-    assert "this one is OFF by default" in comment
-    assert "this DOES change what the server does" in comment
-
-
-def test_the_database_waits_for_every_configuration_of_the_server() -> None:
-    found = resources_in("database.tf")
-    configurations = sorted(name for name in found if name.startswith(CONFIGURATION))
-
-    assert len(configurations) == 4
-    body = found["azurerm_postgresql_flexible_server_database.meridian"]
-    assert depends_on_list(body) == configurations
+    assert "DELIBERATELY NOT BUILT for the first apply" in comment
+    assert "the first sign-in must list the server's log categories" in comment
+    for check in ("AZU-0019", "AZU-0021", "AZU-0024"):
+        assert check in comment, check
 
 
 # ── the server (infrastructure M2, security M1) ──────────────────────────────
@@ -156,32 +150,33 @@ def test_the_server_ignores_the_zone_azure_picks_and_names_none() -> None:
 
     assert attribute(lifecycle, "ignore_changes") == "[zone]"
     assert not has_attribute(own_text(body), "zone")
-    comment = squeezed(comments_of("database.tf"))
-    assert "neither computed nor a replacement trigger" in comment
-    assert "offers ignore_changes for the zone" in comment
 
 
-def test_the_server_keeps_its_wait_for_the_zones_link_beside_the_lifecycle() -> None:
+def test_the_server_waits_for_the_zones_link_and_its_subnets_group() -> None:
+    # Z6b HIGH-1: the group is attached to the subnet before the service is
+    # injected into it, and the subnet is not changed while the server is made.
     body = resources_in("database.tf")[SERVER]
 
-    assert depends_on_list(body) == [
-        "azurerm_private_dns_zone_virtual_network_link.postgres"
-    ]
+    assert depends_on_list(body) == sorted([LINK, f"{SUBNET_NSG}.postgres"])
 
 
-def test_the_password_comment_names_the_two_cases_and_ends_in_the_rule() -> None:
+def test_the_password_comment_ends_in_the_rule_and_the_false_sentence_is_gone() -> None:
     comment = squeezed(comments_of("database.tf"))
 
-    # The sentence that was false.
     assert "Nothing else ever changes the password" not in comment
-    assert "A server that is replaced" in comment
-    assert "fails at the secret, run again" in comment
-    assert "the Job's login fails at first use" in comment
     assert comment.count("raise the version in the same change") == 1
     assert "in the same change as any replacement of the server" in comment
+    assert "before any retry of a first apply" in comment
 
 
-# ── the registry (infrastructure M6, security L2) ────────────────────────────
+def test_the_logins_comment_no_longer_says_the_checks_were_not_found() -> None:
+    comment = squeezed(comments_of("database.tf"))
+
+    assert "The schema holds no validation text" not in comment
+    assert "The provider's example is followed: upper case" not in comment
+
+
+# ── the registry (infrastructure M6, Z6b MEDIUM-5) ───────────────────────────
 
 
 def test_the_registry_names_the_mode_under_which_acrpull_grants_a_pull() -> None:
@@ -189,10 +184,18 @@ def test_the_registry_names_the_mode_under_which_acrpull_grants_a_pull() -> None
 
     assert attribute(body, "role_assignment_mode") == '"LegacyRegistryPermissions"'
     assert "AbacRepositoryPermissions" not in module_text()
-    comment = squeezed(comments_of("registry.tf"))
-    assert "the provider always sends it" in comment
-    assert "is not honoured at all in the ABAC mode" in comment
-    assert "AcrPull" in comment
+
+
+def test_the_basic_registry_sets_no_anonymous_pull_and_a_comment_keeps_the_line() -> (
+    None
+):
+    # Basic has none; an explicit false on Basic is not established. The line
+    # waits, as a comment, for the day of a move to Standard.
+    body = resources_in("registry.tf")["azurerm_container_registry.main"]
+
+    assert not has_attribute(body, "anonymous_pull_enabled")
+    assert "anonymous_pull_enabled" not in module_text()
+    assert "anonymous_pull_enabled = false" in comments_of("registry.tf")
 
 
 # ── the privatelink links (infrastructure M3) ────────────────────────────────
@@ -209,13 +212,10 @@ def test_a_privatelink_zones_link_redirects_a_name_the_zone_lacks(name: str) -> 
 
 def test_the_postgres_zones_link_has_no_resolution_policy() -> None:
     # The policy exists only for Private Link zones; the database's zone is not one.
-    link = resources_in("database.tf")[
-        "azurerm_private_dns_zone_virtual_network_link.postgres"
-    ]
+    link = resources_in("database.tf")[LINK]
 
     assert not has_attribute(link, "resolution_policy")
     assert module_text().count("resolution_policy") == 2
-    assert "is not a Private Link zone" in squeezed(comments_of("endpoints.tf"))
 
 
 # ── the second budget (infrastructure HIGH-2) ────────────────────────────────
@@ -240,22 +240,13 @@ def test_a_second_budget_watches_the_cluster_node_resource_group() -> None:
     assert not nested_blocks(second, "filter")
 
 
-def test_the_first_budget_says_it_does_not_count_the_nodes() -> None:
-    comment = squeezed(comments_of("budget.tf"))
+def test_the_cluster_names_no_node_resource_group_of_its_own() -> None:
+    # The budget reads the group AKS makes, so the cluster must not name one. The
+    # schema's argument is `node_resource_group` (an earlier version of this test
+    # looked for `node_resource_group_name`, which does not exist).
+    body = resources_in("cluster.tf")[CLUSTER]
 
-    assert "It does NOT count the cluster's nodes" in comment
-    assert "billed in the node resource group" in comment
-
-
-def test_the_second_budget_says_no_page_establishes_that_azure_accepts_it() -> None:
-    comment = squeezed(comments_of("budget.tf"))
-
-    assert "NOT established by any page" in comment
-    assert "that Azure accepts a budget on a managed group" in comment
-    assert "no lockdown is set" in comment
-    # The comment's claim holds: the cluster names no node group and no lockdown.
-    assert "node_resource_group_name" not in file_text("cluster.tf")
-    assert "node_resource_group_lockdown" not in file_text("cluster.tf")
+    assert not has_attribute(own_text(body), "node_resource_group")
 
 
 def test_no_daily_cap_alert_is_built_and_no_action_group_is_made() -> None:
@@ -264,8 +255,9 @@ def test_no_daily_cap_alert_is_built_and_no_action_group_is_made() -> None:
     # signal of the cap (a query or an operation name) is on no page the facts
     # sheets read. A row for Z8; building one now would be a guess in a query.
     kinds = {name.split(".")[0] for name in resources()}
+    alerts = {k for k in kinds if "alert" in k or "scheduled_query" in k}
 
-    assert not {k for k in kinds if "scheduled_query" in k or "metric_alert" in k}
+    assert alerts == set()
     assert "azurerm_monitor_action_group" not in kinds
     assert list(data_sources_in("budget.tf")) == [ACTION_GROUP.removeprefix("data.")]
 
@@ -285,10 +277,6 @@ def test_the_postgres_subnet_declares_the_storage_endpoint_azure_adds_to_it() ->
     assert "service_endpoints" not in module_text()
     for name in ("nodes", "endpoints"):
         assert nested_blocks(subnet(name), "service_endpoint") == []
-    comment = squeezed(comments_of("network.tf"))
-    assert "adds it to a delegated subnet itself" in comment
-    assert "is not computed" in comment
-    assert "the 4.x list is gone" in comment
 
 
 def test_only_the_endpoints_subnet_is_private_and_has_the_policy_for_its_group() -> (
@@ -303,15 +291,25 @@ def test_only_the_endpoints_subnet_is_private_and_has_the_policy_for_its_group()
     for name in ("nodes", "postgres"):
         assert not has_attribute(subnet(name), "default_outbound_access_enabled")
         assert not has_attribute(subnet(name), "private_endpoint_network_policies")
-    comment = squeezed(comments_of("network.tf"))
-    assert "off here only" in comment
-    assert "read from the value's name, not from a page" in comment
 
 
 GROUP_NAMES = {
     "postgres": "nsg-${local.name_prefix}-postgres",
     "endpoints": "nsg-${local.name_prefix}-endpoints",
 }
+# The rules of each group, by the name after `azurerm_network_security_rule.`.
+RULES = {
+    "postgres": [
+        "postgres_allow_nodes",
+        "postgres_allow_subnet",
+        "postgres_deny_other_inbound",
+    ],
+    "endpoints": ["endpoints_allow_nodes", "endpoints_deny_other_inbound"],
+}
+
+
+def rule(name: str) -> str:
+    return resources_in("network.tf")[f"{RULE}.{name}"]
 
 
 @pytest.mark.parametrize("name", ["postgres", "endpoints"])
@@ -329,86 +327,215 @@ def test_each_guarded_subnet_has_a_group_in_the_module_group_and_region(
     assert nested_blocks(body, "security_rule") == []
 
 
+def test_the_rules_of_the_module_are_exactly_these_five_in_their_groups() -> None:
+    found = sorted(n for n in resources() if n.startswith(f"{RULE}."))
+
+    assert found == sorted(f"{RULE}.{n}" for names in RULES.values() for n in names)
+    for group, names in RULES.items():
+        for name in names:
+            assert attribute(rule(name), "network_security_group_name") == (
+                f"azurerm_network_security_group.{group}.name"
+            ), name
+            assert attribute(rule(name), "resource_group_name") == (
+                f"{PLATFORM_GROUP}.name"
+            ), name
+            assert attribute(rule(name), "direction") == '"Inbound"', name
+
+
 @pytest.mark.parametrize(
-    ("name", "rule", "port", "destination"),
+    ("rule_name", "port", "destination"),
     [
-        ("postgres", "postgres_allow_nodes", '"5432"', "local.postgres_subnet_cidr"),
-        ("endpoints", "endpoints_allow_nodes", '"443"', "local.endpoints_subnet_cidr"),
+        ("postgres_allow_nodes", '"5432"', POSTGRES_CIDR),
+        ("endpoints_allow_nodes", '"443"', "local.endpoints_subnet_cidr"),
     ],
 )
-def test_a_group_lets_the_nodes_range_reach_one_tcp_port_of_its_subnet(
-    name: str, rule: str, port: str, destination: str
+def test_an_allow_takes_the_nodes_and_the_pod_range_to_one_tcp_port(
+    rule_name: str, port: str, destination: str
 ) -> None:
-    body = resources_in("network.tf")[f"azurerm_network_security_rule.{rule}"]
+    # Overlay pods probably leave through their node's address (recalled by a
+    # reviewer, read on no page), so the nodes' range is the source and the pod
+    # range is there in case it is not. The sources are a list, with a count.
+    body = rule(rule_name)
 
-    assert attribute(body, "network_security_group_name") == (
-        f"azurerm_network_security_group.{name}.name"
-    )
-    assert attribute(body, "resource_group_name") == f"{PLATFORM_GROUP}.name"
+    assert list_items(attribute(body, "source_address_prefixes")) == [
+        NODES_CIDR,
+        POD_CIDR,
+    ]
+    assert not has_attribute(body, "source_address_prefix")
     assert attribute(body, "priority") == "100"
-    assert attribute(body, "direction") == '"Inbound"'
     assert attribute(body, "access") == '"Allow"'
     assert attribute(body, "protocol") == '"Tcp"'
-    assert attribute(body, "source_address_prefix") == NODES_CIDR
     assert attribute(body, "destination_address_prefix") == destination
     assert attribute(body, "destination_port_range") == port
     assert attribute(body, "source_port_range") == '"*"'
 
 
-@pytest.mark.parametrize("name", ["postgres", "endpoints"])
-def test_a_group_denies_all_other_inbound_after_its_allow_and_writes_no_outbound_rule(
-    name: str,
-) -> None:
-    found = resources_in("network.tf")
-    deny = found[f"azurerm_network_security_rule.{name}_deny_other_inbound"]
-    allow = found[f"azurerm_network_security_rule.{name}_allow_nodes"]
+def test_the_database_subnet_allows_anything_from_itself_to_itself() -> None:
+    # Microsoft's page on private access (the facts sheet, round 1, E-net): if a
+    # group denies, the subnet's own traffic must be allowed.
+    body = rule("postgres_allow_subnet")
 
-    assert attribute(deny, "network_security_group_name") == (
-        f"azurerm_network_security_group.{name}.name"
-    )
-    assert attribute(deny, "direction") == '"Inbound"'
+    assert attribute(body, "priority") == "110"
+    assert attribute(body, "access") == '"Allow"'
+    assert attribute(body, "protocol") == '"*"'
+    assert attribute(body, "source_address_prefix") == POSTGRES_CIDR
+    assert attribute(body, "destination_address_prefix") == POSTGRES_CIDR
+    assert attribute(body, "source_port_range") == '"*"'
+    assert attribute(body, "destination_port_range") == '"*"'
+
+
+def test_the_databases_deny_is_from_the_virtual_network_tag_not_from_everything() -> (
+    None
+):
+    # A deny from `*` would also refuse what Azure's default rule 65001 lets in
+    # (the load balancer's tag). From VirtualNetwork it refuses exactly what rule
+    # 65000 allows and leaves the other defaults alone.
+    deny = rule("postgres_deny_other_inbound")
+
     assert attribute(deny, "access") == '"Deny"'
     assert attribute(deny, "protocol") == '"*"'
-    for argument in (
-        "source_port_range",
-        "destination_port_range",
-        "source_address_prefix",
-        "destination_address_prefix",
-    ):
-        assert attribute(deny, argument) == '"*"', argument
-    # Azure's default rules, at 65000 and above, allow the whole virtual network
-    # in: the deny must come after the allow and before them.
-    assert int(attribute(allow, "priority") or "0") < int(
-        attribute(deny, "priority") or "0"
-    )
-    assert 100 < int(attribute(deny, "priority") or "0") < 65000
+    assert attribute(deny, "source_address_prefix") == '"VirtualNetwork"'
+    assert not has_attribute(deny, "source_address_prefixes")
+    assert attribute(deny, "destination_address_prefix") == '"*"'
+    assert attribute(deny, "source_port_range") == '"*"'
+    assert attribute(deny, "destination_port_range") == '"*"'
+    assert attribute(deny, "priority") == "4096"
 
 
-def test_no_rule_of_the_module_is_outbound_and_no_rule_allows_from_anywhere() -> None:
+def test_the_endpoints_deny_keeps_its_form() -> None:
+    deny = rule("endpoints_deny_other_inbound")
+
+    assert attribute(deny, "access") == '"Deny"'
+    assert attribute(deny, "source_address_prefix") == '"*"'
+    assert attribute(deny, "destination_address_prefix") == '"*"'
+    assert attribute(deny, "priority") == "4096"
+
+
+def test_every_deny_comes_after_every_allow_of_its_group_and_before_the_defaults() -> (
+    None
+):
+    for names in RULES.values():
+        priorities = {n: int(attribute(rule(n), "priority") or "0") for n in names}
+        denies = [p for n, p in priorities.items() if "deny" in n]
+        allows = [p for n, p in priorities.items() if "allow" in n]
+
+        assert len(denies) == 1 and len(allows) >= 1, names
+        assert max(allows) < denies[0] < 65000, names
+        assert len(set(priorities.values())) == len(priorities), names
+
+
+def test_no_deny_shadows_the_load_balancers_default_rule_in_the_database_group() -> (
+    None
+):
+    # Rule 65001 allows the AzureLoadBalancer tag. A Deny of the database group
+    # from `*` or from that tag, at a priority below 65001, would shadow it.
+    for name in RULES["postgres"]:
+        body = rule(name)
+        if attribute(body, "access") == '"Deny"':
+            assert attribute(body, "source_address_prefix") == '"VirtualNetwork"', name
+        assert "AzureLoadBalancer" not in body, name
+
+
+def test_the_modules_rules_name_only_the_plans_locals_and_two_known_sources() -> None:
+    # Every rule has exactly one source argument, and the count of the sources
+    # found equals the count of the rules, so a form the pattern does not match
+    # (a new argument name) fails here and does not pass by matching nothing.
+    raw = file_text("network.tf")
+    found = re.findall(r"^\s*source_address_prefix(?:es)?\s*=\s*(.+)$", raw, re.M)
+    rules = [n for n in resources_in("network.tf") if n.startswith(f"{RULE}.")]
+
+    assert len(found) == len(rules) == 5
+    for value in found:
+        items = list_items(value) if value.startswith("[") else [value.strip()]
+        for item in items:
+            assert item in {'"*"', '"VirtualNetwork"'} or item.startswith("local."), (
+                item
+            )
+
+
+def test_no_rule_is_outbound_and_every_allow_comes_from_the_plans_ranges() -> None:
     assert '"Outbound"' not in module_text()
     allows = {
         name: body
         for name, body in resources().items()
-        if name.startswith("azurerm_network_security_rule.")
-        and attribute(body, "access") == '"Allow"'
+        if name.startswith(f"{RULE}.") and attribute(body, "access") == '"Allow"'
     }
 
-    assert len(allows) == 2
+    assert len(allows) == 3
     for name, body in allows.items():
-        assert attribute(body, "source_address_prefix") == NODES_CIDR, name
+        sources = attribute(body, "source_address_prefixes") or attribute(
+            body, "source_address_prefix"
+        )
+        assert "local." in (sources or ""), name
+        assert "*" not in (sources or ""), name
+
+
+def test_the_pod_range_is_one_local_used_by_the_cluster_and_both_allows() -> None:
+    users = [
+        name
+        for name, body in resources().items()
+        if re.search(r"\blocal\.pod_cidr\b", body)
+    ]
+
+    assert sorted(users) == sorted(
+        [
+            CLUSTER,
+            f"{RULE}.postgres_allow_nodes",
+            f"{RULE}.endpoints_allow_nodes",
+        ]
+    )
 
 
 @pytest.mark.parametrize("name", ["postgres", "endpoints"])
-def test_each_group_is_attached_to_its_subnet_and_waits_for_the_module_group(
-    name: str,
-) -> None:
+def test_each_group_is_attached_to_its_subnet_after_its_rules(name: str) -> None:
     body = resources_in("network.tf")[f"{SUBNET_NSG}.{name}"]
+    rules = sorted(f"{RULE}.{n}" for n in RULES[name])
 
     assert attribute(body, "subnet_id") == f"azurerm_subnet.{name}.id"
     assert attribute(body, "network_security_group_id") == (
         f"azurerm_network_security_group.{name}.id"
     )
-    assert attribute(body, "depends_on") == f"[{PLATFORM_GROUP}]"
+    # The deny exists before the service is injected; and the redundant wait for
+    # the module's group (Z6b LOW-8) is gone, the rules reaching it already.
+    assert depends_on_list(body) == rules
+    assert len(depends_on_list(body)) == len(RULES[name])
+    assert PLATFORM_GROUP not in body
+
+
+def test_both_private_endpoints_wait_for_the_endpoints_subnets_group() -> None:
+    found = {
+        name: body
+        for name, body in resources().items()
+        if name.startswith("azurerm_private_endpoint.")
+    }
+
+    assert sorted(found) == [
+        "azurerm_private_endpoint.key_vault",
+        "azurerm_private_endpoint.openai",
+    ]
+    for name, body in found.items():
+        assert depends_on_list(body) == [f"{SUBNET_NSG}.endpoints"], name
+
+
+def test_nothing_waits_for_the_postgres_group_but_the_server() -> None:
+    # The association of the database's subnet is waited for by the server and
+    # by nothing else, and the endpoints' by the two endpoints and nothing else.
+    waiting = {
+        postgres_or_endpoints: sorted(
+            name
+            for name, body in resources().items()
+            if f"{SUBNET_NSG}.{postgres_or_endpoints}" in depends_on_list(body)
+        )
+        for postgres_or_endpoints in ("postgres", "endpoints")
+    }
+
+    assert waiting == {
+        "postgres": [SERVER],
+        "endpoints": [
+            "azurerm_private_endpoint.key_vault",
+            "azurerm_private_endpoint.openai",
+        ],
+    }
 
 
 def test_the_nodes_subnet_has_no_group_and_nothing_names_one_for_it() -> None:
@@ -428,24 +555,23 @@ def test_the_nodes_subnet_has_no_group_and_nothing_names_one_for_it() -> None:
     assert len(associated) == 2
 
 
-def test_network_names_no_address_and_only_the_plans_locals_for_a_range() -> None:
+def test_network_names_no_address_guid_or_price() -> None:
     raw = (MODULE_DIR / "network.tf").read_text(encoding="utf-8")
 
     assert not ADDRESS.search(raw)
     assert not GUID.search(raw)
     assert not PRICE.search(raw)
-    for found in re.findall(r"(?:source|destination)_address_prefix\s*=\s*(\S+)", raw):
-        assert found == '"*"' or found.startswith("local."), found
 
 
-def test_the_network_comment_says_what_the_group_does_not_know() -> None:
+def test_the_network_comment_cites_what_round_one_read_about_the_databases_group() -> (
+    None
+):
+    # The sentence "NOT read: what Microsoft requires of a group on a flexible
+    # server's subnet" was false: round 1 (E-net) read it.
     comment = squeezed(comments_of("network.tf"))
 
-    assert "NOT read: what Microsoft requires of a group on a flexible server's" in (
-        comment
-    )
-    assert "overlay pods are translated to their node's address" in comment
-    assert "the explicit deny at the end of the list is what makes" in comment
+    assert "NOT read: what Microsoft requires of a group" not in comment
+    assert "round 1, E-net" in comment
 
 
 # ── the tag that says when the environment should be gone (security L4) ──────
@@ -473,10 +599,5 @@ def test_expires_on_has_no_default_value_and_the_group_alone_carries_the_tag() -
             assert attribute(other, "tags") == "local.tags", name
 
 
-def test_expires_on_says_it_is_a_label_and_nothing_is_removed_on_the_date() -> None:
-    above = squeezed(
-        comments_of("variables.tf").split("The day the environment is meant")[1]
-    )
-
-    assert "It is a label: nothing deletes anything on that date" in above
-    assert "Absent (the default) means no tag" in above
+def test_the_header_of_main_no_longer_says_only_three_things_are_written() -> None:
+    assert "Written so far" not in comments_of("main.tf")
