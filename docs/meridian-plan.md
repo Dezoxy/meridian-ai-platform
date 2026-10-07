@@ -13735,8 +13735,15 @@ the branch; the counts are the reports'):
   `tests/meridian/registry/test_cli.py` with a shell heredoc and not with the
   edit tools, against the preamble's rule (its report says so); the text is
   the same either way and it is in the diff for review.
-- **The re-read of H17 (below), then H18 (hash to come, pending):** three of
-  its five low findings. `H18-RESULT`
+- **The re-read of H17 (below), then H18 (c7765cf):** three of its five low
+  findings. The scaffold's replacement handles a name collision at the `open`
+  alone, so a `FileExistsError` raised later no longer leaves the temporary
+  behind and un-noted (red first, with a probe of the re-read's own); the
+  recursion sweep asserts that the limit it measured lies inside its bounds,
+  so it fails loudly where it used to measure nothing (shown at limits of 150
+  and 3,000); and the registry option of `eval run` is `RegistryPathOption`,
+  with `--help` byte for byte the same. The 513 tests of the CLI folder and
+  the command's test file passed. Nobody reviewed H18.
 - **H19: this record** (documents only): the plan's section, rows and
   changelog, and two threat rows.
 
