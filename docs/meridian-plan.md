@@ -538,7 +538,7 @@ both readings the same hour ("yes both are right, go on").
 | S065 | Database and migrations | `ensure_roles` has a lock timeout and names its isolation level; audit rows of one transaction can be ordered; the sweep's listing of leftover threads does not read every checkpoint row, and its confining trigger does no work for another role's update; a check refuses two migrations with one number before a pull request merges; a column added to `claims.claims` is backfilled without holding its lock, and the rule is written down; a test database is copied from a template; the ingestion's tests that need no database run without one; retention for `audit.events` and `gateway.usage`, the periods chosen by the owner when the step opens | done (retention is not built: the owner's decision, 2026-10-05, and its backlog row stays open) | S057, S059, S060 |
 | S066 | Gateway ledger upkeep | A command of the gateway's own, under a role of its own and with an audit row, credits a tenant, closes a reservation a dead process left `reserved` and expires old ledger rows; the budget runbook names it; the rate windows are shared between gateway processes, so two pods in a rolling update do not each allow the full limits (T-45), the store chosen with the owner when the step opens | done | S058, S065 |
 | S067 | Triage rules and screening | The one step of these that changes the triage graph's rules: claims of one policy that are open at the same time count for `frequent_claims` (T-76); the injection screen reads the description as posted, before the claimant's name is replaced; the redaction knows Hungarian forms of names and identifiers; the stored wording is compared with the manifest after ingestion (T-27, T-57); a wording version missing from `wording.EXCLUSION_CLAUSES` fails with a message that names it (moved here from S060, which may not change how the triage routes a claim); golden-set cases on the fraud indicators' boundaries and for an unknown policy number; `make eval` passes, and a change that needs `make eval-record` waits for the owner's yes, since it costs money. Built as (2026-10-06; implemented and tested, none of it run on a cluster): the Claims API screens the description as posted and hands the run one boolean, `posted_text_addresses_the_model`, which the assessor reads as a hit of its own screen (CLM-1053 and CLM-1054 are stopped, 26 of 66 attacks); the redaction finds the Hungarian national phone, tax number, domestic account number and personal identification number on their own and the social security and tax identification numbers after their word, and the claimant's name is replaced with Hungarian endings after a capital letter; a wording pair the table has no count for fails the run with the fixed code `wording-version-unknown` where the rules would read it (the log line names the product and version only when both pass a closed check), not with a message that names it, and a claim that is not valid facts fails with `claim-not-valid` after a log of its fields; the golden set holds 47 claims, seven of them new, from a second random stream, and the model is not asked about them; claims that are still open count for `frequent_claims` by the strict date rule of a decided one, and a withdrawn claim never does (migration 0025, the owner's decision of 2026-10-06); `meridian knowledge verify` compares the stored clauses with the manifest-verified wordings and the ingestion Job runs it after its write (migration 0026). The free replay passed after each landing that could move a recorded answer, and no paid recording was made | done | S060, S061, S064 |
-| S068 | Database upkeep and retention | The owner names the retention periods for `audit.events` and `gateway.usage` first (open since S011; without them the step builds the mechanism and schedules nothing); an insert-only audit table has a way to expire rows; migration 0017's rewrite of a large audit table has a way through that is written down and tested; the static check on migrations says what it cannot see or sees it; `expire_ledger` works in batches; a holder of the upkeep credential cannot stall the gateway with an open transaction; a login that is a member of `claims_sweep` is confined or refused where the database is made; no role creates temporary tables it does not need | todo | S066 |
+| S068 | Database upkeep and retention | The owner names the retention periods for `audit.events` and `gateway.usage` first (open since S011; without them the step builds the mechanism and schedules nothing); an insert-only audit table has a way to expire rows; migration 0017's rewrite of a large audit table has a way through that is written down and tested; the static check on migrations says what it cannot see or sees it; `expire_ledger` works in batches; a holder of the upkeep credential cannot stall the gateway with an open transaction; a login that is a member of `claims_sweep` is confined or refused where the database is made; no role creates temporary tables it does not need. Built as (2026-10-07; implemented and tested against PostgreSQL, none of it run on a cluster; no number of days and no schedule is set anywhere): audit rows expire through one function of the owner's that only a session logged in as the upkeep role reaches, `meridian gateway expire-audit` with a dry run that counts, in batches of at most 10,000, each with an audit row, and the rows the upkeep role wrote itself are never removed by it (migrations 0027, 0028); the ledger expires in batches of 100 to 10,000 usage rows on one connection, with a closing call for the counters and credits (0029, 0030); 0017's way through is written down in the migrations' README as needed by no database that exists, a test shows that it fails closed at its first heavy statement and the two ways out are designed, not built; the static check on migrations sees more statements and the README lists what it does not see, each entry pinned by a test; a database default ends a transaction left idle after 60 s (0031), which stops a forgotten transaction and not a deliberate one, so a holder of the upkeep credential can still stall a counter for the statement timeout; a member of `claims_sweep`, or of `gateway_upkeep`, is refused at every `meridian db migrate` after the files are applied, which detects at the next deploy and does not prevent; `pg_temp` is last in the path of every trigger and definer function, with a test over the whole catalog, and the right to make temporary tables stays with PUBLIC (decided, not built). Not built: the periods and a schedule (the owner's, four questions in the section), the briefs' expiry (waits for the owner), a parser for the static check | done (the periods are the owner's and are not set, nothing is scheduled; not built: the briefs' expiry and the removal of PUBLIC's right to make temporary tables, see the Done-when cell and the section) | S066 |
 | S069 | Runtime and gateway edges | Without a change to a prompt or a rule: a validation error in the triage's two answers logs the field; the tool-call limits can differ by agent, or the plan says why not; a failed resumed leg does not leave the first leg's value to be read as the answer; `drafted_by` is right for a completion the filter withheld and the provider billed; the runtime's client of the gateway is bounded per call; a resumed leg that outlived its lease cannot write over the leg that took the run; `service_url_problem` refuses what the HTTP client refuses; a shed tool call's audit row names its run where that can be checked; the refusal flood's count covers the caller check and the throttles; an embedding input is bounded in tokens; the health check watches the certificate the server loaded; the ingestion's data class has a tenant of its own (T-60, the owner's decision when the step opens) | todo | S064, S037 |
 | S070 | Claims intake and what the adjuster is told | The owner decides first whether uploads are built or stay out (T-38: the largest item here; if built it is a step of its own, split off when this one opens); a report dated as a recent loss is seen for what it is, or T-66 says why it cannot be; the adjuster's page marks a recommendation that rests on the model's answer, so a steered model's `approve` does not read as the rules' | todo | S067 |
 | S071 | Measurements that need a live model | Costs money (about fifty chat calls and some embedding calls; the owner says yes before any, and the amount is stated first): a real model's answers to the injection cases the screen lets through, recorded beside the golden recording; a model's refusal of a structured request seen from a real provider; retrieval measured with a real embedding, in the evaluation and in S038's one failing check; the judge compared with labels a person wrote for a sample; a held-out set for the injection screen, and a decision on what a false alarm may cost; CLM-0034's `unsure` settled by a prompt or recorded as the right answer; retrieval over a graph measured again only if the synthetic data gains something relational to find | todo | S067 |
@@ -604,7 +604,7 @@ that day; the rest stand as their step recorded them.
 | A registry notice when every candidate of a route shares a region | S042 | open | S020 |
 | A circuit's failure count without a time window: three failures days apart open it, two failures in three calls never do | S042 | open | S027 |
 | A `make` target for the secret scan, so it gates a push and not only CI | S042 | closed by S057 (`make secret-scan`; it refuses a base git does not know, which gitleaks alone passes with nothing scanned) | S057 |
-| Retention for `audit.events` and `gateway.usage` | S011 | open; not built in S065, by the owner's decision of 2026-10-05 ("Leave retention open"): the periods are the owner's to choose, and an insert-only audit table needs its own way of expiring rows. S066 (2026-10-06) built the mechanism for the ledger: `meridian gateway expire` removes whole past months when an operator names the month, and nothing schedules it; the period is still the owner's to choose, and audit rows are not expired | S068 |
+| Retention for `audit.events` and `gateway.usage` | S011 | open; not built in S065, by the owner's decision of 2026-10-05 ("Leave retention open"): the periods are the owner's to choose, and an insert-only audit table needs its own way of expiring rows. S066 (2026-10-06) built the mechanism for the ledger: `meridian gateway expire` removes whole past months when an operator names the month, and nothing schedules it. S068 (2026-10-07) built the rest of the mechanism, implemented and tested against PostgreSQL and not run on a cluster: the ledger in batches and `meridian gateway expire-audit` for audit rows older than a cutoff the operator types. What stays open is the periods, which are the owner's to choose and which no document states (the owner, 2026-10-06, "we should go with EU based thing": the session sets no number), and a schedule that passes them to the commands, a decision of its own made with them; S068's section puts four questions to the owner. A backup keeps an expired row until it rolls off, so S020 states the database's backup retention beside the audit period | S020 |
 | A connection pool (a request opens about three connections) | S011 | open | S027 |
 | An ingress rate limit (T-02), also on the posts that start a triage | S011, S049 | open; left by S019 (not in its "done when") | S021 |
 | `create_app` cut into a handler class | S011 | declined in S011, with reasons | S011 |
@@ -656,12 +656,12 @@ that day; the rest stand as their step recorded them.
 | `ensure_roles` has no lock timeout and relies on the default isolation level | S054 | closed by S065 (READ COMMITTED and a lock timeout of a minute, with an error that names the lock) | S065 |
 | A coverage gate in CI (measured once: 99.2 % of lines; coverage adds about a third to the run) | S054 | open, the owner's decision | S074 |
 | Template databases, so a test database is copied and not migrated | S054 | closed by S065 (one migrated template per set of migrations; the whole suite beside the cluster went from 3 min 00 s to 2 min 11 s with 4 workers) | S065 |
-| A login that is a MEMBER of `claims_sweep` and does not `SET ROLE` has neither of the two names the sweep's triggers test, so it holds the sweep's grants and is not confined (true since 0014); a test holds that no login is a member on a test database, and nothing checks a deployed one | S065 | open; S063 did not take it: migration 0022 refuses a membership of its own two roles when it runs, and nothing looks at a deployed database afterwards; its security review, low; T-77's residual | S068 |
-| Migration 0017 rewrites `audit.events` twice under an exclusive lock, each statement under the connection's 10 s limit: above about five to six million rows the runner cannot apply it (it fails closed), and the ways out, a new table and a switch or a one-off longer timeout, are not built; it writes about twice the table in WAL | S065 | open; measured by its PostgreSQL review (1.5 million rows: 2.4 s and 2.2 s); the Azure database of S020 starts empty | S068 |
+| A login that is a MEMBER of `claims_sweep` and does not `SET ROLE` has neither of the two names the sweep's triggers test, so it holds the sweep's grants and is not confined (true since 0014); a test holds that no login is a member on a test database, and nothing checks a deployed one | S065 | closed by S068 in the form the database allows: `meridian db migrate` counts at every run the roles that are members of `claims_sweep` through `INHERIT` or `SET` and the roles it is a member of, and a count above zero stops the deploy's migrate Job with the files applied; `gateway_upkeep` is checked the same way for the roles it is a member of. It detects at the next deploy and does not prevent, so a login granted in between is unconfined until then (T-77); implemented and tested against PostgreSQL, the Job's refusal not seen on a cluster. S063 did not take it: migration 0022 refuses a membership of its own two roles when it runs; its security review, low | S068 |
+| Migration 0017 rewrites `audit.events` twice under an exclusive lock, each statement under the connection's 10 s limit: above about five to six million rows the runner cannot apply it (it fails closed), and the ways out, a new table and a switch or a one-off longer timeout, are not built; it writes about twice the table in WAL | S065 | closed by S068 as the step's clause words it, written down and tested: no database that exists is in the state that needs a way through (kind's is short-lived and the Azure database of S020 starts empty), the migrations' README says what an operator of one would do, and a test shows that the runner fails closed and leaves the table as it was, for a cancel at the file's first heavy statement only, not during `CLUSTER` or the rewrite for the column (the README says so); the two ways out stay designed, not built. Measured by its PostgreSQL review (1.5 million rows: 2.4 s and 2.2 s) | S068 |
 | The order `seq` gives the audit rows that existed before 0017 rests on a table rewrite reading the heap in the order `CLUSTER` wrote it, which PostgreSQL does not promise; a test pins it, and 500,000 shuffled rows kept it | S065 | open; a PostgreSQL major upgrade is where it could change | S029 |
-| A checkpoint thread whose ID is not UUID text is walked from a fixed place and may never be listed, and a leftover behind a long run of live threads is listed only when the random start lands inside that run; nothing counts or alerts on leftovers that stay | S065 | partly closed by S064: what a pass cleaned is a series (`meridian_sweep_last_pass`, finding `threads_cleaned`), so leftovers that are found are counted; a thread the walk never lists is still seen by nothing, and no rule reads the gauge's values. The runtime writes UUID text only; both reviews, low | S068 |
+| A checkpoint thread whose ID is not UUID text is walked from a fixed place and may never be listed, and a leftover behind a long run of live threads is listed only when the random start lands inside that run; nothing counts or alerts on leftovers that stay | S065 | partly closed by S064: what a pass cleaned is a series (`meridian_sweep_last_pass`, finding `threads_cleaned`), so leftovers that are found are counted; a thread the walk never lists is still seen by nothing, and no rule reads the gauge's values. The runtime writes UUID text only; both reviews, low. S068 decided to build nothing for it and wrote no sentence in the sweep's docstring (its design had said the docstring would): a rule on a count of leftovers is a cluster item, so the row moves to the step that holds the alerts and the cluster | S073 |
 | The template database is built from the packaged migrations read at import; a test that patches the runner's file list and is the first on its worker to need the template makes the session's fixture fail for the tests after it. A `files` parameter on `apply_migrations` would let the builder pass its own | S065 | open; no test does both today | S074 |
-| The static check on migrations reads SQL text: it does not see an `UPDATE` inside a function body or dynamic SQL, an `ADD` without the word `COLUMN`, or a table reached by another name | S065 | open; its own docstring and the README say so | S068 |
+| The static check on migrations reads SQL text: it does not see an `UPDATE` inside a function body or dynamic SQL, an `ADD` without the word `COLUMN`, or a table reached by another name | S065 | closed by S068: the check sees five more statements (`DROP INDEX` and `REINDEX`, except their `CONCURRENTLY` forms, `DROP TABLE`, `DROP VIEW` and `TRUNCATE`) and, after the review, `DROP SCHEMA`, `DROP SEQUENCE`, `DROP MATERIALIZED VIEW`, `REFRESH MATERIALIZED VIEW`, `ALTER VIEW`, `ALTER MATERIALIZED VIEW`, `ALTER INDEX` and the `CASCADE` forms of `DROP FUNCTION`, `TYPE`, `DOMAIN` and `EXTENSION`, and reads a later `SET LOCAL lock_timeout` of 0, a `RESET` or a `DEFAULT` as taking the timeout away; the migrations' README holds the one list of what it does not see, and each entry has a test that pins it as not seen. No SQL parser is built (a dependency for a check on twenty files) | S068 |
 | The CI python job's limit of 15 minutes, once several parallel runs are measured | S054 | closed by S057 (kept at 15: twice the slowest of 47 successful runs, 7 min 30 s; the median is 6 min 47 s, and the job prints its slowest tests) | S057 |
 | Skip lint and tests in the python job for a pull request that changes only files no test reads (the job must still report) | S054 | open | S022 |
 | A model's refusal of a structured request (`message.refusal`) is read as `filtered` against a mocked transport only; no real one has been seen | S051 | open; not taken by S032, which makes no live call. A live run of the injection cases (the row below) is where one could be provoked | S071 |
@@ -811,10 +811,10 @@ that day; the rest stand as their step recorded them.
 | The failure paths of the lines S062 added to `make smoke` were seen against stubs only (a missing store table, a deleted rule object, a request that is approved, a run interrupted by a signal); `make demo`'s alternating wording and `make images` in a checkout without the cluster's credentials likewise | S062 | open; each needs something broken on purpose on a cluster | S073 |
 | A manual Job of the sweep hides a stopped schedule from `make smoke` for fifteen minutes; check 8 reads the Claims API alone as the sign that the services are deployed | S062 | open | S073 |
 | The command guard's hook took 16 s on a 70 KB command under a machine load of 79, over the 10 s a hook is given; what the harness does with a hook that times out was not looked up | S062 (seen in the guard's review) | closed by S075: Claude Code does not block a call whose hook ran out of time (its documentation says so), so the guard arms a watchdog that answers `ask` after 5 of its 10 seconds and asks at once for a command over its byte or part bounds; a test holds the watchdog's time to the settings' timeout. A single regex match in flight cannot be interrupted, which the hook's header says with its measurements | S075 |
-| A holder of the `gateway_upkeep` credential can stall the gateway for a tenant: `credit_tenant` in a transaction left open holds the counter's row lock, and the gateway's own update of that counter waits until its statement timeout. A limit of two sessions on kind bounds it; a role-level idle-in-transaction timeout would cut it short, and the role is created out of band | S066 (both reviews) | open | S068 |
-| Nothing alerts on a credit, an expiry or a release by the ledger's upkeep, and a call the functions refuse leaves no audit row | S066 | open; S064 did not take it: the upkeep is a command a person runs and exports no series, so a rule has nothing to read; its audit rows are the record | S068 |
+| A holder of the `gateway_upkeep` credential can stall the gateway for a tenant: `credit_tenant` in a transaction left open holds the counter's row lock, and the gateway's own update of that counter waits until its statement timeout. A limit of two sessions on kind bounds it; a role-level idle-in-transaction timeout would cut it short, and the role is created out of band | S066 (both reviews) | closed in part by S068 (0031): a database default of 60 s ends a transaction left idle, so a forgotten one no longer holds a counter's row; it is the database's and not the role's, because it also binds the services, whose transactions were read and wait on nothing but the database. A session can change it for itself, so a holder who means to stall still can until the statement timeout, and it does not touch a session idle outside a transaction: accepted, T-25. Tested on a database the files ran on, not run on a cluster | S068 |
+| Nothing alerts on a credit, an expiry or a release by the ledger's upkeep, and a call the functions refuse leaves no audit row | S066 | open; S064 did not take it: the upkeep is a command a person runs and exports no series, so a rule has nothing to read; its audit rows are the record. S068 decided to build no alert for an upkeep action until a person is on the audit row, since an alert on who did it needs who; the expiry's audit rows say what went and why, and a refused call still leaves none | S021 |
 | `meridian gateway` has no way to run on a cluster: no workload holds the role's Secret (a test keeps it so), and the runbook labels the cluster path designed | S066 | closed by the step's second half (2026-10-06): `make gateway-upkeep` renders a Job of its own outside the release, under the role's Secret; on kind it read the open reservations, refused an expiry with nothing to remove and credited one token | S066 |
-| `expire_ledger` removes a month's rows in three statements under the connection's statement timeout: a very large expiry fails closed and removes nothing, and a batched expiry is not built (8 million usage rows took 2.1 s on a memory disk in the review) | S066 | open | S068 |
+| `expire_ledger` removes a month's rows in three statements under the connection's statement timeout: a very large expiry fails closed and removes nothing, and a batched expiry is not built (8 million usage rows took 2.1 s on a memory disk in the review) | S066 | closed by S068: the ledger expires in batches of 100 to 10,000 usage rows, each its own transaction on one connection, and a closing call removes the counters and credits of those months (migrations 0029, 0030); `expire_ledger` of 0020 stays and is the owner's alone. Implemented and tested against PostgreSQL, not run on a cluster | S068 |
 | `tests/meridian/db/test_gateway_upkeep_credit_expire.py` (about 975 lines) and `test_gateway_upkeep_migration.py` (about 840) are over the 800-line ceiling; their shared helpers would have to move first | S066 | open | S074 |
 | The certificate policy admits any `*.meridian.svc` name and any service account's URI for a request in the namespace, so whoever can create a Certificate and a pod there can answer as another service, the rate store included, and capture the gateway's password for it (T-92) | S066 (security review; as it was since S056) | open | S072 |
 | No image is scanned for known vulnerabilities in CI: the Redis image, like the others, is pinned by digest and read by Renovate, and nothing reports what is in it | S066 (infra review) | open | S022 |
@@ -842,7 +842,7 @@ that day; the rest stand as their step recorded them.
 | node-exporter is off on kind, so a node's CPU, memory and disk are not observed; it alone would hold `observability` at Pod Security `privileged` | S063 | open; the owner's to overturn | S072 |
 | Renovate proposes a chart a week after its release and an image at once (the docker datasource gives no dependable release date for quay.io and ghcr.io), so an image's tag can be proposed before the chart that installs it; a note on the pull request says to leave it | S063 (infra review) | closed by S075: one rule switches off Renovate's tag updates for the 17 images a chart installs by default and keeps digest updates, so an image is not proposed before its chart (the collector's two images are outside it until their pin and the chart's appVersion agree); the chart's pull request moves the tags by hand | S075 |
 | A renewal has not been seen for the collector's certificate (90 days), its authority (a year) or the database's three certificates (90 days), and nothing alerts on the database's: cert-manager's series do not cover CloudNativePG's | S063 | open | S073 |
-| Every role of the database may create temporary tables (PUBLIC's right on the database); nothing a role can shadow with one was found | S063 (database review) | open | S068 |
+| Every role of the database may create temporary tables (PUBLIC's right on the database); nothing a role can shadow with one was found | S063 (database review) | closed by S068 as decided: the right stays with PUBLIC, because taking it away is a database-level privilege that the tests' copies of the template do not carry and two tests use the right as their control; the defence is completed instead: the four older trigger functions pin `pg_temp` last in their search path (0031) and a test over the migrated catalog fails for any trigger or definer function of the owner's schemas that does not (T-100). Tested against PostgreSQL, not run on a cluster | S068 |
 | `infra/kind/smoke.sh` is near 2,900 lines; a new check would be better as a file of its own, which needs the script split first. Tempo's pod mounts an API token it does not use | S063 | open | S074 |
 | No rule and no dashboard panel reads the values of S064's series: a jump in an assessment reason (`special-data`, `injection-suspected`, `filtered`), triages that fail by reason, a sweep finding that stays above zero, the tool servers' refusals, a runtime that cannot reach the gateway; and no rule reads a log line (kind's Loki runs no ruler) | S064 | open; thresholds need a measurement | S027 |
 | The log agent's own counters (its exporter's failures, the memory limiter's refusals) are scraped by nothing; a DaemonSet that does not exist leaves no series, so only smoke says the agent is gone; the kubelet's rotation can outrun the agent, and one flooding pod may stall the others' lines (not measured). The agent mounts the node's pod-log directory, so `logging` cannot be `restricted` and a compromised agent reads every pod's output on its node | S064 (infra review) | open; the second half is a stated residual | S072 |
@@ -856,7 +856,7 @@ that day; the rest stand as their step recorded them.
 | The threat model's rows on the edge's firewall, the budget, egress and provider-side retention (T-02, T-15, T-19, T-20) speak of Azure alone; the mapping ADR says what each would mean on Google Cloud, where a budget pauses model spend at most, the chosen edge has no managed firewall in front, and flagged prompts may be logged for up to 90 days on the online terms | S077 | open; ~~they are corrected when a module is applied, not from documentation~~ no module is applied on Google Cloud (the owner, 2026-10-06), so S078 closes this row by saying in each threat row that its Google Cloud reading is from documentation alone | S078 |
 | The second host's checkpoint rows carry no release stamp: a release that changes the claim brief's steps, edges or state fields ends every brief that waits (`workflow-changed`, `checkpoint-refused`), and in a rolling update an old pod reads rows a new pod wrote and ends the run for good; two tests pin the shapes (T-98); neither case was seen on a cluster | S037 (security review, third pass) | open | S069 (the nearest: it holds the runtime's edges) |
 | The tool server does not check that `add_claim_note` follows a recorded approval for the run: a direct call files a note, and the gate is the workflow's code and the Claims API's record, as for the triage since S015; `approval_required` cannot stand in for it, since the server refuses every call of such a tool | S037 (boundary review) | open | S069 (the nearest: it holds the tool server's edges) |
-| `claims.briefs.brief` has no retention rule, and a brief that nobody decides keeps its run, its checkpoint rows (which hold the unredacted brief) and its claim's one open slot with no age bound; `claims_api` can set a brief's `run_id` and `tenant` as it can a claim's (no key ties them to the claim's tenant) | S037 (reviews) | open; the periods are the owner's to choose | S068 |
+| `claims.briefs.brief` has no retention rule, and a brief that nobody decides keeps its run, its checkpoint rows (which hold the unredacted brief) and its claim's one open slot with no age bound; `claims_api` can set a brief's `run_id` and `tenant` as it can a claim's (no key ties them to the claim's tenant) | S037 (reviews) | open; S068 did not build it: the expiry of a decided brief (an owner's function, the row going whole since its text cannot be blanked under the table's check) and the key that ties a brief's tenant to its claim's (a unique index, a foreign key not valid, then its validation, in two files) wait for the owner's answer on an age bound for an undecided brief (S068's section, question (c)); the periods are the owner's to choose. S070 is the nearest step in the claims workload | S070 |
 | Renovate has no rule for `agent-framework-core`: a bump arrives in the monthly `python` group and can change the graph's signature and strand paused briefs; `python-dotenv` 1.2.4 was locked five days after its release, under the seven-day rule; the guard today is `test_brief_stored_shapes.py` | S037 (security review) | closed by S075 for the missing rule: the framework's packages (`agent-framework` and `agent-framework-*`) leave the monthly `python` group for an `agent framework` pull request of their own, with a label and a note that names the tests and says it is not merged on green checks alone (Part A). A package locked while it is younger than a week, as `python-dotenv` 1.2.4 was, is what uv's `exclude-newer` would refuse (the row for S074) | S075 |
 | No runbook names a failure of the claim brief that an operator can act on: a brief that waits for ever, a release that strands paused briefs, a migration (0023, 0024) not applied | S037 (service acceptance, SA-20) | open; no step writes a runbook, so the nearest is the game day that exercises them | S028 |
 | The claim brief has no grader, no baseline and no cases (its golden set is empty and its evaluation raises `NO_GRADERS`), so nothing in CI grades a brief or fingerprints its prompt; the tenant `evaluation` does not list the agent | S037 (service acceptance, SA-15) | open; no step grades a workload, so the nearest is the one that measures with a model | S071 |
@@ -890,9 +890,20 @@ that day; the rest stand as their step recorded them.
 | Claims filed against a policy that is not the claimant's count towards the holder's next claim while they are open (T-76): until S021 anyone may file against any policy, so planted open claims send the holder's next claim to an adjuster; it costs a review, not a payment or a refusal | S067 (the owner's decision of 2026-10-06) | open | S021 |
 | Not seen on a cluster after S067: migrations 0025 and 0026 applied by the migrate Job, the ingestion Job's second command (`meridian knowledge verify`) and its audit row, an open claim counted through the real services, a Hungarian form redacted in a service's log line, and the posted-text boolean reaching the runtime over mutual TLS | S067 | open; tests hold each (the Job's command line was run in a shell with a stand-in for `meridian`) | S073 |
 | `meridian knowledge verify` runs in the ingestion Job, which a deploy skips when the image's ingestion has already succeeded and the store is not empty, and nothing runs it on a schedule; a Job that verifies without ingesting is not built, and the runbook says when to run it by hand (T-57) | S067 | open | S073 |
-| `meridian knowledge verify` writes its counts into `audit.events.reason`, a column documented as the reason a call was refused, because it is the one free-text column; its audit row has no tenant | S067 (C4v) | open; the owner may prefer a column of its own | S068 |
+| `meridian knowledge verify` writes its counts into `audit.events.reason`, a column documented as the reason a call was refused, because it is the one free-text column; its audit row has no tenant | S067 (C4v) | open; the owner may prefer a column of its own. S068 decided to build nothing: the data classification now says that the column holds a refusal's reason and, for this command, the counts it made. The console's audit search (S033) will read the column, so that step is where a column of its own would show | S033 |
 | Tests that failed under load in S067's runs and passed alone: `test_a_scripted_model_gives_the_oracle_s_proposals` (a `wording_search` call timed out), `test_the_decisions_trace_fails_too_when_one_of_its_services_has_no_span`, and, in one final run, three that were not read (`test_sweep.py::test_importing_the_sweep_loads_no_web_stack_no_langgraph_and_no_claims_api`, `test_claims_mcp.py::test_eight_threads_sending_one_key_leave_one_row_and_all_get_its_id[add_claim_note]` and `test_evaluation_http.py::test_loading_the_claims_evaluation_brings_in_no_agent_framework`); and a first database run of C4v's with 1,338 fixture errors that nobody explained | S067 | open | S074 |
 | Left by S067's reviews, all low: `redact` is 76 lines with its docstring and `redaction.py` 792, eight under the ceiling, so any growth needs a split (the Hungarian part, in a module of its own); `test_redaction_hungarian.py` is 858 lines and `test_claims_graph.py` about 2,300; five tests load the two name-masked cases each on its own (one helper in `servicesupport` would do); `VOWEL_FORMS` and `ARCHAIC_SOUNDS` are plain dicts; no test names `re._compiler`; `test_assessment.py` asserts the `["CLM-0012", "CLM-0044"]` literal beside a derived check; four docstrings and comments say what was true before: `claimant_name.py` ("one word", where two golden descriptions hold "Leon"), the first lines of `triaging.py` ("the run's facts"), and `evalsupport.py` and `test_evaluation_stack.py` ("the 40 golden claims") | S067 (reviews) | open | S074 |
+| Not seen on a cluster after S068: the migrate Job applying 0027 to 0031 (and refusing, by a file's guard, a missing role, or by the check after the files, a membership of `claims_sweep` or of `gateway_upkeep`), the upkeep Job's refusals and a dry run of `expire-audit` through the Job (a date only passes its word check), the database default of 60 s on the cluster's database (`ALTER DATABASE` needs the owner to own it; read in the kind values, not checked), a connected session picking up an altered function's path, and dead index entries slowing a long run until vacuum | S068 | open; tests hold each against PostgreSQL | S073 |
+| The upkeep Job's deadline of 120 s bounds one run to a number of rows that nobody measured on a disk: at the rate F2 measured (8 to 12 ms for a batch of 10,000 usage rows; one machine, data in memory, not a cold disk) it is about a hundred million, and U4's figure of about twelve million was the rate before the index changed; a larger backlog is several runs or a terminal, and a Job that is stopped prints nothing of what it removed | S068 (U4) | open | S073 |
+| `infra/kind/upkeep.sh` and the Makefile: the comment above `READ_BEFORE_RERUN` speaks only of credits (a failed `expire` or `expire-audit` may have removed batches); the `gateway-upkeep` help line and its test say four subcommands where there are five; a `helm get` that times out reads as "the release is not installed" | S068 (U3b, F2) | open; low; S073's contracts edit those files next | S073 |
+| The ledger's closing call inherits two things from 0020: it deletes a month's counters in an order that can meet the reserve's at a month's first seconds (a deadlock that one of the two loses after a second, or a reserve that found a counter the delete then removed and is refused for nothing), and its two removals are single statements over tables with no index on the period, so a very large number of counters would meet the statement timeout | S068 (database review of U4) | open; neither was seen: the first needs a script of two sessions, the second tens of thousands of tenants | S069 |
+| The upkeep command's small ends: no guard on the isolation level (a caller at REPEATABLE READ would read stale snapshots in the closing call; the command's own connection is READ COMMITTED), no progress line on Ctrl-C or SIGTERM, and two sentences (`AUDIT_COUNT_CANCELLED` and what `_say_what_remains` prints) that blame the statement timeout alone for a cancelled statement, which an administrator can cancel too | S068 (reviews, F2) | open; low | S069 |
+| The command guard has no case for `--limit` or for `expire-audit`: the second asks in every form, the dry run included, by the shape of its pattern and not on purpose, and its sentence names no audit rows; no rule matches `meridian gateway ... --confirm` typed directly or a Job rendered with `helm template`, so the guard covers `make gateway-upkeep` and `upkeep.sh` only | S068 (reviews, F1, F2) | open; the guard is a guard for habits | S036 |
+| The state filter of the ledger's batch (`state <> 'reserved'`) has no test in which it decides, because a reserved row of a past month is refused before the delete; the lock timeout of 0029 firing, a reserve and a close that do not wait for an expiry, and the batch's plan from the fifth call of a connection on (a generic plan) are untested too | S068 (database review of U4) | open | S074 |
+| `test_kind_upkeep_script.py` (842 lines) and `test_migration_rules.py` (976) are over the 800-line ceiling, and a sibling test module cannot import the second (no `tests/meridian/db` path is on `sys.path`); `cli/gateway.py` is 779 lines | S068 (F1, F2) | open | S074 |
+| The audit table's trigger can still be switched off by the owner, a superuser or a managed database's administrator, and nothing records it (T-25); a check that the owner role has no members and that the upkeep role owns no object is not built (on a managed database the administrator is a member of the owner role by necessity); what the Azure administrator may do (`session_replication_role`, creating and granting roles) is read, not assumed, and `pgaudit` on the managed database is the enterprise-grade option | S068 (security review) | open | S020 |
+| Every figure of S068's expiry was measured on one machine with the data in memory: the builds of 0027 and 0029 (each blocks writers of its table while it runs), a batch of 10,000 rows, the closing call (measured with no counters planted), the cost of an insert into the new indexes (argued, not timed), the write-ahead log of a batch (estimated, not measured) and a dry run's count over tens of millions of rows | S068 (reviews, F2) | open; the first database that is not in memory is the Azure one | S020 |
+| Rows the upkeep role wrote (every `audit.expire` and `ledger.expired` row, a credit's and a close's) are never removed by the audit expiry, so they stay for ever: a few rows for each operator action, with slugs and tenant IDs and no personal data; a period for them needs a function of their own and the owner's answer | S068 (F1) | open | S020 |
 
 ## Part C — Step details
 
@@ -12262,6 +12273,438 @@ backlog (S070); nothing else changed.
   verify audit row's use of `reason`, and the flag's place before the clause
   screen. The reversal of S053's undecided half is the owner's (18:02 UTC).
 
+### S068 — Database upkeep and retention
+**Status:** done · **Started:** 2026-10-06 · **Finished:** 2026-10-07
+**Goal:** rows of the platform's insert-only audit table and of the Model
+Gateway's cost ledger can expire, by a command an operator runs, and four
+neighbouring database rules are tightened: a transaction left idle, a
+temporary object that shadows a name, a login that is a member of a role the
+database confines by its name, and what the static check on migrations does
+not see.
+**What the step is not:** it sets no retention period (the owner has named
+none, and no document states a number of days), it schedules nothing, it has
+no default cutoff, and nothing of it ran on a cluster. It builds a
+mechanism whose period is an argument a person types; the step removed no
+row of any database but a test's.
+
+**Decisions** (the session's unless marked; the owner may overturn any; the
+design with its threat note was written before the first contract, and what
+follows is what the decisions ended as, not as they began):
+
+- **The periods are not set.** The owner, 2026-10-06, asked how long
+  `audit.events` and `gateway.usage` should be kept: "we should go with EU
+  based thing". The session read that as "no number from the session". EU law
+  gives no single period for these tables (the owner's four questions below
+  name the kinds of rule that bear on it), and the governance documents
+  already say a production period would come from the insurer's retention
+  schedule. So the step builds the mechanism, schedules nothing, and asks.
+- **How an insert-only table lets a row go.** One function of the owner's,
+  `gateway.expire_audit_events(p_before, p_reason, p_limit)`, in the schema
+  `gateway` beside 0020's functions, `SECURITY DEFINER` with a pinned path,
+  `EXECUTE` for `gateway_upkeep` alone (0028). The trigger function
+  `audit.forbid_change()` is replaced: an `UPDATE` and a `TRUNCATE` always
+  raise, for everyone; a `DELETE` passes only when `session_user` is
+  `gateway_upkeep`, `current_user` is the table's owner and the row's
+  `db_role` is not `gateway_upkeep`. That holds only inside the owner's
+  function called by a login of the upkeep role: the owner's own statement, a
+  superuser, and a login that is merely a member of the upkeep role all raise.
+  The function removes at most `p_limit` rows (1 to 10,000) recorded before a
+  cutoff that is not in the future, oldest first, by row location (`ctid`)
+  over rows it locked in the same statement with `FOR UPDATE SKIP LOCKED`, so
+  a row another session holds is skipped and not waited for; each call that
+  removed anything writes one `audit.expire` row with the cutoff and the
+  count, in its own transaction, and a call that removed nothing writes none.
+  The index it reads is `(recorded_at, seq)` (0027), built inside the
+  runner's transaction (a concurrent build cannot run there), so the lock
+  timeout of 3 s is the mitigation, not a concurrent build. **Rows the upkeep
+  role wrote are never removed by this path**, so every removal leaves a
+  permanent row and the credential cannot erase its own acts; that rule stands
+  in three places (the batch, the count, the trigger) and one test holds them
+  equal. Rejected: switching the trigger off inside the function (an exclusive
+  lock on the audit table at every run: every service's audit write would
+  wait, and a failed audit write fails the call); partitions by month (three
+  files or more, a copy as long as 0017's, a primary key that must change, and
+  a schema change by the owner every month with no credential for it at run
+  time); a marker the session can set (whoever may remove a row may set it, so
+  "the owner's included, still raises" would be false); a role that cannot log
+  in, owning the function (no role of the database holds `CREATEROLE`, so a
+  migration cannot make one, and a new role is a cluster change this step did
+  not hold); a role of its own for the caller (the same cluster change). The
+  caller is the existing upkeep role, whose name is now narrower than its job
+  (the README says so): the session's decision, which the owner may overturn.
+- **Age only.** The function does not ask whether a row's claim still exists.
+  A period shorter than a claim's life would shorten the trail an adjuster
+  reads; the runbook says so, and the owner's period decides it (question (b)).
+- **The dry run's count is a second function of the owner's.**
+  `gateway.count_audit_events_before(p_before)` only counts, with `EXECUTE`
+  for the upkeep role alone, because the role has no right on the table or the
+  schema `audit` and the ledger's dry run counts through column grants that
+  have no counterpart here. The role can already remove those rows, so the
+  count adds no reach to remove; it does let its holder learn how many events
+  fell in any interval (volume, no content), which the security review asked
+  to be said (question (d)).
+- **The ledger in batches** (0029, 0030). An index on `gateway.usage (month)`
+  alone (6.8 MB at a million rows; an insert lands on the rightmost page), and
+  `gateway.expire_ledger_batch(p_before, p_reason, p_limit)`, the owner's,
+  executable by the upkeep role alone. A call removes at most `p_limit` usage
+  rows of the months before the cutoff, oldest month first, by row location
+  over rows locked in the same statement, and writes one `ledger.expired` row;
+  the call that finds none left removes the counters and credits of those
+  months and writes one more row; a call after that returns zeros and writes
+  none. The limit is **100 to 10,000**: each batch's audit row is one the
+  upkeep role can never remove, so a limit of 1 wrote one permanent row for
+  every ledger row. "Is any row left" is a `PERFORM 1 ... ORDER BY month LIMIT
+  1` and not an `EXISTS`, which PostgreSQL strips of both clauses and which
+  then planned as a scan from the start of the table. A reserved row of those
+  months refuses the call (GU303, checked first and again before the periods
+  are closed, its raise undoing the removal of counters and credits), and rows
+  held by another session end in GU306. The command holds **one connection for
+  a run**, one transaction for each call. Between calls the counters of a past
+  period stand without all their usage rows, so the reconciliation shows drift
+  for those periods until the closing call; nothing the gateway decides reads
+  a past period, and a test admits and charges a call the same with a
+  half-expired past. 0020's `expire_ledger` stays, an applied file cannot
+  change, and 0030 takes the upkeep role's `EXECUTE` on it back: one way to
+  expire the ledger.
+- **Memberships are checked at every `meridian db migrate`**, after the files
+  are applied, on a connection of its own. The sweep's two triggers and the
+  audit trigger confine a session by its name, so a login that is a member of
+  `claims_sweep` (with `INHERIT` or `SET`) or a role `claims_sweep` is a member
+  of, or a role `gateway_upkeep` is a member of, escapes by having neither name
+  (for the upkeep role: a membership of the owner's role is the one way to the
+  removal outside the function). A count above zero stops the deploy's migrate
+  Job with one sentence that names no role, the files applied and staying
+  applied. It detects at the next deploy and does not prevent, and the
+  README, the runbook and T-25 and T-77 say so. If the check's own query
+  fails, the command says the files were applied, the check did not run and the
+  command should run again, and exits 1. Rejected: confining by `pg_has_role`
+  in the triggers (true for a superuser, which the tests' admin sessions are,
+  and an exclusive lock on two hot tables); a migration (a grant made after a
+  file ran is seen by no file).
+- **The static check says what it cannot see, in one place.** Five statements
+  join those that need a lock timeout (`DROP INDEX` and `REINDEX` except their
+  `CONCURRENTLY` forms, `DROP TABLE`, `DROP VIEW`, `TRUNCATE`), and after the
+  review more (`DROP SCHEMA`, `DROP SEQUENCE`, the materialized-view and
+  `ALTER` forms, the `CASCADE` forms of four `DROP`s, and a later `SET LOCAL
+  lock_timeout` of 0, a `RESET` or a `DEFAULT`). The migrations' README holds
+  the one list of what it does not see, each entry with a test that pins it as
+  not seen. No SQL parser (a dependency for a check on twenty files).
+- **0017's way through is written down, not built.** No database that exists
+  has 0001 to 0016 applied with millions of audit rows and 0017 not (kind is
+  short-lived; the Azure database of S020 starts empty), and an applied file
+  cannot change. The README says what an operator of one would do (a
+  maintenance window with a longer statement timeout, or a new table and a
+  switch, both designed, not built), and a test shows the runner fails closed
+  and leaves the table as it was, for a cancel at the file's first heavy
+  statement. It does not show a cancel during `CLUSTER` or the rewrite for the
+  column; the README says so.
+- **A transaction left idle is ended after 60 s, by a database default**
+  (0031: `ALTER DATABASE ... SET`, the name from `current_database()`), and
+  not by a setting of the upkeep role, because it also binds every service.
+  Before it went out the services' transactions were read (every caller of the
+  connection helper and both checkpoint stores): none is held open across a
+  wait that is not the database, and the three connections that stay open
+  across such a wait are idle outside a transaction, which the setting does
+  not touch. 60 s sits above the services' statement timeout of 10 s, so it
+  never fires before the bound every session has. It stops a forgotten
+  transaction, not a deliberate one: a session can change it for itself, so a
+  holder of the upkeep credential who means to stall a counter still can until
+  the statement timeout (T-25). The setting is not copied to a database made
+  from the test template, so its test reads a database the files ran on.
+  A session the timeout ends gets the service's generic 500 (the tool server's
+  reason `unexpected`) and not a 503: the error's class,
+  `IdleInTransactionSessionTimeout`, is not in the two maps of "database
+  unavailable", and that stays on purpose, since the database is there and a
+  service that left a transaction idle for a minute has a fault of its own.
+- **`pg_temp` last on every trigger and definer function.** 0020, 0028 and
+  0030 carry it from the start; 0031 sets it on the four older trigger
+  functions (`audit.stamp_event`, `gateway.forbid_reopen` and the sweep's two)
+  with `ALTER FUNCTION ... SET search_path`, which keeps their bodies, owners
+  and grants and takes no table lock. None of their bodies names an unqualified
+  relation or type, so this is defence in depth for a later edit and not the
+  fix of a live path. A test over the whole migrated catalog fails for any
+  trigger or definer function of the owner's schemas whose path does not end in
+  `pg_temp`, so the next one has to carry the pin (T-100). **Decided and not
+  built:** taking the right to make temporary tables from PUBLIC (a
+  database-level privilege is not copied to the tests' databases, and two tests
+  use the right as their control, so one would skip silently).
+- **`meridian knowledge verify` ends its read transaction before it prints.**
+  Found while reading it for the idle timeout: it left its transaction open
+  for the caller, and printing every difference to a stalled output for more
+  than 60 s would have ended the session and lost the command's audit row.
+- **Decided with a reason and no code.** Leftover checkpoint threads behind a
+  long run of live ones, and a rule on their count, are a cluster item (the
+  row moves to S073). An upkeep action alerts nobody until a person is on the
+  audit row (S021). `verify`'s counts stay in the audit row's `reason`, which
+  the data classification now says in words (the owner may prefer a column of
+  its own: S033). The expiry of briefs was designed (an owner's function, the
+  row going whole, and a key that ties a brief's tenant to its claim's) and
+  **not built**: it waits for the owner's answer on an age bound for a brief
+  nobody decides (question (c)). The design had promised a sentence in the
+  sweep's docstring and one in the README about the `reason` column; neither
+  was written, and the two rows say so.
+
+**Advisor:** the design records two consultations and the read-only map the
+first one asked for.
+
+- **19:38 UTC on 2026-10-06, at the design, before any contract.** Three
+  things. The marker for the audit expiry must not be a setting, which
+  whoever may remove a row can set; the advisor proposed a role that cannot
+  log in and owns the function. The database-wide idle timeout binds every
+  role, the services' too, so the services' transactions were to be read
+  before the file went out (the map below). And the index would be built in
+  the runner's transaction, so the README says the lock timeout is the
+  mitigation.
+- **20:11 UTC, the map the first call asked for** (read-only, `main` at the
+  time): no service, Job or command holds a transaction open across a wait
+  that is not the database. It left the idle timeout as designed and the
+  threat row not understated. What it got wrong is below: the class of the
+  error an ended session raises.
+- **20:16 UTC, at a surprise:** no role of the database holds `CREATEROLE`
+  (read in the database's values, after the first call), so the role could
+  not be made. The advisor withdrew it and walked the session's alternative,
+  the name test (`current_user` is the table's owner and `session_user` is
+  `gateway_upkeep`), through the owner, a superuser, the upkeep role and a
+  member of it. Four changes, all taken: the function lives in the schema
+  `gateway` so the role gains no right on the schema `audit`; the trigger
+  function is replaced in a new file, with `pg_temp` in the same replace; the
+  index is built in the runner's transaction; and the floor the function
+  holds is only "the cutoff is not in the future", since no period exists.
+- The design's two later sections ("After U3's first report", "After the two
+  reviews of U4") are corrections the session made on the strength of an
+  implementer's test and of two reviews, with no consultation recorded in the
+  design. A consultation the main session made after this section was written
+  is added to it by the main session.
+
+**Where the session's own choices were wrong, and who caught them:**
+
+- **The marker.** The session's first form was a setting the trigger reads.
+  The advisor showed that adds nothing to the grant. The advisor's form, a role
+  that cannot log in, could not be built; the session found that reading
+  the database's values, and the name test replaced it.
+- **A sentence of the reconciled form.** It said only a superuser's `SET
+  SESSION AUTHORIZATION` reaches the removal outside the function. That is
+  false: after it, `SET ROLE` to the owner is refused. U3's implementer's test
+  found it. What keeps the trigger tight is that `gateway_upkeep` is a member
+  of no role, which 0020 held only when it ran, so a check at every migrate
+  was added (U3b) for the upkeep role as U2 had for the sweep's.
+- **The HIGH of the security review: the upkeep credential could erase the
+  trail of its own acts.** With a cutoff of `now()` in a loop, every
+  `audit.expire` row was older than the next call's cutoff, so the table
+  could be reduced to one row that named nothing. Threat row a's "one audit
+  row per batch" was true for a call and false as a lasting property. The
+  database review found the same (M4). Fixed in F1: rows the upkeep role wrote
+  are never removed by this path.
+- **The first database review's findings on the same code.** The index on
+  `recorded_at` alone left a sort in the plan; the delete went by a random
+  UUID key and read random pages; the plan test proved nothing about the real
+  statement (it ran on an empty table with sequential scans off); the 0017 test
+  did not show what the README said (its cancel lands at the first statement).
+  Fixed in F1: the index `(recorded_at, seq)`, removal by row location, a plan
+  test on 20,000 planted rows, and a README that says what the test shows.
+- **The index's second key, and a limit of 1.** At U4's stop the session chose
+  `(month, attempt_id)` for a total order nothing needs: a random UUID as the
+  second key put every model call's insert into a random page and made the
+  batch read the heap at random. A limit of 1 wrote one permanent audit row
+  for every ledger row. And each batch opened a connection of its own. The two
+  reviews of U4 (no critical or high finding) found all three; fixed in F2:
+  the index on `month` alone, a floor of 100, one connection for a run.
+- **`EXISTS` with an inner `ORDER BY` and `LIMIT`.** The session's own F2
+  contract suggested it for "is any row left". PostgreSQL discards both clauses
+  inside an `EXISTS`: F2's implementer measured a sequential scan, after
+  `ANALYZE` and after removing every row alike, and used `PERFORM 1 ... ORDER
+  BY month LIMIT 1`.
+- **The transactions map's class of error.** It assumed an ended session
+  raises `OperationalError`; U5's implementer saw
+  `IdleInTransactionSessionTimeout` (SQLSTATE 25P03), which is not one, and
+  which the two maps of "database unavailable" do not catch. The residual is
+  said in T-25, and the generic 500 stays on purpose.
+- **The kind script's "a refusal changes nothing."** With batches an
+  `ERROR GUnnn` can follow removals that stay. The security review of U4
+  found it in `infra/kind/upkeep.sh`; F2 fixed the script, and this step's
+  documents fixed the two runbook sentences that said the same.
+- **Two sentences the design promised and nobody wrote** (above, the
+  sweep's docstring and the README on the `reason` column).
+
+**Work log:** one design, nine implementer contracts, four reviews, one
+contract for the documents. The commits, from `git log` of the step's branch:
+
+- **U1**, `1ab3057`: the static check reads five more statements and the
+  README lists what it does not see, each entry pinned; 0017 fails closed
+  under a short timeout (a test).
+- **U2**, `e144d15`: `meridian db migrate` refuses a database where a role is
+  a member of `claims_sweep`, or the reverse.
+- The merge of `main` (`ff6fe6d`) after S067's 0025 and 0026: migration
+  numbers 0027 and later were taken then, one contract at a time.
+- **U3 and U3b**, `f196ca7`: 0027 and 0028, the audit expiry, the count, the
+  command `meridian gateway expire-audit`, the check of the upkeep role's
+  memberships and the runbook paragraph.
+- **The database and security reviews of that commit**: no critical finding,
+  one high (above), nine medium and ten low in the database review, four
+  medium in the security review.
+- **F1**, `86789a5`: the high and the reviews' findings (above), the sweep's
+  membership query counting only a membership that grants something (a
+  creator's `ADMIN`-only row would have failed every migrate on a managed
+  database), the check's own failure said as such, the static check's wider
+  list.
+- **U4**, `d34e8a7`: 0029 and 0030, the ledger in batches and the command's
+  loop.
+- **U5**, `0366010`: 0031, the idle timeout and `pg_temp` on four functions.
+- **U5b**, `6360b06`: `verify` rolls back before it prints.
+- **The database and security reviews of U4** (`d34e8a7`): no critical or
+  high finding, four medium and nine low in the database review, two medium
+  and seven low in the security review.
+- **F2**, `3ca4a9e`: the index on `month` alone, a floor of 100, one
+  connection for a run, the closing question as a `PERFORM`, `upkeep.sh` saying
+  what stays removed, and the chart's and kind values' comments naming five
+  functions.
+- **D1**, this section and the documents (the threat model, the data
+  classification, the governance documents, the runbook, the two READMEs).
+
+**Result / verification:**
+
+- **Implemented and tested against PostgreSQL, none of it run on a cluster.**
+  The tests are in the step's commits; the main ones: the trigger's cases (the
+  owner, a superuser, the upkeep role's own statement, a member of the upkeep
+  role, an `UPDATE`, a `TRUNCATE`); batches `[2,2,1,0]`; the count equals what
+  the batches then remove; a locked row is skipped; every boundary of the
+  cutoff and the limit; three places held equal; the ledger's batches against
+  one call of 0020's function on two planted databases; the current month
+  never touched; a reservation that commits while the closing call waits; the
+  plans as `EXPLAIN` printed them; one connection for a run; the membership
+  checks in both directions and through a chain; the idle timeout on a
+  database the files ran on; the catalog test for `pg_temp`.
+- **The numbers the reports hold**, each with its report, and each from **one
+  machine, data in memory, not a cold disk**; a figure from before a later
+  report changed the statement is marked, and the later report wins.
+  - U1: 0017 over 200,000 planted rows applied in 0.46 s of call time under
+    the default timeout; the cancelled arm ended in 0.05 s.
+  - F1: batches of 10,000 audit rows took 0.065, 0.055 and 0.061 s at
+    1,000,000 rows once the delete went by row location (U3's 0.40, 0.32 and
+    0.32 s were the key-probing form that F1 replaced). The plan at 20,000
+    rows after `ANALYZE`: an index scan of `events_recorded_at_idx`, a tid
+    scan, no sort and no sequential scan.
+  - F2: the index on `month` is 6.8 MB (6,792 kB) at 1,000,000 usage rows in
+    a 211 MB table and built in 0.11 to 0.12 s (three builds); the pair
+    `(month, attempt_id)` that it replaced was 39 MB and took 0.32 to 0.35 s.
+    On one connection, three batches of 10,000 took 12, 9 and 8 ms; two of
+    1,000 took 2 and 1 ms; the other 968,000 rows went in 97 batches that
+    averaged 8 ms; the call that found nothing left took 2 ms, with no
+    counters planted. (U4's 0.135, 0.103 and 0.076 s for batches of 10,000 and
+    0.30 s for the pair's build were before the index changed.)
+  - U5: from `pg_locks` on a scratch server, `ALTER DATABASE ... SET` took
+    `RowExclusive` on `pg_db_role_setting` only and `ALTER FUNCTION ... SET`
+    on `pg_proc` only, and an insert that fires the trigger was not blocked by
+    an open `ALTER FUNCTION`; the Python between two fetches of `verify` was
+    0.58 ms at worst for a batch of 200 rows.
+- **The implementers' database runs, as their reports print them** (none read
+  an exit status from a shared shell in every case, and the whole suite is the
+  main session's): U1 `233 passed in 6.86s`; U2 `476 passed in 29.05s`; U3b
+  `4265 passed, 6 skipped in 104.02s`; F1 `4317 passed, 6 skipped in 84.18s`;
+  U4 `4391 passed, 6 skipped in 115.14s`; U5 `2742 passed in 51.27s`; U5b
+  `1144 passed in 32.36s`; F2 `4404 passed, 6 skipped in 80.70s`. The six
+  skipped tests are, as the implementers infer, the live-model ones. `ruff`,
+  the format check and `lint-imports` (six contracts kept) were clean in each
+  report.
+- **The whole suite on the final tree:** FINAL-SUITE-RESULT
+- **A review of F2's commit** (`3ca4a9e`, the last contract, which no reviewer
+  had read when this section was written): REVIEW-F2-RESULT
+- **Seen on a cluster: nothing of this step.** A run on kind would show the
+  migrate Job applying 0027 to 0031 (each guard refusing a missing role, and
+  the check after the files refusing a membership of `claims_sweep` or of
+  `gateway_upkeep` with the sentence and a failed Job); the database default
+  of 60 s on the cluster's database; the upkeep Job's refusals (the command's
+  own for a limit below 100, GU306, GU401 for a cutoff in the future) and a
+  dry run of `expire-audit` through the Job with a date; and a Job stopped by
+  its deadline that printed nothing of what it removed.
+
+**Not tested, or not reached:**
+
+- The GU303 branch inside "rows are left": a reserved row would have to commit
+  between two statements of one call, and nothing short of a hook can pause
+  PL/pgSQL there; no hook was added.
+- The state filter of the ledger's batch never decides in a test: a reserved
+  row of a past month is refused before the delete.
+- The lock timeout of 0029 firing (the order of the text and the contents of
+  `pg_locks` are tested, not the timeout).
+- Batch times and build times on a cold disk, and the cost of an insert into
+  the new indexes (argued, not timed).
+- The closing call with many counters (it was measured with none), and
+  against a cleanup horizon held back.
+- A connected session picking up an altered function's path at its next call.
+- A cancel of 0017 during `CLUSTER` or the rewrite (only its first statement).
+- The lock-order inversion with a reserve at a month's first seconds (a script
+  of two sessions), a reserve and a close that do not wait for an expiry, and
+  the batch's plan from the fifth call of a connection (a generic plan).
+- A row that is reserved when a batch's snapshot is taken and closed before the
+  "any row left" question (GU306's other arm).
+- The write-ahead log per batch (estimated at one to three MB for 10,000 rows
+  by the database review, not measured), and a dry run's count over tens of
+  millions of rows.
+- A live service session ended by the idle timeout (none was observed, and the
+  map found no path that can reach it).
+- The migrate Job's refusal, the upkeep Job and the ownership of the database
+  by the owner for `ALTER DATABASE`, on a cluster.
+
+**For the owner** (none blocks anything; the default if unanswered is that no
+period is set and nothing is scheduled):
+
+- **(a) The periods.** For `audit.events` and for `gateway.usage` (the first
+  are how a decision is reconstructed and who is named for it, and the
+  adjuster's page reads a claim's trail while the claim is shown; the second
+  decide the current day's and month's budgets only and back the cost
+  dashboard). None is set. An audit period would be passed as `--before` to
+  `meridian gateway expire-audit`, and a ledger period as `--before` (a month)
+  to `meridian gateway expire`, each by a person, and a schedule that does it
+  is a decision of its own made with the periods. EU law gives no single
+  number: the kinds of rule that bear on it are the storage-limitation and
+  accountability principles of the GDPR (a written purpose and no longer than
+  that purpose needs), the limitation periods and record-keeping duties that
+  national insurance, accounting and tax law put on an insurer, the insurer's
+  own retention schedule, and the EU AI Act's rule on keeping logs, which
+  constraint C-02 keeps this use case outside. A backup keeps an expired row
+  until it rolls off, so the backup's retention is stated beside the period.
+- **(b) May an audit row be removed while the claim it speaks of still
+  exists?** Today the expiry looks at a row's age only, and the adjuster's
+  page reads audit rows. The alternative is a function that keeps the rows of
+  open claims. The session recommends nothing until (a) is answered, since a
+  period longer than a claim's life makes the question moot.
+- **(c) An age bound for a brief that nobody decides.** Today none exists: an
+  undecided brief keeps its run, its checkpoint rows (which hold the
+  unredacted brief) and its claim's open slot. The comparable value is the
+  time a claim already waits for its documents; the session's suggestion is
+  that the sweep closes such a brief as failed, as it does an abandoned run.
+  The brief's expiry (a decided brief goes whole) and a key that ties a brief's
+  tenant to its claim's wait for this answer.
+- **(d) The dry run's count is a second function of the owner's, executable by
+  the upkeep role.** The session's decision, for the owner to overturn: the
+  role can already remove those rows, so the count adds no reach to remove,
+  and the alternatives (a dry run that prints the cutoff and counts nothing,
+  or one that calls the real function and rolls back, with its row locks and
+  sequence numbers) were worse. It lets the holder learn how many events fell
+  in any interval.
+
+**Follow-ups:**
+
+- In the backlog, each with its step: the periods, a schedule and the
+  database's backup retention (S020, with the Azure administrator's powers, the
+  checks the owner role's members and the upkeep role's owned objects need, the
+  figures measured in memory only and the rows the upkeep role wrote that never
+  expire); what a kind run would show, the upkeep Job's deadline, the shell
+  script's and the Makefile's small ends, a rule on leftover checkpoint
+  threads (S073); the ledger's closing call and the command's small ends
+  (S069); an alert on an upkeep action (S021); the briefs' expiry (S070);
+  `verify`'s column (S033); the guard's cases for `--limit` and `expire-audit`
+  and a rule for the command typed directly (S036); the state filter's test,
+  the lock timeout's test and the two test files over 800 lines (S074).
+- Rows closed, each by its text: the sweep's membership, 0017's way through,
+  the static check, the ledger in batches and the temporary tables (as
+  decided); one closed in part: the idle transaction. Five rows are re-homed:
+  retention (S020), leftover threads (S073), an alert on an upkeep (S021),
+  briefs (S070) and `verify`'s column (S033). Eleven rows are new.
+- For the owner: the four questions above, and the session's reading of "we
+  should go with EU based thing" as "set no number".
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -12791,3 +13234,17 @@ backlog (S070); nothing else changed.
   test's gaps in the backlog (S070); T-73 and T-76 corrected, T-66, T-57,
   T-27, T-30, T-25 and T-13 brought to the code. Seven backlog rows closed
   (one in part) and fourteen new.
+- **vPLAN-VERSION, 2026-10-07:** S068 done, as a mechanism: audit rows can
+  expire through one function of the owner's that only a session logged in as
+  the upkeep role reaches (`meridian gateway expire-audit`, migrations 0027
+  and 0028; rows the upkeep role wrote never go), the ledger expires in
+  batches of 100 to 10,000 usage rows (0029, 0030), a database default ends a
+  transaction left idle after 60 s (0031), `pg_temp` is last in the path of
+  every trigger and definer function, `meridian db migrate` refuses a member
+  of `claims_sweep` and a membership of `gateway_upkeep` after the files are
+  applied, and the static check on migrations sees more statements and lists
+  what it does not. No retention period is set, nothing is scheduled and
+  nothing ran on a cluster; the section puts four questions to the owner.
+  T-100 new (100 threats); T-14, T-25, T-49 and T-77 brought to the code. Five
+  backlog rows closed, one closed in part, five re-homed and eleven new; the
+  briefs' expiry is not built.

@@ -222,7 +222,10 @@ variable. That role can write no table: it can only call database functions
 (the ledger's three, and since S068 the audit expiry and its count), and each
 one holds its own rule and writes its audit row in the same transaction as the
 change. A refusal is one line, `ERROR GUnnn`
-followed by what was refused and what to do, and changes nothing. The
+followed by what was refused and what to do, and the call that was refused
+changes nothing; but an expiry runs many calls, so a refusal can follow
+batches that already committed and stay removed, and the command then says so
+on a line of its own ("before the failure"). The
 command prints counts, IDs and amounts, never the connection string. Every
 change takes a `--reason`, a slug of lower-case letters, digits and
 hyphens (no free text), which is written to the audit row.
@@ -446,9 +449,12 @@ the Job's own deadline is two), then prints the command's output and exits:
 read the last line, not the number (seen on kind on 2026-10-06, an `expire`
 that refused). The last line says one of two things about the ledger.
 
-- **A refusal changed nothing.** The output holds the command's own line,
-  `ERROR GUnnn ...` (a refusal of one of the database functions), and the last
-  line says so: fix the arguments and run again.
+- **A refusal changed nothing**, when the output holds the command's own line,
+  `ERROR GUnnn ...` (a refusal of one of the database functions) and no line
+  that says "before the failure": the last line says so, fix the arguments and
+  run again. With such a line the refusal came after batches of an expiry had
+  committed: what the command says was removed stays removed, the last line
+  says that too, and running the command again continues from there.
 - **Any other failure may have changed it.** A Job that failed without such a
   line (a lost connection, a crash, a usage error, a pod that never started), or
   that did not finish within its three minutes, can have failed after the
