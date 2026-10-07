@@ -74,7 +74,14 @@ CERTIFICATE_ALERTS = (
     "MeridianCertificateMetricsMissing",
     "MeridianCertificateApproverDown",
     "MeridianCertificateRenewalOverdue",
+    "MeridianCertificateIssuingRestartLoop",
 )
+# The containers whose restart loop the last of those reads, in cert-manager's
+# namespace: the controller, which the cert-manager chart (v1.21.2,
+# templates/deployment.yaml) names <chart>-controller, and approver-policy's,
+# named like its Deployment (v0.28.0; test_kind_approver_liveness.py pins the
+# same name against the pins).
+ISSUING_CONTAINERS = {"cert-manager-controller", "cert-manager-approver-policy"}
 # Where Meridian's certificates are: the chart's, in the namespace it installs
 # into, the services' CA's, in cert-manager's (manifests/service-ca.yaml), and
 # the collector's authority and certificate, in observability
@@ -209,7 +216,7 @@ def test_the_manifest_is_one_prometheus_rule_the_stack_selects() -> None:
 def test_every_alert_has_its_labels_annotations_and_a_runbook_that_exists() -> None:
     found = alerts()
 
-    assert len(found) == 19
+    assert len(found) == 20
     for alert in found:
         name = alert["alert"]
         assert alert["labels"]["severity"] in {"critical", "warning"}, name
@@ -233,7 +240,7 @@ def test_every_slo_label_names_an_objective_the_document_defines() -> None:
         a["alert"]: a["labels"]["slo"] for a in alerts() if "slo" in a["labels"]
     }
 
-    assert len(labelled) == 11
+    assert len(labelled) == 12
     assert set(labelled.values()) <= objectives, labelled
 
 
@@ -472,7 +479,7 @@ def certificate_rules() -> dict[str, dict]:
     return {rule["alert"]: rule for rule in groups()["meridian.certificates"]}
 
 
-def test_the_certificate_group_holds_the_five_alerts_with_their_thresholds() -> None:
+def test_the_certificate_group_holds_the_six_alerts_with_their_thresholds() -> None:
     rules = certificate_rules()
 
     assert tuple(rules) == CERTIFICATE_ALERTS
@@ -518,6 +525,19 @@ def test_the_certificate_group_holds_the_five_alerts_with_their_thresholds() -> 
         '{namespace=~"meridian|cert-manager|observability"} > 0) > 0'
     )
     assert overdue["for"] == "1h"
+    # After the liveness probe (S073) a hang that recurs is a container restarted
+    # every few minutes, and the Deployment is available between restarts, so
+    # MeridianCertificateApproverDown (no replica for 15 minutes) may never
+    # fire: three restarts in 30 minutes of either container of the issuing
+    # path, per pod, as MeridianRateStoreRestartLoop reads the rate store's.
+    loop = rules["MeridianCertificateIssuingRestartLoop"]
+    expression = " ".join(loop["expr"].split())
+    assert expression.startswith("changes(kube_pod_container_status_restarts_total{")
+    assert expression.endswith("}[30m]) >= 3")
+    assert 'namespace="cert-manager"' in expression
+    (containers,) = re.findall(r'container=~"([^"]*)"', expression)
+    assert set(containers.split("|")) == ISSUING_CONTAINERS
+    assert loop["for"] == "0m"
     for name, rule in rules.items():
         assert rule["labels"]["severity"] == "warning", name
         assert rule["labels"]["slo"] == "certificate-validity", name
@@ -545,6 +565,9 @@ def test_the_certificate_alerts_read_the_series_cert_manager_and_the_stack_serve
     }
     assert series_named(rules["MeridianCertificateRenewalOverdue"]["expr"]) == {
         RENEWAL_SERIES
+    }
+    assert series_named(rules["MeridianCertificateIssuingRestartLoop"]["expr"]) == {
+        "kube_pod_container_status_restarts_total"
     }
 
 

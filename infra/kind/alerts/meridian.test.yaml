@@ -1835,6 +1835,185 @@ tests:
         alertname: MeridianCertificateRenewalOverdue
         exp_alerts: []
 
+  # ── MeridianCertificateIssuingRestartLoop (S073) ────────────────────────────
+  # kube-state-metrics' restart counter, one sample a minute. After the liveness
+  # probe a hang that recurs is a container that the kubelet restarts every few
+  # minutes (about every 2.5 for a frozen process): the counter gains 1 at
+  # minutes 3, 5 and 7. Two restarts are under the count, the third fires it
+  # with no wait, and it ends once the first of the three has left the 30-minute
+  # window (a range selector is open at its start: the sample at 2m is the last
+  # one that still shows the change from 0 to 1 at 3m, so the evaluation at 32m
+  # no longer counts it).
+  - name: an approver that restarts three times in 30 minutes fires on the third and ends when they have left the window
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="cert-manager", pod="cert-manager-approver-policy-869484464f-q5k8q", container="cert-manager-approver-policy"}'
+        values: "0 0 0 1 1 2 2 3 3x40"
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: MeridianCertificateIssuingRestartLoop
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: MeridianCertificateIssuingRestartLoop
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              platform: meridian
+              slo: certificate-validity
+              namespace: cert-manager
+              pod: cert-manager-approver-policy-869484464f-q5k8q
+              container: cert-manager-approver-policy
+            exp_annotations:
+              summary: "A container that issues certificates keeps restarting."
+              description: "Container cert-manager-approver-policy of pod cert-manager-approver-policy-869484464f-q5k8q in cert-manager restarted 3 times in the last 30 minutes (proposed threshold: 3). One restart is a liveness probe or a lost leader lease doing its work; a hang that comes back is restarted again and again, and the Deployment is available between restarts, so MeridianCertificateApproverDown, which waits for 15 minutes with no available replica, may never fire."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/certificate-expiry.md"
+      - eval_time: 31m
+        alertname: MeridianCertificateIssuingRestartLoop
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              platform: meridian
+              slo: certificate-validity
+              namespace: cert-manager
+              pod: cert-manager-approver-policy-869484464f-q5k8q
+              container: cert-manager-approver-policy
+            exp_annotations:
+              summary: "A container that issues certificates keeps restarting."
+              description: "Container cert-manager-approver-policy of pod cert-manager-approver-policy-869484464f-q5k8q in cert-manager restarted 3 times in the last 30 minutes (proposed threshold: 3). One restart is a liveness probe or a lost leader lease doing its work; a hang that comes back is restarted again and again, and the Deployment is available between restarts, so MeridianCertificateApproverDown, which waits for 15 minutes with no available replica, may never fire."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/certificate-expiry.md"
+      - eval_time: 32m
+        alertname: MeridianCertificateIssuingRestartLoop
+        exp_alerts: []
+
+  # cert-manager's own controller is the other container the rule names (the
+  # chart names it <chart>-controller).
+  - name: cert-manager's controller that restarts three times in 30 minutes fires too
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="cert-manager", pod="cert-manager-6f8d9c7b5-abcde", container="cert-manager-controller"}'
+        values: "0 0 0 1 1 2 2 3 3x40"
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: MeridianCertificateIssuingRestartLoop
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              platform: meridian
+              slo: certificate-validity
+              namespace: cert-manager
+              pod: cert-manager-6f8d9c7b5-abcde
+              container: cert-manager-controller
+            exp_annotations:
+              summary: "A container that issues certificates keeps restarting."
+              description: "Container cert-manager-controller of pod cert-manager-6f8d9c7b5-abcde in cert-manager restarted 3 times in the last 30 minutes (proposed threshold: 3). One restart is a liveness probe or a lost leader lease doing its work; a hang that comes back is restarted again and again, and the Deployment is available between restarts, so MeridianCertificateApproverDown, which waits for 15 minutes with no available replica, may never fire."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/certificate-expiry.md"
+
+  # A restart at minutes 3 and 9 is one probe restart and one more: under the
+  # count at any time.
+  - name: two restarts of the approver in 30 minutes do not fire
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="cert-manager", pod="cert-manager-approver-policy-869484464f-q5k8q", container="cert-manager-approver-policy"}'
+        values: "0 0 0 1 1 1 1 1 1 2x40"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MeridianCertificateIssuingRestartLoop
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: MeridianCertificateIssuingRestartLoop
+        exp_alerts: []
+
+  # Restarts at minutes 5, 21 and 37, 16 minutes apart: any 30 minutes hold two
+  # of them, never three.
+  - name: three restarts spread over more than 30 minutes do not fire
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="cert-manager", pod="cert-manager-approver-policy-869484464f-q5k8q", container="cert-manager-approver-policy"}'
+        values: "0x4 1x15 2x15 3x20"
+    alert_rule_test:
+      - eval_time: 21m
+        alertname: MeridianCertificateIssuingRestartLoop
+        exp_alerts: []
+      - eval_time: 37m
+        alertname: MeridianCertificateIssuingRestartLoop
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: MeridianCertificateIssuingRestartLoop
+        exp_alerts: []
+
+  # Per pod, not summed: a counter that a new pod starts at 0 is a new series
+  # (the pod label differs), so a pod's replacement resets nothing and joins
+  # nothing. The old pod's two restarts (minutes 2 and 4) and its replacement's
+  # one (minute 10) are three in one window, but never three of one pod. A sum
+  # over the pods, or a rate(), would read the replacement as a loop or as a
+  # negative step.
+  - name: two restarts of an old pod and one of its replacement inside one window do not fire
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="cert-manager", pod="cert-manager-approver-policy-869484464f-q5k8q", container="cert-manager-approver-policy"}'
+        values: "0 0 1 1 2 2 2"
+      - series: 'kube_pod_container_status_restarts_total{namespace="cert-manager", pod="cert-manager-approver-policy-7b9c6d5f8-fghij", container="cert-manager-approver-policy"}'
+        values: "_x7 0 0 1x10"
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: MeridianCertificateIssuingRestartLoop
+        exp_alerts: []
+
+  # The replacement that itself loops fires on its own series: the loop is
+  # counted from the new pod's first sample, which holds 0.
+  - name: a replacement pod that restarts three times fires on its own series
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="cert-manager", pod="cert-manager-approver-policy-869484464f-q5k8q", container="cert-manager-approver-policy"}'
+        values: "0 0 1 1 2 2 2"
+      - series: 'kube_pod_container_status_restarts_total{namespace="cert-manager", pod="cert-manager-approver-policy-7b9c6d5f8-fghij", container="cert-manager-approver-policy"}'
+        values: "_x7 0 0 1 1 2 2 3 3x20"
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: MeridianCertificateIssuingRestartLoop
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              platform: meridian
+              slo: certificate-validity
+              namespace: cert-manager
+              pod: cert-manager-approver-policy-7b9c6d5f8-fghij
+              container: cert-manager-approver-policy
+            exp_annotations:
+              summary: "A container that issues certificates keeps restarting."
+              description: "Container cert-manager-approver-policy of pod cert-manager-approver-policy-7b9c6d5f8-fghij in cert-manager restarted 3 times in the last 30 minutes (proposed threshold: 3). One restart is a liveness probe or a lost leader lease doing its work; a hang that comes back is restarted again and again, and the Deployment is available between restarts, so MeridianCertificateApproverDown, which waits for 15 minutes with no available replica, may never fire."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/certificate-expiry.md"
+
+  # The namespace and the container are both pinned: the approver's name in
+  # another namespace, and the webhook and the cainjector of cert-manager's own
+  # namespace, are not this alert's.
+  - name: another namespace, or another container of cert-manager, is not this alert's
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="meridian", pod="cert-manager-approver-policy-869484464f-q5k8q", container="cert-manager-approver-policy"}'
+        values: "0 0 0 1 1 2 2 3 3x40"
+      - series: 'kube_pod_container_status_restarts_total{namespace="cert-manager", pod="cert-manager-webhook-5c7d8f6b9-abcde", container="cert-manager-webhook"}'
+        values: "0 0 0 1 1 2 2 3 3x40"
+      - series: 'kube_pod_container_status_restarts_total{namespace="cert-manager", pod="cert-manager-cainjector-7d6f5b8c9-abcde", container="cert-manager-cainjector"}'
+        values: "0 0 0 1 1 2 2 3 3x40"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MeridianCertificateIssuingRestartLoop
+        exp_alerts: []
+      - eval_time: 31m
+        alertname: MeridianCertificateIssuingRestartLoop
+        exp_alerts: []
+
+  - name: no restart series at all does not fire the certificate restart alert
+    interval: 1m
+    input_series:
+      - series: 'kube_cronjob_status_last_successful_time{namespace="meridian", cronjob="meridian-sweep"}'
+        values: "0+60x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MeridianCertificateIssuingRestartLoop
+        exp_alerts: []
+
   # ── MeridianGatewayMetricsMissing (S064) ────────────────────────────────────
   # `_x4` is four minutes with no sample: the counter's first sample is at 4m,
   # as a process's first export is (it already holds what it counted, which an

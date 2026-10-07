@@ -470,6 +470,49 @@ spec:
               Certificate stays Ready until its end.
             runbook_url: https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/certificate-expiry.md
 
+        # With approver-policy's liveness probe (S073) a hang of its process is
+        # restarted by the kubelet after about two minutes, and a hang that comes
+        # back is a container that restarts every few minutes: the Deployment is
+        # available between restarts, so MeridianCertificateApproverDown (no
+        # available replica for 15 minutes) may never fire, and nothing else
+        # labelled Meridian reads restarts in `cert-manager`. Modelled on
+        # MeridianRateStoreRestartLoop: three restarts in 30 minutes, of cert-manager's
+        # controller (the chart names the container <chart>-controller) or of
+        # approver-policy's container; the webhook and the cainjector are not
+        # this path. The window is 30 minutes, not 15: a probe restart takes
+        # about 140 seconds and the kubelet's back-off, at most 5 minutes, adds to
+        # it, so a loop that restarts every 10 minutes (3 in 30) is still one.
+        # changes(), per pod and never summed: a new pod's counter is a new series
+        # (the pod label differs), so a replaced pod's restarts and its
+        # replacement's do not add, and the replacement is counted from its first
+        # sample (a series that first appears with a restart already in it shows
+        # that restart as no change). A lost leader lease also exits and
+        # restarts the add-on once, and a restart under load once: one or two in
+        # 30 minutes is not a loop. `for: 0m` because the window is the wait. The
+        # labels are the group's. Nothing here is measured: three in 30 minutes
+        # is a proposal, and the rule is not seen firing on a cluster. From
+        # kube-state-metrics.
+        - alert: MeridianCertificateIssuingRestartLoop
+          expr: |
+            changes(kube_pod_container_status_restarts_total{namespace="cert-manager", container=~"cert-manager-controller|cert-manager-approver-policy"}[30m]) >= 3
+          for: 0m
+          labels:
+            severity: warning
+            platform: meridian
+            slo: certificate-validity
+          annotations:
+            summary: A container that issues certificates keeps restarting.
+            description: >-
+              Container {{ $labels.container }} of pod {{ $labels.pod }} in
+              {{ $labels.namespace }} restarted {{ $value }} times in the last
+              30 minutes (proposed threshold: 3). One restart is a liveness
+              probe or a lost leader lease doing its work; a hang that comes
+              back is restarted again and again, and the Deployment is
+              available between restarts, so MeridianCertificateApproverDown,
+              which waits for 15 minutes with no available replica, may never
+              fire.
+            runbook_url: https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/certificate-expiry.md
+
     # Rules that notice a series that is not there (S064, T-86). Every rule
     # above reads a rate or a count, and a service whose metrics stop arriving
     # reads as one with nothing to report: nothing fires. Each hop now counts

@@ -33,6 +33,10 @@ FIELD_MANAGER = "meridian-kind"
 # Neither can be read here without the chart, so they are pinned with the
 # version they were read at; the test below fails when pins.env moves on.
 CHART_READ = "v0.28.0"
+# The binary's own endpoints (it serves /readyz on its health port and answers 404
+# at /healthz and /livez) belong to the IMAGE, which pins.env pins apart from the
+# chart: read on the running pod of this tag on 2026-10-07.
+IMAGE_READ = "v0.28.0"
 CHART_CONTAINER_NAME = "cert-manager-approver-policy"
 CHART_HEALTH_PORT_NAME = "healthcheck"
 CHART_NAMESPACE = "cert-manager"
@@ -85,6 +89,18 @@ def test_the_pins_still_hold_the_chart_the_container_and_port_names_were_read_in
         "chart's deployment template again (the container's name, the health "
         "port's name, and whether the chart has taken a liveness probe, which "
         "would make the manifest a conflict), then change CHART_READ here"
+    )
+
+
+def test_the_pins_still_hold_the_image_whose_endpoints_were_read() -> None:
+    (pinned,) = re.findall(r"^APPROVER_POLICY_IMAGE_TAG=(\S+)$", PINS, re.MULTILINE)
+
+    assert pinned == IMAGE_READ, (
+        f"the approver-policy image moved from {IMAGE_READ} to {pinned}: read the "
+        "binary's endpoints again (/readyz must answer, /healthz and /livez must "
+        "still be 404 or a liveness probe on /readyz may not be the right one, and "
+        "/readyz must still be only the webhook server's started check), then "
+        "change IMAGE_READ here"
     )
 
 
@@ -264,30 +280,87 @@ def test_up_waits_for_the_rollout_with_a_bound_and_dies_saying_where_to_look() -
     assert body.index("approver-policy-liveness.yaml") < body.index("rollout status")
 
 
-def test_the_apply_failure_says_to_delete_the_manifest_and_set_the_charts_value() -> (
-    None
-):
+def test_the_apply_failure_releases_the_field_before_the_manifest_is_deleted() -> None:
     body = folded(up_function("apply_approver_liveness_probe"))
     (message,) = re.findall(
         r'-f "[^"]+approver-policy-liveness.yaml" 2>&1\)" \|\| die "([^"]+)"', body
     )
 
     assert "kubectl said: ${out}" in message
-    assert "delete infra/kind/manifests/approver-policy-liveness.yaml" in message
-    assert "set the chart's value" in message
+    # Deleting the manifest and the function leaves meridian-kind owning the field
+    # on a cluster that has the probe, and Helm's next upgrade conflicts again: the
+    # message names the step that drops the owner, and puts it first.
+    release = message.index("First release it")
+    assert "keeps owning the field" in message
+    assert "delete the livenessProbe lines" in message[release:]
+    assert "apply the copy once" in message[release:]
+    assert "under the field manager meridian-kind" in message[release:]
+    assert "no force flag" in message[release:]
+    assert "not tried on a cluster" in message[release:]
+    deleted = message.index("delete infra/kind/manifests/approver-policy-liveness.yaml")
+    assert release < deleted
+    assert message.index("set the chart's value") > deleted
 
 
-def test_the_comment_says_a_second_run_is_expected_to_change_nothing_and_not_seen() -> (
-    None
-):
+def test_the_apply_failure_says_what_a_required_value_error_means() -> None:
+    body = folded(up_function("apply_approver_liveness_probe"))
+    (message,) = re.findall(
+        r'-f "[^"]+approver-policy-liveness.yaml" 2>&1\)" \|\| die "([^"]+)"', body
+    )
+
+    assert "'Required value'" in message
+    assert "Deployment is absent" in message
+    assert "container was renamed" in message
+
+
+def test_the_header_gives_the_same_two_step_remedy_and_what_was_not_tried() -> None:
+    header = " ".join(
+        line.removeprefix("# ").removeprefix("#")
+        for line in MANIFEST.read_text(encoding="utf-8").splitlines()
+        if line.startswith("#")
+    )
+    header = " ".join(header.split())
+
+    assert "First release the field" in header
+    assert "without the livenessProbe lines" in header
+    assert "--force-conflicts" in header and "was not chosen" in header
+    assert "Neither was tried on a cluster" in header
+    assert header.index("First release the field") < header.index(
+        "Then delete this file"
+    )
+    assert "conflict on livenessProbe owned by meridian-kind" in header
+    assert "Required value" in header
+
+
+def test_the_comment_and_header_say_what_run_r13_saw_and_what_stays_unseen() -> None:
     (comment,) = re.findall(
         r"^((?:# .*\n)+)apply_approver_liveness_probe\(\) \{", UP_SH, re.MULTILINE
     )
     flat = " ".join(line.removeprefix("# ") for line in comment.splitlines())
+    header = " ".join(
+        line.removeprefix("# ").removeprefix("#")
+        for line in MANIFEST.read_text(encoding="utf-8").splitlines()
+        if line.startswith("#")
+    )
+    header = " ".join(header.split())
 
-    assert "second run" in flat
-    assert "no rollout" in flat
-    assert "has not been seen" in flat
+    # Seen on kind on 2026-10-07 (R13), in both places.
+    assert "has not been seen" not in flat
+    for text in (flat, header):
+        lowered = text.lower()
+        assert "2026-10-07" in text
+        assert "run R13" in text
+        assert "no rollout" in text
+        assert "meridian-kind" in text
+        assert "not seen" in lowered
+        for unseen in ("newer chart", "under real load", "cold install"):
+            assert unseen in lowered, (unseen, text)
+    assert "140 seconds" in header
+    assert "ten quiet minutes" in header
+    # The alert is no longer "the next contract's".
+    assert "next contract" not in header
+    assert "MeridianCertificateRenewalOverdue" in header
+    assert "MeridianCertificateIssuingRestartLoop" in header
 
 
 def test_the_header_of_up_lists_the_probe_in_the_step_it_belongs_to() -> None:

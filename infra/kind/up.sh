@@ -216,19 +216,22 @@ apply_api_server_policy() {
 # no value for (manifests/approver-policy-liveness.yaml says why and what it
 # does and does not catch). One server-side apply under the field manager
 # `meridian-kind`, which owns that one field. Conflicts are NOT forced: if a
-# later chart takes the field, the apply fails and says so, and the remedy is to
-# delete the manifest and this function and set the chart's value. The probe
+# later chart takes the field, the apply fails and says so; the remedy is in the
+# message below and in the manifest's header (release the field first, then
+# delete the manifest and this function and set the chart's value). The probe
 # changes the pod template, so the Deployment rolls out once; the wait below
 # ends the step only when the new pod is Ready, and the policies are applied
 # after it, against the pod that will stay. A second run applies the same
-# object: that is expected to change nothing and start no rollout (Helm's own
-# apply leaves a field it does not own alone), and it has not been seen on a
-# cluster yet.
+# object and changes nothing: seen on kind on 2026-10-07 (run R13: the same pod,
+# no rollout, the probe still there and the field still owned by meridian-kind
+# alone, for one more apply of an unchanged chart). Not seen: an upgrade to a
+# newer chart, the refusal when a chart takes the field, the probe under real
+# load and a cold install with this function.
 apply_approver_liveness_probe() {
   local out
   out="$(kctl apply --server-side --field-manager=meridian-kind \
     -f "${KIND_DIR}/manifests/approver-policy-liveness.yaml" 2>&1)" ||
-    die "the liveness probe of approver-policy was not applied; kubectl said: ${out}. A conflict names a field manager other than meridian-kind: then the chart has taken the field, so delete infra/kind/manifests/approver-policy-liveness.yaml and apply_approver_liveness_probe from up.sh and set the chart's value in values/approver-policy.yaml"
+    die "the liveness probe of approver-policy was not applied; kubectl said: ${out}. A conflict names a field manager other than meridian-kind: then the chart has taken the field. Deleting the manifest and this function is not enough on a cluster that already has the probe, because meridian-kind keeps owning the field and Helm's next upgrade conflicts again. First release it: copy infra/kind/manifests/approver-policy-liveness.yaml, delete the livenessProbe lines of the copy and apply the copy once with kubectl apply --server-side under the field manager meridian-kind (the apply omits the field, so its owner drops it; no force flag; not tried on a cluster). Then delete infra/kind/manifests/approver-policy-liveness.yaml and apply_approver_liveness_probe from up.sh and set the chart's value in values/approver-policy.yaml. A 'Required value' error instead of a conflict means the Deployment is absent or its container was renamed: this file then no longer updates an object that exists, and it needs the new name"
   kctl -n cert-manager rollout status deployment/cert-manager-approver-policy \
     --timeout=5m >/dev/null ||
     die "approver-policy's Deployment did not finish its rollout after the liveness probe was added, in the 5m this waits (the wait can also have failed at once; kubectl's own message above says which): look at its pods (kubectl -n cert-manager get pods; describe the one that is not ready) and at the log of the old and the new pod (kubectl -n cert-manager logs deploy/cert-manager-approver-policy); a probe that fails shows as 'Liveness probe failed' in the pod's events"

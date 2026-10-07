@@ -48,11 +48,12 @@ GROUPS = [
     "meridian.certificates",
     "meridian.telemetry",
 ]
-# The file holds 19 alert rules and 3 recording rules (S064: two of them are in
+# The file holds 20 alert rules and 3 recording rules (S064: two of them are in
 # the group `meridian.telemetry`, with four alerts, the fourth (G1) about the log
 # agent's DaemonSet; S066 added one alert, on the gateway's group; S072 one, on
-# the workloads'; S073 one, on the certificates').
-RULE_COUNT = 22
+# the workloads'; S073 two, on the certificates': a renewal overdue and a
+# restart loop).
+RULE_COUNT = 23
 # Tied to the script in test_smoke_line_count.py: the sum of the lines each
 # check prints when all is well, so a ``pass`` beyond this count fails that test. S063
 # added the fifth line of the network policy check (the collector), the two

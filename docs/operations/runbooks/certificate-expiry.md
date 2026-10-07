@@ -17,8 +17,14 @@ the kind cluster (2026-10-05): the target up, the series for the CA and the
 seven services, the rules loaded and inactive. `MeridianCertificateNotRenewed`
 was also seen pending and firing on 2026-10-06, in the renewal watch.
 `MeridianCertificateMetricsMissing` and `MeridianCertificateApproverDown`
-have not been seen on a cluster, nor has `MeridianCertificateRenewalOverdue`
-(S073, the part "The renewal is overdue" below): not seen firing on a cluster.
+have not been seen on a cluster. S073 added two: `MeridianCertificateRenewalOverdue`
+(the part "The renewal is overdue" below), loaded and quiet on kind on
+2026-10-07 (run R13: 22 rules healthy, none firing) and not seen firing, and
+`MeridianCertificateIssuingRestartLoop`, implemented and unit-tested, not yet
+loaded on a cluster and not seen firing. approver-policy has a liveness probe
+since S073, added by `make up` (not by the chart): a frozen approver process was
+restarted by the kubelet 140 seconds after it stopped, seen on kind on
+2026-10-07 (run R13).
 
 A service's certificate lasts 90 days and cert-manager renews it 30 days
 before its end; the CA's lasts a year and is renewed about four months
@@ -63,7 +69,12 @@ cluster on 2026-10-06 and again on 2026-10-07.
   approver-policy has had no available replica for 15 minutes. Without
   the first nothing is requested, without the second nothing is approved,
   so no certificate is renewed, and a renewal that waits leaves the
-  Certificate Ready, so `MeridianCertificateNotReady` stays quiet.
+  Certificate Ready, so `MeridianCertificateNotReady` stays quiet. Since
+  approver-policy's liveness probe (S073) a hang of its process is no longer
+  this alert's signal: the kubelet restarts the container after about two
+  minutes, and the Deployment is available again, so this fires for a pod that
+  stays down; `MeridianCertificateIssuingRestartLoop`, below, is the signal of
+  a hang that returns.
 - `MeridianCertificateMetricsMissing`: for 15 minutes Prometheus has had
   no expiry series for the CA's certificate `meridian-services-ca`, or
   its scrape of cert-manager's controller is down. The two alerts above
@@ -76,6 +87,13 @@ cluster on 2026-10-06 and again on 2026-10-07.
   that was denied, an approver-policy that hangs while its HTTP still
   answers, an issuer that is down. The Certificate is still Ready. This is
   what `MeridianCertificateNotRenewed` shows about nine days later.
+- `MeridianCertificateIssuingRestartLoop` (S073): the container of
+  cert-manager's controller or of approver-policy restarted three times in 30
+  minutes. One restart is a liveness probe or a lost leader lease doing its
+  work; three is a hang that comes back and is restarted again and again,
+  with the Deployment available between restarts, which is why
+  `MeridianCertificateApproverDown` may never fire for it. Read the previous
+  container's log and the pod's events (step 1 of "What to do").
 - Later, if nothing was done: a service whose certificate is a day from
   its end turns unhealthy and restarts in a loop, because the file it
   loads is still the old one.
@@ -119,9 +137,17 @@ k get certificaterequestpolicy
 
 ## What to do
 
-1. A pod of cert-manager or approver-policy is down: wait for the
-   kubelet, or read why it is not ready with
-   `k -n cert-manager describe pod <pod>`. Requests that were waiting are
+1. A pod of cert-manager or approver-policy is down or restarting: a frozen
+   approver is restarted by the kubelet about two minutes after it stops
+   (seen on kind on 2026-10-07, run R13: readiness fails first, so for those
+   two minutes the pod is not Ready and no request is decided; the restart
+   count goes from 0 to 1), so wait for it, or read why it is not ready with
+   `k -n cert-manager describe pod <pod>`: its events say "Liveness probe
+   failed" when the probe restarted it. After a restart the process that hung
+   is the previous container's: `k -n cert-manager logs <pod> --previous`. A
+   count of 1 is the probe doing its work; a count that climbs is
+   `MeridianCertificateIssuingRestartLoop`'s, and the previous container's log
+   says what each hung process was doing. Requests that were waiting are
    decided once it runs again.
 2. A policy is missing or not Ready, or the issuer is not: `make up`
    converges the issuer and the policies. Run it from a clean checkout of
@@ -248,9 +274,11 @@ one-hour certificates of the watch below renew 30 minutes before their end
 and are not overdue. Status: implemented and unit-tested with promtool (an
 overdue renewal fires after the hour, one overdue for 50 minutes does not,
 one that completes clears it, another namespace and an absent series fire
-nothing); not seen firing on a cluster. Not established: how the series
-behaves while a renewal is pending (expected: it stays in the past until
-issuance sets the next time).
+nothing); loaded and quiet on kind on 2026-10-07 (run R13), not seen firing on
+a cluster. Not established: how the series behaves while a renewal is pending
+(expected: it stays in the past until issuance sets the next time), and that
+Prometheus stores it at all (R13 saw the rule loaded and healthy, not the
+series).
 
 Read, in this order, with `k` as under "Confirm"; each only reads:
 
@@ -259,7 +287,9 @@ k -n <namespace> describe certificate <name>
 k -n <namespace> get certificaterequest
 k -n <namespace> describe certificaterequest <the newest one for the certificate>
 k -n cert-manager get pods
+k -n cert-manager describe pod <the approver's pod>
 k -n cert-manager logs deployment/cert-manager-approver-policy
+k -n cert-manager logs <the approver's pod> --previous
 k get clusterissuer
 k -n observability get issuer
 ```
@@ -269,9 +299,12 @@ k -n observability get issuer
 2. The newest CertificateRequest's conditions, **Approved** or **Denied**. A
    `Denied` names the field and the policy: "What to do", step 3. Neither
    condition means nobody decided: go on to the pod.
-3. The approver's pod and its log: not Running, restarts climbing or no
-   available replica (`MeridianCertificateApproverDown` is then firing too)
-   is "What to do", step 1. A pod that is Running and Ready while the
+3. The approver's pod, its events and its log (the previous container's too,
+   after a restart: `--previous`; the events say "Liveness probe failed" when
+   the probe restarted it): not Running, restarts climbing or no available
+   replica (`MeridianCertificateApproverDown` or
+   `MeridianCertificateIssuingRestartLoop` is then firing too) is "What to
+   do", step 1. A pod that is Running and Ready with no restart while the
    request stays undecided is a hang that no probe of the add-on can see (it
    answers `/readyz` and decides nothing); its log, the policies' status
    (`k get certificaterequestpolicy`) and the time of its last line say
