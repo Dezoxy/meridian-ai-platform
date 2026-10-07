@@ -34,10 +34,12 @@ from meridian.platform.gateway.ratelimit import (
 from meridian.platform.knowledge_mcp.ingest import MAX_TOTAL_WAIT_SECONDS
 
 
-def run_require_database(*, policy: bool) -> subprocess.CompletedProcess[str]:
+def run_require_database(
+    *, policy: bool, operator: bool = True
+) -> subprocess.CompletedProcess[str]:
     """``require_database`` from deploy.sh in bash against a stub ``kctl`` that
     knows the Database, no Secret to check and, when ``policy``, the NetworkPolicy
-    ``platform-db``."""
+    ``platform-db`` and, when ``operator``, the operator's ``cnpg-operator``."""
     script = "\n".join(
         [
             "set -euo pipefail",
@@ -51,6 +53,8 @@ def run_require_database(*, policy: bool) -> subprocess.CompletedProcess[str]:
             '    *"get database"*) printf true ;;',
             '    *"get networkpolicy platform-db"*)',
             '      [[ "${POLICY}" == yes ]] || return 1 ;;',
+            '    *"get networkpolicy cnpg-operator"*)',
+            '      [[ "${OPERATOR}" == yes ]] || return 1 ;;',
             "  esac",
             "}",
             function_definition(DEPLOY_SH, "require_database"),
@@ -62,7 +66,11 @@ def run_require_database(*, policy: bool) -> subprocess.CompletedProcess[str]:
         ["bash", "-c", script],
         capture_output=True,
         text=True,
-        env={"PATH": os.environ["PATH"], "POLICY": "yes" if policy else "no"},
+        env={
+            "PATH": os.environ["PATH"],
+            "POLICY": "yes" if policy else "no",
+            "OPERATOR": "yes" if operator else "no",
+        },
         check=False,
     )
 
@@ -78,6 +86,39 @@ def test_deploy_dies_with_make_up_when_the_database_policy_is_missing() -> None:
     assert "passed" not in missing.stdout
     assert present.returncode == 0, present.stderr
     assert "passed" in present.stdout
+
+
+def test_deploy_dies_with_make_up_when_the_operators_policy_is_missing() -> None:
+    # The operator's pod lives in `meridian` since S072 (contract C): the chart's
+    # default-deny selects it, and without its own policy it loses the API server
+    # and the database's pods. A cluster made before that change, or one whose
+    # policy was removed, has the database's policy and not this one.
+    missing = run_require_database(policy=True, operator=False)
+    present = run_require_database(policy=True, operator=True)
+
+    assert missing.returncode != 0
+    assert "NetworkPolicy 'cnpg-operator'" in missing.stderr
+    assert "NetworkPolicy 'platform-db'" not in missing.stderr
+    assert "default-deny" in missing.stderr
+    assert "API server" in missing.stderr
+    assert "database" in missing.stderr
+    assert "run 'make up' first" in missing.stderr
+    assert "passed" not in missing.stdout
+    assert present.returncode == 0, present.stderr
+    assert "passed" in present.stdout
+
+
+def test_the_database_policys_guard_comes_first_and_both_read_the_namespace_var() -> (
+    None
+):
+    body = function_body(DEPLOY_SH, "require_database")
+    reads = re.findall(r'kctl -n "\$\{NAMESPACE\}" get networkpolicy (\S+) ', body)
+
+    assert reads == ["platform-db", "cnpg-operator"]
+    # Both guards stop the deploy before the address is compared, and neither
+    # replaces `api_server_matches_policy`, which reads the database's policy.
+    assert body.index("cnpg-operator") < body.index("api_server_matches_policy")
+    assert body.count("api_server_matches_policy") == 1
 
 
 def test_the_release_holds_no_job_a_flag_renders_one_and_deploy_knows_services() -> (

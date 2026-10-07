@@ -654,6 +654,9 @@ def run_script(
         f"{log.format(name='kubectl')}\n"
         'case "$*" in\n'
         '  *"get nodes"*) ;;\n'
+        # up.sh's read for a cluster made before the operator moved (contract
+        # F2): nothing printed is a namespace that is not there.
+        '  *"get namespace"*) ;;\n'
         f'  *"get configmap {CONFIGMAP}"*) {answer} ;;\n'
         # Writing the record (S075): `create --dry-run=client | jq | apply`.
         f'  *"create configmap {CONFIGMAP}"*) '

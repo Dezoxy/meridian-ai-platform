@@ -607,6 +607,38 @@ tests:
               description: "Deployment claims-api in meridian has had no available replica for 5 minutes (proposed threshold)."
               runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/rollback.md"
 
+  - name: the database operator at 0 replicas does not fire it, a service at 0 does
+    interval: 1m
+    input_series:
+      - series: 'kube_deployment_status_replicas_available{namespace="meridian", deployment="cnpg-cloudnative-pg"}'
+        values: "0x20"
+      - series: 'kube_deployment_status_replicas_available{namespace="meridian", deployment="claims-api"}'
+        values: "0x20"
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: MeridianServiceUnavailable
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              platform: meridian
+              slo: service-availability
+              namespace: meridian
+              deployment: claims-api
+            exp_annotations:
+              summary: "A Meridian service has no available replica."
+              description: "Deployment claims-api in meridian has had no available replica for 5 minutes (proposed threshold)."
+              runbook_url: "https://github.com/Dezoxy/meridian-ai-platform/blob/main/docs/operations/runbooks/rollback.md"
+
+  - name: the database operator alone at 0 replicas fires nothing
+    interval: 1m
+    input_series:
+      - series: 'kube_deployment_status_replicas_available{namespace="meridian", deployment="cnpg-cloudnative-pg"}'
+        values: "0x20"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MeridianServiceUnavailable
+        exp_alerts: []
+
   # ── MeridianDatabaseNotReady ────────────────────────────────────────────────
   - name: a platform-db pod that is not ready fires, a ready one does not
     interval: 1m
