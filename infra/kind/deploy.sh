@@ -109,8 +109,9 @@ readonly HELM_UPGRADE_TIMEOUT=300s
 # How long a deleted Job may take to go, its pod's termination included. Under
 # kctl's KCTL_OUTER_TIMEOUT (90 s), which bounds the call whatever happens.
 readonly DELETE_TIMEOUT=60s
-# The deadlines of a psql in a pod, as smoke.sh's PSQL_OPTIONS (S062): a lock or
-# a statement that hangs ends the read, and the script goes on without the count.
+# The deadlines of a psql in a pod, as PSQL_OPTIONS in smoke.d/shared.sh (S062):
+# a lock or a statement that hangs ends the read, and the script goes on without
+# the count.
 readonly PSQL_OPTIONS='-c statement_timeout=5s -c lock_timeout=3s'
 # cert-manager issues the services' certificates in seconds once its webhook and
 # the issuer are Ready (`make up` waited for both); two minutes is far more than
@@ -391,9 +392,10 @@ install_release() {
 }
 
 # stored_chunk_count: the number of rows in knowledge.chunks (the query is
-# CHUNK_COUNT_SQL of common.sh, which smoke.sh reads too), read in the
-# database's primary pod the way smoke.sh reaches psql. Prints psql's answer and
-# returns 0 when the exec ended with status 0; returns 1 for anything else: the
+# CHUNK_COUNT_SQL of common.sh, which smoke.d/02-database.sh reads too), read in
+# the database's primary pod the way smoke.d/02-database.sh reaches psql. Prints
+# psql's answer and returns 0 when the exec ended with status 0; returns 1 for
+# anything else: the
 # pod was not found or not reached, the call ended at its outer bound (124 or
 # 137), or psql ran and failed (kubectl exits with psql's own status then, and
 # says "command terminated with exit code N"). Only status 0 says what the table
