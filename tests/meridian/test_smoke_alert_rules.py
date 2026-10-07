@@ -6,7 +6,7 @@ Grafana's datasource proxy it reads Prometheus' ``/api/v1/rules``: the groups of
 the file's, and no Meridian alert is firing; then it reads the health dashboard
 the way the cost dashboard is read. These tests run the functions in bash
 against a stub ``kctl`` and a stub ``gcurl`` (the harness is the cost panel's,
-in test_kind_manifests.py); the canned ``/api/v1/rules`` answer is built from
+in kindharness.py); the canned ``/api/v1/rules`` answer is built from
 the real rule file, so a rule added to the file does not break them. Nothing
 here touches a cluster.
 """
@@ -18,9 +18,9 @@ import subprocess
 from pathlib import Path
 
 import yaml
-from test_kind_manifests import (
+from kindharness import PROMETHEUS_ERROR_ANSWER
+from kindsupport import (
     KIND_DIR,
-    PROMETHEUS_ERROR_ANSWER,
     SMOKE_SH,
     function_body,
     function_definition,

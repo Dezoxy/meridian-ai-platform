@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 
 import pytest
-from test_kind_manifests import requires_jq
+from kindsupport import requires_jq
 from test_smoke_alert_rules import (
     HEALTH_TITLE,
     HEALTH_UID,

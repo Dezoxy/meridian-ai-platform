@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 import test_smoke_network_policy as network
 from chartsupport import rendered_chart
-from test_kind_manifests import SMOKE_SH, requires_jq
+from kindsupport import SMOKE_SH, requires_jq
 
 pytestmark = requires_jq
 

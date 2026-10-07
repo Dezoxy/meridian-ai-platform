@@ -385,3 +385,47 @@ def assert_counters_reconcile(db: DatabaseHandle) -> None:
         "AND c.kind = 'tokens-day' AND c.period_start = u.day)",
     )
     assert uncounted == [(0,)]
+
+
+HELD = 100
+MICRO_HELD = 5_000_000
+
+
+def credit(
+    db: DatabaseHandle, amount: int, kind: str = TOKENS_KIND, tenant: str = TENANT
+) -> tuple[uuid.UUID, int]:
+    ((credit_id, held),) = run(db, ROLE, CREDIT, (tenant, kind, amount, REASON))
+    return credit_id, held
+
+
+def credits(db: DatabaseHandle) -> list[tuple]:
+    return run(
+        db,
+        OWNER,
+        "SELECT credit_id, tenant, kind, period_start, amount, reason, db_role "
+        "FROM gateway.credits ORDER BY recorded_at, amount",
+    )
+
+
+def planted_ledger(db: DatabaseHandle) -> None:
+    """One settled call that charged the tenant HELD tokens today and MICRO_HELD
+    this month, so the two counters hold what their usage rows charge."""
+    plant_usage(db, tokens=HELD, micro_eur=MICRO_HELD, state="settled")
+
+
+# The columns `meridian gateway` reads, by table: LIST_RESERVED (usage) and the
+# dry run's counts of rows by month (usage.month, the two period_start columns).
+READABLE_COLUMNS = {
+    "usage": (
+        "attempt_id",
+        "tenant",
+        "deployment",
+        "state",
+        "reserved_at",
+        "reserved_tokens",
+        "reserved_micro_eur",
+        "month",
+    ),
+    "budget_counters": ("period_start",),
+    "credits": ("period_start",),
+}

@@ -28,8 +28,8 @@ from pathlib import Path
 
 import pytest
 from certscriptsupport import KIND_DIR
+from kindsupport import SMOKE_SH, requires_jq
 from test_certificate_deploy import write_stub
-from test_kind_manifests import SMOKE_SH, requires_jq
 
 pytestmark = requires_jq
 

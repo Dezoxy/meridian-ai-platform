@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 import yaml
 from chartsupport import SERVICES
-from test_kind_manifests import (
+from kindsupport import (
     KIND_DIR,
     SMOKE_SH,
     UP_SH,

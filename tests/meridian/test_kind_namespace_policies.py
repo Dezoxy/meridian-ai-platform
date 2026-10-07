@@ -4,7 +4,7 @@
 platform charts live in (``cert-manager-networkpolicy.yaml``,
 ``observability-networkpolicy.yaml``) and one for smoke's telemetry Jobs
 (``smoke-networkpolicy.yaml``, in `meridian`). Each is checked here the way the
-database's is (``test_kind_manifests.py``): the exact rules, and that every
+database's is (``test_kind_pod_secrets_and_policy.py``): the exact rules, and that every
 rule but the stated exception names a peer and a port. The platform charts are
 not vendored, so no test renders them: the pod labels and ports the policies
 select were read with ``helm template`` on 2026-10-06 and the files say where;
@@ -27,7 +27,7 @@ from chartsupport import (
     rendered_chart,
     rules,
 )
-from test_kind_manifests import (
+from kindsupport import (
     KIND_DIR,
     SMOKE_SH,
     UP_SH,
