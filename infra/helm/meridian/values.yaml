@@ -194,9 +194,13 @@ probes:
 # with what the service serves.
 #
 # `tls: true` says a service serves TLS and asks its callers for a certificate
-# (S055). It is one value and nothing else: the template adds the uvicorn
-# flags, the probes' scheme, the DNS name in the certificate and the prefix the
-# service reads its callers' identity with. The chart fails for a service that
+# (S055). Its command starts through `python -m
+# meridian.platform.common.tlsstart`, which takes uvicorn's own flags and reads
+# the certificate once, for the server and for /healthz (S069); the Claims API
+# keeps `uvicorn`. Apart from that command it is one value and nothing else:
+# the template adds the flags, the probes' scheme, the DNS name in the
+# certificate and the prefix the service reads its callers' identity with. The
+# chart fails for a service that
 # another workload calls (a serviceUrl or a serviceMap names it) and does not
 # set it. The Claims API has none: the edge
 # calls it over plain HTTP (TLS at the edge is a backlog row), and it is a
@@ -238,7 +242,9 @@ services:
     replicas: 1
     tls: true
     command:
-      - uvicorn
+      - python
+      - -m
+      - meridian.platform.common.tlsstart
       - --factory
       - meridian.runtime.app:create_app_from_env
       - --host
@@ -267,7 +273,9 @@ services:
     replicas: 1
     tls: true
     command:
-      - uvicorn
+      - python
+      - -m
+      - meridian.platform.common.tlsstart
       - --factory
       - meridian.platform.gateway.app:create_app_from_env
       - --host
@@ -296,7 +304,9 @@ services:
     replicas: 1
     tls: true
     command:
-      - uvicorn
+      - python
+      - -m
+      - meridian.platform.common.tlsstart
       - --factory
       - meridian.platform.policy_mcp.app:create_app_from_env
       - --host
@@ -320,7 +330,9 @@ services:
     replicas: 1
     tls: true
     command:
-      - uvicorn
+      - python
+      - -m
+      - meridian.platform.common.tlsstart
       - --factory
       - meridian.workloads.claims_triage.mcp_server.app:create_app_from_env
       - --host
@@ -344,7 +356,9 @@ services:
     replicas: 1
     tls: true
     command:
-      - uvicorn
+      - python
+      - -m
+      - meridian.platform.common.tlsstart
       - --factory
       - meridian.platform.knowledge_mcp.app:create_app_from_env
       - --host
