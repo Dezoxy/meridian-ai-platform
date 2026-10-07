@@ -29,6 +29,7 @@ from ledgerbatchsupport import (
 from upkeepsupport import (
     BAD_REASON,
     CLOSE,
+    COST_KIND,
     CURRENT_MONTH,
     EXPIRE,
     NOT_A_MONTH,
@@ -36,6 +37,7 @@ from upkeepsupport import (
     STILL_RESERVED,
     call_after_temp_tables_named_like_types,
     call_with_a_planted_clock,
+    plant_counter,
     plant_usage,
     previous_month,
     refusal,
@@ -403,12 +405,80 @@ def test_when_every_usage_row_left_is_held_the_call_is_refused_and_changes_nothi
     ]
 
 
-# The branch of the function that tells GU303 from GU306 when rows are left (a row
-# that was reserved when the call's first count ran) is not reached by any test:
-# a reserved row has to commit between two statements of one call, and nothing
-# short of a hook into the function can pause it there. The first count refuses
-# every reserved row it sees (the tests above), and the third refuses one that
-# commits while the closing call waits (the test of the late reservation below).
+# ── a reserved row that commits while a batch waits for the table ───────────
+# Two branches of the function sit after its first count of reserved rows: the
+# state filter of the batch and the count that tells GU303 from GU306 when rows
+# are left. Both are reached with no hook into the function, by a second session
+# that takes SHARE on the table (which conflicts with the ROW EXCLUSIVE a DELETE
+# needs, and not with the reads the first count and the batch's subquery make),
+# inserts a reserved row of an old month and stays open. The call's first count
+# cannot see that row; its DELETE waits for the table; the second session commits;
+# the DELETE then takes its snapshot and sees the row.
+PLANT_RESERVED_UNDER_SHARE_LOCK = (
+    "LOCK TABLE gateway.usage IN SHARE MODE; "
+    "INSERT INTO gateway.usage (attempt_id, call_id, tenant, agent, run_id, "
+    "deployment, provider, model, day, month, reserved_tokens, reserved_micro_eur, "
+    "charged_tokens, charged_micro_eur) "
+    "SELECT md5('held-attempt')::uuid, md5('held-call')::uuid, 'ledger-tenant-1', "
+    "'claims-triage', md5('held-run')::uuid, 'aoai-sdc-gpt-4o', 'azure-openai', "
+    "'gpt-4o', m.month, m.month, 10, 4, 10, 4 FROM (SELECT (date_trunc('month', "
+    "now() AT TIME ZONE 'UTC') - interval '1 month')::date AS month) AS m"
+)
+
+
+def call_while_a_reserved_row_commits(
+    db: DatabaseHandle, before: date
+) -> tuple[list, list | psycopg.Error]:
+    """One batch call as the upkeep role, whose DELETE waits for the table while
+    another session inserts a reserved row of the previous month and then commits."""
+    return second_waits_for_first(
+        db,
+        (OWNER, PLANT_RESERVED_UNDER_SHARE_LOCK, None),
+        (UPKEEP_ROLE, BATCH, (before, REASON, MIN_BATCH)),
+    )
+
+
+def test_a_reserved_row_that_commits_while_a_batch_waits_and_no_row_goes_is_refused(
+    fresh_database: DatabaseHandle,
+) -> None:
+    current = utc_month(fresh_database)
+    old = previous_month(current)
+    plant_counter(fresh_database, COST_KIND, old, 4)
+    counters_before = ledger(fresh_database)["counters"]
+
+    first, second = call_while_a_reserved_row_commits(fresh_database, current)
+
+    # The first count saw no reserved row and the DELETE found no row to take, so
+    # the function asked whether rows were left, found the reserved one, and
+    # counted again: GU303 from inside "rows are left", not GU306.
+    assert first == []
+    assert isinstance(second, psycopg.Error)
+    assert second.sqlstate == STILL_RESERVED
+    after = ledger(fresh_database)
+    assert [row[4] for row in after["usage"]] == ["reserved"]
+    assert after["counters"] == counters_before
+    assert ledger_audit_rows(fresh_database) == []
+
+
+def test_a_reserved_row_that_commits_while_a_batch_waits_is_not_removed_with_the_rest(
+    fresh_database: DatabaseHandle,
+) -> None:
+    current = utc_month(fresh_database)
+    plant_ledger(fresh_database, [previous_month(current)], rows=1)
+    counters_before = ledger(fresh_database)["counters"]
+
+    first, second = call_while_a_reserved_row_commits(fresh_database, current)
+
+    # Only the state filter keeps the DELETE off the reserved row: the first count
+    # did not see it, and the lock on the row is taken by the same statement.
+    assert first == []
+    assert second == [(1, 0, 0)]
+    after = ledger(fresh_database)
+    assert [row[4] for row in after["usage"]] == ["reserved"]
+    assert after["counters"] == counters_before
+    assert [row[2] for row in ledger_audit_rows(fresh_database)] == [
+        f"before={current:%Y-%m} batch usage=1"
+    ]
 
 
 # ── a reservation that commits while the closing call runs ──────────────────

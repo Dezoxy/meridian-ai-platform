@@ -22,6 +22,8 @@ from dbsupport import OWNER, DatabaseHandle
 from ledgerbatchsupport import ANALYZE, plant_ledger
 from upkeepsupport import previous_month, run, utc_month
 
+from meridian.platform.common.db import connect
+
 FUNCTION_SOURCE = (
     "SELECT prosrc FROM pg_proc WHERE oid = "
     "'gateway.expire_ledger_batch(date, text, integer)'::regprocedure"
@@ -51,6 +53,23 @@ def with_values(text: str, cutoff: str) -> str:
 
 def plan(db: DatabaseHandle, text: str) -> str:
     rows = run(db, OWNER, f"EXPLAIN (COSTS OFF) {text}")
+    return "\n".join(row[0] for row in rows)
+
+
+def generic_plan(db: DatabaseHandle, text: str, types: str, cutoff: str) -> str:
+    """The plan of a statement of the function when it has parameters and the
+    server must use a generic plan: the function's own text, with ``p_before``
+    and ``p_limit`` as the parameters ``$1`` and ``$2``, prepared and explained
+    under ``force_generic_plan`` (what a session's sixth call may get)."""
+    prepared = text.replace("p_before", "$1").replace("p_limit", "$2")
+    arguments = cutoff if types == "date" else f"{cutoff}, 100"
+    with connect(db.dsn(OWNER), "test-plan") as conn:
+        conn.execute("SET plan_cache_mode = force_generic_plan")
+        conn.execute(f"PREPARE probe ({types}) AS {prepared}")
+        rows = conn.execute(
+            f"EXPLAIN (COSTS OFF) EXECUTE probe({arguments})"
+        ).fetchall()
+        conn.rollback()
     return "\n".join(row[0] for row in rows)
 
 
@@ -111,6 +130,33 @@ def test_the_question_still_reads_the_index_after_a_large_removal_with_no_analyz
     cutoff = f"date '{newest.isoformat()}'"
 
     shown = plan(planted, f"SELECT 1 {with_values(left, cutoff)}")
+
+    assert re.search(rf"Index (Only )?Scan using {INDEX}", shown)
+    assert "Seq Scan" not in shown
+    assert "Sort" not in shown
+
+
+def test_a_generic_plan_of_the_batch_still_reads_the_index_in_order(
+    planted: DatabaseHandle,
+) -> None:
+    delete = statement(source(planted), r"(DELETE FROM gateway\.usage.*?);")
+    cutoff = f"date '{utc_month(planted).isoformat()}'"
+
+    shown = generic_plan(planted, delete, "date, integer", cutoff)
+
+    assert f"Index Scan using {INDEX}" in shown
+    assert "Tid Scan" in shown
+    assert "Seq Scan" not in shown
+    assert "Sort" not in shown
+
+
+def test_a_generic_plan_of_the_question_whether_a_row_is_left_reads_the_index(
+    planted: DatabaseHandle,
+) -> None:
+    left = the_question_whether_a_row_is_left(planted)
+    cutoff = f"date '{utc_month(planted).isoformat()}'"
+
+    shown = generic_plan(planted, f"SELECT 1 {left}", "date", cutoff)
 
     assert re.search(rf"Index (Only )?Scan using {INDEX}", shown)
     assert "Seq Scan" not in shown

@@ -320,7 +320,9 @@ disk of a cloud database.
   that was stopped prints nothing of what it removed; the batches that finished
   stay removed, each with its audit row, and the next run goes on from the
   oldest row left. A failure the command sees after some batches says how many
-  usage rows were removed and that they stay removed. There is no undo.
+  usage rows were removed, at least that many (a commit whose outcome is
+  unknown may have removed one batch more), and that they stay removed. There
+  is no undo.
 - **No period and no schedule.** Nothing here sets a number of days and nothing
   runs it by itself; the cutoff is the operator's argument.
 

@@ -93,9 +93,10 @@
 --   version of the row at a new location. What keeps a row where it is: the FOR
 --   UPDATE row lock, taken in the same statement. It marks the row in place and
 --   makes no new version, so no other statement can move the row until the
---   transaction ends, and the lock holds ROW EXCLUSIVE on the table, so VACUUM
---   FULL and CLUSTER cannot get their lock before then (a plain VACUUM does not
---   move a row). Were an update of a row committed before the lock was taken,
+--   transaction ends. The row lock takes ROW SHARE on the table and the removal
+--   ROW EXCLUSIVE, and both keep an exclusive lock out, so VACUUM FULL and
+--   CLUSTER cannot get theirs before the transaction ends (a plain VACUUM does
+--   not move a row). Were an update of a row committed before the lock was taken,
 --   the lock would follow it to the new version and return the new location.
 --   A second defence, said as such: the batch selects only rows whose state is
 --   not 'reserved', and, read from the writers (gateway/budget.py, 0020), the

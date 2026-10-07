@@ -518,11 +518,17 @@ def _expire_ledger_batches(
         )
     except typer.Exit:
         if so_far.batches:
+            # A count, not a promise of the total: a batch is counted after its
+            # commit returned, so a commit whose outcome is unknown (the
+            # connection died inside it) may have removed one batch more. The
+            # line starts "removed N usage rows in B batch(es) before the
+            # failure" because infra/kind/upkeep.sh matches that start.
             typer.echo(
                 f"removed {so_far.usage} usage rows in {so_far.batches} batch(es) "
-                "before the failure: each batch is its own transaction with its "
-                "own audit row, and what was removed stays removed; run the "
-                "command again to continue",
+                "before the failure (at least that many: a commit whose outcome "
+                "is unknown may have removed one batch more): each batch is its "
+                "own transaction with its own audit row, and what was removed "
+                "stays removed; run the command again to continue",
                 err=True,
             )
         raise

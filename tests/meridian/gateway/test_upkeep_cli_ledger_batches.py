@@ -197,6 +197,38 @@ def test_a_run_of_three_batches_opens_one_connection(
     assert len(ledger_audit_rows(db)) == 4
 
 
+def test_a_run_of_seven_batches_runs_past_the_fifth_call_on_one_connection(
+    monkeypatch: pytest.MonkeyPatch, db: DatabaseHandle
+) -> None:
+    current = planted_old_month(db, rows=700)
+    real_connect = gateway_cli.connect
+    opened: list[int] = []
+
+    def counts(dsn: str, application_name: str) -> psycopg.Connection:
+        opened.append(1)
+        return real_connect(dsn, application_name)
+
+    monkeypatch.setattr(gateway_cli, "connect", counts)
+
+    result = runner.invoke(app, argv(current, "--limit", "100", "--confirm"))
+
+    # From the sixth execution on one connection psycopg prepares the statement on
+    # the server, and the function's own statements may get a generic plan: seven
+    # batches and the closing call, all on the one connection, must still count
+    # and audit exactly as the first five do.
+    assert result.exit_code == 0, result.output
+    assert opened == [1]
+    assert result.stdout.splitlines() == [
+        f"removed before {current}: usage rows 700, counter rows 6, credits 2",
+        f"in 7 batch(es) of at most 100 usage rows, {THEN}",
+    ]
+    assert ledger_audit_rows(db) == [
+        *[audit_row(current, "batch usage=100")] * 7,
+        audit_row(current, "closed counters=6 credits=2"),
+    ]
+    assert usage_count(db) == 0
+
+
 def test_the_default_limit_is_within_the_functions_range() -> None:
     assert (
         gateway_cli.MIN_LEDGER_BATCH
@@ -257,9 +289,10 @@ def test_a_failure_between_batches_leaves_what_was_removed_removed_and_says_so(
     lines = result.stderr.splitlines()
     assert lines[0].startswith("ERROR gateway upkeep failed")
     assert lines[1] == (
-        "removed 200 usage rows in 2 batch(es) before the failure: each batch is "
-        "its own transaction with its own audit row, and what was removed stays "
-        "removed; run the command again to continue"
+        "removed 200 usage rows in 2 batch(es) before the failure (at least that "
+        "many: a commit whose outcome is unknown may have removed one batch "
+        "more): each batch is its own transaction with its own audit row, and "
+        "what was removed stays removed; run the command again to continue"
     )
     assert usage_count(db) == 50
     assert len(ledger_audit_rows(db)) == 2
