@@ -1,7 +1,9 @@
 """The CI job and ``make pytest-db`` must test against the same PostgreSQL."""
 
+import os
 import re
 import subprocess
+import tomllib
 
 import yaml
 from servicesupport import REPO_ROOT
@@ -266,7 +268,8 @@ def test_the_tests_step_prints_its_slowest_tests() -> None:
     assert tests["env"]["PYTEST_ARGS"] == "--durations=25"
     assert re.search(r"^PYTEST_ARGS\s*\?=\s*$", MAKEFILE, re.MULTILINE)
     assert re.search(
-        r"^pytest:\n\tuv run pytest -n \$\(PYTEST_WORKERS\) \$\(PYTEST_ARGS\)$",
+        r"^pytest:\n\tuv run pytest -n \$\(PYTEST_WORKERS\)"
+        r" \$\(PYTEST_COVERAGE_ARGS\) \$\(PYTEST_ARGS\)$",
         MAKEFILE,
         re.MULTILINE,
     )
@@ -290,6 +293,84 @@ def test_the_jobs_limit_is_twice_its_slowest_measured_run() -> None:
     # finding. Change the number and the workflow's comment together.
     assert JOB["timeout-minutes"] == 15
     assert "7 min 30 s" in WORKFLOW_TEXT
+
+
+# ── a floor under line coverage (S074) ──────────────────────────────────────
+# The floor is read by pytest-cov from the pyproject, the one place it is
+# written. 99.11 % of the 13,783 statements of src/meridian were covered in the
+# whole suite as CI runs it (2026-10-07: 20,015 tests, six workers, the database
+# and Redis present); rounded down to 99 and one point taken off for the
+# variation between runs, that is 98. A person who raises the floor changes it
+# here as well.
+COVERAGE_FLOOR = 98
+COVERAGE_CONFIG = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text("utf-8"))[
+    "tool"
+]["coverage"]
+# Targets that call a live model or Azure, or change a cloud account; CI runs
+# none of them.
+PAID_TARGETS = (
+    "eval-record",
+    "eval-injection-record",
+    "gateway-live",
+    "azure-smoke",
+    "azure-apply",
+    "aws-apply",
+    "aws-destroy",
+)
+
+
+def test_the_floor_is_configured_in_one_place_and_equals_the_constant_here() -> None:
+    assert COVERAGE_CONFIG["report"]["fail_under"] == COVERAGE_FLOOR
+    assert COVERAGE_CONFIG["run"]["source"] == ["src/meridian"]
+    # Neither the Makefile nor the workflow repeats the number: pytest-cov takes
+    # it from the configuration when `--cov` is given without `--cov-fail-under`.
+    for text in (MAKEFILE, WORKFLOW_TEXT):
+        assert "--cov-fail-under" not in text
+        assert not re.search(r"fail[-_]under\W*\d", text)
+
+
+def test_both_pytest_targets_can_turn_coverage_on() -> None:
+    for target in ("pytest", "pytest-db"):
+        recipe = MAKEFILE.split(f"\n{target}:\n", 1)[1].split("\n\n", 1)[0]
+        assert "$(PYTEST_COVERAGE_ARGS)" in recipe
+
+
+def test_a_run_without_the_switch_measures_no_coverage_and_cannot_fail_on_it() -> None:
+    # `make -n` prints the recipe without running it: no switch, no `--cov`; the
+    # switch, `--cov`, which is what makes pytest-cov apply the floor; and 0 or
+    # anything but 1 leaves it off.
+    def pytest_line(*arguments: str) -> str:
+        # CI sets COVERAGE=1 and PYTEST_ARGS in the environment of the run that
+        # runs this test, and make passes its own flags to a make it starts.
+        environment = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("COVERAGE", "PYTEST_ARGS", "MAKEFLAGS", "MFLAGS")
+        }
+        done = subprocess.run(
+            ["make", "-n", "pytest", *arguments],
+            cwd=REPO_ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return done.stdout
+
+    assert re.search(r"^COVERAGE\s*\?=\s*$", MAKEFILE, re.MULTILINE)
+    assert "--cov" not in pytest_line()
+    assert "--cov" not in pytest_line("COVERAGE=0")
+    assert "--cov " in pytest_line("COVERAGE=1")
+
+
+def test_no_workflow_runs_a_paid_target_or_a_recording_run() -> None:
+    # Every workflow, not only the python job's: a step's `run` or a comment.
+    for workflow in sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml")):
+        text = workflow.read_text(encoding="utf-8")
+        for target in PAID_TARGETS:
+            assert target not in text, f"{workflow.name} names {target}"
+        for variable in ("MERIDIAN_EVAL_INJECTION_RECORD",):
+            assert variable not in text, f"{workflow.name} names {variable}"
 
 
 # ── the secret scan a push needs (S057) ─────────────────────────────────────
