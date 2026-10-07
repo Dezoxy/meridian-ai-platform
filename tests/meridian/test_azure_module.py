@@ -21,6 +21,7 @@ from azuremodulesupport import (
     GCP_DIR,
     MODULE_DIR,
     REFUSED,
+    REPO_ROOT,
     attribute,
     comments_of,
     data_sources,
@@ -853,8 +854,13 @@ def test_no_file_states_an_address_outside_the_private_ranges() -> None:
             )
 
 
-def test_no_file_states_a_price() -> None:
+def test_no_file_but_the_readme_states_a_price() -> None:
+    # The README is the one place a price may stand: its Cost section carries the
+    # list prices with their read date (and a test below holds that date). In code
+    # or in a comment a price goes stale unseen.
     for path in module_files():
+        if path.name == "README.md":
+            continue
         assert not PRICE.search(path.read_text(encoding="utf-8")), path.name
 
 
@@ -868,68 +874,182 @@ def test_the_checks_above_can_see_what_they_look_for() -> None:
     assert not PRICE.search("budget_amount_eur and the 2 nodes")
 
 
-# ── the README stub ──────────────────────────────────────────────────────────
+# ── the README (S020, Z8: the real one replaced the stub and its tests) ───────
 
 README_HEADINGS = [
     "# Azure platform module",
     "## What it declares",
-    "## Inputs",
+    "## What it relies on in the foundation",
+    "### Variables",
     "## Outputs",
     "## The subscription pin",
-    "## The checks that exist",
-    "## What does not exist, on purpose",
-    "## What `validate` and the scan cannot see",
+    "## The doors that exist, and the one that does not",
+    "## What `validate` and the scan cannot tell",
+    "### Before anything is created",
+    "### Ordering and timing",
+    "### The plan after the first apply",
+    "### Identity, the vault and the endpoints",
+    "### Cost and removal",
+    "## The resource providers to register",
+    "## Deliberately not built for the first apply",
+    "## The scan",
+    "## Cost",
+    "## Removal",
+    "## Residuals",
+    "### Nine things the second half of S020 must do",
     "## What a production environment sets differently",
     "## The Region list",
-    "## Cost",
 ]
+
+# Host shapes the README must not print (a host name is a leak in a public
+# repository, and the redaction of a plan's output is the wrapper's, not this
+# document's). The README says "the Key Vault's Private Link zone", not its name.
+HOST_SUFFIXES = (
+    "azmk8s.io",
+    "azurecr.io",
+    "database.azure.com",
+    "vault.azure.net",
+    "vaultcore.azure.net",
+    "openai.azure.com",
+    "cognitiveservices.azure.com",
+    "oic.prod-aks.azure.com",
+    "blob.core.windows.net",
+    "onmicrosoft.com",
+)
 
 
 def readme() -> str:
     return (MODULE_DIR / "README.md").read_text(encoding="utf-8")
 
 
-def test_the_readme_has_the_headings_and_is_a_stub_under_all_but_the_first() -> None:
+def readme_section(heading: str) -> str:
+    """The text under a `## ` heading, up to the next `## ` heading."""
+    parts = readme().split(f"\n## {heading}\n", 1)
+    assert len(parts) == 2, heading
+    return parts[1].split("\n## ", 1)[0]
+
+
+def test_the_readme_has_exactly_these_headings_and_every_section_is_written() -> None:
     headings = re.findall(r"^#{1,6} .+$", readme(), flags=re.MULTILINE)
-    gcp_readme = (GCP_DIR / "README.md").read_text(encoding="utf-8")
-    gcp_headings = re.findall(r"^#{1,6} .+$", gcp_readme, flags=re.MULTILINE)
 
     assert headings == README_HEADINGS
-    # Every heading but the title and the pin's is one the Google README has,
-    # at whatever level (it nests Inputs and Outputs one level down).
-    texts = {h.lstrip("#").strip() for h in gcp_headings}
-    own = {"Azure platform module", "The subscription pin"}
-    assert [h for h in headings if h.lstrip("#").strip() not in own | texts] == []
-    for section in readme().split("\n## ")[1:]:
-        assert len(section.splitlines()) <= 4, section  # a stub: a line or two
+    assert "Not written yet" not in readme()
+    for title in [h[3:] for h in README_HEADINGS if h.startswith("## ")]:
+        # A section is more than a line or two: the stub's limit was four lines.
+        assert len(readme_section(title).strip().splitlines()) > 4, title
 
 
-def test_the_first_section_is_four_sentences_that_say_what_the_design_requires() -> (
-    None
-):
-    first = readme().split("\n## ", 1)[0].split("\n", 1)[1]
+def test_the_first_paragraph_says_written_validated_and_never_applied() -> None:
+    first = readme().split("\n## ", 1)[0]
     paragraph = " ".join(first.split())
 
-    sentences = re.split(r"(?<=[.!?])\s+", paragraph)
-
-    assert len(sentences) == 4, sentences
-    assert "never been planned" in sentences[1]
-    assert "never" in sentences[1] and "applied" in sentences[1]
-    assert "No command plans, applies or removes it" in sentences[2]
-    for command in (
-        "terraform fmt -check",
-        "terraform init -backend=false",
-        "terraform validate",
-    ):
-        assert command in sentences[3]
+    assert "written and validated, and NEVER applied" in paragraph
+    assert "never been planned" in paragraph
+    assert "no price has been paid" in paragraph
+    # The word "applied" is never used of the module without "never" or "not"
+    # (the foundation, which the owner did apply, is the one other thing it names).
+    for sentence in re.split(r"(?<=[.!?])\s+", paragraph):
+        if re.search(r"\bapplied\b", sentence) and "foundation" not in sentence:
+            assert re.search(r"\b(never|NEVER|not)\b", sentence), sentence
 
 
-def test_the_readme_wraps_at_eighty_columns_and_has_no_host_or_identifier() -> None:
+def test_the_readme_names_both_doors_and_says_no_apply_door_exists() -> None:
+    doors = readme_section("The doors that exist, and the one that does not")
+
+    assert "`make azure-platform-validate`" in doors
+    assert "`make azure-platform-scan`" in doors
+    assert "No plan, apply or removal door exists" in doors
+    # Every make target the README names is one the Makefile has; the README names
+    # no azure-platform target that plans, applies or removes.
+    named = set(re.findall(r"make (azure-platform-[a-z]+)", readme()))
+    in_makefile = set(
+        re.findall(
+            r"^(azure-platform-[a-z]+):",
+            (REPO_ROOT / "Makefile").read_text(encoding="utf-8"),
+            flags=re.MULTILINE,
+        )
+    )
+    assert named == {"azure-platform-validate", "azure-platform-scan"}
+    assert in_makefile == named
+
+
+def test_the_readme_holds_no_url_identifier_host_or_public_address() -> None:
+    text = readme()
+
+    assert not re.search(r"https?://", text)
+    assert not GUID.search(text)
+    for found in ADDRESS.findall(text):
+        address = ipaddress.ip_address(found)
+        assert any(address in private for private in PRIVATE_RANGES), found
+    for suffix in HOST_SUFFIXES:
+        assert suffix not in text, suffix
+
+
+def test_the_readme_wraps_at_eighty_columns() -> None:
     for line in readme().splitlines():
-        assert len(line) <= 80 or line.startswith("|"), line
-    assert not re.search(r"https?://", readme())
-    assert not GUID.search(readme())
-    assert not PRICE.search(readme())
+        if line.startswith("|"):
+            continue  # a table row is as wide as its widest cell
+        # One unbreakable token (a relative link) may hold a line over the limit.
+        widest = max((len(word) for word in line.split()), default=0)
+        assert len(line) <= 80 or len(line) - widest <= 80, line
+
+
+def test_every_tf_file_of_the_module_is_named_in_the_readme() -> None:
+    names = sorted(path.name for path in MODULE_DIR.glob("*.tf"))
+
+    assert len(names) == 13
+    for name in names:
+        assert f"`{name}`" in readme(), name
+
+
+def test_the_readme_names_every_variable_and_every_output() -> None:
+    outputs = re.findall(r'^output "(\w+)"', raw_text("outputs.tf"), re.MULTILINE)
+
+    assert len(outputs) == 10
+    for name in VARIABLE_NAMES + outputs:
+        assert f"`{name}`" in readme(), name
+
+
+def test_the_cost_section_carries_a_read_date_and_is_not_a_cost_statement() -> None:
+    cost = readme_section("Cost")
+
+    assert re.search(r"read on 2026-10-07", cost)
+    assert "It is not a cost statement" in cost
+    assert "PER budget" in cost
+    # The sheet's sum, with its read basis, is there to be compared with a fresh read.
+    assert "0.30476" in cost and "3.6571" in cost
+
+
+def test_the_readme_lists_eight_scan_findings_and_nine_second_half_items() -> None:
+    scan = readme_section("The scan")
+    residuals = readme_section("Residuals")
+    items = re.findall(r"^\d+\. \*\*", residuals.split("### Nine things", 1)[1], re.M)
+
+    assert set(re.findall(r"AZU-\d{4}", scan)) == {
+        "AZU-0017",
+        "AZU-0019",
+        "AZU-0021",
+        "AZU-0024",
+        "AZU-0040",
+        "AZU-0065",
+        "AZU-0066",
+        "AZU-0067",
+    }
+    assert len(items) == 9
+
+
+def test_the_readme_says_what_a_removal_leaves_and_what_stays_undecided() -> None:
+    removal = " ".join(readme_section("Removal").split())
+    residuals = " ".join(readme_section("Residuals").split())
+
+    assert "Terraform-driven only" in removal
+    assert "with no export" in removal
+    assert "hard rule 8" in removal
+    assert "soft-deleted" in removal
+    assert "10 to 15 minutes" in removal
+    assert "undecided" in residuals
+    assert "open to every address" in residuals
+    assert "administrator_password_wo_version" in residuals
 
 
 # ── the validations, run by terraform console ────────────────────────────────

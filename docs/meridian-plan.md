@@ -462,7 +462,7 @@ and Pydantic, at the cost of one dependency.
 |---|---|---|---|---|
 | S019 | Hardened Helm charts | Probes, resource limits, default-deny NetworkPolicy, PodDisruptionBudgets, non-root read-only containers, pinned digests; `helm lint` and the infra reviewer pass | done | S018 |
 | S055 | Service-to-service identity | On kind, each service proves which service it is to the one it calls: the Agent Runtime, the Model Gateway and the tool servers refuse a call that carries no identity or comes from a service the registry does not map; the tenant and agent a caller may name come from that mapping, and a header that disagrees is refused; the tool servers accept the runtime alone (T-08, T-24, T-48, T-50); the mechanism is chosen with the owner when the step opens and recorded in an ADR | done | S019 |
-| S020 | Azure platform | Terraform adds the virtual network, AKS, ACR, PostgreSQL Flexible Server with pgvector and Workload Identity to Key Vault; the environment is created and removed with one command each | todo | S007, S019, S055, S056 |
+| S020 | Azure platform | Terraform adds the virtual network, AKS, ACR, PostgreSQL Flexible Server with pgvector and Workload Identity to Key Vault; the environment is created and removed with one command each. **First half, code only (2026-10-07): a module `infra/terraform/azure/` written, validated and scanned without an account and NEVER applied** (44 resources, two doors: `make azure-platform-validate` and `make azure-platform-scan`), its README, ADR 11, the deployment view `DeploymentAzure` (designed), the threat model's rows T-103 to T-107 and the Azure platform document brought to it. **What waits:** the wrapper and the command guard's rules for it (no door that plans, applies or removes exists); the owner's upgrade to pay-as-you-go by about 2026-10-30; the owner's decision on a firewall for the foundation's vault and account; the apply and its cost, stated at the paid stop; and the second half (the chart on the cluster, the roles, the egress rule, S022's push). The "done when" above is the whole step and is not met | doing | S007, S019, S055, S056 |
 | S021 | Identity | Entra ID sign-in for the UI and APIs; roles platform-admin, agent-developer, adjuster and auditor; a mock OIDC issuer on kind; the tenant is resolved from the token | todo | S020 |
 | S022 | Delivery pipeline | Build, SBOM, Trivy scan, cosign signing, push to ACR, kind smoke test, manual approval, deploy to AKS; the rollback runbook exercised; evidence attached to the release | todo | S020, S021 |
 | S023 | Mistral provider | Mistral Large 3 adapter on Azure AI Foundry, DataZoneStandard; the routing policy uses it; ADR 3's provider set updated | todo | S010, S020 |
@@ -1024,6 +1024,11 @@ that day; the rest stand as their step recorded them.
 | What R11's reviews left in the start module, all low: the refusal line for a command line the module does not take names no flag (argparse's text can quote a word, so a missing `--ssl-certfile` and a typo read the same); `UVICORN_*` environment variables, which uvicorn's own command read, are no longer read (nothing in `infra/` sets one); an `OSError` from the builder gives its class alone, so a missing certificate, key or CA file are not told apart; `app.endswith(":create_app_from_env")` in the chart test is a suffix check and two asserts are redundant; the subprocess test asserts exactly one stderr line and fails on an unrelated warning; `Path(str(config.ssl_certfile))` calls `str()` on a value the parser already requires; `PYTHONSAFEPATH=1` would drop the working directory from `sys.path` for both start paths | S069 (security, Python and infrastructure reviews of R11) | open; low | S074 |
 | The start module's premise stops where Kubernetes' ordering does: two equal reads around the load mean the context holds that certificate unless the Secret was set back to an earlier version during the load (a person re-applying an old Secret; cert-manager does not), `ca.crt` is outside the bracket, and a mount that is not a kubelet Secret volume is outside the premise (AKS's Secret driver, if one is chosen, was not looked at; in the chart the mounts are plain `secret:` volumes with no `subPath`). The first two are accepted as stated in the module's docstring | S069 (security review L3, R11b) | open; the third is S020's to read when the Secret driver is chosen | S020 |
 | The evidence for `reset` against `refused` in smoke's check 9 and in this kind README (an unknown CA's connection ends with no alert) was measured on 2026-10-06 against a test server built on a plain `uvicorn.Config`, not through the start module that the five services now use; a test holds the module's context equal to uvicorn's own and smoke passed 46 of 46 after K2's deploy (the ending that line read is not in the run's record), but the ending was not measured against the module | S069 (infrastructure review of R11) | open; low; the comments now say the evidence came from plain uvicorn | S073 |
+| The Azure module has no door that plans, applies or removes it, and the command guard and the settings have no rule for its directory (a by-hand plan, `state` or `output` there asks no one; the only barrier is that no sign-in is on the machine, and S071 plans one): the wrapper (a clean environment, the lock read-only, no variable or override file, the default workspace, a plan record bound to its commit and hash, `TF_LOG*` and `TF_CLI_ARGS*` dropped, a check that a plan that creates or replaces the server rewrites the administrator's secret, a documented retry for role propagation, redaction of Azure's host shapes and of an address) comes together with the guard's and the settings' rules for the new names, before any target exists, with a security review of its own (S079's K6 form) | S020 (Z8; the two reviews' findings M1, M4, M7, M9) | open | S020's next contract, after S079 is on `main` |
+| The foundation's Key Vault and Azure OpenAI account are open to every address (public access on, default action Allow) and the vault would receive the database administrator's password: a firewall (default Deny plus the operator's address, a sensitive variable with no default and no example) is a change to the applied foundation, written free and applied by the owner at the paid stop; the decision is the owner's and comes before any apply (T-104) | S020 (infrastructure review HIGH-4) | open; owner | S020, the paid stop |
+| The Azure server's own logging is not built: list the server's log categories at the first sign-in, build one diagnostic setting for the category that holds the connection log in a workspace of its own or under a cap of its own, then the parameters `log_connections` and `log_checkpoints`; `connection_throttle.enable` after the bootstrap; the TLS floor (`require_secure_transport`, `ssl_min_protocol_version`) read and stated; the scan's `AZU-0019`, `AZU-0021` and `AZU-0024` stay listed until then | S020 (Z6b; the second review) | open | S020, second half |
+| The Azure audit log is purged with the environment, with no export, and there is no alert on the workspace's daily cap: read Microsoft's page on the cap and the operation it logs, then build the alert and decide on an export before a removal or the knowing loss (T-105) | S020 (security review M6) | open; owner | S020, second half |
+| What the Azure second half must do, nine items in the module's README: the secrets identity's standing read, egress (the Entra host, the metadata address, the policies measured under Cilium), a second administrator, Pod Security labels on Azure's namespaces, the password's version rule, the database's roles and the Entra administrator, the server's logging, the audit log's afterlife, and the edge's Service address and source ranges | S020 (Z8) | open | S020, second half |
 
 ## Part C — Step details
 
@@ -18911,6 +18916,296 @@ real thing):
   here and kept.
 - For the owner: the decisions above and the four questions at the paid stop.
 
+### S020 — Azure platform
+**Status:** doing · **Started:** 2026-10-07 · **Finished:** — · first half
+written in plan vPLAN-VERSION
+**Goal:** the Azure environment of one demo day as code: the virtual network,
+AKS, the registry, PostgreSQL Flexible Server with pgvector and workload
+identity to Key Vault, created and removed together, beside the persistent
+foundation (S007). This record is the first half, the code half, which the
+owner started on 2026-10-07 at about 12:13 UTC with a yes to "Terraform
+written, validated, scanned; NO apply, NO plan against the account, NO cost".
+**Nothing was applied, no plan ran against an account, no sign-in was used and
+no price was paid.** The module is written and validated, and a policy scan
+finds nothing at HIGH or CRITICAL; that is a capability of code and not a
+deployed one (hard rule 7).
+
+**Two halves.** The first half (this record): the module `infra/terraform/azure/`
+with its README, ADR 11, the deployment view `DeploymentAzure`, five threat
+rows, the Azure platform document brought to it. The second half is the
+owner's: the wrapper and the guard's rules (a later pull request: no door that
+plans, applies or removes the module exists), the upgrade to pay-as-you-go by
+about 2026-10-30, a decision on a firewall for the foundation's vault and
+account, the apply with its cost stated first and a yes, and then the work that
+needs a cluster: the chart on it, the identities' service accounts, the
+database's roles, the egress rule, S022's push. If the owner answers no to the
+apply, this section closes the step as done with its second half not built, and
+says so.
+
+**Decisions** (the main session's unless marked; the owner may overturn any;
+the design was written before the first contract, and where a review or a
+sheet changed one, the entry says which):
+
+- **Where, state, pin (D1 to D3).** `infra/terraform/azure/`, its own state: the
+  foundation is persistent, this is created and removed. The state is the
+  foundation's storage account under the key `platform.tfstate`, Entra
+  authentication only. The foundation is read by data source and by its fixed
+  names, never through its remote state. The subscription comes from
+  `ARM_SUBSCRIPTION_ID`; the module computes the vault name that the foundation
+  would have in that subscription and a plan elsewhere stops at that read.
+  **The advisor's reading corrected D3's carrier of the suffix:** the resource
+  group has none, the vault has it.
+- **Region (D4).** A closed list equal to the foundation's, `swedencentral` or
+  `westeurope`, default Sweden Central, held equal by a test (hard rule 3).
+- **Network and engine (D5), the API server (D6), the administrator's password
+  (D9), the edge (D12) and the tenant: ADR 11** holds the options not taken,
+  the prices and the owner's words.
+- **Nodes (D7).** One system pool of two `Standard_D2s_v5` from a closed list of
+  two sizes, 50 pods a node, the Free tier, no automatic upgrade. The default
+  size came from what the kind cluster runs (32 pods requesting 2.07 vCPU and
+  3.0 GiB; the memory limits sum to 7.0 GiB), **not from a page**; and the
+  facts sheet's reading of AKS's memory reservation made the pod limit 50. The
+  trial's vCPU quota is on no page (a six-year-old community answer says 4, which
+  two such nodes use whole): it is read with one sign-in before the paid stop.
+- **Registry (D8).** Basic, admin off, `AcrPull` for the kubelet identity, and a
+  public endpoint: Basic has no private endpoint (Premium only, ten times the
+  price). The role assignment mode is written (`LegacyRegistryPermissions`)
+  because `AcrPull` is honoured only under it.
+- **Database (D9).** PostgreSQL 17, burstable, private access, 7-day backups,
+  no geo-redundancy (fixed at creation; it copies to the paired region), the
+  `vector` allow-list. Password and Entra authentication both on: the chart's
+  eleven roles log in with passwords. The tension with T-42 is written (ADR 11).
+- **Identities and endpoints (D10, D11).** Two identities, each federated to one
+  service account with one role on one resource; no role on a group, the vault or
+  the subscription. Private endpoints for the vault and the OpenAI account, so
+  that the gateway's egress rule can be a rule to one subnet; **the foundation's
+  public access stays on** (the laptop's live mode and `make azure-smoke` use
+  it), so closing the three resources to the network is not done.
+- **Observability and budget (D13, D14).** One workspace with a daily cap takes
+  the cluster's audit categories, the one thing the cluster cannot keep for
+  itself; managed Redis and Azure Monitor stay designed. A budget alerts and
+  does not stop spend (T-15).
+- **The doors (D15).** `make azure-platform-validate` and `make
+  azure-platform-scan` only, S078's shape. The wrapper and the guard come
+  together after S079 is on `main`, so that no creating command exists that the
+  guard does not read.
+- **The owner's decisions of 2026-10-07 (the question tool).** The edge:
+  **"Envoy + written WAF design (Recommended)"**, after the owner asked for each
+  option "for presentation and for business case". The tenant: first "Move now",
+  then, after the facts that a trial cannot create a tenant, **"Stay in the
+  trial's tenant after all"**; the checklist for the upgrade: "Later, when
+  S020's code is merged" (below). Part D question 5 is answered.
+- **What the first two reviews and the second facts sheet changed.** The
+  workspace is purged at removal (so the log goes with the environment: T-105);
+  a second budget on the node resource group; the subnet's storage endpoint is
+  declared and the server's zone ignored; the registry's mode is written; the
+  two Private Link links redirect an unknown name; the vector allow-list is in
+  the case Microsoft writes it; the administrator's login is letters alone; the
+  workspace takes no shared key. Then the second infrastructure review took the
+  server's logging out again, ordered the security groups before what is made in
+  their subnets, and made the database's group deny from the `VirtualNetwork`
+  tag and not from everything.
+
+**Advisor:** two consultations on the design, both in the design file's dated
+sections; the owner's rounds are above.
+- *2026-10-07, about 12:44 UTC (before the first contract).* It changed: D3
+  named the wrong resource as the carrier of the suffix (corrected); the "no
+  tension found" of the threat note was wrong (T-42 against D9 is one, written,
+  with its row to amend); D7's default had no evidence (the kind cluster was
+  read, and the condition under which the default moves written); D12's "the
+  same code either way" was off (a subnet and an identity differ: reworded, and
+  one question for the cluster's identity); every SKU is checked as offered in
+  the region from a page, with the date; and a facts sheet read from Microsoft's
+  pages goes out beside the first contract.
+- *2026-10-07, about 15:13 UTC (after the first infrastructure review).* It
+  changed: the module's fixes wait for the second facts sheet (several had the
+  wrong shape without it); HIGH-4 is the foundation's firewall, code the owner
+  applies at the paid stop, and the operator's address is a sensitive variable
+  with no default and no example; M1 and M9 go to the wrapper, M8 to the README,
+  the quota to the owner's list.
+
+**Work log** (contracts Z1 to Z6b and Z8; each ran in a worktree of its own
+from the step's branch and was carried by the main session; the commit is the
+step branch's):
+- **Z1, `461ea15`**: the skeleton: versions, the provider with
+  `resource_provider_registrations = "none"`, every variable with its closed
+  list, `main.tf` (the foundation's data sources, the pin, the group),
+  `network.tf`, the lock for two platforms, a README stub and the first tests.
+  `151 passed`.
+- **Z2, `fa991b3`**: `cluster.tf`, `registry.tf` and the workspace; the
+  cluster's identity and its one role. **Z3, `7d6e9d3`**: `database.tf`, with
+  the ephemeral password and the write-only arguments (the schema offered both:
+  no STOP). **Z4, `5a963eb`** (with `da86857`, a test whose premise the facts
+  sheet had settled): `identity.tf`, `endpoints.tf`, `budget.tf`, `outputs.tf`.
+- **Z5, `d5f61c1`**: the two doors, `.trivyignore` with no entry, the Renovate
+  note; `aws.sh validate azure` keeps its provider cache under the home
+  directory so a validate leaves nothing in the module's directory. The scan
+  found eight MEDIUM and LOW findings and none at HIGH.
+- **Z6, `ff7a722`**: the fixes after the first two reviews and the second facts
+  sheet (the list above), a test file of its own (`test_azure_module_fixes.py`),
+  and the list of what `validate` cannot tell.
+- **Z6b, `d3188fb`**: the fixes after the second infrastructure review: what is
+  created in which order, and what the database subnet lets in; the server's
+  logging taken out, with a comment that says what the first sign-in must read.
+- **Z7, the wrapper, the guard and the settings: not built**, by the design's
+  order (after S079 is on `main`); a backlog row.
+- **Z8, this change**: the module's README, ADR 11, the view `DeploymentAzure`,
+  the Azure platform document, five threat rows and T-42 amended, this section,
+  the lines of two READMEs that were false. Three tests of the README stub were
+  replaced by tests of the real README, and the price test now exempts the
+  README, the one place a price may stand.
+- Merges of `main` into the step branch: `742e2d3`, `0ab25a0`.
+
+**Reviews** (three; each read the module and none ran a plan):
+- *Infrastructure review of `d5f61c1`*: approve with fixes. **0 critical, 4
+  high, 11 medium, 11 low.** High: the workspace outlives the removal (fixed:
+  purged); the budget cannot see the cost (fixed: a second budget); a re-apply
+  would remove the PostgreSQL subnet's storage endpoint (fixed: declared); the
+  foundation's vault is public and receives the password (**not fixed: the
+  owner's decision**, T-104). Medium and low: fixed in Z6 and Z6b where the
+  module could, the rest in the wrapper's list (password version, role
+  propagation, redaction) or in the README.
+- *Security review of `d5f61c1`*: **0 critical, 1 high, 8 medium, 7 low.** The
+  high: the workspace's shared keys reach the state (fixed: shared-key sign-in
+  off; whether the keys are still written is not read). Medium: the security
+  groups (built), the vault's audit log (built), the server's logging (built,
+  then taken out again), the lossy audit capture and its death with the
+  environment (the README and T-105; an alert is not built), the guard and the
+  settings for the directory (the wrapper's contract), egress and the standing
+  read of the secrets identity (the second half).
+- *Second infrastructure review of `ff7a722`*: approve with fixes. **0
+  critical, 2 high, 6 medium, 8 low.** High: the associations were not ordered
+  against what is made in their subnets, and the database's deny from every
+  source refused traffic the service may need (both fixed in Z6b). Medium: the
+  server's logging cascades into the database's creation (removed), the throttle
+  could slow the bootstrap Job (removed), two no-op parameters (removed), an
+  anonymous-pull setting that Basic does not have (removed), the amount is per
+  budget and the mail comes twice (the README).
+
+**Result / verification** (the gates as each contract's report printed them;
+the main session's own run is in the pull request):
+- Z6b, on `d3188fb`: `make azure-platform-validate`: `Success! The
+  configuration is valid.` `make azure-platform-scan`: `- '0': Clean (no
+  security findings detected)`. `uv run pytest -n 4 tests/meridian/
+  test_azure_module*.py tests/meridian/test_azure_scan.py
+  tests/meridian/test_aws_script.py`: `1260 passed in 12.06s`. `make lint`:
+  `Contracts: 6 kept, 0 broken.` `make test`: `Ran 385 tests`, `OK`.
+  `make docs`: `docs consistency: 14 checks passed`.
+- Z8, on the documents' branch: `make azure-platform-validate`: `Success! The
+  configuration is valid.` (the README sits in the module's directory).
+  `make azure-platform-scan`: `- '0': Clean (no security findings detected)`;
+  the same image at all severities found the eight findings the README lists
+  (`AZU-0017`, `0019`, `0021`, `0024`, `0040`, `0065`, `0066`, `0067`). `uv run
+  pytest -n 4 tests/meridian/test_azure_module*.py
+  tests/meridian/test_azure_scan.py`: `418 passed in 3.50s`. `make check`: exit
+  0, no ERROR line. `make test`: `Ran 385 tests`, `OK`. `make lint`:
+  `Contracts: 6 kept, 0 broken.` `make docs`: one failure, `ADR numbers must
+  run 1..10 without gaps: [1, 2, 3, 4, 5, 6, 7, 8, 9, 11]`, which the contract
+  causes (ADR 10 is on `main`, not on this branch) and which a merge of `main`
+  ends; no other check failed. The view's PNG was exported and read at full
+  size.
+- The whole suite on the final tree: FINAL-SUITE-RESULT.
+
+**Not seen** (the whole of it; each is a statement about what has not met
+Azure):
+- Whether `azurerm` 5.8 plans this module at all, and whether a second plan is
+  empty. Whether any precondition refuses (`validate` does not evaluate one).
+- The trial's vCPU quota, whether the `Dsv5` family, PostgreSQL 17 on a
+  burstable size with private access and Kubernetes 1.36 are offered to this
+  subscription in the region, and whether `max_pods = 50` is accepted.
+- That the seven resource providers register, and that the cluster survives its
+  role's propagation (up to 60 minutes on the page).
+- That the security groups admit the database service's own traffic, that
+  overlay pods leave through their node's address, that the private endpoints
+  are approved, that a role at one secret's scope works on a secret made through
+  the data plane, that Azure accepts a budget on the node resource group, and
+  that the diagnostic categories are the names Azure takes.
+- That the removal is clean: the delegated subnet right after the server, the
+  purge, the soft-deleted secret, the vault's diagnostic setting.
+- Every price, which is a list price read on 2026-10-07 through a summarising
+  reader, six of the sheet's twelve lines estimates, and the `FreeTierInfra
+  structureCost` meter, which no page explains. Whether the state holds the
+  workspace's keys. Whether the chart's NetworkPolicies behave under Cilium.
+- That any statement of ADR 11 about Azure's behaviour is true: each is a
+  reading of a page or of the provider's schema.
+
+**Not done, by decision or left open:** the wrapper and the guard's rules; the
+server's logging, the throttle, the cap's alert and the TLS floor as
+parameters (the README says why each is not built); an `anonymous_pull`
+setting; a firewall for the foundation; a private cluster; Defender, Azure
+Policy and Container Insights; the web application firewall (a written design
+in ADR 11); the second half.
+
+**For the owner** (non-blocking; nothing is asked to be paid):
+
+*The upgrade to pay-as-you-go, by about 2026-10-30, in the order of
+Microsoft's page "Upgrade your Azure free account" and the facts read on
+2026-10-07:*
+1. Before it, look at what the trial still holds: the credit is usable for 30
+   days from sign-up (the page's example: a trial that began on November 1 and
+   was upgraded on November 5 kept its credit until November 30; for this one,
+   signed up on 2026-09-30, that reads as 2026-10-30, the arithmetic of the
+   example and not a statement of that date). Upgrading before the end keeps the
+   unused credit.
+2. In the portal: Subscriptions, the subscription, "Upgrade subscription", a
+   payment method, a name, a support plan (the page asks for one; its price is
+   not read), "Upgrade". The page may ask for a phone number.
+3. What changes: the spending limit goes away, so spend beyond the credit bills
+   the card, and the budgets (the foundation's EUR 60 and the module's two)
+   alert and stop nothing. The page also says free services last 12 months
+   after the upgrade.
+4. After it, read the subscription's offer and its identifier, and **check that
+   the identifier is the same**: no page says whether an upgrade changes it, and
+   every global name in the foundation and the module derives from it (the vault,
+   the OpenAI account, the state account, the registry, the server, the pin).
+   If it changed, stop: the foundation would have to be rebuilt.
+5. Then, with one sign-in and before the paid stop, read: the vCPU quota in the
+   region (total regional and the `Dsv5` family; four are used by two
+   `Standard_D2s_v5` nodes, six if an upgrade needs a surge node), which sizes
+   the subscription is offered, PostgreSQL 17 on `B_Standard_B1ms` with private
+   access, and Kubernetes 1.36. The portal's way to each is the owner's to find:
+   no page of it was read.
+6. Register the seven resource providers (`Microsoft.Network`, `Compute`,
+   `ContainerService`, `ContainerRegistry`, `DBforPostgreSQL`,
+   `ManagedIdentity`, `OperationalInsights`): by a command of the owner's, before
+   the apply, never by the provider. Optional after the upgrade: the West Europe
+   OpenAI account (a line of the foundation's `openai_locations`).
+7. Decide the firewall (below), and then ask for the plan.
+- *Not in the checklist, on purpose:* a new tenant. The owner's decision is to
+  stay; a later move recreates the foundation, the cluster and the server (ADR
+  11).
+
+*The firewall for the foundation's vault and account: both sides.* **Write it**
+(default Deny plus the operator's address, as a sensitive variable with no
+default and no example): the password then sits in a vault that a stranger's
+token cannot reach, which the infrastructure review's default demands; the cost
+is a change to the applied foundation that the owner applies at the paid stop,
+and a laptop whose address changes loses the live mode and `make azure-smoke`
+until the variable is changed (the foundation's README gave that as the reason
+it uses no allow list); the module's own write of the secret needs the
+operator's address allowed too, and the cluster has its private path by the two
+endpoints. **Leave it open**: no change to an applied foundation and a laptop
+that works from anywhere, with the password behind a role and nothing else, and
+the audit setting recording each read. The session reads the first as what both
+reviews ask for. The decision is the owner's and comes before any apply.
+
+*The cost of a demo day.* From the sheet's sum of 2026-10-07 (Sweden Central,
+list prices, six of twelve lines estimates): about EUR 0.31 an hour, EUR 3.7
+for twelve hours, up to EUR 6.3 with a gigabyte of logs past the free
+allowance, against QA-07's EUR 10; the unexplained `FreeTierInfrastructureCost`
+meter would add EUR 0.53 for twelve hours. A web application firewall at the
+edge would add EUR 3.6 (Application Gateway for Containers with a policy) or
+EUR 4.9 (WAF v2) for twelve hours before capacity units (ADR 11). **This is not
+a cost statement:** it is made at the paid stop from a fresh read of the price
+list, with the closed lists' ceilings and the amount per budget in front of the
+owner.
+
+**Follow-ups:** the five rows of the backlog (the wrapper and the guard, the
+firewall, the server's logging, the audit log's afterlife, the second half's nine
+items); the Ingress row of `docs/architecture/overview/01-meridian-ai-platform.md`
+still names Application Gateway WAF in the Azure design, which ADR 11 and the
+model no longer do.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -18919,7 +19214,7 @@ real thing):
 | 2 | Terraform state: HCP Terraform, as in the homelab, or an Azure Storage account? **Answered 2026-09-30: Azure Storage** in Sweden Central with Entra ID authentication (S007) | S007 | ~~HCP Terraform, for consistency with the homelab~~ |
 | 3 | A claim whose documents miss the deadline is closed as rejected without a human. Keep that, or route it to the adjuster? **Answered 2026-10-03: route it to an adjuster**, with the reason that its documents are overdue; no claim is rejected without a person | ~~S015~~ ~~S048~~ S052 (moved with the deadline, 2026-10-03) | ~~Keep, recorded as a procedural closure in C-02~~ |
 | 4 | Licence: keep all rights reserved, or publish under MIT or Apache-2.0? **Answered 2026-09-29: Apache-2.0**, copyright Dezoxy; `NOTICE` credits the MIT-licensed ECC material | Before anyone asks to reuse the code | ~~All rights reserved~~ |
-| 5 | Should Meridian live in a dedicated work tenant instead of the trial account's default directory? It decides where S021's sign-in, roles and app registrations are created, and moving later means recreating the foundation | S021, and the upgrade to pay-as-you-go by about 2026-10-30, which is already an account change | Stay in the trial account's tenant; decide at the upgrade |
+| 5 | Should Meridian live in a dedicated work tenant instead of the trial account's default directory? It decides where S021's sign-in, roles and app registrations are created, and moving later means recreating the foundation. **Answered 2026-10-07: stay in the trial's tenant** (the owner first said "Move now"; a trial cannot create a tenant, and after the facts: "Stay in the trial's tenant after all"; S020, ADR 11) | S021, and the upgrade to pay-as-you-go by about 2026-10-30, which is already an account change | ~~Stay in the trial account's tenant; decide at the upgrade~~ |
 | 6 | Should a session be stopped from editing the command guard's own files? The permission rules allow Edit and Write on `.claude/hooks/guard-bash.sh` and `.claude/settings.json`, so a session can weaken the guard that reads its commands (N4 of the third security review). Two ways: deny Edit and Write on `.claude/hooks/**` and `.claude/settings*.json`, or ask before each. The session recommends asking: a deny would also stop a session from fixing the guard when a review finds a hole, as S075 did after each of its three reviews, while an ask puts the edit in front of the owner | S075's pull request, if the owner wants it built there; no step needs it | Neither is built: the guard stays a guard for habits, and the gap is listed in the runbook and in the hook's header |
 
 ## Part E — Changelog
@@ -19779,3 +20074,13 @@ real thing):
   operations README and the certificate-expiry runbook (the `tlsstart:` line),
   the kind README (three sentences) and T-89 and T-90. The whole suite:
   The whole suite on the final tree: 20,058 passed, 8 skipped.
+- **vPLAN-VERSION, 2026-10-07:** S020 `doing`: the first half, the code half,
+  of the Azure platform: a Terraform module `infra/terraform/azure/` written,
+  validated and scanned without an account and never applied, its README, ADR
+  11 (the network engine, the API server, the administrator's password, the edge
+  and the tenant, with the owner's two decisions of the day), the deployment
+  view `DeploymentAzure` (designed), the threat model's rows T-103 to T-107 and
+  T-42 amended, the Azure platform document brought to it, five backlog rows,
+  and Part D question 5 answered (stay in the trial's tenant). The wrapper and
+  the guard's rules, the upgrade, a firewall decision, the apply and the second
+  half wait. The whole suite: FINAL-SUITE-RESULT.
