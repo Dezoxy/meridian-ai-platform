@@ -881,6 +881,14 @@ cpu_shape "a long run of quoted values after -m" "git -m $(repeat "'x'" 2500)"
 cpu_shape "3000 separators and 800 empty -m values" "git $(repeat ';' 3000)$(repeat " -m ''" 800)"
 cpu_shape "every trigger word, 3900 escaped quotes and 300 separators" \
   "git aws rest record azure- credential MERIDIAN_ python3 $(repeat "$esc_quote" 3900)$(repeat '&' 300)"
+# The command-word test of the AWS pass (G5: an option's argument is eaten, which
+# gave the prefixes a second alternative per flag): prefixes with options and
+# arguments in a long run, ended by make or by a word that is not make.
+cpu_shape "800 prefixes with option arguments before make" \
+  "git aws-destroy; $(repeat 'sudo -u x env -u y ' 400)make -m \"aws-apply\""
+cpu_shape "1500 sudo -u without an argument-taking end" "git aws-destroy; $(repeat 'sudo -u ' 1500)git commit"
+cpu_shape "400 repetitions of timeout and xargs options before a near-miss word" \
+  "git aws-destroy; $(repeat 'timeout -s K 5 xargs -I X ' 400)makefile -m \"aws-apply\""
 # A line that reaches the passes with padding is still read to its end: the
 # denied part after the padding is denied, not skipped.
 ask_for "the first review's worst shape followed by a denied part is denied" deny \
