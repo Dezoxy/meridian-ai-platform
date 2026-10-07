@@ -319,7 +319,16 @@ def test_approver_policy_keeps_its_limit_and_says_it_was_measured_on_kind() -> N
 
     assert values["resources"]["limits"] == {"memory": "96Mi"}
     assert "measured on kind alone" in text
+    # Not in the values file, because the chart's schema refuses the key (S073):
+    # the probe is the manifest's, which up.sh applies after the install. The
+    # manifest is read here so this line cannot go on passing while the probe is
+    # nowhere; its port, numbers and ownership are test_kind_approver_liveness's.
     assert "livenessProbe" not in values
+    manifest = (KIND_DIR / "manifests" / "approver-policy-liveness.yaml").read_text(
+        encoding="utf-8"
+    )
+    assert len(re.findall(r"^\s+livenessProbe:", manifest, re.MULTILINE)) == 1
+    assert "path: /readyz" in manifest
     assert "image" not in values
 
 

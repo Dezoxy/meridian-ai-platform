@@ -212,6 +212,26 @@ No claim is approved above the threshold, rejected or closed without a
 person (constraint C-02). Who the person is, is not recorded yet: the
 sign-in is milestone M2.
 
+#### Optional: a file for the claim (S080, off by default)
+
+Status: implemented and tested, and run once on kind through the edge on
+2026-10-07 with its switches on for that run (by script, not in a browser:
+**no browser has used the form or the link yet**). It is off in kind's values,
+so the demo as set up shows no form and the pages are as described above. To
+see it, turn the uploads switch on for one local run by the steps in
+[`infra/kind/README.md`](../infra/kind/README.md) ("Files for a claim"), which
+also say why it must not be on for a host that other people reach, and run
+`make deploy`. Then the claimant's status page of a claim has a form: a kind,
+one PDF, JPEG or PNG of at most 1 MiB, five a claim, and the banner "Synthetic
+data only: never upload a real document." Post one of the generated samples in
+[`data/synthetic/upload-samples/`](../data/synthetic/upload-samples/)
+(`not-a-pdf.pdf` is the one the route refuses, with 415). The status page then
+lists the file by kind, size and time, and the adjuster's page for the claim
+lists it too, with the hash and "not scanned" beside it. Nothing reads the file
+and no triage starts. The adjuster's download is a second switch, off by
+default; the same steps turn it on. Nothing scans a file, and a stored file
+stays until `make down`.
+
 ### 9 to 11: what it cost and who may call what
 
 In Grafana, Dashboards, **Meridian: Model Gateway tokens and cost**: tokens
@@ -233,12 +253,13 @@ make registry   # the registry against its schemas and the tool contracts
 ### 11 to 13: what stops a bad change
 
 ```bash
-make lint       # ends with "Contracts: 6 kept, 0 broken."
+make lint       # "Contracts: 6 kept, 0 broken.", then the file size check's line
 ```
 
 The import contracts are the architecture's rules as a failing build: no
 agent framework in a platform package, no provider SDK outside the
-gateway.
+gateway. The file size check that follows them fails a source file over 800
+lines unless `scripts/file-size-exceptions.txt` lists it.
 
 Open [`data/evaluation/README.md`](../data/evaluation/README.md): the 47
 golden claims run through the real services on every pull request, answered
@@ -251,7 +272,7 @@ request instead.
 
 ### 13 to 15: what is not there
 
-- [The threat model](architecture/security/threat-model.md): 101 threats,
+- [The threat model](architecture/security/threat-model.md): 111 threats,
   each implemented, implemented in part, designed, open or accepted, with
   the evidence. The first lines give the count.
 - Not built: sign-in and roles, TLS at the edge and between the edge and

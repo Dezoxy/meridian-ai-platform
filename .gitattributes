@@ -1,2 +1,7 @@
 # LF line endings: the generator output is byte-for-byte and the manifest hashes depend on it.
 data/synthetic/** text eol=lf
+# The upload samples are bytes, not text: a PNG's signature holds a CR LF that the
+# line above would turn into a LF, and the manifest hashes the exact bytes.
+data/synthetic/upload-samples/*.pdf binary
+data/synthetic/upload-samples/*.jpg binary
+data/synthetic/upload-samples/*.png binary

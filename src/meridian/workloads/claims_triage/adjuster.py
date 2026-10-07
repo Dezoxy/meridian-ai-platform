@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path as FilePath
 from typing import Annotated, NamedTuple
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import urlencode
 from uuid import UUID
 
 import psycopg
@@ -37,8 +37,6 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 from opentelemetry.trace import Tracer
 from pydantic import AwareDatetime
-from starlette.datastructures import MutableHeaders
-from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from meridian.platform.common.audit import AuditUnavailable
 from meridian.platform.common.db import connect
@@ -67,6 +65,12 @@ from meridian.workloads.claims_triage.claim_dates import (
     REPORTED_ON_LABEL,
     day_gaps,
 )
+from meridian.workloads.claims_triage.claim_files import (
+    DOWNLOAD_EVENT,
+    FileSummary,
+    list_files,
+    size_text,
+)
 from meridian.workloads.claims_triage.lifecycle import (
     DOCUMENTS_OVERDUE,
     DOCUMENTS_REFUSED_EVENT,
@@ -78,6 +82,14 @@ from meridian.workloads.claims_triage.models import (
     Decision,
     DecisionFailure,
     DecisionResponse,
+)
+from meridian.workloads.claims_triage.page_security import (
+    CLAIMANT_PREFIX,
+    CROSS_SITE_DETAIL,
+    STYLESHEET_PATH,
+    CrossSiteRefused,
+    SecurityHeadersMiddleware,
+    require_same_origin,
 )
 from meridian.workloads.claims_triage.proposal import (
     RESTS_ON_NOTES,
@@ -93,15 +105,10 @@ from meridian.workloads.claims_triage.triaging import (
 logger = logging.getLogger(__name__)
 
 PACKAGE_DIR = FilePath(__file__).parent
-PAGES_PREFIX = "/adjuster/"
-CLAIMANT_PREFIX = "/claimant/"
 QUEUE_PATH = "/adjuster/claims"
-STYLESHEET_PATH = "/adjuster/static/adjuster.css"
 NO_SUCH_CLAIM_DETAIL = "no such claim"
-CROSS_SITE_DETAIL = "the request came from another site"
 ARRIVED_LABEL = "Documents that arrived later"
 TRAIL_LIMIT = 200
-HTTP_OK = 200
 HTTP_FORBIDDEN = 403
 HTTP_NOT_FOUND = 404
 HTTP_SEE_OTHER = 303
@@ -112,30 +119,7 @@ PAGE_STATUSES = (409, 502, 504)
 # A failed resume leaves the decision recorded; sending it again completes the
 # run. A 409 is a refusal or another request at work: nothing to send again.
 RESEND_STATUSES = (502, 504)
-# The only ``Sec-Fetch-Site`` values that pass: ``same-origin`` (the page's own
-# post) and ``none`` (the user typed the address). Any other is another site,
-# or a value this code does not know (T-70).
-OWN_FETCHES = ("same-origin", "none")
 CLAIM_ID_PATTERN = r"^CLM-[0-9]{4}$"
-# The stylesheet holds no data, so it may be cached; every other response under
-# ``/adjuster/`` may hold a claim and is not stored.
-STYLESHEET_CACHE_CONTROL = "max-age=3600"
-SECURITY_HEADERS = {
-    "Content-Security-Policy": (
-        "default-src 'none'; style-src 'self'; form-action 'self'; "
-        "frame-ancestors 'none'; base-uri 'none'"
-    ),
-    "X-Content-Type-Options": "nosniff",
-    "X-Frame-Options": "DENY",
-    # The Referer holds the claim's ID, so it goes only to this app. A post of
-    # the page itself then carries a real Origin in a browser without Fetch
-    # Metadata (``no-referrer`` makes Chrome send ``Origin: null``).
-    "Referrer-Policy": "same-origin",
-    # A page of another site cannot load a response of ``/adjuster/`` or
-    # ``/claimant/``, not even with ``no-cors``.
-    "Cross-Origin-Resource-Policy": "same-origin",
-    "Cache-Control": "no-store",
-}
 
 ClaimId = Annotated[str, Path(pattern=CLAIM_ID_PATTERN)]
 # Each takes the claim, the move and the run the page showed (empty for a claim
@@ -178,10 +162,21 @@ DECIDED_STATES = ("approved", "rejected", "documents_requested")
 # one transaction share a recorded_at; seq (migration 0017) is the order the
 # database inserted them in, so it breaks the tie. It is the order of insertion
 # and not of commit: across concurrent transactions recorded_at comes first.
+# The page lists the NEWEST TRAIL_LIMIT rows (selected newest first, one more
+# than the limit to know whether older rows exist, then put in time order), and
+# leaves out the downloads of files: an anonymous GET writes one row each, and
+# they would push the claim's decisions out of the listing. They are counted in
+# one line by DOWNLOADS_SQL. The filter is in this query because the view cannot
+# be filtered without a migration.
 TRAIL_SQL = (
     "SELECT recorded_at, db_role, service, event, outcome, reason "
     "FROM audit.claim_trail "
-    "WHERE claim_id = %s AND tenant = %s ORDER BY recorded_at, seq LIMIT %s"
+    "WHERE claim_id = %s AND tenant = %s AND event <> %s "
+    "ORDER BY recorded_at DESC, seq DESC LIMIT %s"
+)
+DOWNLOADS_SQL = (
+    "SELECT count(*), max(recorded_at) FROM audit.claim_trail "
+    "WHERE claim_id = %s AND tenant = %s AND event = %s"
 )
 # How the run ended, completed or failed, at or after the decision: its event
 # and reason, or no row while it has not ended (the resend button's test): the
@@ -250,7 +245,9 @@ class ClaimView:
     ``referral_reason`` is the reason of the move that brought a waiting claim
     to the adjuster (``None`` for a claim in another state, or a move with no
     reason). ``documents_refused``: documents were posted after the deadline
-    since a referral for overdue documents."""
+    since a referral for overdue documents. ``files`` are the files the claimant
+    sent, in arrival order (S070); the page lists them, and links to each only
+    when the download is on (``render_claim``'s ``downloads``)."""
 
     claim_id: str
     state: str
@@ -267,6 +264,9 @@ class ClaimView:
     triages: int = 0
     referral_reason: str | None = None
     documents_refused: bool = False
+    files: tuple[FileSummary, ...] = ()
+    trail_older: bool = False
+    downloads: tuple[int, datetime] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,76 +275,6 @@ class Notice:
 
     status: int
     detail: str
-
-
-class CrossSiteRefused(Exception):
-    """The post came from another site (T-70)."""
-
-
-def is_cross_site(origin: str | None, host: str | None, fetch_site: str | None) -> bool:
-    """Whether a post is one that another site made (T-70).
-
-    ``Sec-Fetch-Site``, when present, decides alone: ``same-origin`` and
-    ``none`` pass; ``cross-site``, ``same-site`` and any value not known are
-    refused. A page cannot set it (it is a forbidden header name, the browser
-    sets it), so it is trusted over ``Origin``: a browser that sends it sends
-    ``Origin: null`` for the page's own post under some referrer policies.
-
-    Only when it is absent (an older browser, curl, a test) does ``Origin``
-    count: ``null``, one that is not a URL, and one whose host and port are not
-    the request's ``Host`` are refused (a browser without Fetch Metadata sends
-    a real ``Origin`` under the page's ``same-origin`` referrer policy).
-    Netlocs are compared, not schemes (the edge may end TLS), and not case. A
-    request with none of the headers passes, as it does on the JSON route
-    (T-69).
-    """
-    if fetch_site is not None:
-        return fetch_site.lower() not in OWN_FETCHES
-    if origin is None:
-        return False
-    if host is None:
-        return True
-    try:
-        netloc = urlsplit(origin).netloc
-    except ValueError:
-        return True
-    # ``null`` and a bare word have no netloc and can never equal a Host.
-    return netloc.lower() != host.lower()
-
-
-def require_same_origin(request: Request) -> None:
-    headers = request.headers
-    if is_cross_site(
-        headers.get("origin"), headers.get("host"), headers.get("sec-fetch-site")
-    ):
-        raise CrossSiteRefused
-
-
-class SecurityHeadersMiddleware:
-    """Add the pages' headers to every response under ``/adjuster/`` and
-    ``/claimant/``: a 404, a 405, a 413 and a 422 as well as a page. The JSON
-    routes are not touched."""
-
-    def __init__(self, app: ASGIApp) -> None:
-        self.app = app
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or not scope["path"].startswith(
-            (PAGES_PREFIX, CLAIMANT_PREFIX)
-        ):
-            await self.app(scope, receive, send)
-            return
-
-        async def send_with_headers(message: Message) -> None:
-            if message["type"] == "http.response.start":
-                headers = MutableHeaders(scope=message)
-                for name, value in SECURITY_HEADERS.items():
-                    headers[name] = value
-                if scope["path"] == STYLESHEET_PATH and message["status"] == HTTP_OK:
-                    headers["Cache-Control"] = STYLESHEET_CACHE_CONTROL
-            await send(message)
-
-        await self.app(scope, receive, send_with_headers)
 
 
 # ── what the pages show, as text ────────────────────────────────────────────
@@ -448,7 +378,11 @@ def render_queue(
     )
 
 
-def render_claim(view: ClaimView, notice: Notice | None = None) -> str:
+def render_claim(
+    view: ClaimView, notice: Notice | None = None, *, downloads: bool = False
+) -> str:
+    """The claim's page. ``downloads``: the download is on, so each listed file
+    has a link to it; off, the page is what it was without the download."""
     proposal = view.proposal
     payable = _euros(proposal.payable_amount) if proposal else ""
     # The recorded word again, for a run that did not complete; not beside a
@@ -497,6 +431,26 @@ def render_claim(view: ClaimView, notice: Notice | None = None) -> str:
         # Jinja would print ``None``: a claim with no run is the empty string.
         run="" if view.run_id is None else str(view.run_id),
         queue_path=QUEUE_PATH,
+        downloads=downloads,
+        # The downloads of the claim's files, counted and not listed, and whether
+        # older events than the listed ones exist.
+        file_downloads=view.downloads and (view.downloads[0], _when(view.downloads[1])),
+        trail_older=view.trail_older,
+        trail_limit=TRAIL_LIMIT,
+        # The link, and the file's identifier in it, only with the download on;
+        # empty otherwise, and then the page holds no identifier.
+        files=[
+            (
+                f.kind,
+                f.media_type,
+                size_text(f.size_bytes),
+                _when(f.received_at),
+                f.sha256[:12],
+                f.sha256,
+                f"{QUEUE_PATH}/{view.claim_id}/files/{f.file_id}" if downloads else "",
+            )
+            for f in view.files
+        ],
     )
 
 
@@ -552,7 +506,14 @@ def load_claim(dsn: str, tenant: str, claim_id: str) -> ClaimView | None:
         decision = None
         if state in DECIDED_STATES:
             decision = conn.execute(DECISION_SQL, (claim_id, run_id)).fetchone()
-        trail = conn.execute(TRAIL_SQL, (claim_id, tenant, TRAIL_LIMIT)).fetchall()
+        rows = conn.execute(
+            TRAIL_SQL, (claim_id, tenant, DOWNLOAD_EVENT, TRAIL_LIMIT + 1)
+        ).fetchall()
+        ((downloaded, last_download),) = conn.execute(
+            DOWNLOADS_SQL, (claim_id, tenant, DOWNLOAD_EVENT)
+        ).fetchall()
+        # Read with the tenant's filter, as the claim is: never the content.
+        files = list_files(conn, tenant, claim_id)
         # A decision with no run has nothing to resume, so nothing to send again.
         # How the run ended is asked of the database, not read off the listed
         # rows: the page lists at most TRAIL_LIMIT of them.
@@ -576,13 +537,16 @@ def load_claim(dsn: str, tenant: str, claim_id: str) -> ClaimView | None:
         proposal=proposal,
         proposal_note=note,
         decision=None if decision is None else (decision[0], decision[1]),
-        trail=tuple(TrailRow(*row) for row in trail),
+        trail=tuple(TrailRow(*row) for row in reversed(rows[:TRAIL_LIMIT])),
+        trail_older=len(rows) > TRAIL_LIMIT,
+        downloads=(downloaded, last_download) if downloaded else None,
         resend_due=resend_due,
         swept=swept,
         run_id=run_id,
         triages=triages,
         referral_reason=referral_reason,
         documents_refused=documents_refused,
+        files=files,
     )
 
 
@@ -609,10 +573,13 @@ def add_adjuster_pages(
     tracer: Tracer,
     decide: DecideFn,
     triage_again: TriageAgainFn,
+    downloads_enabled: bool = False,
 ) -> None:
     """Add the queue, the claim, the decision and triage forms and the
     stylesheet to the Claims API. ``decide`` is the API's one decision path and
-    ``triage_again`` the one that sends a claim back or tries it again (S048)."""
+    ``triage_again`` the one that sends a claim back or tries it again (S048).
+    ``downloads_enabled``: the claim page links to each file (the route itself is
+    ``file_download``'s)."""
     stylesheet = (PACKAGE_DIR / "static" / "adjuster.css").read_bytes()
     app.add_middleware(SecurityHeadersMiddleware)
 
@@ -685,7 +652,7 @@ def add_adjuster_pages(
                 return render_error(*claim_database_failure(exc, claim_id))
         if view is None:
             return render_error(HTTP_NOT_FOUND, NO_SUCH_CLAIM_DETAIL)
-        return HTMLResponse(render_claim(view))
+        return HTMLResponse(render_claim(view, downloads=downloads_enabled))
 
     # The proposal the page above shows, as JSON, for ``meridian eval run``
     # (T-80): the claim's ID, its state and the proposal, and nothing of the
@@ -725,7 +692,8 @@ def add_adjuster_pages(
         if view is None:
             return render_error(failure.status, failure.detail)
         notice = Notice(failure.status, failure.detail)
-        return HTMLResponse(render_claim(view, notice), status_code=failure.status)
+        page = render_claim(view, notice, downloads=downloads_enabled)
+        return HTMLResponse(page, status_code=failure.status)
 
     def answered(
         call: Callable[[], DecisionResponse | ClaimMoveResponse | DecisionFailure],

@@ -24,6 +24,26 @@
 {% endfor %}
 </dl>
 
+<h2>Files the claimant sent</h2>
+{% if files %}
+{% if downloads %}
+<p>These files come from an unauthenticated upload and are not scanned.</p>
+{% endif %}
+<table>
+<thead>
+<tr><th scope="col">Kind</th><th scope="col">Media type</th><th scope="col">Size</th><th scope="col">Received</th><th scope="col">SHA-256</th><th scope="col">Scan</th></tr>
+</thead>
+<tbody>
+{% for kind, media_type, size, received, short, full, href in files %}
+<tr><td>{{ kind }}</td><td>{{ media_type }}</td><td>{{ size }}</td><td>{{ received }}</td><td><span title="{{ full }}">{{ short }}</span></td><td>not scanned{% if href %} <a href="{{ href }}" rel="noopener noreferrer">download</a>{% endif %}</td></tr>
+{% endfor %}
+</tbody>
+</table>
+<p>Malware scanning is designed, not implemented: no file listed here has been scanned.</p>
+{% else %}
+<p>No file has been sent for this claim.</p>
+{% endif %}
+
 <h2>Triage proposal</h2>
 {% if view.proposal %}
 {% set p = view.proposal %}
@@ -113,6 +133,12 @@
 {% endif %}
 
 <h2>Audit trail</h2>
+{% if file_downloads %}
+<p>Downloads of this claim's files: {{ file_downloads[0] }}, the latest at {{ file_downloads[1] }}. They are counted here and not listed below.</p>
+{% endif %}
+{% if trail_older %}
+<p>Older events are not listed: the latest {{ trail_limit }} are shown.</p>
+{% endif %}
 {% if trail %}
 <table>
 <thead>

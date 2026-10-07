@@ -34,6 +34,12 @@ deployment meridian gcp "DeploymentGcp" "Where would the platform run on Google 
     autoLayout tb 300 150
 }
 
+deployment meridian azure "DeploymentAzure" "Where would the platform run on Azure, and what does the cloud change?" {
+    title "Meridian AI Platform: deployment on Azure in Sweden Central, DESIGNED and not built (what the cloud changes)"
+    include *
+    autoLayout tb 300 150
+}
+
 dynamic meridian "ClaimsTriage" "What happens between a claim being submitted and a triage proposal waiting for an adjuster?" {
     claimant -> meridian.ingress "Submits a claim"
     meridian.ingress -> meridian.claimsApp "Routes the claim"

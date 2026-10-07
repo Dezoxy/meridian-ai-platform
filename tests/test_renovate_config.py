@@ -318,6 +318,17 @@ class Readers(unittest.TestCase):
         note = " ".join(group["prBodyNotes"])
         for words in ("approver-policy", "cert-manager", "`make up`", "`make smoke`"):
             self.assertIn(words, note)
+        # approver-policy's liveness probe is not a chart value: `make up` applies
+        # it under the field manager meridian-kind (S073). A chart that renders
+        # its own probe makes Helm fail on a conflict that names no file; the
+        # note says what that means and where the remedy is written.
+        for words in (
+            "`livenessProbe`",
+            "`meridian-kind`",
+            "infra/kind/manifests/approver-policy-liveness.yaml",
+            "infra/kind/README.md",
+        ):
+            self.assertIn(words, note)
 
     def test_promtool_and_the_prometheus_pin_arrive_in_one_group(self) -> None:
         # The Makefile's PROMTOOL_IMAGE follows the Prometheus image the chart
@@ -499,9 +510,12 @@ class Readers(unittest.TestCase):
             "`make aws-kubeadm-scan`",
             "`make gcp-kubeadm-validate`",
             "`make gcp-kubeadm-scan`",
+            "`make azure-platform-validate`",
+            "`make azure-platform-scan`",
             "Google Cloud module",
             "self-managed AWS module",
             "Google Cloud twin",
+            "Azure platform module",
         ):
             with self.subTest(words=words):
                 self.assertIn(words, note)
@@ -514,6 +528,8 @@ class Readers(unittest.TestCase):
             "aws-kubeadm-scan",
             "gcp-kubeadm-validate",
             "gcp-kubeadm-scan",
+            "azure-platform-validate",
+            "azure-platform-scan",
         ):
             with self.subTest(target=target):
                 makefile = (ROOT / "Makefile").read_text(encoding="utf-8")

@@ -1,5 +1,6 @@
 """The shared app setup: error answers, the body limit, health and lifecycle."""
 
+import asyncio
 import logging
 from collections.abc import Callable, Iterator, Mapping
 from datetime import UTC, datetime, timedelta
@@ -23,6 +24,7 @@ from opentelemetry.sdk.trace.sampling import ALWAYS_ON, Sampler, SamplingResult
 from opentelemetry.trace import ProxyTracerProvider
 from psycopg import errors
 from servicesupport import REGISTRY_DIR
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from tlsserver import serve_tls
 from tlssupport import (
     CertificateAuthority,
@@ -858,3 +860,178 @@ def test_a_413_answer_that_raises_is_the_json_413_and_leaks_no_message(
         assert [e.name for e in span.events] == [], span.name
         assert CANARY not in (span.status.description or "")
         assert CANARY not in " ".join(str(v) for v in (span.attributes or {}).values())
+
+
+# ── a limit of its own for an exact route (S070) ────────────────────────────
+BIG = 1000  # the limit of the one route that has its own; LIMIT is 100
+
+
+def build_with_route_limit(
+    limits: Mapping[tuple[str, str], int] | None = None,
+) -> TestClient:
+    service = create_service_app(
+        title="Test",
+        description="A test service.",
+        service_name="test-service",
+        tracer_name="meridian.test",
+        max_body_bytes=LIMIT,
+        route_body_limits=(
+            {("POST", "/files/{id}"): BIG, ("POST", "/a.b/{id}"): BIG}
+            if limits is None
+            else limits
+        ),
+        environ={},
+    )
+    app = service.app
+
+    @app.post("/files/{id}")
+    @app.put("/files/{id}")
+    @app.post("/files/{id}/more")
+    @app.post("/files/{id}/")
+    @app.post("/other")
+    @app.post("/a.b/{id}")
+    @app.post("/files")
+    async def echo(request: Request) -> dict[str, int]:
+        return {"bytes": len(await request.body())}
+
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def test_a_route_with_a_limit_of_its_own_takes_it_declared_or_streamed() -> None:
+    client = build_with_route_limit()
+
+    at = client.post("/files/7", content=b"x" * BIG)
+    over = client.post("/files/7", content=b"x" * (BIG + 1))
+    streamed_over = client.post("/files/7", content=chunks([600, 401]))
+    streamed_at = client.post("/files/7", content=chunks([600, 400]))
+
+    assert (at.status_code, at.json()) == (200, {"bytes": BIG})
+    assert over.status_code == 413
+    assert streamed_over.status_code == 413
+    assert (streamed_at.status_code, streamed_at.json()) == (200, {"bytes": BIG})
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        pytest.param("PUT", "/files/7", id="another method of the same path"),
+        pytest.param("POST", "/other", id="another path"),
+        pytest.param("POST", "/files", id="a segment short"),
+        pytest.param("POST", "/files/7/more", id="a segment more"),
+        pytest.param("POST", "/files/7/", id="a trailing slash"),
+        pytest.param("POST", "/files/", id="an empty segment"),
+        pytest.param("GET", "/files/7", id="GET on the route's path"),
+        pytest.param("HEAD", "/files/7", id="HEAD on the route's path"),
+        pytest.param("POST", "/Files/7", id="another case"),
+        pytest.param("POST", "/axb/7", id="a dot in the pattern is only a dot"),
+    ],
+)
+def test_a_request_that_is_not_exactly_the_route_keeps_the_apps_limit(
+    method: str, path: str
+) -> None:
+    client = build_with_route_limit()
+
+    # No redirect is followed: ``/files/`` is redirected (307) to ``/files``, which
+    # keeps the apps limit and would answer 413 on its own account.
+    response = client.request(
+        method, path, content=b"x" * (LIMIT + 1), follow_redirects=False
+    )
+
+    assert response.status_code == 413
+
+
+def test_a_parameter_matches_one_segment_and_the_query_is_not_the_path() -> None:
+    client = build_with_route_limit()
+
+    assert client.post("/a.b/7", content=b"x" * BIG).status_code == 200
+    assert client.post("/files/7?x=" + "y" * 50, content=b"x" * BIG).status_code == 200
+    assert client.post("/files/7/more", content=b"x" * BIG).status_code == 413
+
+
+def test_the_limit_of_a_route_may_also_be_lower_than_the_apps() -> None:
+    client = build_with_route_limit({("POST", "/other"): 10})
+
+    assert client.post("/other", content=b"x" * 11).status_code == 413
+    assert client.post("/other", content=b"x" * 10).status_code == 200
+    assert client.post("/other", content=chunks([6, 5])).status_code == 413
+    assert client.post("/other", content=chunks([5, 5])).status_code == 200
+    assert client.post("/files/7", content=b"x" * LIMIT).status_code == 200
+
+
+async def drive(scope: dict[str, Any], body: bytes) -> list[str]:
+    """Run the middleware, configured with a route limit, over a bare ASGI app
+    that reads the body once; the list says what happened: ``reached`` the app,
+    ``refused`` (the 413 sent) or ``413 raised`` where the body was read."""
+    events: list[str] = []
+
+    async def app(scope: Any, receive: Any, send: Any) -> None:
+        events.append("reached")
+        await receive()
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    async def send(message: dict[str, Any]) -> None:
+        if message["type"] == "http.response.start":
+            events.append(f"refused {message['status']}")
+
+    middleware = http.BodyLimitMiddleware(
+        app, LIMIT, route_limits={("POST", "/files/{id}"): BIG}
+    )
+    try:
+        await middleware(scope, receive, send)
+    except StarletteHTTPException as exc:  # the middleware's, not FastAPI's
+        events.append(f"{exc.status_code} raised")
+    return events
+
+
+def http_scope(path: str, root_path: str = "") -> dict[str, Any]:
+    return {
+        "type": "http",
+        "method": "POST",
+        "path": path,
+        "root_path": root_path,
+        "headers": [],
+    }
+
+
+@pytest.mark.parametrize("kind", ["websocket", "lifespan"])
+def test_a_scope_that_is_not_http_passes_untouched_with_a_route_limit_set(
+    kind: str,
+) -> None:
+    # The early return on the scope's type: nothing of a websocket or the
+    # lifespan is counted or refused, even with the limits configured.
+    scope = http_scope("/files/7") | {"type": kind}
+
+    assert asyncio.run(drive(scope, b"x" * (BIG + 1))) == ["reached"]
+
+
+def test_a_path_under_a_root_path_keeps_the_apps_limit_it_fails_closed() -> None:
+    # The middleware matches ``scope["path"]``. Behind a server started with a
+    # root path the path carries the prefix, the pattern misses, and the app's
+    # limit applies: an upload would be refused at 64 KiB, never admitted at the
+    # larger one. No service sets a root path today (the review's L7); this pins
+    # the direction of the failure, so a change to strip it is a decision.
+    scope = http_scope("/api/files/7", root_path="/api")
+
+    assert asyncio.run(drive(scope, b"x" * (LIMIT + 1))) == ["reached", "413 raised"]
+    assert asyncio.run(drive(http_scope("/files/7"), b"x" * (LIMIT + 1))) == ["reached"]
+
+
+def test_no_route_limit_is_every_route_at_the_apps_limit() -> None:
+    client = build_with_route_limit({})
+
+    assert client.post("/files/7", content=b"x" * (LIMIT + 1)).status_code == 413
+    assert client.post("/files/7", content=b"x" * LIMIT).status_code == 200
+
+
+@pytest.mark.parametrize(
+    "pattern", ["files/{id}", "/files/{id", "/files/a{id}", "/files/{}", "/{1x}"]
+)
+def test_a_pattern_whose_parameter_is_not_a_whole_segment_is_refused_at_start(
+    pattern: str,
+) -> None:
+    with pytest.raises(ValueError, match="route pattern"):
+        http.BodyLimitMiddleware(
+            lambda *_: None, LIMIT, route_limits={("POST", pattern): BIG}
+        )
