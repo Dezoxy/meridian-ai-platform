@@ -22,14 +22,17 @@ from meridian.platform.guardrails import redact
 # --- A national number after an international one, with a plain space ---------
 
 
-def test_a_national_number_after_an_international_one_is_still_not_found() -> None:
-    # The international span takes the national number's "06 20 " and stops
-    # inside it: the last seven digits of the second number stay. It was so
-    # before the date guard.
+def test_a_national_number_after_an_international_one_is_found() -> None:
+    # Changed on purpose (S070, row 886): the international span used to take
+    # the national number's "06 20 " and stop inside it, so that the last seven
+    # digits of the second number stayed, as before the date guard. It is cut at
+    # the space now, when the number before it is a complete Hungarian one and
+    # the number after it is taken (``test_redaction_international_cut.py``
+    # holds both sides of that).
     result = redact("+36 30 123 4567 06 20 765 4321")
 
-    assert result.text == "[phone] 765 4321"
-    assert result.found == {"phone": 1}
+    assert result.text == "[phone] [phone]"
+    assert result.found == {"phone": 2}
 
 
 # --- A dotted or slashed international number with a group "06" or "00" -------

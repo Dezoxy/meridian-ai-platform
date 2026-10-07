@@ -407,10 +407,16 @@ def _number_from_the_month_of_a_date(loss: Loss, start: int) -> bool:
 def _international_run_on(loss: Loss, start: int) -> bool:
     """A national number that follows an international one with no slash and no
     dot between them (a space, a hyphen or nothing): the international span
-    (which takes ``.`` and ``/`` among its separators since F1r, and is cut
-    only at a slash or a dot) began before this number and ended inside it.
-    After a slash or a dot the span is cut at the second number, so a loss there
-    is a leak of its own and is no part of this shape."""
+    (which takes ``.`` and ``/`` among its separators since F1r) began before
+    this number and ended inside it. The span is cut at a slash or a dot before
+    "06" or "00", and (S070, row 886) at a space before "06" or "00" when the
+    number before it is a complete Hungarian one and the number after it is
+    taken: so what remains of this shape is a run-on that is not cut, in the
+    corpus always a first number that is no complete number of the numbering
+    plan (a foreign one, a wrong code or length: the generator ends some with a
+    group that reads as a year). After a slash or a dot the span is cut at the
+    second number, so a loss there is a leak of its own and is no part of this
+    shape."""
     text = loss.text
     if start < 2 or start in loss.survivors:
         return False
@@ -443,7 +449,7 @@ RESIDUAL_SHAPES = (
     ),
     Shape(
         "a number run on into by an international one",
-        "+36/83/701/902 00 36/73/48/9525",
+        "+36.53.861.9481999 00 36 20 159 1904",
         _international_run_on,
     ),
 )
@@ -612,8 +618,10 @@ def test_a_number_after_a_date_hides_no_leak_in_the_numbers_after_it() -> None:
 # branch changed what the matcher does (the same matcher is on ``main``, where
 # the first-digit rule hid them). The list is EXACT: the sweep passes only if its
 # unnamed runs are these and no others, not a subset and not a superset, and the
-# count is pinned beside it. A fourth entry is a new leak and is no entry to add
-# without a decision; a fix of one removes its entry in the same change.
+# count is pinned beside it. A third entry is a new leak and is no entry to add
+# without a decision; a fix of one removes its entry in the same change (row
+# 886's, the cut of an international span at a space, did: the third number's
+# tail is hidden now).
 KNOWN_UNNAMED_RUNS = [
     # A LEAK, open. A date-tail guard refuses the first number (it follows
     # "2."), the rescan's candidate inside it ends by taking the next number's
@@ -626,16 +634,6 @@ KNOWN_UNNAMED_RUNS = [
         "2.06.85.[phone].2050.641.88/06",
         "00 36.2050.641.88",
     ),
-    # A LEAK, open, and row 886's (the cut of an international span at a space,
-    # the next contract): the international span runs on at a space into the
-    # second number, and what is left of it, with the "(00 36)" of the third,
-    # forms a number after a slash. Its pins take this text and its fix must
-    # turn it; when it does, this entry is removed there.
-    (
-        "Tel: +36.62.7320.12 00 36 69 0619 45/(00 36).92.803.020.",
-        "Tel: [phone] [phone].92.803.020.",
-        "(00 36).92.803.020",
-    ),
     # Not a regression: digits glued to an "x", which the old matcher hid only
     # by an accidental span across two numbers. Both matchers leave
     # "06/83/7819 64x" alone. An exception, not a leak to fix.
@@ -645,7 +643,7 @@ KNOWN_UNNAMED_RUNS = [
         "06.5633.06/83",
     ),
 ]
-PINNED_UNNAMED_RUNS = 3
+PINNED_UNNAMED_RUNS = 2
 
 
 def test_every_digit_the_old_matcher_hid_stays_hidden_but_in_the_named_shapes() -> None:
@@ -693,7 +691,7 @@ PINNED_HITS = {
     "a number after two date groups": 40,
     "a Budapest number written as a date": 152,
     "a mobile number that starts at the month of a date": 7,
-    "a number run on into by an international one": 63,
+    "a number run on into by an international one": 11,
 }
 # The texts that leave a digit of an inserted number in the clear, and of them
 # the texts in which the reference leaves one too: the leaks no differential
@@ -702,8 +700,8 @@ PINNED_HITS = {
 # letters and digits that are no number, and the matcher is not asked to hide
 # them), and the row of the plan that counted them had 12,281 and 12,147 of
 # 24,000 texts before the generator wrote the forms it lacks.
-PINNED_IN_THE_CLEAR = 12_084
-PINNED_IN_THE_REFERENCE_TOO = 11_911
+PINNED_IN_THE_CLEAR = 11_965
+PINNED_IN_THE_REFERENCE_TOO = 11_843
 
 
 def test_the_hits_of_each_named_shape_are_pinned() -> None:

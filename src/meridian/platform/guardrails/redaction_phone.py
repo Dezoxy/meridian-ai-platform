@@ -34,6 +34,10 @@ PHONE_SHAPE = re.compile(rf"\+[0-9]+(?:[{PHONE_SEPARATORS}][0-9]+)*")
 # by itself.) Residual: a dotted international number whose group after a dot
 # begins "06" or "00" is cut there.
 PHONE_JOIN = re.compile(r"[/.]\(?(?:06|00)")
+# Where a second number may begin after a space (any of ``SPACE_CHARS``): an
+# opening parenthesis if there is one, then "06" or "00". The span is cut there
+# only under the conditions of ``_national_run_on``.
+PHONE_RUN_ON = re.compile(rf"[{SPACE_CHARS}]\(?(?:06|00)")
 PAREN_GROUP = re.compile(r"\(\+?[0-9]+\)")
 # A phone number may be followed by a hyphen and a Hungarian case ending (the
 # number, then "-es" or "-val"): the ending stays and the number is replaced.
@@ -153,7 +157,68 @@ def _choose_phone_span(text: str, start: int, end: int) -> tuple[int, int] | Non
     return span
 
 
+def _is_hungarian_international(number: str) -> bool:
+    """Whether the text is a complete Hungarian international number: the shape
+    and digit count of ``_phone_shape_holds``, then the country code 36 and a
+    domestic number of the numbering plan (``national_phone_holds``, which
+    reads "0036" as the prefix, so the "+" is written as "00")."""
+    digits = NON_DIGITS.sub("", number)
+    return (
+        _phone_shape_holds(number)
+        and digits.startswith("36")
+        and national_phone_holds("00" + digits)
+    )
+
+
+def _national_number_follows(text: str, start: int) -> bool:
+    """Whether a national number begins at ``start`` as the national pass will
+    see it: ``NATIONAL_PHONE`` matches there and ``_choose_national_phone_span``
+    takes it (which refuses a candidate that starts as a date)."""
+    candidate = NATIONAL_PHONE.match(text, start)
+    return (
+        candidate is not None
+        and _choose_national_phone_span(text, start, candidate.end()) is not None
+    )
+
+
+def _national_run_on(text: str, start: int, limit: int) -> int | None:
+    """Where an international number that begins at ``start`` ends, before
+    ``limit``, because a second number begins after a space: the offset of the
+    space, or None. The text before the space must be a complete Hungarian
+    international number and the text after it a national number that is
+    taken, so a group of one number that begins "06" or "00" ("+36 1 060 1234",
+    "+36 30 0036 123") or a number followed by an amount ("+36 30 123 4567 00
+    Ft") is no cut. The date-tail refusal (``_is_date_tail``) needs a dot or a
+    slash right before the candidate, never a space, so it cannot apply here;
+    the refusals of a candidate that starts as a date are in the chooser."""
+    # The pattern is four characters long: a match that begins before ``limit``
+    # ends before ``limit + 4``.
+    stop = min(limit + 3, len(text))
+    at = start
+    while (match := PHONE_RUN_ON.search(text, at, stop)) and match.start() < limit:
+        space = match.start()
+        left_is_complete = _is_hungarian_international(text[start:space])
+        if left_is_complete and _national_number_follows(text, space + 1):
+            return space
+        at = space + 1
+    return None
+
+
 def _international_span(text: str, start: int, end: int) -> tuple[int, int] | None:
+    """The span of the international number in the candidate, or None.
+
+    The candidate is cut before a dot or a slash that is followed by "06" or
+    "00" (``PHONE_JOIN``: a second number joined to the first), and at a space
+    that is followed by "06" or "00" when what stands before it is a complete
+    Hungarian international number and what follows is a national number the
+    national pass takes (``_national_run_on``): "+36 30 123 4567 06 20 765 4321"
+    is two numbers and so is "+36/83/701/902 00 36/73/48/9525". It is not cut
+    where the left part is no complete number of the numbering plan (a foreign
+    number, a wrong code or length) or the right part is refused (a wrong code,
+    too few or too many digits, a date): the span is then the longest prefix
+    whose shape holds, as before, and what the span leaves of the second number
+    stays in the clear. A group of the first number that begins "06" or "00" is
+    no cut either."""
     joined_before = (
         start > 0
         and text[start - 1] in TOKEN_CHARS
@@ -162,7 +227,9 @@ def _international_span(text: str, start: int, end: int) -> tuple[int, int] | No
     if joined_before:
         return None
     join = PHONE_JOIN.search(text, start, end)
-    trimmed = text[start : join.start() if join else end]
+    limit = join.start() if join else end
+    run_on = _national_run_on(text, start, limit)
+    trimmed = text[start : limit if run_on is None else run_on]
     while trimmed:
         trimmed = _without_trailing_marks(trimmed)
         stop = start + len(trimmed)
