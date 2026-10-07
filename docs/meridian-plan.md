@@ -19440,7 +19440,7 @@ real thing):
 **Left before it is done:** a browser, a slow body and the app's own limits
 seen on a cluster (two runs, RU1 and RU2, saw the edge's side: the second
 settled which route serves an encoded path); the whole suite on the final tree
-(FINAL-SUITE-RESULT); the pull request and its merge; and the owner's decision
+(done: 21,219 passed, 8 skipped); the pull request and its merge; and the owner's decision
 on retention and erasure of uploaded files, which comes before any use with
 real data (For the owner). The code is built and has been reviewed twice, and
 the path ran once on kind; this record is the documents contract that follows
@@ -19830,7 +19830,9 @@ reads them again.
 - **Every landing:** `make lint` ended `Contracts: 6 kept, 0 broken.`,
   `make test` ended `Ran 385 tests` / `OK` (F5's last line read `codex agents:
   11 twins current`), and `make docs` `docs consistency: 14 checks passed`.
-- **The whole suite on the final tree:** FINAL-SUITE-RESULT.
+- **The whole suite on the final tree,** with coverage, merged with `main` at
+  1ef35d8: `21219 passed, 8 skipped, 8 warnings in 347.91s (0:05:47)`, 99.14
+  per cent of 14,384 statements (124 missed).
 
 **Mutations**, each applied, run, seen red and restored (the counts are the
 reports'):
