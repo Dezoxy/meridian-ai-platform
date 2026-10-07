@@ -26,7 +26,7 @@ from workloads.claims_triage.test_adjuster_pages import (
     url_of,
 )
 
-from meridian.workloads.claims_triage import adjuster, claim_dates, claimant
+from meridian.workloads.claims_triage import adjuster, claim_dates
 
 RECEIVED = datetime(2026, 7, 15, 12, 0, tzinfo=UTC)
 GAP_LABELS = (
@@ -82,8 +82,38 @@ def test_the_day_of_receipt_is_the_day_in_the_insurers_time_zone() -> None:
     assert rows[claim_dates.REPORT_TO_RECEIVED_LABEL] == "0 days"
 
 
-def test_the_time_zone_is_the_one_the_claimants_form_stamps_in() -> None:
-    assert claim_dates.REPORT_TIME_ZONE is claimant.REPORT_TIME_ZONE
+@pytest.mark.parametrize(
+    ("received", "reported", "gap"),
+    [
+        # winter, UTC+1: 22:30 UTC is still the 13th in Vienna, 23:30 UTC is
+        # the 14th (a fixed +02:00 would call both the 14th)
+        (datetime(2026, 12, 13, 22, 30, tzinfo=UTC), "2026-12-13", "0 days"),
+        (datetime(2026, 12, 13, 23, 30, tzinfo=UTC), "2026-12-13", "1 day"),
+        (datetime(2026, 12, 13, 23, 30, tzinfo=UTC), "2026-12-14", "0 days"),
+        # the day the clocks go forward (03-29, +01:00 until 01:00 UTC, then
+        # +02:00): midnight of the 29th is 23:00 UTC on the 28th, midnight of
+        # the 30th is 22:00 UTC on the 29th
+        (datetime(2026, 3, 28, 22, 59, tzinfo=UTC), "2026-03-28", "0 days"),
+        (datetime(2026, 3, 28, 23, 0, tzinfo=UTC), "2026-03-28", "1 day"),
+        (datetime(2026, 3, 29, 21, 59, tzinfo=UTC), "2026-03-29", "0 days"),
+        (datetime(2026, 3, 29, 22, 0, tzinfo=UTC), "2026-03-29", "1 day"),
+        # the day the clocks go back (10-25, +02:00 until 01:00 UTC, then
+        # +01:00): midnight of the 25th is 22:00 UTC on the 24th, midnight of
+        # the 26th is 23:00 UTC on the 25th
+        (datetime(2026, 10, 24, 21, 59, tzinfo=UTC), "2026-10-24", "0 days"),
+        (datetime(2026, 10, 24, 22, 0, tzinfo=UTC), "2026-10-24", "1 day"),
+        (datetime(2026, 10, 25, 22, 59, tzinfo=UTC), "2026-10-25", "0 days"),
+        (datetime(2026, 10, 25, 23, 0, tzinfo=UTC), "2026-10-25", "1 day"),
+    ],
+)
+def test_the_day_of_receipt_follows_the_zones_offset_through_both_change_days(
+    received: datetime, reported: str, gap: str
+) -> None:
+    claim = {"loss_date": "2026-03-01", "reported_on": reported}
+
+    rows = rows_for(claim, received)
+
+    assert rows[claim_dates.REPORT_TO_RECEIVED_LABEL] == gap
 
 
 def test_a_claim_with_no_received_moment_has_only_the_first_gap() -> None:
@@ -147,7 +177,10 @@ def test_the_labels_name_neither_the_claimant_nor_a_prompt() -> None:
         assert "claimant" not in label.lower(), label
         assert "prompt" not in label.lower(), label
     assert "stated" in claim_dates.LOSS_DATE_LABEL
-    assert "as received" in claim_dates.REPORTED_ON_LABEL
+    assert "as submitted with the claim" in claim_dates.REPORTED_ON_LABEL
+    assert "not checked by the API" in claim_dates.REPORTED_ON_LABEL
+    assert "received" not in claim_dates.REPORTED_ON_LABEL
+    assert "from the two dates above" in claim_dates.LOSS_TO_REPORT_LABEL
 
 
 def test_the_facts_hold_the_labelled_dates_and_the_gaps_in_order() -> None:

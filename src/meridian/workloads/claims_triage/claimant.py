@@ -52,7 +52,6 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any, get_args
-from zoneinfo import ZoneInfo
 
 import httpx
 import psycopg
@@ -97,6 +96,7 @@ from meridian.workloads.claims_triage.adjuster import (
     render_error,
     require_same_origin,
 )
+from meridian.workloads.claims_triage.claim_dates import REPORT_TIME_ZONE
 from meridian.workloads.claims_triage.claimant_errors import (
     ClaimantErrorMiddleware,
     claim_id_of,
@@ -134,10 +134,6 @@ from meridian.workloads.claims_triage.triaging import (
 logger = logging.getLogger(__name__)
 
 START_PATH = "/claimant/claims"
-# The insurer's time zone: the report date is the date there, not in UTC (with
-# UTC a loss dated today would be after the report for two hours after local
-# midnight).
-REPORT_TIME_ZONE = ZoneInfo("Europe/Vienna")
 HTTP_BAD_REQUEST = 400
 HTTP_METHOD_NOT_ALLOWED = 405
 HTTP_UNPROCESSABLE = 422

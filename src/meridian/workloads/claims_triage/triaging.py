@@ -242,12 +242,15 @@ def arrived_documents(conn: psycopg.Connection, claim_id: str) -> tuple[str, ...
     return tuple(name for (name,) in rows)
 
 
+# Whether the claim moved to its state longer ago than the triage lease (one
+# parameter: the lease in seconds): the definition of a lapsed triage, which
+# ``TRIAGE_AGE_SQL`` and the read the moves make before they lock a claim share.
+LEASE_LAPSED_SQL = "state_changed_at < clock_timestamp() - make_interval(secs => %s)"
 # When the claim moved to its state and whether that is longer ago than the
 # triage lease (the same test ``take_triage`` makes in its one ``SELECT``); read
 # by the triage-again route, which has locked the claim without its age.
 TRIAGE_AGE_SQL = (
-    "SELECT state_changed_at, "
-    "state_changed_at < clock_timestamp() - make_interval(secs => %s) "
+    f"SELECT state_changed_at, {LEASE_LAPSED_SQL} "  # noqa: S608 (a constant)
     "FROM claims.claims WHERE claim_id = %s AND tenant = %s"
 )
 

@@ -15,7 +15,7 @@ attribute (T-03).
 
 import dataclasses
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import Any, NamedTuple
 from uuid import UUID
@@ -67,6 +67,7 @@ from meridian.workloads.claims_triage.models import (
 )
 from meridian.workloads.claims_triage.triaging import (
     BEING_TRIAGED_DETAIL,
+    LEASE_LAPSED_SQL,
     TRIAGE_AGE_SQL,
     TRIAGE_CAP_DETAIL,
     TRIAGE_LEASE_SECONDS,
@@ -94,10 +95,13 @@ LOCK_CLAIM_SQL = (
     "WHERE claim_id = %s AND tenant = %s FOR NO KEY UPDATE"
 )
 SUBMISSION_SQL = "SELECT submission FROM claims.claims WHERE claim_id = %s"
-# The submission as read before the claim is locked: filtered by tenant, as the
-# lock is, so another tenant's claim is read by no one.
+# The submission as read before the claim is locked, with what the route's
+# refusal depends on (its state, whether the triage lease lapsed, the triages it
+# has had): filtered by tenant, as the lock is, so another tenant's claim is read
+# by no one. An advisory read: nothing is decided from it.
 UNLOCKED_SUBMISSION_SQL = (
-    "SELECT submission FROM claims.claims WHERE claim_id = %s AND tenant = %s"
+    f"SELECT submission, state, {LEASE_LAPSED_SQL}, triages "  # noqa: S608 (a constant)
+    "FROM claims.claims WHERE claim_id = %s AND tenant = %s"
 )
 # One row per run, so an outcome is recorded once for it; ``run_id`` is NULL only
 # for the adjuster's decision on a claim that has no paused run.
@@ -152,23 +156,51 @@ def _submission(conn: psycopg.Connection, claim_id: str) -> ClaimSubmission:
         raise StoredSubmissionInvalid("the stored submission is not valid") from None
 
 
+def _could_take_again(state: str, triages: int, lapsed: bool) -> bool:
+    """Whether triage-again could go on from what was read before the lock: the
+    claim is under the cap and waits for an adjuster or failed, or is triaging
+    with its lease lapsed (a take-over)."""
+    if triages >= MAX_TRIAGES_PER_CLAIM:
+        return False
+    return state in TRIAGEABLE_AGAIN or (state == "triaging" and lapsed)
+
+
+def _could_take_documents(state: str, triages: int, lapsed: bool) -> bool:
+    """Whether documents could be taken: the claim waits for them."""
+    return state == "documents_requested"
+
+
 def _prepare_before_lock(
-    conn: psycopg.Connection, tenant: str, claim_id: str
+    conn: psycopg.Connection,
+    tenant: str,
+    claim_id: str,
+    could_go_on: Callable[[str, int, bool], bool],
 ) -> PreparedRunInput | None:
     """The part of the run's input that the submission alone decides, built
     before the claim's row is locked (S070): it compiles a pattern from the
     claimant's name, about 55 ms for the largest name, which a row lock must not
-    wait for. A stored submission cannot change (no role may update it, T-76), so
-    what is built here is what a read under the lock would give. Nothing is
-    decided from this read: the claim's state, its tenant's 404 and every check
-    still come from ``_lock_claim``. ``None`` where the tenant has no such claim
-    or its submission is not valid: the lock then refuses the first, and
-    ``_prepared`` refuses the second where it always did (and logs it there)."""
-    row = conn.execute(UNLOCKED_SUBMISSION_SQL, (claim_id, tenant)).fetchone()
+    wait for, and which a request that is refused must not pay for. So it is
+    built only where ``could_go_on(state, triages, lapsed)``, read from the same
+    statement, says the route could go on. A stored submission cannot change (no
+    role may update it, T-76), so what is built here is what a read under the lock
+    would give. The read is advisory and nothing is decided from it: the claim's
+    state, its tenant's 404 and every check, status code and detail still come
+    from ``_lock_claim`` and the code after it, in their order. ``None`` where
+    the tenant has no such claim, the route could not go on or the submission is
+    not valid: the lock then refuses the first, ``_prepared`` builds the second
+    under the lock (the rare cost: a state that changed in between, or a stale
+    page, which depends on what the caller sent, so the read cannot know it) and
+    refuses the third where it always did (and logs it there)."""
+    row = conn.execute(
+        UNLOCKED_SUBMISSION_SQL, (TRIAGE_LEASE_SECONDS, claim_id, tenant)
+    ).fetchone()
     if row is None:
         return None
+    stored, state, lapsed, triages = row
+    if not could_go_on(state, triages, lapsed):
+        return None
     try:
-        submission = ClaimSubmission.model_validate(row[0])
+        submission = ClaimSubmission.model_validate(stored)
     except ValidationError:
         return None
     return prepare_run_input(submission)
@@ -178,8 +210,10 @@ def _prepared(
     conn: psycopg.Connection, claim_id: str, before_lock: PreparedRunInput | None
 ) -> PreparedRunInput:
     """The run input's first part, under the lock: the one built before it, or
-    (none could be: the claim was not there or its submission is not valid) the
-    read of ``_submission``, which refuses an invalid one."""
+    (none was: the claim was not there, the read said the route could not go on
+    and the locked state says it can, or its submission is not valid) the read of
+    ``_submission``, which builds it under the lock, as before S070, and refuses
+    an invalid one."""
     if before_lock is not None:
         return before_lock
     return prepare_run_input(_submission(conn, claim_id))
@@ -205,7 +239,9 @@ def refuse_stale_page(page_run: str | None, run_id: UUID | None) -> None:
     read (T-33). ``page_run`` is the run the page showed, empty for a claim with
     no run; ``None`` is a caller with no page (the JSON routes), which is not
     checked. Called with the claim locked; the refusal is a 409 and nothing has
-    been written."""
+    been written. It depends on what the caller sent, not on the claim alone, so
+    the read before the lock cannot know it: a stale page for a claim that could
+    go on still pays the pattern's compile before this refuses it."""
     if page_run is not None and page_run != ("" if run_id is None else str(run_id)):
         raise HTTPException(409, STALE_PAGE_DETAIL)
 
@@ -296,7 +332,7 @@ def _take_over(
 
 def _take_again(dsn: str, tenant: str, claim_id: str, page_run: str | None) -> _Taken:
     with connect(dsn, SERVICE_NAME) as conn:
-        before_lock = _prepare_before_lock(conn, tenant, claim_id)
+        before_lock = _prepare_before_lock(conn, tenant, claim_id, _could_take_again)
         state, run_id, triages = _lock_claim(conn, tenant, claim_id)
         refuse_stale_page(page_run, run_id)
         taken = (
@@ -446,7 +482,9 @@ def _store_arrival(
     state is a 409; one referred because its documents did not arrive leaves an
     event of it (see ``_record_late_documents``)."""
     with connect(dsn, SERVICE_NAME) as conn:
-        before_lock = _prepare_before_lock(conn, tenant, claim_id)
+        before_lock = _prepare_before_lock(
+            conn, tenant, claim_id, _could_take_documents
+        )
         state, old_run, triages = _lock_claim(conn, tenant, claim_id)
         if state == "documents_requested":
             return _take_documents(

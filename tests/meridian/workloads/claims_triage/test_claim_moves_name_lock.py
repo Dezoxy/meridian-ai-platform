@@ -13,6 +13,7 @@ pattern is being compiled.
 """
 
 import json
+import logging
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -20,9 +21,13 @@ from typing import Any
 import psycopg
 import pytest
 from dbsupport import OWNER, DatabaseHandle
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from opentelemetry import trace
 from servicesupport import owner_rows
 from workloads.claims_triage.test_claim_moves import (
+    BEING_TRIAGED_DETAIL,
+    CAP_DETAIL,
     CLAIMANT,
     MOVE_ID,
     NOT_AWAITING_DOCUMENTS_DETAIL,
@@ -42,11 +47,13 @@ from workloads.claims_triage.test_claim_moves import (
 from workloads.claims_triage.test_claims_app import (
     OTHER_TENANT,
     claim_state,
+    claims_dsn,
     decisions,
 )
 
 from meridian.platform.common.db import connect
 from meridian.workloads.claims_triage import claimant_name, moves, triaging
+from meridian.workloads.claims_triage.models import ClaimSubmission
 
 PROBE_ROW_SQL = "SELECT 1 FROM claims.claims WHERE claim_id = %s FOR UPDATE NOWAIT"
 
@@ -56,9 +63,11 @@ def row_is_locked(db: DatabaseHandle, claim_id: str) -> bool:
     asks for it without waiting."""
     with connect(db.dsn(OWNER), "test-lock-probe") as conn:
         try:
-            conn.execute(PROBE_ROW_SQL, (claim_id,))
+            row = conn.execute(PROBE_ROW_SQL, (claim_id,)).fetchone()
         except psycopg.errors.LockNotAvailable:
             return True
+        # A claim that is not there must not read as "not locked".
+        assert row is not None, "the probed claim does not exist"
         return False
 
 
@@ -268,27 +277,31 @@ def test_another_tenants_claim_is_404_and_its_name_is_not_compiled(
 
 
 @pytest.mark.parametrize(
-    ("state", "status", "body"),
+    ("state", "status", "body", "log_lines"),
     [
         pytest.param(
             "triaging",
             409,
             {"detail": "the claim is being triaged"},
+            0,
             id="within-its-lease-the-submission-is-never-read",
         ),
         pytest.param(
             "awaiting_adjuster",
             500,
             {"detail": "internal error", "claim_id": MOVE_ID},
+            1,
             id="where-it-is-read-it-is-a-500",
         ),
     ],
 )
 def test_a_stored_submission_that_is_not_valid_is_refused_where_it_is_read_today(
     fresh_database: DatabaseHandle,
+    caplog: pytest.LogCaptureFixture,
     state: str,
     status: int,
     body: dict[str, str],
+    log_lines: int,
 ) -> None:
     put_claim(
         fresh_database,
@@ -299,6 +312,7 @@ def test_a_stored_submission_that_is_not_valid_is_refused_where_it_is_read_today
         submission={"claim_id": MOVE_ID, "canary": CLAIMANT["name"]},
     )
     runtime = MoveRuntime()
+    caplog.set_level(logging.DEBUG)
 
     response = client_for(fresh_database, runtime).post(triage_url(), json={})
 
@@ -307,3 +321,167 @@ def test_a_stored_submission_that_is_not_valid_is_refused_where_it_is_read_today
     assert CLAIMANT["name"] not in json.dumps(response.json())
     assert claim_state(fresh_database, MOVE_ID)[0] == state
     assert runtime.calls == []
+    # One line, where the submission is read: the claim, the class and the
+    # fields, and nothing the claimant wrote (its extra key is a star).
+    lines = [r for r in caplog.records if r.name == moves.logger.name]
+    assert len(lines) == log_lines
+    for line in lines:
+        text = line.getMessage()
+        assert line.levelno == logging.ERROR
+        assert MOVE_ID in text
+        assert "ValidationError" in text
+        assert "policy_number" in text
+        assert "extra_forbidden" in text
+        assert CLAIMANT["name"] not in text
+        assert "canary" not in text
+    assert CLAIMANT["name"] not in caplog.text
+    assert "canary" not in caplog.text
+
+
+# ── a request the lock will refuse pays no compile ──────────────────────────
+# The read before the lock also reads the state, the triages and whether the
+# lease lapsed, and prepares only for a request that could go on. Every answer
+# below is the one the lock gives; only the compile is gone.
+REFUSALS = [
+    pytest.param(
+        "triage", "triaging", 1, False, BEING_TRIAGED_DETAIL, "triaging", id="lease"
+    ),
+    pytest.param(
+        "triage", "awaiting_adjuster", 5, False, CAP_DETAIL, None, id="cap-waiting"
+    ),
+    pytest.param(
+        "triage", "triage_failed", 5, False, CAP_DETAIL, None, id="cap-failed"
+    ),
+    pytest.param(
+        "triage", "triaging", 5, True, CAP_DETAIL, "triage_failed", id="cap-lapsed"
+    ),
+    pytest.param(
+        "triage", "withdrawn", 1, False, NOT_TRIAGEABLE_DETAIL, None, id="withdrawn"
+    ),
+    pytest.param(
+        "triage", "approved", 1, False, NOT_TRIAGEABLE_DETAIL, None, id="decided"
+    ),
+    pytest.param(
+        "documents",
+        "awaiting_adjuster",
+        1,
+        False,
+        NOT_AWAITING_DOCUMENTS_DETAIL,
+        None,
+        id="documents-to-a-waiting-claim",
+    ),
+    pytest.param(
+        "documents",
+        "withdrawn",
+        1,
+        False,
+        NOT_AWAITING_DOCUMENTS_DETAIL,
+        None,
+        id="documents-to-a-withdrawn-claim",
+    ),
+    pytest.param(
+        "documents",
+        "triaging",
+        1,
+        False,
+        NOT_AWAITING_DOCUMENTS_DETAIL,
+        None,
+        id="documents-to-a-claim-being-triaged",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("route", "state", "triages", "lapsed", "detail", "then"), REFUSALS
+)
+def test_a_request_the_claim_refuses_answers_its_409_and_compiles_no_pattern(
+    fresh_database: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    route: str,
+    state: str,
+    triages: int,
+    lapsed: bool,
+    detail: str,
+    then: str | None,
+) -> None:
+    put_claim(fresh_database, MOVE_ID, state, run_id=None, triages=triages)
+    if lapsed:
+        age_triage(fresh_database, triaging.TRIAGE_LEASE_SECONDS + 10)
+    seen = watch_compiles(monkeypatch, fresh_database)
+    runtime = MoveRuntime()
+    client = client_for(fresh_database, runtime)
+
+    response = (
+        client.post(triage_url(), json={})
+        if route == "triage"
+        else client.post(documents_url(), json={"documents": ["photos"]})
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": detail}
+    assert seen == []
+    assert claim_state(fresh_database, MOVE_ID)[0] == (then or state)
+    assert runtime.calls == []
+    assert arrived_names(fresh_database, MOVE_ID) == []
+
+
+def test_a_stale_page_is_refused_after_the_pattern_of_a_claim_that_could_go_on(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # What the page showed is not in the claim, so the read cannot know: it pays.
+    put_claim(fresh_database, MOVE_ID, "awaiting_adjuster", run_id=None, triages=1)
+    seen = watch_compiles(monkeypatch, fresh_database)
+    runtime = MoveRuntime()
+
+    with pytest.raises(HTTPException) as refused:
+        moves.triage_again(
+            claims_dsn(fresh_database),
+            TENANT,
+            runtime.client,
+            trace.get_tracer("test"),
+            MOVE_ID,
+            page_run=str(uuid.uuid4()),
+        )
+
+    assert refused.value.status_code == 409
+    assert refused.value.detail == moves.STALE_PAGE_DETAIL
+    assert seen == [False]
+    assert claim_state(fresh_database, MOVE_ID)[0] == "awaiting_adjuster"
+    assert runtime.calls == []
+
+
+def test_a_claim_that_can_go_on_only_when_locked_is_sent_the_usual_input(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The advisory read sees a withdrawn claim and prepares nothing; before the
+    # lock a second connection makes it wait for an adjuster. The lock says go,
+    # and the pattern is compiled under it: the rare path's cost, not its bytes.
+    stored = put_claim(fresh_database, MOVE_ID, "withdrawn", run_id=None, triages=1)
+    seen = watch_compiles(monkeypatch, fresh_database)
+    real = moves._prepare_before_lock
+
+    def advisory(*args: Any, **kwargs: Any) -> Any:
+        answer = real(*args, **kwargs)
+        set_state(fresh_database, "awaiting_adjuster")()
+        return answer
+
+    monkeypatch.setattr(moves, "_prepare_before_lock", advisory)
+    runtime = MoveRuntime()
+
+    response = client_for(fresh_database, runtime).post(triage_url(), json={})
+
+    assert response.status_code == 200
+    assert seen == [True]
+    (start,) = runtime.starts
+    usual = triaging.triage_run_input(ClaimSubmission.model_validate(stored), ())
+    assert json.dumps(json.loads(start.content)["input"]) == json.dumps(usual)
+
+
+def test_a_probe_of_a_claim_that_is_not_there_fails_instead_of_saying_not_locked(
+    fresh_database: DatabaseHandle,
+) -> None:
+    put_claim(fresh_database, MOVE_ID, "awaiting_adjuster", run_id=None, triages=1)
+
+    assert row_is_locked(fresh_database, MOVE_ID) is False
+    with pytest.raises(AssertionError, match="does not exist"):
+        row_is_locked(fresh_database, "CLM-0000")

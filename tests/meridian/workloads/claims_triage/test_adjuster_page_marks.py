@@ -61,13 +61,17 @@ def combination_id(combination: tuple[str | None, str]) -> str:
 
 
 def proposal_with(recommendation: str | None, status: str) -> dict[str, Any]:
-    """A stored proposal the validator accepts, for one combination."""
+    """A stored proposal the validator accepts, for one combination. A rejection
+    the model's reading found an exclusion for has the shape the graph writes:
+    ``excluded``, with the clause."""
     called = status != "not_needed"
     reason, extra = {
         "approve": ("over_threshold", {"payable_amount": 5000}),
         "reject": ("policy_inactive", {}),
         None: ("unverified", {"gaps": ["exclusion_assessment"]}),
     }[recommendation]
+    if recommendation == "reject" and status == "applies":
+        reason, extra = "excluded", {"exclusion_clause": "3.2"}
     return (
         OUTPUT
         | {
@@ -108,6 +112,59 @@ def test_a_stored_proposal_is_marked_by_its_recommendation_and_its_assessment(
 def test_the_table_covers_every_status_the_proposal_allows() -> None:
     assert set(STATUSES) == set(get_args(AssessmentStatus))
     assert set(ASSESSED) <= set(STATUSES)
+
+
+def test_each_sentence_and_marker_belongs_to_its_key() -> None:
+    # The words are typed here, not read from the dictionaries: swapping the
+    # two values of either one must fail this.
+    notes = proposal_module.RESTS_ON_NOTES
+    marks = proposal_module.RESTS_ON_MARKS
+
+    assert "a model's reading" in notes["model"]
+    assert "no model was asked" not in notes["model"]
+    assert "no model was asked" in notes["rules"]
+    assert "a model's reading" not in notes["rules"]
+    assert "model reading" in marks["model"]
+    assert "rules only" not in marks["model"]
+    assert "rules only" in marks["rules"]
+    assert "model reading" not in marks["rules"]
+
+
+# What the graph can write with a recommendation: an assessment that is
+# unavailable never carries one (the recommendation is withheld), and is marked
+# "neither" even where a model was called, so it is not in the invariant.
+WITH_A_RECOMMENDATION = [
+    c for c in EXPECTED if c[0] is not None and c[1] != "unavailable"
+]
+
+
+@pytest.mark.parametrize("combination", WITH_A_RECOMMENDATION, ids=combination_id)
+def test_a_recommendation_rests_on_the_model_exactly_when_a_model_was_called(
+    combination: tuple[str | None, str],
+) -> None:
+    # Independent of ``EXPECTED``: it reads ``drafted_by`` of the validated
+    # proposal, the field that says a model answered.
+    stored = TriageProposal.model_validate(proposal_with(*combination))
+
+    rests_on = proposal_module.recommendation_rests_on(
+        stored.recommendation, stored.assessment
+    )
+
+    assert stored.recommendation is not None
+    assert (rests_on == "model") == (stored.drafted_by is not None)
+    assert rests_on in ("model", "rules")
+
+
+def test_a_rejection_the_models_reading_excluded_has_the_graphs_shape() -> None:
+    stored = TriageProposal.model_validate(proposal_with("reject", "applies"))
+
+    assert (stored.reason, stored.exclusion_clause) == ("excluded", "3.2")
+    assert (
+        proposal_module.recommendation_rests_on(
+            stored.recommendation, stored.assessment
+        )
+        == "model"
+    )
 
 
 def test_a_proposal_stored_before_s017_is_marked_without_error() -> None:
