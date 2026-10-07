@@ -102,7 +102,7 @@ install_release() {
 
 check_prerequisites() {
   log "checking prerequisites"
-  need_tools docker kind kubectl helm openssl jq
+  need_tools docker kind kubectl helm openssl jq timeout
   require_local_docker
   docker info >/dev/null 2>&1 || die "the Docker daemon is not running; start Docker Desktop"
   local kind_version

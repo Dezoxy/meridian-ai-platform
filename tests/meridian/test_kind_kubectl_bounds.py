@@ -5,10 +5,12 @@ frozen node hung ``make smoke`` or ``make deploy`` with no word. ``kctl`` of
 ``common.sh`` now reads the call it is given and bounds it by what the call is:
 
 - an ordinary call carries ``--request-timeout`` (15 s, ``KCTL_REQUEST_TIMEOUT``);
-- ``wait``, ``rollout status``, ``attach``, ``port-forward``, ``logs -f`` and
-  ``get -w`` hold a stream or wait by design and get no flag: ``wait`` and
-  ``rollout status`` carry their own ``--timeout`` at every call site, which a
-  test below reads;
+- ``attach``, ``port-forward``, ``logs -f`` and ``get -w`` hold a stream by design
+  and get no flag;
+- ``wait`` and ``rollout status`` carry their own ``--timeout`` at every call
+  site, which a test below reads, and run under ``timeout`` for that value plus a
+  margin (30 s): the flag bounds the waiting loop, not the first request (K9);
+  Helm's install and upgrade are bounded the same way (margin 60 s);
 - ``exec`` and a ``delete --wait`` run under the system's ``timeout``
   (90 s, ``KCTL_OUTER_TIMEOUT``): the request flag does not bound a stream, and
   nothing else bounds the call that opens it.
@@ -19,8 +21,10 @@ whole through the harnesses of the tests around them; the last tests read the
 scripts' text.
 """
 
+import contextlib
 import os
 import re
+import signal
 import subprocess
 from pathlib import Path
 
@@ -35,6 +39,8 @@ FLAG = "--request-timeout=15s"
 # The cluster every call names: the credentials file of kind and its context.
 KUBECTL_TARGET = f"--kubeconfig {KIND_DIR}/kubeconfig --context kind-meridian"
 HELM_TARGET = f"--kubeconfig {KIND_DIR}/kubeconfig --kube-context kind-meridian"
+# The bound of the test that runs the whole of smoke.sh on stand-ins.
+HANG_GUARD_SECONDS = 300
 # The flags that take their value as the next word, wherever they stand.
 VALUE_FLAGS = {
     "-n",
@@ -80,9 +86,10 @@ SCRIPTS = (
 def call_class(args: list[str]) -> str:
     """What ``kctl`` should do with ``args``: ``request`` (add the flag),
     ``own`` (the call carries its own ``--request-timeout``), ``stream`` (it
-    holds a stream or waits, and gets nothing) or ``outer`` (run under
-    ``timeout``). The rule, in Python, so that the whole-script tests can read
-    what a stub saw."""
+    holds a stream, and gets nothing), ``waits`` (``wait`` and ``rollout
+    status``: no request flag, run under ``timeout`` for their own ``--timeout``
+    plus a margin) or ``outer`` (run under ``timeout``). The rule, in Python, so
+    that the whole-script tests can read what a stub saw."""
     verb = sub = ""
     own = follow = watch = waits = False
     skip = False
@@ -107,12 +114,14 @@ def call_class(args: list[str]) -> str:
             verb = word
         elif not sub:
             sub = word
+    holds_a_wait = verb == "wait" or (verb == "rollout" and sub == "status")
     streams = (
-        verb in {"wait", "attach", "port-forward"}
-        or (verb == "rollout" and sub == "status")
+        verb in {"attach", "port-forward"}
         or (verb == "logs" and follow)
         or (verb == "get" and watch)
     )
+    if holds_a_wait:
+        return "waits"
     if own:
         return "own"
     if streams:
@@ -188,9 +197,11 @@ ORDINARY = [
     ["delete", "pod", "x", "--ignore-not-found", "--wait=false"],
     ["delete", "configmap", "x"],
 ]
-STREAMS = [
+WAITS = [
     ["wait", "--for=condition=Ready", "pod/x", "--timeout=60s"],
     ["-n", "meridian", "rollout", "status", "deployment/x", "--timeout=300s"],
+]
+STREAMS = [
     ["-n", "observability", "port-forward", "svc/x", ":80"],
     ["attach", "pod/x"],
     ["logs", "-f", "job/x"],
@@ -234,6 +245,24 @@ def test_a_call_that_waits_or_streams_carries_no_request_timeout(
     assert call.endswith(" ".join(args))
     assert timeouts == []
     assert call_class(args) == "stream"
+
+
+@pytest.mark.parametrize("args", WAITS, ids=lambda args: " ".join(args[:3]))
+def test_a_waiting_call_runs_under_its_own_timeout_plus_a_margin(
+    tmp_path: Path, args: list[str]
+) -> None:
+    done, calls, timeouts = run_wrapper(tmp_path, ["kctl", *args])
+
+    assert done.returncode == 0, done.stderr
+    (call,) = calls
+    assert "--request-timeout" not in call
+    assert call.endswith(" ".join(args))
+    seconds = 60 if "wait" in args else 300
+    assert timeouts == [
+        f"--foreground --kill-after=5 {seconds + 30} kubectl {KUBECTL_TARGET} "
+        + " ".join(args)
+    ]
+    assert call_class(args) == "waits"
 
 
 @pytest.mark.parametrize("args", OUTER, ids=lambda args: " ".join(args[:4]))
@@ -366,6 +395,256 @@ def test_the_helm_read_timeout_is_set_by_the_environment(tmp_path: Path) -> None
     assert timeouts[0].startswith("--foreground --kill-after=5 7 helm ")
 
 
+# ── the calls that wait: an outer bound over their own --timeout ─────────────
+# Against an API server that accepts a connection and never answers, --timeout
+# bounds the waiting loop and not the first request (measured, 2026-10-07: the
+# three calls below were still running after 25 s with --timeout=3s). The
+# wrapper runs each under `timeout` for the flag's value plus a margin.
+WAITING_COMMANDS = {
+    "kubectl wait": ["kctl", "wait", "--for=condition=Ready", "pod/x", "--timeout=1s"],
+    "kubectl rollout status": [
+        *("kctl", "-n", "meridian", "rollout", "status", "deployment/x"),
+        "--timeout=1s",
+    ],
+    "helm upgrade": [
+        *("helmc", "upgrade", "--install", "meridian", "./chart"),
+        *("--namespace", "meridian", "--timeout", "1s"),
+    ],
+    "helm upgrade of the chart": [
+        *("helm_chart", "upgrade", "--install", "--timeout", "1s"),
+    ],
+}
+# The Go durations the scripts write, in seconds, and the same with a margin.
+KUBECTL_WAITS = [
+    (["--timeout=300s"], 330),
+    (["--timeout", "5m"], 330),
+    (["--timeout=10m"], 630),
+    (["--timeout=1h30m"], 5430),
+    (["--timeout=0"], 30),
+]
+HELM_UPGRADES = [
+    (["--timeout", "300s"], 360),
+    (["--timeout=10m"], 660),
+    (["--wait", "--timeout", "10m"], 660),
+]
+# A waiting call with no usable --timeout of its own: nothing is run.
+REFUSED = {
+    "kubectl wait": ["kctl", "wait", "--for=condition=Ready", "pod/x"],
+    "kubectl rollout status": ["kctl", "rollout", "status", "deployment/x"],
+    "kubectl wait with a word for a timeout": [
+        *("kctl", "wait", "pod/x", "--timeout=soon"),
+    ],
+    "kubectl wait with the flag last": ["kctl", "wait", "pod/x", "--timeout"],
+    "helm upgrade": ["helmc", "upgrade", "--install", "x", "./chart"],
+    "helm install": ["helmc", "install", "x", "./chart"],
+    "helm upgrade with a word for a timeout": [
+        *("helmc", "upgrade", "x", "./chart", "--timeout=soon"),
+    ],
+}
+
+
+def run_silent_server(
+    tmp_path: Path, command: list[str], environment: dict[str, str]
+) -> tuple[subprocess.CompletedProcess[str], int]:
+    """``command`` in a bash that sourced ``common.sh``, with the system's own
+    ``timeout`` and a stand-in ``kubectl`` and ``helm`` that, for a waiting call,
+    note their process id and then become ``sleep`` for five minutes: what a
+    real client does against a server that never answers. Returns the process
+    (``status=N`` is printed after the command, so a script that died prints no
+    such line) and the stand-in's process id."""
+    stubs = tmp_path / "bin"
+    stubs.mkdir(exist_ok=True)
+    pid_file = tmp_path / "pid"
+    write_stub(
+        stubs,
+        "kubectl",
+        'case "$*" in *wait*|*rollout*) echo $$ >"$PID_FILE"; exec sleep 300 ;; esac',
+    )
+    write_stub(
+        stubs,
+        "helm",
+        'case "$*" in *" upgrade "*|*" install "*)'
+        ' echo $$ >"$PID_FILE"; exec sleep 300 ;; esac',
+    )
+    done = subprocess.run(
+        [
+            *("bash", "-c", 'source "$1"; shift; "$@"; echo status=$?', "_"),
+            str(KIND_DIR / "common.sh"),
+            *command,
+        ],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": f"{stubs}:{os.environ['PATH']}",
+            "HOME": str(tmp_path),
+            "PID_FILE": str(pid_file),
+            "NAMESPACE": "meridian",
+            "tag": "abc",
+            **environment,
+        },
+        check=False,
+        timeout=SECONDS,
+    )
+    return done, int(pid_file.read_text(encoding="utf-8"))
+
+
+def process_is_gone(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    return False
+
+
+@pytest.mark.parametrize("label", list(WAITING_COMMANDS))
+def test_a_waiting_call_to_a_server_that_never_answers_ends_and_the_script_dies(
+    tmp_path: Path, label: str
+) -> None:
+    # The bound is the call's own 1 s and no margin: it must not wait tens of
+    # seconds, and `timeout 0` would mean no bound at all.
+    done, pid = run_silent_server(
+        tmp_path,
+        WAITING_COMMANDS[label],
+        {"KCTL_WAIT_MARGIN": "0", "HELM_UPGRADE_MARGIN": "0"},
+    )
+
+    assert done.returncode == 1
+    assert "status=" not in done.stdout
+    assert label.removesuffix(" of the chart") in done.stderr
+    assert "did not answer" in done.stderr
+    assert "1s" in done.stderr
+    assert process_is_gone(pid)
+
+
+def test_a_helm_upgrade_that_was_ended_says_what_to_read_next_and_what_not_to_do(
+    tmp_path: Path,
+) -> None:
+    done, _ = run_silent_server(
+        tmp_path,
+        WAITING_COMMANDS["helm upgrade"],
+        {"HELM_UPGRADE_MARGIN": "0"},
+    )
+
+    message = " ".join(done.stderr.split())
+    assert "pending-upgrade" in message
+    assert "status meridian" in message
+    assert "history meridian" in message
+    assert "-n meridian" in message
+    assert "README" in message
+    assert "How long the scripts wait for the API server" in message
+    # Nothing here advises removing the release or going back to a revision.
+    assert "uninstall" not in message
+    assert "rollback" not in message
+    assert "roll back" not in message
+
+
+@pytest.mark.parametrize("status", [124, 137])
+def test_either_status_of_the_surrounding_timeout_kills_the_script_with_a_sentence(
+    tmp_path: Path, status: int
+) -> None:
+    for command in (WAITING_COMMANDS["kubectl wait"], WAITING_COMMANDS["helm upgrade"]):
+        done, calls, _ = run_wrapper(tmp_path, command, timeout_status=status)
+
+        assert done.returncode == 1
+        assert "did not answer" in done.stderr
+        assert calls == []
+
+
+@pytest.mark.parametrize("status", [0, 1])
+@pytest.mark.parametrize("label", list(WAITING_COMMANDS))
+def test_a_waiting_call_that_ends_in_time_passes_its_status_and_output_through(
+    tmp_path: Path, label: str, status: int
+) -> None:
+    stubs = tmp_path / "bin"
+    stubs.mkdir()
+    for tool in ("kubectl", "helm"):
+        write_stub(stubs, tool, f"echo answer; echo warning >&2; exit {status}")
+    done = subprocess.run(
+        [
+            *("bash", "-c", 'source "$1"; shift; "$@"; echo status=$?', "_"),
+            str(KIND_DIR / "common.sh"),
+            *WAITING_COMMANDS[label],
+        ],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": f"{stubs}:{os.environ['PATH']}",
+            "HOME": str(tmp_path),
+            "NAMESPACE": "meridian",
+            "tag": "abc",
+        },
+        check=False,
+        timeout=SECONDS,
+    )
+
+    assert done.stdout == f"answer\nstatus={status}\n"
+    assert done.stderr == "warning\n"
+
+
+@pytest.mark.parametrize(("flags", "bound"), KUBECTL_WAITS, ids=lambda x: str(x))
+def test_a_kubectl_wait_is_bounded_by_its_timeout_plus_thirty_seconds(
+    tmp_path: Path, flags: list[str], bound: int
+) -> None:
+    done, calls, timeouts = run_wrapper(tmp_path, ["kctl", "wait", "pod/x", *flags])
+
+    assert done.returncode == 0, done.stderr
+    assert len(calls) == 1
+    assert timeouts[0].startswith(f"--foreground --kill-after=5 {bound} kubectl ")
+
+
+@pytest.mark.parametrize(("flags", "bound"), HELM_UPGRADES, ids=lambda x: str(x))
+def test_a_helm_upgrade_is_bounded_by_its_timeout_plus_sixty_seconds(
+    tmp_path: Path, flags: list[str], bound: int
+) -> None:
+    done, calls, timeouts = run_wrapper(
+        tmp_path, ["helmc", "upgrade", "--install", "x", "./chart", *flags]
+    )
+
+    assert done.returncode == 0, done.stderr
+    assert len(calls) == 1
+    assert timeouts[0].startswith(f"--foreground --kill-after=5 {bound} helm ")
+
+
+def test_the_margins_are_set_by_the_environment(tmp_path: Path) -> None:
+    _, _, kubectl = run_wrapper(
+        tmp_path,
+        ["kctl", "wait", "pod/x", "--timeout=60s"],
+        environment={"KCTL_WAIT_MARGIN": "5"},
+    )
+    _, _, helm = run_wrapper(
+        tmp_path,
+        ["helmc", "upgrade", "x", "./chart", "--timeout=60s"],
+        environment={"HELM_UPGRADE_MARGIN": "7"},
+    )
+
+    assert kubectl[-1].startswith("--foreground --kill-after=5 65 kubectl ")
+    assert helm[-1].startswith("--foreground --kill-after=5 67 helm ")
+
+
+@pytest.mark.parametrize("label", list(REFUSED))
+def test_a_waiting_call_with_no_usable_timeout_of_its_own_is_refused(
+    tmp_path: Path, label: str
+) -> None:
+    done, calls, timeouts = run_wrapper(tmp_path, REFUSED[label])
+
+    assert done.returncode == 1
+    assert "--timeout" in done.stderr
+    assert label.split(" with")[0] in done.stderr
+    assert calls == []
+    assert timeouts == []
+
+
+@pytest.mark.parametrize("verb", ["template", "get", "status"])
+def test_a_helm_call_that_is_not_an_install_or_an_upgrade_has_no_surrounding_timeout(
+    tmp_path: Path, verb: str
+) -> None:
+    done, calls, timeouts = run_wrapper(tmp_path, ["helmc", verb, "x", "./chart"])
+
+    assert done.returncode == 0, done.stderr
+    assert len(calls) == 1
+    assert timeouts == []
+
+
 # ── the scripts, whole, against stubs ────────────────────────────────────────
 def without_the_target(words: list[str]) -> list[str]:
     """``words`` less the cluster's own two flags and their values."""
@@ -432,7 +711,16 @@ def test_upkeep_bounds_its_kubectl_calls_and_still_reads_the_release(
 def test_smoke_bounds_the_calls_it_makes_on_a_stub_cluster(tmp_path: Path) -> None:
     smoke = start_smoke(tmp_path, hold=False, first_delete_fails=False)
 
-    smoke.process.communicate(timeout=SECONDS)
+    try:
+        # A hang guard and not a speed limit: the run takes seconds, but it
+        # failed at a load of 150 under a bound of 60 with nothing wrong.
+        smoke.process.communicate(timeout=HANG_GUARD_SECONDS)
+    finally:
+        # start_smoke made a process group of its own: a guard that fires must
+        # not leave the script or a stand-in behind.
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(smoke.process.pid, signal.SIGKILL)
+        smoke.process.wait()
 
     # The stub logs "$*", so a probe's program with newlines in it is several
     # lines; a call's own line is the one that starts with the cluster's flags.
@@ -547,7 +835,7 @@ def test_every_call_that_waits_carries_its_own_nonzero_timeout() -> None:
     waits = []
     for script, words in kctl_calls():
         plain = [word.strip("\"'") for word in words]
-        if call_class(plain) == "stream" and "port-forward" not in plain:
+        if call_class(plain) == "waits":
             waits.append((script, plain))
 
     assert waits, "no wait found: the reader is broken"
@@ -604,6 +892,19 @@ def test_deploys_helm_upgrade_has_a_timeout_and_the_value_is_the_rollouts() -> N
     assert re.search(r"^readonly ROLLOUT_TIMEOUT=300s$", text, re.MULTILINE)
 
 
+def test_every_helm_install_or_upgrade_in_the_scripts_carries_its_own_timeout() -> None:
+    calls = [
+        (name, line)
+        for name in (*SCRIPTS, "down.sh", "holder.sh")
+        for line in logical_lines(script_text(name))
+        if re.search(r"\b(helmc|helm_chart) (upgrade|install)\b", line)
+    ]
+
+    assert len(calls) == 2, calls
+    for name, line in calls:
+        assert re.search(r'--timeout[= ]"?\$\{\w+\}"?', line), (name, line)
+
+
 def test_the_helm_read_with_no_timeout_flag_of_its_own_is_the_bounded_one() -> None:
     reads = [
         (name, line)
@@ -617,11 +918,12 @@ def test_the_helm_read_with_no_timeout_flag_of_its_own_is_the_bounded_one() -> N
 
 
 # ── what the wrapper needs of the machine, and the exec that had no bound ────
-@pytest.mark.parametrize("name", ["deploy.sh", "smoke.sh", "upkeep.sh"])
-def test_a_script_that_runs_exec_or_a_waiting_delete_needs_timeout_on_the_machine(
+@pytest.mark.parametrize("name", ["up.sh", "deploy.sh", "smoke.sh", "upkeep.sh"])
+def test_a_script_that_runs_exec_a_wait_or_an_upgrade_needs_timeout_on_the_machine(
     name: str,
 ) -> None:
-    (line,) = re.findall(r"^need_tools (.*)$", script_text(name), re.MULTILINE)
+    # up.sh's call is indented: it is inside check_prerequisites.
+    (line,) = re.findall(r"^\s*need_tools (.*)$", script_text(name), re.MULTILINE)
 
     assert "timeout" in line.split()
 
@@ -637,16 +939,41 @@ def test_the_chunk_count_in_deploy_has_smokes_statement_and_lock_timeouts() -> N
 
 
 # ── the README ───────────────────────────────────────────────────────────────
-def test_the_readme_says_the_bounds_and_that_no_cluster_has_seen_them() -> None:
-    readme = script_text("README.md")
+def bounds_passage(text: str) -> str:
     (section,) = re.findall(
-        r"\n## Using kubectl and helm\n(.*?)\n## Memory\n", readme, re.DOTALL
+        r"\n## Using kubectl and helm\n(.*?)\n## Memory\n", text, re.DOTALL
     )
+    return section
 
-    for word in ("KCTL_REQUEST_TIMEOUT", "KCTL_OUTER_TIMEOUT", "HELM_READ_TIMEOUT"):
+
+def test_the_readme_says_the_bounds_what_was_seen_and_what_was_not() -> None:
+    readme = script_text("README.md")
+    section = bounds_passage(readme)
+
+    for word in (
+        *("KCTL_REQUEST_TIMEOUT", "KCTL_OUTER_TIMEOUT", "HELM_READ_TIMEOUT"),
+        *("KCTL_WAIT_MARGIN", "HELM_UPGRADE_MARGIN"),
+    ):
         assert word in section
     for verb in ("wait", "rollout status", "port-forward", "exec", "logs -f"):
         assert verb in section
     assert "15s" in section
-    assert "not yet seen on a cluster" in section
+    # What was seen (three deploys with the bounds on kind, 2026-10-07) and what
+    # was not (a frozen API server): the words, not one fixed sentence, so that
+    # the next honest edit does not break the test.
+    assert "2026-10-07" in section
+    assert "not seen" in section
+    assert "frozen API server" in section
     assert "have no request timeout" not in readme
+
+
+def test_the_wrappers_comment_says_what_was_seen_and_what_was_not() -> None:
+    comment = "\n".join(
+        line for line in script_text("common.sh").splitlines() if line.startswith("#")
+    )
+
+    assert "2026-10-07" in comment
+    assert "not seen" in comment
+    assert "frozen API server" in comment
+    assert "per request" in comment
+    assert "not yet seen on a cluster" not in comment

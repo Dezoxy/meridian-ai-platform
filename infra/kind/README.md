@@ -2412,22 +2412,41 @@ that names the bound.
 |---|---|---|
 | An ordinary call (`get`, `apply`, `create`, `patch`, `label`, `logs`, a `delete` with no `--wait`) | `--request-timeout=15s`, a request | `KCTL_REQUEST_TIMEOUT`, for instance `20s` |
 | `exec`, and a `delete` with `--wait` (also `--timeout=60s`) | the system's `timeout`, 90 s, which then prints the line `kctl: kubectl exec ended with status 124 ...` | `KCTL_OUTER_TIMEOUT`, in seconds |
-| `wait` and `rollout status` | their own `--timeout` at every call site; no request flag, which would end the watch early | the call site |
+| `wait` and `rollout status` | their own `--timeout` at every call site, and the system's `timeout` for that value plus 30 s, which then stops the script with a line that says the API server did not answer; a call with no `--timeout` is refused; no request flag, which may end the watch early | the call site; `KCTL_WAIT_MARGIN`, in seconds |
 | `port-forward`, `attach`, `logs -f`, `get -w` | none, they are streams; `port-forward` is started raw (`kubectl ... &`) by `smoke.sh` and `demo.sh`, which kill it and look for its port with a counted loop, and by `grafana.sh` in the foreground, which ends with ^C; no script uses the other three | |
 | `helm get` (`upkeep.sh`), which has no timeout flag | the system's `timeout`, 30 s | `HELM_READ_TIMEOUT`, in seconds |
-| `helm upgrade --install` | `--wait --timeout 10m` for each of `make up`'s ten releases; `--timeout 300s` for the chart in `make deploy` | `up.sh`, `deploy.sh` |
+| `helm upgrade --install` | `--wait --timeout 10m` for each of `make up`'s ten releases; `--timeout 300s` for the chart in `make deploy`; and the system's `timeout` for that value plus 60 s, which stops the script with a line that names `helm status` and `helm history`; a call with no `--timeout` is refused | `up.sh`, `deploy.sh`; `HELM_UPGRADE_MARGIN`, in seconds |
 
 A call that passes its own `--request-timeout` (the reads of the API server's
 address and of the holder's record) keeps it. `kctl` reads the words of the
 call up to `--`, so the command an `exec` runs decides nothing, and a namespace
 called `wait` is a namespace. The scripts need `timeout` (GNU coreutils; on
 macOS, `brew install coreutils` puts it on the PATH as `gtimeout`, so add a
-`timeout` link) and `smoke.sh`, `deploy.sh` and `upkeep.sh` say so at their
-start. Why the flag is not on every call: kubectl's help says the flag bounds
+`timeout` link) and `up.sh`, `smoke.sh`, `deploy.sh` and `upkeep.sh` say so at
+their start. Why the flag is not on every call: kubectl's help says the flag bounds
 "a single server request", and says nothing of what it does to a watch, a log
 stream or an exec session, so those calls get the bound that is written for
-them. Tested with stand-ins, not yet seen on a cluster: not with the node
-paused (`docker pause`), which is the run that shows it.
+them.
+
+Two things the bounds do not mean. The request flag is per request and not per
+call: against a listener that accepts a connection and never answers, `kubectl
+get --request-timeout=4s` took 20 s, because the client tries discovery five
+times (measured by the review of S073, 2026-10-07, at 4 s; 15 s was not
+measured and gives about 75 s). And a `--timeout` of `wait`, `rollout status`
+or `helm upgrade` bounds the waiting loop and not the first request: against
+the same listener all three were still running after 25 s with a `--timeout`
+of 3 s, which is why each now has the outer bound. The Helm margin is the
+wider one because a Helm ended in the middle of an upgrade can leave the
+release `pending-upgrade`: when the line says it ended one, read `helm status`
+and `helm history` of the release before anything else, and change nothing
+until they say what state it is in.
+
+What was seen on kind: `make deploy` and `make smoke` with the request flag
+and the `exec` bound on their calls (run R2, 2026-10-07, and the runs after
+it), which passed. The outer bound on `wait`, `rollout status` and Helm is
+newer than those runs and has not been on kind. A frozen API server (the node
+paused with `docker pause`) was not seen with any of these bounds: only the
+tests' stand-ins and the review's silent listener have met one.
 
 ## Memory
 

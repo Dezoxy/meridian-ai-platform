@@ -1563,7 +1563,10 @@ def run_ingest_corpus(count: str) -> tuple[list[str], str]:
             "kctl() {",
             '  case "$*" in',
             '    *"delete jobs"*) echo DELETE ;;',
-            '    *" exec "*) [[ "${COUNT}" != FAIL ]] || return 1; echo "${COUNT}" ;;',
+            # FAIL is psql's own error: kubectl says the command ended with a status.
+            '    *" exec "*) if [[ "${COUNT}" == FAIL ]]; then',
+            '      echo "command terminated with exit code 2" >&2; return 1; fi',
+            '      echo "${COUNT}" ;;',
             '    *"get pod"*) echo platform-db-1 ;;',
             '    *"get job"*) echo job.batch/meridian-ingest-abc ;;',
             "  esac",

@@ -35,42 +35,81 @@ die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 # long as the API server is silent, so a frozen node hung `make smoke` or `make
 # deploy` with no word. kctl reads the call it is given and bounds it by what it
 # is; the values can be set in the environment for a slow machine.
-#  - An ordinary call gets --request-timeout, the time one request to the API
-#    server may take. A call that passes its own keeps it.
-#  - wait, rollout status, attach, port-forward, logs -f and get -w hold a stream
-#    or wait by design, and the flag would end them early: they get none. wait
-#    and rollout status carry their own --timeout at every call site (a test
-#    reads them); the other three are not used through kctl.
+#  - An ordinary call gets --request-timeout, a bound per request to the API
+#    server and not per call: kubectl makes several requests in a call (it tries
+#    discovery more than once), so a call can take a multiple of the flag.
+#    Measured against a listener that accepts a connection and never answers,
+#    with --request-timeout=4s: `kubectl get` took 20 s, five times the flag
+#    (S073 review, 2026-10-07; 4 s was measured, 15 s was not, and 15 s is
+#    expected to give about 75 s). A call that passes its own keeps it.
+#  - attach, port-forward, logs -f and get -w hold a stream by design, and the
+#    flag would end them early: they get none. They are not used through kctl.
+#  - wait and rollout status carry their own --timeout at every call site (a test
+#    reads them), but that flag bounds the waiting loop and not the first request:
+#    against the same listener `kubectl wait --timeout=3s` and `kubectl rollout
+#    status --timeout=3s` were still running after 25 s. They run under the
+#    system's `timeout` for their own --timeout plus KCTL_WAIT_MARGIN seconds, and
+#    a call with no --timeout is refused (it would have no bound to add to).
+#    --request-timeout is NOT added to them: whether it cuts a legitimate watch
+#    short was not checked.
 #  - exec and a delete with --wait hold a stream too, and nothing else bounds the
 #    call that opens it: they run under the system's `timeout` for
 #    KCTL_OUTER_TIMEOUT seconds. A delete with --wait also carries --timeout.
-# Tested with stand-ins, not yet seen on a cluster.
+# The same holds for Helm's --timeout (see helmc below).
+# What was seen on kind (run R2, 2026-10-07, and later runs): `make deploy` and
+# `make smoke` with the request flag and the exec bound on their calls, which
+# passed. The outer bound on wait, rollout status and Helm came after those runs
+# and has not been on kind. A frozen API server (`docker pause` of the node) was
+# not seen, for any of these bounds: only the stand-ins of the tests and the
+# review's silent listener have met one.
 KCTL_REQUEST_TIMEOUT="${KCTL_REQUEST_TIMEOUT:-15s}"
 KCTL_OUTER_TIMEOUT="${KCTL_OUTER_TIMEOUT:-90}"
+# The seconds added to a waiting call's own --timeout (kubectl) before the outer
+# bound ends it. It is a margin and not a second timeout: the call's own timeout
+# ends a healthy wait first, so the outer bound only fires when the API server
+# has not answered at all.
+KCTL_WAIT_MARGIN="${KCTL_WAIT_MARGIN:-30}"
+# The seconds added to `helm upgrade`'s or `helm install`'s own --timeout. It is
+# wider than kubectl's because a Helm that is ended in the middle of an upgrade
+# can leave the release as `pending-upgrade`: it should be ended only when it is
+# stuck, never because it was slow.
+HELM_UPGRADE_MARGIN="${HELM_UPGRADE_MARGIN:-60}"
 # The seconds a read of the release by helm may take: `helm get` has no timeout
 # flag of its own.
 HELM_READ_TIMEOUT="${HELM_READ_TIMEOUT:-30}"
-readonly KCTL_REQUEST_TIMEOUT KCTL_OUTER_TIMEOUT HELM_READ_TIMEOUT
+readonly KCTL_REQUEST_TIMEOUT KCTL_OUTER_TIMEOUT KCTL_WAIT_MARGIN HELM_UPGRADE_MARGIN HELM_READ_TIMEOUT
 # How long `timeout` waits after its signal before it kills the call.
 readonly KCTL_KILL_AFTER=5
 
 # kctl_classify ARGS...: sets ${kctl_class} to "request" (add the flag), "outer"
-# (run under timeout) or "none" (a stream, a wait, or a call that has its own
-# --request-timeout), and ${kctl_verb}. The words after `--` are the command of
-# an exec, not kubectl's, so they are not read; a namespace is skipped as the
-# value of its flag, so a namespace called `wait` decides nothing.
+# (run under timeout), "waits" (wait and rollout status: run under timeout for
+# their own --timeout plus a margin) or "none" (a stream, or a call that has its
+# own --request-timeout), and ${kctl_verb}, ${kctl_label} (the verb, or `rollout
+# status`) and ${kctl_timeout} (the text of the call's --timeout, or empty). The
+# words after `--` are the command of an exec, not kubectl's, so they are not
+# read; a namespace is skipped as the value of its flag, so a namespace called
+# `wait` decides nothing.
 kctl_classify() {
-  local word skip=0 sub="" follow=0 watch=0 waits=0 own=0
+  local word skip=0 sub="" follow=0 watch=0 waits=0 own=0 take_timeout=0
   kctl_verb=""
+  kctl_label=""
+  kctl_timeout=""
   kctl_class=request
   for word in "$@"; do
     [[ "${word}" == -- ]] && break
+    if ((take_timeout)); then
+      take_timeout=0
+      kctl_timeout="${word}"
+      continue
+    fi
     if ((skip)); then
       skip=0
       continue
     fi
     case "${word}" in
       -n | --namespace | -s | --server | --context | --cluster | --user | --kubeconfig) skip=1 ;;
+      --timeout) take_timeout=1 ;;
+      --timeout=*) kctl_timeout="${word#--timeout=}" ;;
       --request-timeout | --request-timeout=*) own=1 ;;
       -f | --follow | --follow=true) [[ "${kctl_verb}" == logs ]] && follow=1 ;;
       -w | --watch | --watch=true | --watch-only) [[ "${kctl_verb}" == get ]] && watch=1 ;;
@@ -79,13 +118,23 @@ kctl_classify() {
       *) if [[ -z "${kctl_verb}" ]]; then kctl_verb="${word}"; elif [[ -z "${sub}" ]]; then sub="${word}"; fi ;;
     esac
   done
+  # A wait is bounded from its --timeout whatever else it passes.
+  if [[ "${kctl_verb}" == wait ]]; then
+    kctl_class=waits
+    kctl_label="wait"
+    return 0
+  fi
+  if [[ "${kctl_verb}" == rollout && "${sub}" == status ]]; then
+    kctl_class=waits
+    kctl_label="rollout status"
+    return 0
+  fi
   if ((own)); then
     kctl_class=none
     return 0
   fi
   case "${kctl_verb}" in
-    wait | attach | port-forward) kctl_class=none ;;
-    rollout) [[ "${sub}" != status ]] || kctl_class=none ;;
+    attach | port-forward) kctl_class=none ;;
     logs) ((follow == 0)) || kctl_class=none ;;
     get) ((watch == 0)) || kctl_class=none ;;
     exec) kctl_class=outer ;;
@@ -111,10 +160,104 @@ kctl() {
       fi
       return "${status}"
       ;;
+    waits) kctl_waiting "$@" ;;
   esac
 }
 
-helmc() { helm --kubeconfig "${KUBECONFIG_FILE}" --kube-context "${KUBE_CONTEXT}" "$@"; }
+# duration_seconds TEXT: a Go duration as kubectl and Helm read it (one or more
+# of <digits>h, <digits>m, <digits>s, or 0) as whole seconds on stdout. Returns 1
+# for anything else: a bare number, a fraction, a sign, a word.
+duration_seconds() {
+  local text=$1 total=0
+  [[ "${text}" == 0 ]] && {
+    printf '0'
+    return 0
+  }
+  [[ "${text}" =~ ^([0-9]+[hms])+$ ]] || return 1
+  while [[ "${text}" =~ ^([0-9]+)([hms])(.*)$ ]]; do
+    case "${BASH_REMATCH[2]}" in
+      h) total=$((total + 10#${BASH_REMATCH[1]} * 3600)) ;;
+      m) total=$((total + 10#${BASH_REMATCH[1]} * 60)) ;;
+      s) total=$((total + 10#${BASH_REMATCH[1]})) ;;
+    esac
+    text="${BASH_REMATCH[3]}"
+  done
+  printf '%d' "${total}"
+}
+
+# kctl_waiting ARGS...: kubectl wait or rollout status (${kctl_label} and
+# ${kctl_timeout} are kctl_classify's) under `timeout` for its own --timeout plus
+# KCTL_WAIT_MARGIN seconds. The flag bounds the waiting loop, not the first
+# request, so against an API server that never answers the call would not end.
+# A call with no usable --timeout is refused before anything runs. When the bound
+# ends the call the script stops, with the sentence (kubectl's own statuses are 0
+# and 1, so 124 and 137 are the bound's).
+kctl_waiting() {
+  local seconds status=0
+  [[ -n "${kctl_timeout}" ]] ||
+    die "kctl: kubectl ${kctl_label} has no --timeout of its own, so it has no bound to add the margin to; every call that waits carries one (a mistake in the script; nothing was run)"
+  seconds="$(duration_seconds "${kctl_timeout}")" ||
+    die "kctl: kubectl ${kctl_label} has a --timeout that is not a duration of the form 300s or 5m (nothing was run)"
+  timeout --foreground --kill-after="${KCTL_KILL_AFTER}" "$((seconds + KCTL_WAIT_MARGIN))" \
+    kubectl --kubeconfig "${KUBECONFIG_FILE}" --context "${KUBE_CONTEXT}" "$@" || status=$?
+  if ((status == 124 || status == 137)); then
+    die "kubectl ${kctl_label} was ended after its --timeout of ${seconds}s plus a margin of ${KCTL_WAIT_MARGIN}s (KCTL_WAIT_MARGIN): the API server did not answer. The cluster may be frozen or overloaded; read the node's state and the Docker containers before anything is deleted (on kind the database is the only copy of the audit log), then run the command again"
+  fi
+  return "${status}"
+}
+
+# helmc VERB ARGS...: Helm on the kind cluster. An install or an upgrade waits, and
+# its --timeout is "time to wait for any individual Kubernetes operation" (Helm's
+# help), which does not end a call against an API server that never answers: it
+# runs under `timeout` for its --timeout plus HELM_UPGRADE_MARGIN seconds. A call
+# with no usable --timeout is refused before anything runs. Other verbs (template,
+# which reads no cluster) are not bounded here; helm reads of the cluster go
+# through helmc_bounded.
+helmc() {
+  case "${1:-}" in
+    upgrade | install) helmc_waiting "$@" ;;
+    *) helm --kubeconfig "${KUBECONFIG_FILE}" --kube-context "${KUBE_CONTEXT}" "$@" ;;
+  esac
+}
+
+# helmc_waiting VERB ARGS...: helmc for an install or an upgrade. When the bound
+# ends it the script stops, and the sentence says what to read next: Helm ended in
+# the middle of an upgrade can leave the release `pending-upgrade`.
+helmc_waiting() {
+  local verb=$1 word previous="" value="" release="" in_namespace="" seconds status=0
+  shift
+  # The release is the first word that is no flag and no flag's value, which holds
+  # for both callers: the name comes right after the verb and its own flags.
+  for word in "$@"; do
+    case "${previous}" in
+      --timeout) value="${word}" ;;
+      -n | --namespace) in_namespace="${word}" ;;
+    esac
+    case "${previous}" in
+      --timeout | -n | --namespace)
+        previous=""
+        continue
+        ;;
+    esac
+    case "${word}" in
+      --timeout=*) value="${word#--timeout=}" ;;
+      --namespace=*) in_namespace="${word#--namespace=}" ;;
+      -*) ;;
+      *) [[ -n "${release}" ]] || release="${word}" ;;
+    esac
+    previous="${word}"
+  done
+  [[ -n "${value}" ]] ||
+    die "helmc: helm ${verb} has no --timeout of its own, so it has no bound to add the margin to; every upgrade carries one (a mistake in the script; nothing was run)"
+  seconds="$(duration_seconds "${value}")" ||
+    die "helmc: helm ${verb} has a --timeout that is not a duration of the form 300s or 10m (nothing was run)"
+  timeout --foreground --kill-after="${KCTL_KILL_AFTER}" "$((seconds + HELM_UPGRADE_MARGIN))" \
+    helm --kubeconfig "${KUBECONFIG_FILE}" --kube-context "${KUBE_CONTEXT}" "${verb}" "$@" || status=$?
+  if ((status == 124 || status == 137)); then
+    die "helm ${verb} of release ${release:-unknown} was ended after its --timeout of ${seconds}s plus a margin of ${HELM_UPGRADE_MARGIN}s (HELM_UPGRADE_MARGIN): the API server did not answer. Helm ended in the middle of an upgrade can leave the release as pending-upgrade, so change nothing yet: read 'helm --kubeconfig ${KUBECONFIG_FILE} --kube-context ${KUBE_CONTEXT} -n ${in_namespace:-<namespace>} status ${release:-<release>}' and 'history ${release:-<release>}', and infra/kind/README.md, the section 'How long the scripts wait for the API server'; then run the command again"
+  fi
+  return "${status}"
+}
 # helmc for a call that reads the cluster and has no --timeout of its own.
 helmc_bounded() {
   timeout --foreground --kill-after="${KCTL_KILL_AFTER}" "${HELM_READ_TIMEOUT}" \

@@ -392,16 +392,35 @@ install_release() {
 
 # stored_chunk_count: the number of rows in knowledge.chunks (the query is
 # CHUNK_COUNT_SQL of common.sh, which smoke.sh reads too), read in the
-# database's primary pod the way smoke.sh reaches psql. Fails when it cannot be
-# read.
+# database's primary pod the way smoke.sh reaches psql. Prints psql's answer and
+# returns 0 when psql answered; returns 1 when psql ran and failed with an error
+# of its own (kubectl says "command terminated with exit code N" then); returns 2
+# when the count could not be read at all: the pod was not found or not reached,
+# or the call ended at its outer bound (status 124 or 137). The two are told
+# apart because only the database's own answer says what the table holds: a
+# count that could not be read says nothing about it. kubectl's error is shown
+# (cleaned and cut short) when the count could not be read.
 stored_chunk_count() {
-  local primary
+  local primary errors answer status=0
   primary="$(kctl -n "${NAMESPACE}" get pod \
     -l cnpg.io/cluster=platform-db,cnpg.io/instanceRole=primary \
-    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)" || return 1
-  [[ -n "${primary}" ]] || return 1
-  kctl -n "${NAMESPACE}" exec "${primary}" -c postgres -- \
-    env "PGOPTIONS=${PSQL_OPTIONS}" psql -d meridian -tAc "${CHUNK_COUNT_SQL}" 2>/dev/null
+    -o jsonpath='{.items[0].metadata.name}')" || return 2
+  [[ -n "${primary}" ]] || return 2
+  errors="$(mktemp)"
+  answer="$(kctl -n "${NAMESPACE}" exec "${primary}" -c postgres -- \
+    env "PGOPTIONS=${PSQL_OPTIONS}" psql -d meridian -tAc "${CHUNK_COUNT_SQL}" 2>"${errors}")" || status=$?
+  if ((status == 0)); then
+    rm -f "${errors}"
+    printf '%s\n' "${answer}"
+    return 0
+  fi
+  if ((status != 124 && status != 137)) && grep -q 'command terminated with exit code' "${errors}"; then
+    rm -f "${errors}"
+    return 1
+  fi
+  printable_ascii <"${errors}" | cut -c 1-300 >&2
+  rm -f "${errors}"
+  return 2
 }
 
 # The ingestion of this image's corpus, at most once per image. Its Job is kept
@@ -411,7 +430,7 @@ stored_chunk_count() {
 # other ingestion Job (another tag, or a failed one) is deleted first. Sets
 # ${ingested_at} when it ran.
 ingest_corpus() {
-  local job="meridian-ingest-${tag}" found state chunks
+  local job="meridian-ingest-${tag}" found state chunks count_status=0 reason
   # An error is not "no such Job" (that would ingest again): it stops the
   # deploy. An empty answer means there is no such Job. Stderr is not part of
   # the answer: a warning there is not a Job.
@@ -422,11 +441,20 @@ ingest_corpus() {
     state="$(job_state "${job}")" || die "could not read the state of job/${job}"
   fi
   if [[ "${state}" == succeeded ]]; then
-    if chunks="$(stored_chunk_count)" && [[ "${chunks}" =~ ^[0-9]+$ ]] && ((10#${chunks} > 0)); then
+    chunks="$(stored_chunk_count)" || count_status=$?
+    # Ingesting again removes the kept ingestion Jobs and embeds the corpus
+    # again, which calls the model: it starts only on the database's own answer
+    # (no rows, or an error of its own). A count that could not be read says
+    # nothing about the table and stops the deploy with nothing removed.
+    ((count_status != 2)) ||
+      die "could not read how many rows knowledge.chunks holds (the database's pod was not found or did not answer; kubectl's error is above), so it is not known whether the corpus of image ${image} is in the store. Nothing was removed and no ingestion started: it would embed the corpus again, which calls the model and costs money. Find out why the database does not answer (kubectl -n ${NAMESPACE} get pods -l cnpg.io/cluster=platform-db), then run make deploy again"
+    if ((count_status == 0)) && [[ "${chunks}" =~ ^[0-9]+$ ]] && ((10#${chunks} > 0)); then
       log "the corpus of image ${image} is already in the store (job ${job} succeeded, ${chunks} chunks in knowledge.chunks); not ingesting again"
       return 0
     fi
-    log "job ${job} succeeded, but knowledge.chunks holds no rows or could not be read; ingesting again"
+    reason="holds no rows"
+    ((count_status == 0)) || reason="answered with an error of its own"
+    log "job ${job} succeeded, but knowledge.chunks ${reason}; ingesting again"
   fi
   kctl -n "${NAMESPACE}" delete jobs -l app.kubernetes.io/name=meridian-ingest --ignore-not-found --wait --timeout="${DELETE_TIMEOUT}" >/dev/null
   run_job "${job}" ingest
