@@ -15395,6 +15395,17 @@ a cluster.
   checked: whether the limit interrupts a blocked psycopg call, and the cost
   on the hosted runner. Three rows record what was left (the core in use, the
   size check's scope, code that runs only in a child process).
+- **At the merge of `main` (2026-10-07, after PRs 125 and 126).** Three
+  listed files had grown on `main` while this branch was out, in pull requests
+  that the check did not yet read: `tests/meridian/test_alert_rules.py` (855 to
+  900), `tests/meridian/test_helm_identity.py` (1,047 to 1,086) and
+  `tests/meridian/test_smoke_alert_rules.py` (825 to 826). Their entries were
+  set to today's counts here, once, because the list records the tree on the
+  day the check starts to run; from this merge on a count is only lowered. And
+  the job's limit was seen from the other side the same day: the python job of
+  pull request 126 passed every step and was cancelled at 15 minutes 12
+  seconds, on a hosted runner that was slow during an incident at GitHub; its
+  re-run passed. The 30 minutes of this part are that limit's answer.
 - **The whole suite on the final tree** (the main session fills the next line
   when it has run): FINAL-SUITE-RESULT
 - **Plan version of this part:** PLAN-VERSION
