@@ -33,6 +33,13 @@ adjuster; the rules decide every other claim.
 | OpenTelemetry Collector | `opentelemetry-collector` | 0.174.0 (collector 0.162.0) | `observability` |
 | Log agent: a second release of the collector's chart, the contrib build, as a DaemonSet that ships the services' output to Loki (S064) | `opentelemetry-collector` | 0.174.0 (collector 0.162.0, contrib) | `logging` |
 
+`up.sh` sources [`gateways.sh`](gateways.sh) after `common.sh`: the names and the
+functions that fill in and apply Prometheus's gateway (`fill_placeholder`,
+`prometheus_service_address`, `prometheus_gateway_manifest` and
+`apply_prometheus_gateway`) live there, to keep `up.sh` under the size ceiling;
+the call to `apply_prometheus_gateway` is still in `up.sh`, right after the
+stack's release.
+
 The CloudNativePG operator runs in `meridian`, beside the database it manages,
 and has no namespace of its own (S072, contract C). The release is made with
 `config.clusterWide=false`, so its rules over Secrets, ConfigMaps, pods
