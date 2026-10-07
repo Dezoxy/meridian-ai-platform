@@ -14090,8 +14090,11 @@ changed one, the next list says so):
 - **A chunk count that cannot be read stops the deploy** (K9, the infra
   review's M1): `make deploy` used to delete the ingest Jobs and ingest again
   when the count was unreadable, a paid model call after an unchecked read.
-  Only psql's own answer, a count or an error, decides now; a timeout or an
-  unreachable pod stops the script before anything is deleted.
+  As K9 built it, psql's own answer, a count or an error, decided, and a
+  timeout or an unreachable pod stopped the script before anything was
+  deleted; the re-read showed that an error of psql and an answer that is no
+  number still deleted and ingested again, and K13 closed both: the one
+  answer that starts an ingestion is exit 0 with the text `0`.
 - **The chart bounds each Deployment's rollback history at two
   ReplicaSets** (K2, `revisionHistoryLimit: 2`; a value below 1 is refused),
   and `make images` reads a reference with a registry, a port or a digest and
@@ -14162,7 +14165,10 @@ changed one, the next list says so):
   it failed and with psql's first line; check 8 reads that each service has a
   policy object of its name; a date of the right form that is no date is
   "cannot tell when it ends"; a missing `jq` fails the tests under CI and no
-  longer skips them; the sentence of an outer bound reaches smoke's terminal.
+  longer skips them; the sentence of an outer bound reaches smoke's terminal
+  at the telemetry waits (K10b's report said it did so at the two network
+  waits "already": false, the re-read ran that shape and saw smoke die without
+  a word; K13 made those two say it and go on).
 - **The answer for probes that time out under load** (the design's decision
   13) came by accident and is not a probe value: no value changed, and the
   rule for the machine is in the development environment document (below, "The
@@ -14330,6 +14336,8 @@ of the step's branch at 3270162, before this record):
 | K9 | the outer bound on waits and Helm; the chunk count (the review's HIGH and M1) | 21b7acc |
 | K10, K10b | the reviews' other findings; K10b the `wait` sentence reaching the terminal and the prerequisites | 3270162 |
 | D1 | this record, the threat rows, the machine's rule and the sentences the runs made false | with this commit |
+| K12 | the rate store's liveness rule allows two seconds; a stand-in's log line in one write (after the pull request's first run in CI) | eea3599 |
+| K13 | the re-read's four MEDIUM and three LOW, and its sentences (after the re-read of K9, K10 and K12) | ff0d48a |
 
 **Result / verification:**
 
@@ -14381,6 +14389,41 @@ of the step's branch at 3270162, before this record):
   pull request's run in CI on the tip is the whole-suite evidence for it. K12
   was not deployed: the rule's new form is not seen on kind, and kind's host
   could not show the fault in any case.
+- **The re-read of the fixes, and K13.** K9, K10 and K12 had been read by
+  nobody; one infrastructure re-read took all three. No critical or high
+  finding, four MEDIUM and seven LOW, and for K12: the arithmetic of the two
+  seconds holds (150 starts measured 0.006 to 0.997 s below the real start on
+  a machine with a boot fraction near zero), no real renewal is missed beyond
+  the named case, and three sentences overclaimed. The four MEDIUM, each in
+  the unsafe or the silent direction: smoke died without a word when a bound
+  fired at the two network waits (the sentence went into a file nobody read);
+  a chunk count that came back empty or not a number with exit 0 still
+  deleted the kept ingest Jobs and ingested again; so did any error of psql
+  itself, which K9's contract had chosen ("as today") and which on a loaded
+  node turns a timed-out count into a delete and a model call; and Helm's
+  `--timeout` is per operation, so the outer bound of one timeout and a
+  minute could end a healthy install of a chart with hooks and leave it
+  `pending-install`. K13 (ff0d48a) fixed the four, each with a test seen
+  failing first: the two sites say the sentence and smoke goes on; only exit
+  0 with the text `0` ingests (K9's choice for psql's errors is REVERSED:
+  `migrate` runs before the count, so the table exists and an error never
+  means "no rows"); the bound for `make up`'s releases is three timeouts and
+  the margin, a ceiling for a pre-hook, the wait and a post-hook that nobody
+  measured (the charts' hooks were not rendered or counted), and its sentence
+  says the way out of `pending-*` is the owner's; the two margins refuse what
+  is not digits. Also: `images.sh` no longer lists every image as unused on
+  an empty answer, the bound's sentence says the call may have been killed,
+  and the sentences say what is true (`timeout` here is uutils 0.10.0, not
+  GNU; the wrapper ran on kind on the path where nothing goes wrong and no
+  bound has fired there; `cert-renew`'s one write of the record is not seen;
+  the restart 70 seconds after a pod starts is what the rule's numbers
+  predict, not something seen). Left as rows: the date verdict's edge (L4)
+  and a real-image test that could flake if `btime` moves between two reads.
+  Nobody reviewed K13.
+- **Gates after K13** (ff0d48a): the implementer's run of every test file
+  that reads a kind script, the chart or the smoke script, 2,551 passed; the
+  main session's run of the nine changed or touched test files, 394 passed,
+  and `make test`, `make docs` and `make lint` ended 0.
 
 **Not seen** (the first half's list; the second half's items are above):
 
