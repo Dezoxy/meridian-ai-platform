@@ -14557,8 +14557,7 @@ what was wrong):
   again from AWS's price files before any ask, and stays a figure of the design
   until the owner's billing console confirms it.
 
-**Advisor:** two consultations; the handoff files hold the first, and the
-second's effect is not recorded.
+**Advisor:** two consultations.
 
 - **2026-10-06, 17:21 UTC, before the first contract (the design).** It changed
   five things. The plan's row no longer says "reuses S036's network" (fixed in
@@ -14568,10 +14567,19 @@ second's effect is not recorded.
   the workers poll the join parameter with a bound; and the cost figure names
   its three address lines.
 - **2026-10-07, about 09:57 UTC, at the report of K2b and before that of K3.**
-  Its effect is not recorded in the handoff files. The design says only that
-  it came before K3's report, so that the acceptance of GCP-0031 was not put to
-  it separately: the acceptance repeats the reviewed precedent of `AWS-0164` on
-  a module that is never applied.
+  It was called for another step's pull request and read K2b's report with it.
+  It changed four things here. The guard's answers for the wrapper's new lines
+  were MEASURED instead of taken from the implementer's reading of the
+  pattern (the three wrapper lines are asked or denied; a by-hand plan in the
+  second module's directory passes, which the review then sized). The
+  settings' deny globs that do not reach the second state directory were
+  handed to the security reviewer by name, and their fix was judged a
+  tightening that needs no ask. The root README's line and the `Makefile`'s
+  help line that K2b made false went into the documents contract. And the
+  two wrapper test files over the ceiling became a row instead of a silence.
+  It came before K3's report, so the acceptance of GCP-0031 was not put to it
+  separately: the acceptance repeats the reviewed precedent of `AWS-0164` on a
+  module that is never applied, and is the session's.
 
 No other consultation is recorded.
 
@@ -14633,7 +14641,21 @@ No other consultation is recorded.
 
 K6-RESULT
 
-K6B-RESULT
+- **K6b landed** (e335061). The plan's record is held to exactly its four
+  lines: a partial fifth line and a NUL, which the old read let through
+  (harmless, every field being bound), are refused, and the record table's
+  assertion is now the parse sentence itself, because the old one ("record"
+  in the message) was also true of the refusal that followed and so could not
+  fail. `plan`, the applying command and the removing command print the
+  module first, and the removing command names it in the last line above
+  Terraform's question. The module's README says all the state holds in
+  clear (the owner's address, the budget's e-mail address and the account
+  number beside the boot scripts and the Elastic IP), that a write to the
+  state is an integrity risk, the order of a removal by hand, and four edges
+  of the redaction as sentences. Seen red first: ten record cases and eight
+  module-line cases. The implementer's gates: `shellcheck` 0, 1,405 tests of
+  the wrapper and the module passed, `make lint` and `make docs` 0. Nothing
+  was run against an account.
 
 **Reviews:**
 
