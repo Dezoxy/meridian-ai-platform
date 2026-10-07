@@ -395,8 +395,9 @@ applied to one. The session that owns the cluster checks, on `main`:
    from contract M4b, the same read written with a doubled slash, a
    per-cent-encoded letter or a dot segment is refused beside the plain one,
    and a POSTed form body reaches Prometheus; tested with stand-ins and run
-   in a container of the pinned nginx image, not yet on the cluster; S073
-   one, for the database's own
+   in a container of the pinned nginx image, and seen on kind on 2026-10-07:
+   the first five lines in run R16b (51 PASS) and all ten in run R17 (56
+   PASS); S073 one, for the database's own
    certificates, which fails when the earliest ends within 84 hours: tested
    with a stand-in, and seen to pass on kind on 2026-10-07, 46 PASS in run R4d,
    not seen failing; S055 added three, for service

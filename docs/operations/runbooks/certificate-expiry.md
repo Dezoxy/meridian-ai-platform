@@ -385,8 +385,11 @@ on any cluster but the local kind one): `rollout restart deployment/loki-gateway
 statefulset/tempo`, `rollout restart deployment/kube-prometheus-stack-grafana`.
 
 What the collector's client certificate does when it changes, which a plain
-renewal does not (run R16, 2026-10-07; the refusal was seen on the cluster, the
-roll by the annotations is tested and not yet seen). Both gateways admit a write
+renewal does not (run R16, 2026-10-07; the refusal was seen on the cluster; a
+pod rolled by its annotations was seen in R16 (Grafana, Tempo, Loki's gateway)
+and R17 (Grafana and the collector; Prometheus's gateway was created, not
+rolled), each time the first roll that carried them, and a roll after a
+changed client certificate was not seen). Both gateways admit a write
 from ONE subject, `CN=otel-collector-client`, and nothing else.
 - A **renewal that keeps the subject** (day 60: a new key, the same common
   name) is not refused: the old certificate stays valid until it ends, and the

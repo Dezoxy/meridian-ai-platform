@@ -1232,7 +1232,8 @@ node image, Kubernetes components and the platform).
     `200 success` (the gateway forwards the body).
     Skipped, one line, while no Meridian Deployment exists. Tested with
     stand-ins, and the probes' Python run against nginx of the pinned image in
-    a container; not yet run on the cluster. The paragraph of the script
+    a container; run on the cluster on 2026-10-07: the first five lines in run
+    R16b (51 PASS) and all ten in run R17 (56 PASS). The paragraph of the script
     (`smoke.d/12-telemetry-stores.sh`) says what the lines do not prove.
 
 `make smoke` creates three Jobs in `observability`. Kubernetes removes each one
@@ -2377,8 +2378,9 @@ is readable by the operators that hold a cluster-wide read of Secrets
 S072), though by no Meridian pod; and the telemetry from the services to the
 collector is TLS only by the second authority above (S063, tested without a
 cluster), and the collector's own hops to Tempo, Prometheus and Loki are TLS
-with its client certificate since S072 (implemented and tested without a
-cluster; the threat model's T-90 says what it does not stop).
+with its client certificate since S072 (implemented and tested, and seen on
+kind in runs R14 to R17 of 2026-10-07; the threat model's T-90 says what it
+does not stop).
 
 A cluster whose services were first applied as raw manifests (before S019)
 keeps them: Helm adopted the objects in place (`--take-ownership`) and no
@@ -2832,7 +2834,10 @@ limits (about 4.5 GiB in all). The two gateways of S072 (Loki's, and the nginx
 in front of Prometheus) add a limit of 64 MiB and a request of 32 MiB each, so
 128 MiB of limits and 64 MiB of requests more, still about 4.6 GiB in all; the
 Prometheus one held 4.3 MiB in a container of the pinned image, run as the pod
-runs it, and neither has been read from cAdvisor on the cluster. The rate
+runs it. On the cluster, read once from Prometheus after run R17 (2026-10-07),
+its working set was 4.3 MiB with a peak of 9.6 MiB in its first minutes, and
+Loki's gateway peaked at 19.8 MiB in 30 minutes; neither was read under load.
+The rate
 store was not measured on the cluster: outside one,
 on the pinned image without its modules, over TLS, read-only and as user 999, it
 held 12 MB when idle and a peak of 17 MB after 12,000 admissions from 40
