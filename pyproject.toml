@@ -32,6 +32,11 @@ dependencies = [
     "opentelemetry-sdk==1.45.0",
     "psycopg[binary]==3.3.6",
     "pydantic==2.13.5",
+    # Checks a user's bearer token (S021, common/signin.py): RS256 only, the
+    # algorithms list fixed in code. Already locked, through mcp and msal, so
+    # pinned directly at the version the lock holds; the crypto extra is the
+    # RSA support, on the locked cryptography.
+    "pyjwt[crypto]==2.15.1",
     "python-multipart==0.0.32",
     "pyyaml==6.0.3",
     # The gateway's shared rate windows (S066, T-45): synchronous client only, no
