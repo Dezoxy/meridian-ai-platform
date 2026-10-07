@@ -80,10 +80,11 @@ lets reach the port fail the probes and restart the store for as long as they
 last (the policy is the control; a smaller maxclients would not help), and so
 does a certificate that expired unrenewed (redis-cli then fails to verify it).
 And the server's start is the boot time plus the process's start, read when the
-probe runs: a wall clock that stepped back by more than the gap between the
-files' write and the process's start, and two seconds (a virtual machine
-resumed, then set by NTP) makes a certificate look newer than the server and restarts it until the clock
-catches up, at most every five minutes (the kubelet's back-off); a step forward
+probe runs: a wall clock that stepped back (a virtual machine resumed, then set
+by NTP) makes a certificate look newer than the server and restarts it until the
+clock catches up, at most every five minutes (the kubelet's back-off). The
+threshold lies between the gap from the process's start to the files' write and
+that gap plus two seconds, depending on how the two cuts fell; a step forward
 hides a renewal. No small fix exists without writable state.
 
 The directives of redis.conf, each from the documentation of Redis 8.10 (the
@@ -328,12 +329,15 @@ Takes the root.
                    the kernel (under 0.01 second) and to a second by the
                    division (under one second). So the computed start is the
                    real one less something under 2.01 seconds, and never above
-                   it, and neither number changes for the life of the
-                   container. Not the time of the /proc/1 directory: the
-                   kernel sets that when the inode is first looked up, not when
-                   the process started. sed and cut cut the fields out after the
-                   `)` that ends the command's name, so a name with a space
-                   cannot move them
+                   it, as long as the wall clock holds: btime is derived from
+                   the wall clock, so neither number changes for the life of the
+                   container only while the clock holds. 2.01 is a bound; 150
+                   starts on one machine measured 0.006 to 0.997 seconds, with
+                   a boot fraction near zero. Not the time of the /proc/1
+                   directory: the kernel sets that when the inode is first
+                   looked up, not when the process started. sed and cut cut
+                   the fields out after the `)` that ends the command's name,
+                   so a name with a space cannot move them
   file's time      stat -L -c %Y on tls.crt: -L follows the link tls.crt ->
                    ..data/tls.crt to the file itself. The kubelet writes a
                    Secret's files into a new directory ..<timestamp>, then
@@ -355,8 +359,10 @@ Takes the root.
                    a file written less than two seconds before a start could
                    read as newer than the server, on every probe for the
                    container's life (a test in CI saw it: all twenty runs of
-                   the probe failed; on a cluster six failures in a row restart
-                   the container about 70 seconds after its pod starts, once).
+                   the probe failed). What the rule's numbers predict for a
+                   cluster, and was NOT seen there (two runs on kind had no
+                   restart): six failures in a row restart the container about
+                   70 seconds after its pod starts, once).
                    The bound does not cover a
                    step of the wall clock: a step moves btime by its size (the
                    header says what a clock set backwards does). A time that

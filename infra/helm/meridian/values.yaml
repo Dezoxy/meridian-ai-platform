@@ -548,8 +548,8 @@ sweep:
 # lets a second one through. Nothing is persisted: a restart of the store hands
 # every tenant its windows again, as a restart of the gateway did. The store is
 # restarted once for each renewal of its certificate (its liveness probe fails
-# when the files on the volume are newer than the server, within about a minute
-# of the kubelet writing them), because Redis reads its certificate only at
+# when the files on the volume are newer than the server by more than two
+# seconds, within about a minute of the kubelet writing them), because Redis reads its certificate only at
 # start; its duration and renewal are the services' (`certificate`).
 #   enabled     renders the store
 #   image       the full reference, `<name>:<tag>@sha256:<64 hex digits>`: the

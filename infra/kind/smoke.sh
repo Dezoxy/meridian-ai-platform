@@ -2795,7 +2795,7 @@ network_pod_spec() {
 # line (the database line) and 1 when it cannot. ${network_pod} is set before the
 # Pod exists, so the trap deletes it whichever step fails.
 network_start_pod() {
-  local err_file detail
+  local err_file detail wait_said
   network_pod="smoke-network-$(date +%s)"
   err_file="$(mktemp)"
   if ! network_pod_spec "${network_pod}" meridian "${NETWORK_POD_NAME_LABEL}" 2>"${err_file}" |
@@ -2805,14 +2805,17 @@ network_start_pod() {
     fail "network policy: could not start the probe pod ${network_pod} in meridian (${detail})"
     return 1
   fi
-  if ! kctl -n meridian wait --for=condition=Ready "pod/${network_pod}" \
-    --timeout="${NETWORK_POD_READY_TIMEOUT}" >/dev/null 2>"${err_file}"; then
-    detail="$(clean_lines "$(<"${err_file}")")"
-    rm -f "${err_file}"
-    fail "network policy: the probe pod ${network_pod} did not become Ready within ${NETWORK_POD_READY_TIMEOUT} (${detail})"
+  rm -f "${err_file}"
+  # The wait's error is captured and not sent to a file: when the call's bound
+  # ends it, kctl dies with a sentence in the capturing subshell, and the sentence
+  # must reach the terminal (show_wait_error) and the FAIL line, not a file nobody
+  # reads. Smoke goes on: every later call is bounded too.
+  if ! wait_said="$(kctl -n meridian wait --for=condition=Ready "pod/${network_pod}" \
+    --timeout="${NETWORK_POD_READY_TIMEOUT}" 2>&1 >/dev/null)"; then
+    show_wait_error "${wait_said}"
+    fail "network policy: the probe pod ${network_pod} did not become Ready within ${NETWORK_POD_READY_TIMEOUT} ($(clean_lines "${wait_said}"))"
     return 1
   fi
-  rm -f "${err_file}"
 }
 
 # network_database_lines: the database's line, from the probe Pod. Unlabelled it
@@ -2869,7 +2872,7 @@ network_outsider_delete() {
 # FAIL line and 1 when it cannot. ${network_outsider} is set before the Pod
 # exists, so the trap deletes it whichever step fails.
 network_outsider_start() {
-  local err_file detail
+  local err_file detail wait_said
   network_outsider="${NETWORK_OUTSIDER_PREFIX}$(date +%s)"
   err_file="$(mktemp)"
   if ! network_pod_spec "${network_outsider}" "${NETWORK_OUTSIDER_NAMESPACE}" "" 2>"${err_file}" |
@@ -2879,14 +2882,15 @@ network_outsider_start() {
     fail "network policy: could not start the probe pod ${network_outsider} in ${NETWORK_OUTSIDER_NAMESPACE} (${detail})"
     return 1
   fi
-  if ! kctl -n "${NETWORK_OUTSIDER_NAMESPACE}" wait --for=condition=Ready "pod/${network_outsider}" \
-    --timeout="${NETWORK_POD_READY_TIMEOUT}" >/dev/null 2>"${err_file}"; then
-    detail="$(clean_lines "$(<"${err_file}")")"
-    rm -f "${err_file}"
-    fail "network policy: the probe pod ${network_outsider} in ${NETWORK_OUTSIDER_NAMESPACE} did not become Ready within ${NETWORK_POD_READY_TIMEOUT} (${detail})"
+  rm -f "${err_file}"
+  # Captured, not sent to a file, as in network_start_pod: a bound's sentence
+  # reaches the terminal and the FAIL line.
+  if ! wait_said="$(kctl -n "${NETWORK_OUTSIDER_NAMESPACE}" wait --for=condition=Ready "pod/${network_outsider}" \
+    --timeout="${NETWORK_POD_READY_TIMEOUT}" 2>&1 >/dev/null)"; then
+    show_wait_error "${wait_said}"
+    fail "network policy: the probe pod ${network_outsider} in ${NETWORK_OUTSIDER_NAMESPACE} did not become Ready within ${NETWORK_POD_READY_TIMEOUT} ($(clean_lines "${wait_said}"))"
     return 1
   fi
-  rm -f "${err_file}"
 }
 
 # check_network_collector: the fifth line of check 8 (S063). A pod outside

@@ -37,7 +37,7 @@ readonly NODE="${CLUSTER_NAME}-control-plane"
 # How containerd names an image that `kind load` took from the engine.
 readonly NODE_REPOSITORY="docker.io/library/${IMAGE_REPOSITORY}"
 readonly ENGINE_FORMAT='{{.Repository}}:{{.Tag}} {{.ID}} {{.Size}}'
-readonly CANNOT_READ_TAGS="cannot read the tags in use from the cluster's answer (jq's error is above): make images prints no listing, since an empty list that could not be read would mark every image unused"
+readonly CANNOT_READ_TAGS="cannot read the tags in use from the cluster's answer (it is not a list; jq's error, when it printed one, is above): make images prints no listing, since an empty list that could not be read would mark every image unused"
 
 # Each line of the output of the next three functions is "image ID size".
 engine_rows() {
@@ -114,6 +114,12 @@ read_workloads() {
 read_replicasets_and_pods() {
   kctl -n "${NAMESPACE}" get replicasets,pods -o json ||
     die "cannot read the replica sets and pods of namespace ${NAMESPACE}"
+}
+
+# has_items JSON: true when JSON is a list answer: an object whose "items" is an
+# array (empty is fine). An empty or blank answer is not.
+has_items() {
+  jq -e '.items | type == "array"' <<<"$1" >/dev/null
 }
 
 # contains_line LINES LINE: true when LINE is one of the lines of LINES.
@@ -204,7 +210,10 @@ if [[ -f "${KUBECONFIG_FILE}" ]]; then
   # scales up again.
   # Each read on its own line with its own check: two reads in one $(...) leave
   # the status of the last, and an empty list that could not be read would mark
-  # every image unused.
+  # every image unused. An empty answer with status 0 gives jq no input, no
+  # output and status 0, so each answer's shape is checked first: a list.
+  has_items "${workloads}" || die "${CANNOT_READ_TAGS}"
+  has_items "${replicasets_and_pods}" || die "${CANNOT_READ_TAGS}"
   from_templates="$(tags_of '.items[]' "${workloads}")" || die "${CANNOT_READ_TAGS}"
   from_pods="$(tags_of '.items[] | select(.kind == "Pod")' "${replicasets_and_pods}")" || die "${CANNOT_READ_TAGS}"
   rollback="$(tags_of '.items[] | select(.kind == "ReplicaSet")' "${replicasets_and_pods}")" || die "${CANNOT_READ_TAGS}"

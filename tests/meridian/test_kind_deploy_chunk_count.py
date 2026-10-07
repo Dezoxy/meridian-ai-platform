@@ -1,11 +1,13 @@
-"""A chunk count that cannot be read does not start an ingestion (S073, K9).
+"""A chunk count that is not a number does not start an ingestion (S073, K9, K13).
 
 ``deploy.sh`` skips the ingestion when its Job succeeded and the store holds
 rows. Ingesting again removes the kept ingest Jobs and embeds the corpus again:
-model calls, which cost money. Before this change a count that could not be read
-(the pod not found, the call ended at its outer bound, the pod not reached) was
-read like "no rows", and the deploy ingested again. Now only the database's own
-answer starts it: no rows, or an error of psql's own. Anything else stops the
+model calls, which cost money. K9 stopped the deploy when the count could not be
+read at all (the pod not found, the call ended at its outer bound, the pod not
+reached) but let psql's own error and an empty or garbled answer ingest again.
+K13 narrowed that: ``migrate`` runs before ``ingest_corpus``, so the table
+exists and an error never means "no rows". The only answer that ingests again is
+exit 0 with the text ``0``; a positive number skips; anything else stops the
 deploy with nothing removed.
 
 The functions run in bash, from the script's text, against a stand-in ``kctl``
@@ -24,16 +26,53 @@ DEPLOY_SH = (KIND_DIR / "deploy.sh").read_text(encoding="utf-8")
 COMMON_SH = (KIND_DIR / "common.sh").read_text(encoding="utf-8")
 
 # What kubectl prints when the command it ran in the pod ended with a status.
-PSQL_FAILED = "command terminated with exit code 2"
+PSQL_FAILED = "error:command terminated with exit code {}"
 
 # The answers of the stand-in ``kctl`` to the lookup of the pod and to the count.
 # ``pod`` is what the lookup does, ``count`` what the exec does.
 READABLE = {
     "rows": {"pod": "found", "count": "answer:12", "status": 0},
+    "17 rows": {"pod": "found", "count": "answer:17", "status": 0},
     "no rows": {"pod": "found", "count": "answer:0", "status": 0},
-    "psql's own error": {"pod": "found", "count": f"error:{PSQL_FAILED}", "status": 1},
 }
+# Answers that are not "a number, with exit 0": psql's own errors (kubectl exits
+# with psql's status and says so), a remote status outside 1 to 3, and exit 0
+# with an answer that is no number.
 UNREADABLE = {
+    "psql exits 1 (a statement or lock timeout, or any error)": {
+        "pod": "found",
+        "count": PSQL_FAILED.format(1),
+        "status": 1,
+    },
+    "psql exits 2 (could not connect)": {
+        "pod": "found",
+        "count": PSQL_FAILED.format(2),
+        "status": 2,
+    },
+    "psql exits 3 (an error in a script)": {
+        "pod": "found",
+        "count": PSQL_FAILED.format(3),
+        "status": 3,
+    },
+    "the command in the pod was ended by TERM (143)": {
+        "pod": "found",
+        "count": PSQL_FAILED.format(143),
+        "status": 143,
+    },
+    "an empty answer with exit 0": {"pod": "found", "count": "answer:", "status": 0},
+    "an answer that is no number, with exit 0": {
+        "pod": "found",
+        "count": "answer:ERROR: relation does not exist",
+        "status": 0,
+    },
+    "a negative number, with exit 0": {
+        "pod": "found",
+        "count": "answer:-1",
+        "status": 0,
+    },
+    "two lines, with exit 0": {"pod": "found", "count": "answer:0\n0", "status": 0},
+}
+UNREADABLE |= {
     "the lookup of the pod fails": {"pod": "fails", "count": "", "status": 0},
     "the pod is not found": {"pod": "empty", "count": "", "status": 0},
     "the count ends at the outer bound (124)": {
@@ -152,11 +191,10 @@ def test_a_count_that_cannot_be_read_stops_the_deploy_and_removes_nothing(
     assert not [line for line in lines if "ingesting again" in line]
 
 
-@pytest.mark.parametrize("label", ["no rows", "psql's own error"])
-def test_the_databases_own_answer_of_no_rows_or_an_error_ingests_again_as_before(
-    tmp_path: Path, label: str
+def test_the_answer_zero_with_exit_0_is_the_one_answer_that_ingests_again(
+    tmp_path: Path,
 ) -> None:
-    status, lines, _ = run_ingest_corpus(tmp_path, READABLE[label])
+    status, lines, _ = run_ingest_corpus(tmp_path, READABLE["no rows"])
 
     assert status == 0
     assert of_kind(lines, "DIE") == []
@@ -166,8 +204,11 @@ def test_the_databases_own_answer_of_no_rows_or_an_error_ingests_again_as_before
     assert of_kind(lines, "RUN") == ["RUN meridian-ingest-abc ingest"]
 
 
-def test_a_store_that_holds_rows_is_not_ingested_again(tmp_path: Path) -> None:
-    status, lines, _ = run_ingest_corpus(tmp_path, READABLE["rows"])
+@pytest.mark.parametrize("label", ["rows", "17 rows"])
+def test_a_store_that_holds_rows_is_not_ingested_again(
+    tmp_path: Path, label: str
+) -> None:
+    status, lines, _ = run_ingest_corpus(tmp_path, READABLE[label])
 
     assert status == 0
     assert [line for line in lines if "already in the store" in line]

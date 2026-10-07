@@ -273,6 +273,7 @@ def run_ingest_corpus(count: str) -> tuple[list[str], str]:
             ),
             'log() { echo "LOG $*"; }',
             'die() { echo "DIE $*"; exit 1; }',
+            function_definition(COMMON_SH, "printable_ascii"),
             "job_state() { echo succeeded; }",
             'run_job() { echo "RUN $*"; }',
             "kctl() {",
@@ -311,15 +312,29 @@ def test_a_succeeded_job_with_chunks_in_the_store_is_not_ingested_again() -> Non
     assert ingested_at == "ingested_at="
 
 
-@pytest.mark.parametrize("count", ["0", "FAIL", "", "not-a-number"])
-def test_a_succeeded_job_with_no_chunks_or_no_answer_ingests_again(count: str) -> None:
-    lines, ingested_at = run_ingest_corpus(count)
+def test_a_succeeded_job_with_no_chunks_ingests_again() -> None:
+    lines, ingested_at = run_ingest_corpus("0")
 
     assert not [line for line in lines if "already in the store" in line]
-    (reason,) = [line for line in lines if "ingesting again" in line]
-    assert "not-a-number" not in reason  # an answer is never quoted
+    assert len([line for line in lines if "ingesting again" in line]) == 1
     assert [line for line in lines if line.startswith("RUN")]
     assert re.fullmatch(r"ingested_at=\d+", ingested_at)  # the wait is armed
+
+
+@pytest.mark.parametrize("count", ["FAIL", "", "not-a-number"])
+def test_a_succeeded_job_with_no_number_for_a_count_stops_and_ingests_nothing(
+    count: str,
+) -> None:
+    # K13: an error of psql's own, an empty answer and a garbled one are not "no
+    # rows" (the table exists: migrate ran before). The only answer that ingests
+    # again is 0. Every case of the kind is in test_kind_deploy_chunk_count.py.
+    with pytest.raises(subprocess.CalledProcessError) as stopped:
+        run_ingest_corpus(count)
+
+    lines = stopped.value.stdout.splitlines()
+    assert [line for line in lines if line.startswith("DIE")]
+    assert not [line for line in lines if line.startswith(("RUN", "DELETE"))]
+    assert "not-a-number" not in stopped.value.stdout  # an answer is never quoted
 
 
 def test_deploy_prints_a_jobs_log_through_the_printable_ascii_filter() -> None:
@@ -469,13 +484,12 @@ def test_deploy_says_it_skipped_the_token_window_when_the_ingestion_was_not_run(
     assert len([line for line in done.stdout.splitlines() if "skipped" in line]) == 1
 
 
-@pytest.mark.parametrize(
-    ("job", "chunks"), [("succeeded", "0"), ("succeeded", ""), ("absent", "")]
-)
+@pytest.mark.parametrize("job", ["succeeded", "absent"])
 def test_deploy_waits_as_before_and_prints_no_skip_when_this_run_ran_the_ingestion(
-    job: str, chunks: str
+    job: str,
 ) -> None:
-    done = run_ingest_then_token_window(job=job, chunks=chunks)
+    # The count is 0 where the Job succeeded; where it is absent nothing is counted.
+    done = run_ingest_then_token_window(job=job, chunks="0")
 
     assert done.returncode == 0, done.stderr
     lines = done.stdout.splitlines()

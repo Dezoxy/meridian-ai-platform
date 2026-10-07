@@ -10,7 +10,9 @@ frozen node hung ``make smoke`` or ``make deploy`` with no word. ``kctl`` of
 - ``wait`` and ``rollout status`` carry their own ``--timeout`` at every call
   site, which a test below reads, and run under ``timeout`` for that value plus a
   margin (30 s): the flag bounds the waiting loop, not the first request (K9);
-  Helm's install and upgrade are bounded the same way (margin 60 s);
+  Helm's install and upgrade are bounded the same way, except that its
+  ``--timeout`` is per operation: three of them for a chart with hooks, one for
+  the chart of ``make deploy`` (margin 60 s, K13);
 - ``exec`` and a ``delete --wait`` run under the system's ``timeout``
   (90 s, ``KCTL_OUTER_TIMEOUT``): the request flag does not bound a stream, and
   nothing else bounds the call that opens it.
@@ -422,10 +424,13 @@ KUBECTL_WAITS = [
     (["--timeout=1h30m"], 5430),
     (["--timeout=0"], 30),
 ]
+# Helm's --timeout is per operation, so a chart with hooks (the charts of up.sh)
+# is bounded by three of them, a pre-hook, the wait and a post-hook, and the
+# margin once (K13). The chart of deploy.sh has no hook: test_kind_bounds_k13.py.
 HELM_UPGRADES = [
-    (["--timeout", "300s"], 360),
-    (["--timeout=10m"], 660),
-    (["--wait", "--timeout", "10m"], 660),
+    (["--timeout", "300s"], 960),
+    (["--timeout=10m"], 1860),
+    (["--wait", "--timeout", "10m"], 1860),
 ]
 # A waiting call with no usable --timeout of its own: nothing is run.
 REFUSED = {
@@ -516,7 +521,7 @@ def test_a_waiting_call_to_a_server_that_never_answers_ends_and_the_script_dies(
     assert process_is_gone(pid)
 
 
-def test_a_helm_upgrade_that_was_ended_says_what_to_read_next_and_what_not_to_do(
+def test_a_helm_upgrade_that_was_ended_says_what_to_read_next_and_whose_way_out_it_is(
     tmp_path: Path,
 ) -> None:
     done, _ = run_silent_server(
@@ -532,10 +537,12 @@ def test_a_helm_upgrade_that_was_ended_says_what_to_read_next_and_what_not_to_do
     assert "-n meridian" in message
     assert "README" in message
     assert "How long the scripts wait for the API server" in message
-    # Nothing here advises removing the release or going back to a revision.
-    assert "uninstall" not in message
-    assert "rollback" not in message
-    assert "roll back" not in message
+    # Going back to a revision or removing the release is named, as the owner's
+    # to decide (K13): the sentence does not tell the reader to run either.
+    assert "The way out is the owner's" in message
+    assert "a session does not run either" in message
+    assert "run helm rollback" not in message
+    assert "run the command again" not in message
 
 
 @pytest.mark.parametrize("status", [124, 137])
@@ -593,7 +600,7 @@ def test_a_kubectl_wait_is_bounded_by_its_timeout_plus_thirty_seconds(
 
 
 @pytest.mark.parametrize(("flags", "bound"), HELM_UPGRADES, ids=lambda x: str(x))
-def test_a_helm_upgrade_is_bounded_by_its_timeout_plus_sixty_seconds(
+def test_a_helm_upgrade_is_bounded_by_three_timeouts_plus_sixty_seconds(
     tmp_path: Path, flags: list[str], bound: int
 ) -> None:
     done, calls, timeouts = run_wrapper(
@@ -618,7 +625,7 @@ def test_the_margins_are_set_by_the_environment(tmp_path: Path) -> None:
     )
 
     assert kubectl[-1].startswith("--foreground --kill-after=5 65 kubectl ")
-    assert helm[-1].startswith("--foreground --kill-after=5 67 helm ")
+    assert helm[-1].startswith("--foreground --kill-after=5 187 helm ")
 
 
 @pytest.mark.parametrize("label", list(REFUSED))

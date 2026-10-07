@@ -37,8 +37,9 @@
 # CERT=rate-store costs a restart: the store reads its certificate once, at its
 # start, and its liveness check restarts the server when the file on the volume
 # is more than two seconds newer than the server. The script says so (one line,
-# before the write): every model call answers 503 for one to three minutes and
-# the tenants' rate windows are lost. The one case it does not restart is a
+# before the write): every model call answers 503 for one to three minutes (worked
+# out from the probes' numbers, not measured) and the tenants' rate windows are
+# lost. The one case it does not restart is a
 # renewal typed within two seconds after the store started: the store then keeps
 # the certificate it loaded until the next renewal or restart (the template's
 # comment on the rule says what that costs). The six services do not restart on
@@ -130,7 +131,9 @@ if is_issuing; then
 fi
 patch="$(trigger_patch)"
 if [[ "${cert}" == rate-store ]]; then
-  log "renewing the rate store's certificate restarts the store when it sees the new file: for one to three minutes every model call answers 503 and the tenants' rate windows are lost"
+  # "One to three minutes" is derived from the probes' numbers (the kubelet's
+  # sync of the Secret, then ten seconds a probe and six failures), not measured.
+  log "renewing the rate store's certificate restarts the store when it sees the new file: for about one to three minutes (worked out from the probes' numbers, not measured) every model call answers 503 and the tenants' rate windows are lost"
 fi
 kctl -n "${NAMESPACE}" patch certificate "${cert}" --subresource=status --type=merge -p "${patch}" >/dev/null ||
   die "kubectl could not write the status of the Certificate ${cert} (its error is above); if it says the object has been modified, cert-manager wrote to it meanwhile: run the command again"

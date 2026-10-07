@@ -446,9 +446,13 @@ answers 404.
 
 Docker (running), `kind`, `kubectl`, `helm`, `openssl` and `jq`. `make smoke`
 and `make demo` also need `curl`. `make up`, `make deploy`, `make smoke` and
-`make gateway-upkeep` also need GNU `timeout` (coreutils; it bounds a call of
+`make gateway-upkeep` also need `timeout` (coreutils; it bounds a call of
 `kubectl` that no flag bounds, see "How long the scripts wait for the API
-server", S073), and refuse to start without it. Tested with:
+server", S073), and refuse to start without it. The wrapper reads two behaviours
+of it, the statuses 124 (ended) and 137 (killed after the grace); GNU `timeout`
+gives both, and so did uutils 0.10.0, the one on the machine of the S073 runs
+(run R4e used it): the re-read of K9, K10 and K12 saw both statuses behave the
+same there. Tested with:
 
 | Tool | A laptop | A Linux virtual machine (2026-10-06) |
 |---|---|---|
@@ -480,7 +484,7 @@ node image, Kubernetes components and the platform).
 | `make gateway-upkeep ARGS="..."` | Needs `make up` (the Secret `gateway-upkeep-db`) and `make deploy` (the image). Runs the gateway's upkeep command (`meridian gateway`, S066) as a Job of its own under the database role `gateway_upkeep` and prints its output; `ARGS` is the subcommand and its arguments (`reservations --older-than 15`, `close ATTEMPT_ID --reason SLUG`, `credit TENANT --tokens N --reason SLUG`, `expire --before YYYY-MM --reason SLUG [--limit N] [--confirm]`, `expire-audit --before YYYY-MM-DD --reason SLUG [--limit N] [--confirm]`; only the date form of `expire-audit` passes the word check below, which allows no colon or plus sign). `infra/kind/upkeep.sh` splits `ARGS` on blanks into an array without reading any of it as shell and refuses, before it asks the cluster anything, a word with a character outside letters, digits, `.`, `_`, `=` and `-`: a quote, a backslash, a `$`, a backtick, a newline or a glob character among them. It passes the words to `helm template` as one JSON list (`--set-json`), with a suffix of its own so that a second run is a new Job, applies the Job outside the release (`make deploy` neither creates nor removes it) with the image the release runs, waits for it and prints its log through the same filter as the deploy's Jobs. Exit code 0 when the Job succeeded; 1 when it failed (the command exits 1 on a refusal, `ERROR GUnnn`, and 2 on a usage error: both are a Failed Job, never retried), when it did not finish in three minutes or when `make up` or `make deploy` is missing (`make` itself returns 2 for the failed recipe). A failure whose output holds a line that says what the command removed "before the failure" (the two expiries remove in batches, and a failure can follow batches that committed) says what stays removed and that running the command again continues; one that holds the command's own `ERROR GUnnn` line and no such line says that the refusal changed nothing; every other failure, and a Job that did not finish, says that the change may have been applied and to read the reservations or the audit rows before running it again, because a credit is a new row on every run. Make itself expands `$(...)` and `$$` in a value given on its command line before the script sees it (the script's header and the target's help line say so); what reaches the script is then checked as above. The Job and its output are kept for a day. Implemented and tested (stub `kubectl`, the real chart), and run on kind on 2026-10-06 (second and third runs of S066): a read, a refusal and a credit of one token; the audit row of the credit was not read on the cluster. |
 | `make grafana` | Port-forward Grafana to <http://127.0.0.1:3000>. User `admin`. |
 | `make grafana-password` | Print the Grafana admin password. |
-| `make cert-renew CERT=<name>` | Ask cert-manager to issue one Certificate of the namespace `meridian` again, now (S073). After a denied or failed request cert-manager waits before it asks again (an hour, doubling to 32), so a repaired policy does not help a deploy for an hour; `cmctl renew` asks at once and is not installed, so `infra/kind/cert-renew.sh` does what it does with `kubectl`: it sets the Certificate's `Issuing` condition to `True` (reason `ManuallyTriggered`, the time now, the Certificate's generation) through the status subresource, as a JSON merge patch that carries every other condition and the `resourceVersion` it read (a Certificate cert-manager changed in between is refused, and the command is run again). It refuses, before it asks the cluster anything, a missing `CERT` and a name that is not a DNS label, without repeating the value, and then a name that is not a Certificate of the namespace, listing the names it found; a Certificate that is already being issued is left alone. It reads no Secret and writes nothing but that status. It reads who holds the cluster first, stops when another holder has it unless `TAKE_CLUSTER=1` is in front of it, and writes the record `ok` right after the write succeeded (a refused write leaves the record as it was). With `CERT=rate-store` it first says what the renewal costs: the store restarts itself when its certificate file is newer than its start, so every model call answers 503 for one to three minutes and the tenants' rate windows are lost (the six services do not restart on a renewal by hand). `make deploy`'s stop at the Certificates names it. Tested against a stub `kubectl`. Seen on kind on 2026-10-07: a refusal for each bad name (no `CERT`, a name that is not a Certificate, a name that is not a DNS label), each with its own sentence and nothing written, and one renewal of a healthy Certificate (revision 1 to 2 within the same second, a new CertificateRequest Approved and Ready, the record back at `ok`). Not seen: the renewal of a Certificate whose request was denied (the case it is for), a refusal by a `409` between the read and the write, and the rate store's renewal. |
+| `make cert-renew CERT=<name>` | Ask cert-manager to issue one Certificate of the namespace `meridian` again, now (S073). After a denied or failed request cert-manager waits before it asks again (an hour, doubling to 32), so a repaired policy does not help a deploy for an hour; `cmctl renew` asks at once and is not installed, so `infra/kind/cert-renew.sh` does what it does with `kubectl`: it sets the Certificate's `Issuing` condition to `True` (reason `ManuallyTriggered`, the time now, the Certificate's generation) through the status subresource, as a JSON merge patch that carries every other condition and the `resourceVersion` it read (a Certificate cert-manager changed in between is refused, and the command is run again). It refuses, before it asks the cluster anything, a missing `CERT` and a name that is not a DNS label, without repeating the value, and then a name that is not a Certificate of the namespace, listing the names it found; a Certificate that is already being issued is left alone. It reads no Secret and writes nothing but that status. It reads who holds the cluster first, stops when another holder has it unless `TAKE_CLUSTER=1` is in front of it, and writes the record `ok` right after the write succeeded (a refused write leaves the record as it was). With `CERT=rate-store` it first says what the renewal costs: the store restarts itself when its certificate file is newer than its start, so every model call answers 503 for one to three minutes (worked out from the probes' numbers, not measured) and the tenants' rate windows are lost (the six services do not restart on a renewal by hand). `make deploy`'s stop at the Certificates names it. Tested against a stub `kubectl`. Seen on kind on 2026-10-07: a refusal for each bad name (no `CERT`, a name that is not a Certificate, a name that is not a DNS label), each with its own sentence and nothing written, and one renewal of a healthy Certificate (revision 1 to 2 within the same second, a new CertificateRequest Approved and Ready, the record back at `ok`). Not seen: the renewal of a Certificate whose request was denied (the case it is for), a refusal by a `409` between the read and the write, the rate store's renewal, and the script's one write of the record (the renewal seen ran the script before that change, when it wrote `changing` and then `ok`). |
 | `make cluster-holder` | Print who holds the cluster: the holder, its commit, the time its last `make up` or `make deploy` started or ended and the state, `ok` or `changing` with a sentence that says to look at what failed (S075); or that there is no record, or no cluster. It changes nothing on the cluster and refreshes the gitignored credentials file as `make up` does. A cluster that does not answer is an error. See "Who holds the cluster" below. |
 | `make down` | Delete the `meridian` cluster and its credentials file. Destructive; refuses any other cluster name. Since S075 it reads the record of who holds the cluster first and stops when another holder has it, unless `TAKE_CLUSTER=1` is in front of it; a cluster that does not answer stops it too (who holds it cannot be told, and another step's `make up` may be restarting the node), and `TAKE_CLUSTER=1 make down` deletes a broken cluster all the same. The record goes with the cluster. |
 
@@ -2468,18 +2472,19 @@ that names the bound.
 | `wait` and `rollout status` | their own `--timeout` at every call site, and the system's `timeout` for that value plus 30 s, which then stops the script with a line that says the API server did not answer; a call with no `--timeout` is refused; no request flag, which may end the watch early | the call site; `KCTL_WAIT_MARGIN`, in seconds |
 | `port-forward`, `attach`, `logs -f`, `get -w` | none, they are streams; `port-forward` is started raw (`kubectl ... &`) by `smoke.sh` and `demo.sh`, which kill it and look for its port with a counted loop, and by `grafana.sh` in the foreground, which ends with ^C; no script uses the other three | |
 | `helm get` (`upkeep.sh`), which has no timeout flag | the system's `timeout`, 30 s | `HELM_READ_TIMEOUT`, in seconds |
-| `helm upgrade --install` | `--wait --timeout 10m` for each of `make up`'s ten releases; `--timeout 300s` for the chart in `make deploy`; and the system's `timeout` for that value plus 60 s, which stops the script with a line that names `helm status` and `helm history`; a call with no `--timeout` is refused | `up.sh`, `deploy.sh`; `HELM_UPGRADE_MARGIN`, in seconds |
+| `helm upgrade --install` | `--wait --timeout 10m` for each of `make up`'s ten releases; `--timeout 300s` for the chart in `make deploy`; and the system's `timeout`: for `make up`'s releases (their charts are taken to carry hooks; not rendered to check) three times that value plus 60 s, for the chart in `make deploy` (no hook, no `--wait`) that value plus 60 s; it stops the script with a line that names `helm status` and `helm history`; a call with no `--timeout` is refused | `up.sh`, `deploy.sh`; `HELM_UPGRADE_MARGIN`, in seconds |
 
 A call that passes its own `--request-timeout` (the reads of the API server's
 address and of the holder's record) keeps it. `kctl` reads the words of the
 call up to `--`, so the command an `exec` runs decides nothing, and a namespace
-called `wait` is a namespace. The scripts need `timeout` (GNU coreutils; on
-macOS, `brew install coreutils` puts it on the PATH as `gtimeout`, so add a
-`timeout` link) and `up.sh`, `smoke.sh`, `deploy.sh` and `upkeep.sh` say so at
-their start. Why the flag is not on every call: kubectl's help says the flag bounds
-"a single server request", and says nothing of what it does to a watch, a log
-stream or an exec session, so those calls get the bound that is written for
-them.
+called `wait` is a namespace. The scripts need `timeout` (coreutils: GNU's, or
+uutils 0.10.0, which run R4e used and whose statuses 124 and 137 behaved the
+same in the re-read's runs; on macOS, `brew install coreutils` puts GNU's on the
+PATH as `gtimeout`, so add a `timeout` link) and `up.sh`, `smoke.sh`,
+`deploy.sh` and `upkeep.sh` say so at their start. Why the flag is not on every
+call: kubectl's help says the flag bounds "a single server request", and says
+nothing of what it does to a watch, a log stream or an exec session, so those
+calls get the bound that is written for them.
 
 Two things the bounds do not mean. The request flag is per request and not per
 call: against a listener that accepts a connection and never answers, `kubectl
@@ -2489,17 +2494,26 @@ measured and gives about 75 s). And a `--timeout` of `wait`, `rollout status`
 or `helm upgrade` bounds the waiting loop and not the first request: against
 the same listener all three were still running after 25 s with a `--timeout`
 of 3 s, which is why each now has the outer bound. The Helm margin is the
-wider one because a Helm ended in the middle of an upgrade can leave the
-release `pending-upgrade`: when the line says it ended one, read `helm status`
-and `helm history` of the release before anything else, and change nothing
-until they say what state it is in.
+wider one because a Helm ended in the middle of an install or an upgrade can
+leave the release `pending-install` or `pending-upgrade`, and Helm's
+`--timeout` is per operation ("time to wait for any individual Kubernetes
+operation (like Jobs for hooks)", Helm v4.3.0's help), so a chart with hooks
+may lawfully take a pre-hook, the wait and a post-hook: for `make up`'s
+releases the bound is three timeouts plus the margin, a ceiling and not a
+measurement (nobody measured the hooks' time). When the line says it ended
+one, read `helm status` and `helm history` of the release before anything
+else, and change nothing until they say what state it is in; the way out
+(`helm rollback` or an uninstall) is the owner's, on the list of things a
+session asks before. Each margin is digits only, at most six, or empty for the
+default; anything else stops the script at its start.
 
 What was seen on kind: `make deploy` and `make smoke` with the request flag
 and the `exec` bound on their calls (run R2, 2026-10-07, and the runs after
-it), which passed. The outer bound on `wait`, `rollout status` and Helm is
-newer than those runs and has not been on kind. A frozen API server (the node
-paused with `docker pause`) was not seen with any of these bounds: only the
-tests' stand-ins and the review's silent listener have met one.
+it), which passed. `make deploy` and `make smoke` also ran under the outer
+bound on `wait`, `rollout status` and Helm on the path where nothing goes wrong
+(run R4e); no bound has fired on kind. A frozen API server (the node paused
+with `docker pause`) was not seen with any of these bounds: only the tests'
+stand-ins and the review's silent listener have met one.
 
 ## Memory
 

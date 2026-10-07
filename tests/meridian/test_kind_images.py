@@ -698,14 +698,22 @@ def test_a_listing_that_fails_alone_is_an_error_and_prints_no_removal_command(
     [
         {"in_use": "this is not json"},
         {"in_use": "{}"},
+        {"in_use": ""},
+        {"in_use": "\n"},
         {"running": "this is not json"},
         {"running": "{}"},
+        {"running": ""},
+        {"running": "\n"},
     ],
     ids=[
         "workloads-not-json",
         "workloads-no-items",
+        "workloads-empty-answer",
+        "workloads-blank-answer",
         "rollout-not-json",
         "rollout-no-items",
+        "rollout-empty-answer",
+        "rollout-blank-answer",
     ],
 )
 def test_a_read_of_the_tags_in_use_that_cannot_be_made_stops_with_a_sentence(
