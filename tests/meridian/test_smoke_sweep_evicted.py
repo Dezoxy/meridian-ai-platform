@@ -15,13 +15,13 @@ outcome not read (SKIP, with the reason). The harness is ``run_sweep_check``.
 
 from pathlib import Path
 
-from test_kind_manifests import (
+from kindharness import (
     SWEEP_TOLERANCE_SECONDS,
     epoch_of,
-    requires_jq,
     run_sweep_check,
     sweep_cronjob_answer,
 )
+from kindsupport import requires_jq
 from test_smoke_sweep_by_hand import (
     BY_HAND_NOTE,
     by_hand_job,

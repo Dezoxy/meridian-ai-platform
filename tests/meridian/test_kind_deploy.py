@@ -154,12 +154,14 @@ def test_deploy_migrates_seeds_installs_ingests_and_then_waits_in_that_order() -
     # approver-policy with its five policies. So is the rate store's Secret
     # (S066), which `make up` makes: a pod that cannot read it would not start,
     # after the Jobs had run. The store is waited for before the gateway, whose
-    # every call (the ingestion's too) needs it.
+    # every call (the ingestion's too) needs it. Meridian's alert rules (S073)
+    # are the first change, after the checks and before the build.
     assert main_sequence() == [
         "require_database",
         "require_issuer",
         "require_approval",
         "require_rate_store_secret",
+        "apply_alert_rules",
         "build_image",
         'run_job "meridian-migrate-${tag}" migrate',
         'run_job "meridian-seed-${tag}" seed',
@@ -266,6 +268,9 @@ def run_ingest_corpus(count: str) -> tuple[list[str], str]:
             "set -euo pipefail",
             "NAMESPACE=meridian; tag=abc; image=meridian:abc; ingested_at=''",
             *re.findall(r"^readonly CHUNK_COUNT_SQL=.*$", COMMON_SH, re.M),
+            *re.findall(
+                r"^readonly (?:PSQL_OPTIONS|DELETE_TIMEOUT)=.*$", DEPLOY_SH, re.M
+            ),
             'log() { echo "LOG $*"; }',
             'die() { echo "DIE $*"; exit 1; }',
             "job_state() { echo succeeded; }",
@@ -273,7 +278,10 @@ def run_ingest_corpus(count: str) -> tuple[list[str], str]:
             "kctl() {",
             '  case "$*" in',
             '    *"delete jobs"*) echo DELETE ;;',
-            '    *" exec "*) [[ "${COUNT}" != FAIL ]] || return 1; echo "${COUNT}" ;;',
+            # FAIL is psql's own error: kubectl says the command ended with a status.
+            '    *" exec "*) if [[ "${COUNT}" == FAIL ]]; then',
+            '      echo "command terminated with exit code 2" >&2; return 1; fi',
+            '      echo "${COUNT}" ;;',
             '    *"get pod"*) echo platform-db-1 ;;',
             '    *"get job"*) echo job.batch/meridian-ingest-abc ;;',
             "  esac",
@@ -424,6 +432,7 @@ def run_ingest_then_token_window(
             "}",
             "NAMESPACE=meridian tag=abc image=stub:abc",
             *re.findall(r"^readonly TOKEN_WINDOW_SECONDS=\d+$", DEPLOY_SH, re.M),
+            *re.findall(r"^readonly DELETE_TIMEOUT=.*$", DEPLOY_SH, re.M),
             'ingested_at=""',
             function_definition(DEPLOY_SH, "ingest_corpus"),
             function_definition(DEPLOY_SH, "wait_for_token_window"),

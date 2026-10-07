@@ -11,7 +11,7 @@ is ``run_network_policy_check`` of ``test_smoke_network_policy.py``.
 from pathlib import Path
 
 from chartsupport import RATE_STORE, SERVICES, network_policies, rendered_chart
-from test_kind_manifests import requires_jq
+from kindsupport import requires_jq
 from test_smoke_network_policy import (
     DEPLOYED,
     POLICY,

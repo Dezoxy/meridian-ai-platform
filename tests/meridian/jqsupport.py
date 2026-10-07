@@ -6,7 +6,7 @@ stay green with all of them skipped, so the rule is the one the Docker test of
 the rate store follows: a missing ``jq`` skips on a developer's machine and FAILS
 under ``GITHUB_ACTIONS=true``. ``tests/meridian/conftest.py`` runs
 ``stop_without_jq`` as the fixture ``jq_installed``, which ``requires_jq``
-(``test_kind_manifests.py``) names.
+(``kindsupport.py``) names.
 """
 
 import os

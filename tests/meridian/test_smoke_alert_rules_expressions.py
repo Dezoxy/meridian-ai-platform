@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from test_kind_manifests import KIND_DIR, SMOKE_SH, function_definition, requires_jq
+from kindsupport import KIND_DIR, SMOKE_SH, function_definition, requires_jq
 from test_smoke_alert_rules import (
     RULE_COUNT,
     prometheus_answer,

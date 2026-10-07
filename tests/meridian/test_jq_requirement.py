@@ -7,7 +7,7 @@ machine that has ``jq`` and on one that has not.
 
 import pytest
 from jqsupport import CI_ENV, MISSING, stop_without_jq
-from test_kind_manifests import requires_jq
+from kindsupport import requires_jq
 
 
 @pytest.fixture

@@ -8,21 +8,21 @@ success. Seen on kind (S073, R0): a Job made by hand carries the annotation
 tests pin: a Job is left out of the verdict only when it carries the first and
 not the second; a Job with the second (the positive fact) or with neither (an
 older cluster's) is the schedule's, and the line says so for the second case.
-The harness is ``run_sweep_check`` of ``test_kind_manifests.py``.
+The harness is ``run_sweep_check`` of ``kindharness.py``.
 """
 
 from pathlib import Path
 
-from test_kind_manifests import (
+from kindharness import (
     SWEEP_FINISHED,
     SWEEP_TOLERANCE_SECONDS,
     epoch_of,
-    requires_jq,
     run_sweep_check,
     seconds_after,
     sweep_cronjob_answer,
     sweep_job,
 )
+from kindsupport import requires_jq
 
 SCHEDULED_KEY = "batch.kubernetes.io/cronjob-scheduled-timestamp"
 MANUAL_KEY = "cronjob.kubernetes.io/instantiate"

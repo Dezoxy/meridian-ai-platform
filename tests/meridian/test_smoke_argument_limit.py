@@ -17,19 +17,16 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from test_kind_manifests import (
-    KIND_DIR,
-    SMOKE_SH,
+from kindharness import (
     SWEEP_FINISHED,
     SWEEP_TOLERANCE_SECONDS,
     epoch_of,
-    function_definition,
-    requires_jq,
     run_sweep_check,
     seconds_after,
     sweep_cronjob_answer,
     sweep_job,
 )
+from kindsupport import KIND_DIR, SMOKE_SH, function_definition, requires_jq
 from test_smoke_alert_rules import (
     RULE_COUNT,
     prometheus_answer,

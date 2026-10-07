@@ -325,16 +325,19 @@ def test_a_sweep_pass_ends_well_before_the_next_one_is_due() -> None:
     assert 0 < deadline <= SWEEP_PERIOD_SECONDS // 2
 
 
-def test_the_sweep_keeps_one_success_three_failures_and_a_day_of_history() -> None:
+def test_the_sweep_keeps_three_successes_three_failures_and_a_day_of_history() -> None:
     spec = sweep_cronjob()["spec"]
 
     # A run the controller cannot start within two minutes is skipped; the next
     # one is five minutes away.
     assert spec["startingDeadlineSeconds"] == 120
-    # The last success is the one `make smoke` reads; a success is removed when
-    # the next one finishes, so a failure (three kept) is what the TTL, one day,
-    # leaves to read in the morning, and the last success of a suspended CronJob.
-    assert spec["successfulJobsHistoryLimit"] == 1
+    # The last success is the one `make smoke` reads. A Job made by hand is
+    # owned by the CronJob and counts: with one kept, a by-hand success evicted
+    # the schedule's own (seen on kind on 2026-10-07), so three are kept, and a
+    # by-hand run or two leave the schedule's last success in the history. A
+    # failure (three kept) is what the TTL, one day, leaves to read in the
+    # morning, and the last success of a suspended CronJob.
+    assert spec["successfulJobsHistoryLimit"] == 3
     assert spec["failedJobsHistoryLimit"] == 3
     assert sweep_job_spec()["ttlSecondsAfterFinished"] == 24 * 60 * 60
 

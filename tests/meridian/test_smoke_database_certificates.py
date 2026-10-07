@@ -20,7 +20,7 @@ import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
-from test_kind_manifests import (
+from kindsupport import (
     KIND_DIR,
     SMOKE_SH,
     function_definition,
