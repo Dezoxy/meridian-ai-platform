@@ -297,8 +297,11 @@ applied to one. The session that owns the cluster checks, on `main`:
 4. Every series a rule or the new dashboard names exists. `make smoke`
    does not read this: a rule over a missing series is healthy and quiet.
    Each of these returns a number in Grafana's Explore:
-   - `count(kube_deployment_status_replicas_available{namespace="meridian"})`,
-     expected 7 (the six services and, since S066, the rate store);
+   - `count(kube_deployment_status_replicas_available{namespace="meridian", deployment!="cnpg-cloudnative-pg"})`,
+     expected 7 (the six services and, since S066, the rate store; the
+     matcher leaves out the database operator's Deployment, which lives in
+     `meridian` since S072's cluster batch and is not a Meridian service, as
+     in the alert and the health dashboard);
    - `count(kube_pod_status_ready{namespace="meridian", pod=~"platform-db-[0-9]+", condition="true"})`,
      expected 1;
    - `count(kube_cronjob_status_last_successful_time{namespace="meridian", cronjob="meridian-sweep"})`,

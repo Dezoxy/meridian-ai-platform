@@ -67,8 +67,14 @@ sum(meridian:gateway_calls:delta15m{meridian_outcome=~"completed|failed"})
 `service-availability`, one series per service, 1 while it is available:
 
 ```promql
-kube_deployment_status_replicas_available{namespace="meridian"} > bool 0
+kube_deployment_status_replicas_available{namespace="meridian", deployment!="cnpg-cloudnative-pg"} > bool 0
 ```
+
+The matcher leaves out the database operator's Deployment, which is in
+`meridian` since S072's cluster batch (in files, not seen on kind) and is not
+a Meridian service; it is the matcher of `MeridianServiceUnavailable` and of
+the health dashboard's panel. It changes what the objective measures: without
+it the operator's replica would count as a service's.
 
 `database-availability`, 1 while the database's pod is ready:
 
