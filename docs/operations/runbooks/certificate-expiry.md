@@ -29,7 +29,9 @@ year like the CA's (the next section).
 
 The chart's values `certificate.duration` (90 days, `2160h`, by default) and
 `certificate.renewBefore` (empty: cert-manager's default, a third of the
-lifetime) change this for the seven service certificates, never the CA's. A
+lifetime) change this for the eight certificates of `meridian` (the six
+services, the ingestion Job's `meridian-ingest` and the rate store), never the
+CA's. A
 duration above `2160h` (the most the issuer's policy signs) or below `1h`
 (cert-manager's shortest), and a `renewBefore` that is not shorter than the
 duration, fail the render with a message that names the value. The service's
@@ -325,7 +327,7 @@ procedure before step 5.
 
 1. In a working copy of `infra/kind/values/meridian.yaml`, never committed,
    add `certificate:` with `duration: 1h` and `renewBefore: 30m` beneath it,
-   and run `make deploy`. It reissues the seven certificates and waits for
+   and run `make deploy`. It reissues the eight certificates and waits for
    them to be Ready.
 2. The services still hold the certificates they loaded, which last 90 days,
    and a service reads its file again only near the end of the one it

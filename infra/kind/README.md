@@ -1429,9 +1429,10 @@ pinned image with the server stopped by `SIGSTOP`, not `docker pause`, which
 stops `docker exec` too). Seen on kind on 2026-10-07 (run R2): the store's
 new pod held no defunct process at five readings a minute apart and after
 smoke, six minutes in (the old probes had left about 90 by then), Ready with
-no restart. Not seen: the store over the two hours the fault took, a store
-frozen below the protocol on kind, and the probes at `timeoutSeconds: 5`
-(a later change). Its
+no restart. Seen on kind on 2026-10-07 (run R4e): the store's new pod with
+both probes at `timeoutSeconds: 5`, Ready, 0 restarts, and 0 defunct processes
+on the node. Not seen: the store over the two hours the fault took, and a store
+frozen below the protocol on kind. Its
 NetworkPolicy admits the Model Gateway's pods on 6379 and nobody
 else, and gives it no egress; it is the store's only control before
 authentication, so the chart refuses the store with `networkPolicy.enabled`
@@ -1896,7 +1897,7 @@ set `tls: true`; only the Claims API, which nobody inside the chart calls,
 stays plain HTTP.
 
 **How long a certificate lasts (S062).** Two chart values set the lifetime of
-every one of the seven Certificates; the defaults render what the chart
+every one of the eight Certificates; the defaults render what the chart
 rendered before they existed (`duration: 2160h`, no `renewBefore`, so
 cert-manager renews at a third of the lifetime, 60 days in):
 
@@ -1925,7 +1926,7 @@ certificate:
   renewBefore: 30m
 ```
 
-then run `make deploy`, which reissues the seven certificates and waits for
+then run `make deploy`, which reissues the eight certificates and waits for
 them to be Ready. The services still hold the 90-day certificates they loaded,
 and a service looks at its file again only near the end of the one it loaded,
 so restart the Deployments once (the owner's command, as in the runbook
@@ -2529,8 +2530,11 @@ and the `exec` bound on their calls (run R2, 2026-10-07, and the runs after
 it), which passed. `make deploy` and `make smoke` also ran under the outer
 bound on `wait`, `rollout status` and Helm on the path where nothing goes wrong
 (run R4e); no bound has fired on kind. A frozen API server (the node paused
-with `docker pause`) was not seen with any of these bounds: only the tests'
-stand-ins and the review's silent listener have met one.
+with `docker pause` for thirty seconds) was met once (run R5b, 2026-10-07):
+every call ended after 10 seconds at the client's own handshake timeout and
+never reached these bounds. A bound of the wrapper ending a call is not seen:
+only the tests' stand-ins and the review's silent listener have met a server
+that accepts and never answers.
 
 ## Memory
 
