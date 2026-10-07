@@ -2,7 +2,8 @@
 
 What the claims-triage workload's evaluation is made from and what it
 produced. Everything here is synthetic claims and a model's answers to them.
-Never edit a file by hand: each has a command that writes it.
+Never edit a file by hand: each has a command that writes it. The one
+exception is the label worksheet, which a person fills in (its row says so).
 
 | File | What it is | Written by |
 |---|---|---|
@@ -320,8 +321,10 @@ graders and each case's expectation already read. The harness is
 replay mode, as in the golden run, so the clauses found and each request are
 the same when recording and replaying.
 
-What it costs and who runs it: `make eval-injection-record`, by the owner, on
-a laptop with an Azure login and Docker, after a yes to the amount. About EUR
+What it costs and who runs it: `make eval-injection-record`, on a machine with
+an Azure login and Docker (the owner will sign in on the virtual machine, which
+is not a yes to a run), after the owner's yes to the amount; the command guard
+asks before it, and the amount is stated first. About EUR
 0.12 is expected (52 calls at the golden run's measured EUR 0.0020 to 0.0023),
 EUR 0.31 if every answer ran to its cap. The ceiling is the gateway's, not the
 session's: the run's gateway loads a copy of the registry in which the tenant
@@ -463,7 +466,8 @@ are known to be unsupported, is a paid step (it needs the live judge).
   needs an Azure login.
 - `make eval-injection-record`: answer the injection cases the baseline says
   reach the model with the live model, and write the three files above. It
-  spends money, needs an Azure login and Docker, and is the owner's to run.
+  spends money, needs an Azure login and Docker, and starts only after the
+  owner's yes to the amount: the command guard asks before it.
 - `uv run meridian eval diff A B`: two reports side by side, as
   `prompt-comparison.md`.
 - `uv run meridian eval run --base-url URL --report FILE`: post the golden
@@ -518,6 +522,17 @@ read none of the screen, the existing cases or their summary
 built). **The rule: the screen, its patterns, the existing cases and the
 sentences are not changed after the result is read, because a set that was
 tuned on is no longer held out.**
+
+The result, made once on 2026-10-07 with nothing tuned: the injection screen
+stopped **6 of 48 attacks (13 %)** and flagged **0 of 24 look-alikes**, where
+on the suite's own cases it stops 26 of 66 (39 %) and flags 16 of 28. By family
+it stopped override 1 of 6, role 2 of 6, role-marker 2 of 6 and answer-format 1
+of 6, and none of the authority, obfuscated, other-language and indirect
+attacks (0 of 6 each); of the 6 stopped, all are in English. So the earlier
+figure was tuned to its own set, and the screen is bound to English keywords.
+The 0 of 24 is the count of these sentences that tripped the screen; it is not
+a false-alarm rate on real claims. The summary holds the table by family and by
+language and the IDs.
 
 ```text
 uv run python -m meridian.workloads.claims_triage.injection_heldout
