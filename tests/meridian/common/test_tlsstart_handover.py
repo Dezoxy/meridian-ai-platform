@@ -9,6 +9,9 @@ factory, in one process: no port is bound, and a handshake over memory reads
 back which certificate the context holds.
 """
 
+import builtins
+import io
+import os
 import ssl
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -33,11 +36,6 @@ from meridian.platform.toolserver.settings import ToolServerSettings
 
 ENDED = {"status": "certificate-expiring"}
 RENEWED_LIFETIME = timedelta(days=60)
-
-
-@pytest.fixture(autouse=True)
-def nothing_handed_over(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(certlife, "_handed_over", None)
 
 
 @pytest.fixture
@@ -215,19 +213,68 @@ def test_the_share_comes_from_the_environment_the_process_runs_in(
     assert handed.source == pki.server.cert
 
 
-def test_the_module_never_reads_the_key_file_itself(
+def test_the_module_never_opens_the_key_file_itself(
     pki: Pki, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    read: list[Path] = []
-    real = Path.read_bytes
+    """Every way Python code opens a file is watched: ``Path.read_bytes``,
+    ``open``, ``io.open`` (which ``Path`` goes through) and ``os.open``. The
+    builder reads the key inside OpenSSL, which none of these sees, so any
+    opening of the key that is seen is made by Python code: the module's own,
+    as the certificate's own opening shows the hooks see the module's reads."""
+    opened: list[str] = []
 
-    def recording(self: Path) -> bytes:
-        read.append(self)
-        return real(self)
+    def watching(real: Callable[..., Any]) -> Callable[..., Any]:
+        def watched(file: Any, *args: Any, **kwargs: Any) -> Any:
+            if isinstance(file, str | bytes | os.PathLike):
+                opened.append(os.fsdecode(file))
+            return real(file, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "read_bytes", recording)
+        return watched
+
+    monkeypatch.setattr(Path, "read_bytes", _recording_read_bytes(opened))
+    monkeypatch.setattr(builtins, "open", watching(builtins.open))
+    monkeypatch.setattr(io, "open", watching(io.open))
+    monkeypatch.setattr(os, "open", watching(os.open))
 
     load_config(pki, service_app, tlsstart.serve_one_certificate)
 
-    assert pki.server.cert in read
-    assert pki.server.key not in read
+    assert str(pki.server.cert) in opened
+    assert str(pki.server.key) not in opened
+
+
+def _recording_read_bytes(opened: list[str]) -> Callable[[Path], bytes]:
+    real = Path.read_bytes
+
+    def recording(self: Path) -> bytes:
+        opened.append(str(self))
+        return real(self)
+
+    return recording
+
+
+def test_a_renewal_between_openssls_two_opens_is_loaded_again(
+    pki: Pki, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The new certificate lands, and the new key a moment later, while the
+    builder runs: it finds a certificate and a key that do not match, which is
+    no bad file, and the certificate's bytes have changed: load again."""
+    renewed = renewed_pair(pki)
+    loads: list[None] = []
+
+    def straddling(**given: Any) -> ssl.SSLContext:
+        loads.append(None)
+        if len(loads) > 1:
+            return create_ssl_context(**given)
+        pki.server.cert.write_bytes(renewed.cert.read_bytes())
+        try:
+            return create_ssl_context(**given)
+        finally:
+            pki.server.key.write_bytes(renewed.key.read_bytes())
+
+    monkeypatch.setattr("uvicorn.config.create_ssl_context", straddling)
+
+    config = load_config(pki, service_app, tlsstart.serve_one_certificate)
+
+    assert len(loads) == 2
+    assert served_certificate(config.ssl) == der_of(renewed.cert)
+    assert health(config) == (200, {"status": "ok"})

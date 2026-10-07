@@ -2,6 +2,8 @@
 that uvicorn's own command line would have started, with the certificate read
 once (the hand-over itself is in ``test_tlsstart_handover``)."""
 
+import os
+import ssl
 import subprocess
 import sys
 from collections.abc import Callable
@@ -31,11 +33,6 @@ from meridian.platform.common.tlsstart import STARTUP_FAILURE, main
 GARBAGE = "not-a-certificate-canary-9013"
 # Not named in the chart; the factory is never called when the start fails.
 UNCALLED_FACTORY = "meridian.platform.policy_mcp.app:create_app_from_env"
-
-
-@pytest.fixture(autouse=True)
-def nothing_handed_over(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(certlife, "_handed_over", None)
 
 
 @pytest.fixture
@@ -147,25 +144,56 @@ def test_the_caller_certificate_uris_are_read_through_the_modules_context(
 # ── the command line ─────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize(
-    "flag", ["--ssl-certfile", "--ssl-keyfile"], ids=["no-certificate", "no-key"]
-)
-def test_a_start_without_a_certificate_or_key_is_refused_not_served_plain(
+def without(words: list[str], flag: str) -> list[str]:
+    at = words.index(flag)
+    return [*words[:at], *words[at + 2 :]]
+
+
+def valued(words: list[str], flag: str, value: str) -> list[str]:
+    return [*words[: words.index(flag) + 1], value, *words[words.index(flag) + 2 :]]
+
+
+def abbreviated(words: list[str], flag: str) -> list[str]:
+    # ``--ssl-cert-r``: what ``allow_abbrev=True`` would take for the flag.
+    return [flag[:-3] if word == flag else word for word in words]
+
+
+# What this module refuses to start: it serves MUTUAL TLS (the five services ask
+# every caller for a certificate), so a start that would not is refused.
+REFUSED_STARTS: dict[str, Callable[[list[str]], list[str]]] = {
+    "no-certificate": lambda words: without(words, "--ssl-certfile"),
+    "no-key": lambda words: without(words, "--ssl-keyfile"),
+    "no-ca": lambda words: without(words, "--ssl-ca-certs"),
+    "no-request-for-a-client-certificate": lambda w: without(w, "--ssl-cert-reqs"),
+    "client-certificate-never-asked": lambda w: valued(w, "--ssl-cert-reqs", "0"),
+    "request-out-of-range": lambda w: valued(w, "--ssl-cert-reqs", "3"),
+    "abbreviated-flag": lambda w: abbreviated(w, "--ssl-cert-reqs"),
+}
+
+
+@pytest.mark.parametrize("case", REFUSED_STARTS)
+def test_a_start_that_would_not_ask_for_a_client_certificate_is_refused_not_served(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     pki: Pki,
-    flag: str,
+    case: str,
 ) -> None:
     stand_in_for_listening(monkeypatch)
-    words = chart_arguments(pki)
-    at = words.index(flag)
-    del words[at : at + 2]
 
     with pytest.raises(SystemExit) as stopped:
-        main(words)
+        main(REFUSED_STARTS[case](chart_arguments(pki)))
 
     assert stopped.value.code == STARTUP_FAILURE
     assert len(capsys.readouterr().err.splitlines()) == 1
+
+
+@pytest.mark.parametrize("requested", ["1", "2"])
+def test_a_request_for_a_client_certificate_optional_or_required_is_taken(
+    pki: Pki, requested: str
+) -> None:
+    words = valued(chart_arguments(pki), "--ssl-cert-reqs", requested)
+
+    assert tlsstart.parse_arguments(words).ssl_cert_reqs == int(requested)
 
 
 def test_a_flag_the_module_does_not_know_is_refused(
@@ -240,13 +268,62 @@ def test_a_key_that_is_not_the_certificates_ends_the_start_without_a_path(
 ) -> None:
     other = pki.ca.issue("other", "other", [])
     pki.server.key.write_bytes(other.key.read_bytes())
+    loads: list[None] = []
+
+    def counting_load(**given: Any) -> Any:
+        loads.append(None)
+        return create_ssl_context(**given)
+
+    monkeypatch.setattr("uvicorn.config.create_ssl_context", counting_load)
 
     line = refused(monkeypatch, capsys, chart_arguments(pki))
 
+    # The certificate's bytes did not change during the load: no second try.
+    assert len(loads) == 1
     assert "--ssl-keyfile" in line
-    assert "SSLError" in line
+    # OpenSSL's own fixed token for what is wrong, never a path.
+    assert "SSLError: KEY_VALUES_MISMATCH" in line
     assert str(tmp_path) not in line
     assert certlife._handed_over is None
+
+
+def serve_with(pki: Pki, default: Callable[[], Any]) -> Callable[[], Any]:
+    """``serve_one_certificate`` called as uvicorn calls it, with ``default``
+    standing in for its builder."""
+    config = uvicorn.Config(
+        echo_the_caller,
+        ssl_certfile=str(pki.server.cert),
+        ssl_keyfile=str(pki.server.key),
+        ssl_ca_certs=str(pki.ca.ca_file),
+        ssl_cert_reqs=1,
+    )
+    return lambda: tlsstart.serve_one_certificate(config, default)
+
+
+def test_an_error_that_is_a_bug_and_not_a_bad_file_leaves_as_it_is(
+    pki: Pki,
+) -> None:
+    def broken() -> Any:
+        raise TypeError("a programming error, not a file's fault")
+
+    with pytest.raises(TypeError):
+        serve_with(pki, broken)()
+
+
+def test_an_ssl_reason_that_is_not_openssls_token_is_left_out_of_the_line(
+    pki: Pki,
+) -> None:
+    refusal = ssl.SSLError(1, "text a path could be in: /canary-path-6602")
+    refusal.reason = "not a token /canary-path-6602"
+
+    def refusing() -> Any:
+        raise refusal
+
+    with pytest.raises(tlsstart.StartFailure) as failed:
+        serve_with(pki, refusing)()
+
+    assert str(failed.value).endswith("(SSLError)")
+    assert "canary-path-6602" not in str(failed.value)
 
 
 def test_a_restart_share_that_is_not_a_fraction_ends_the_start_without_its_value(
@@ -259,6 +336,21 @@ def test_a_restart_share_that_is_not_a_fraction_ends_the_start_without_its_value
     assert certlife.RESTART_SHARE_ENV in line
     assert "SettingsError" in line
     assert "7.25" not in line
+
+
+def test_bytes_that_are_no_certificate_name_the_flag_not_the_variable(
+    pki: Pki,
+) -> None:
+    """A builder that accepts the file (stood in for) and bytes the parser
+    refuses reach the hand-over, which names what was read."""
+    pki.server.cert.write_text(GARBAGE)
+
+    with pytest.raises(tlsstart.StartFailure) as failed:
+        serve_with(pki, lambda: ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER))()
+
+    assert "--ssl-certfile" in str(failed.value)
+    assert certlife.CERT_FILE_ENV not in str(failed.value)
+    assert GARBAGE not in str(failed.value)
 
 
 def test_bytes_that_never_settle_end_the_start_after_the_fifth_load(
@@ -315,3 +407,27 @@ def test_a_start_that_fails_in_the_real_process_exits_3_with_one_line_and_no_tra
     assert "canary-directory-4410" not in done.stderr
     assert "Traceback" not in done.stderr
     assert "--ssl-certfile" in done.stderr
+
+
+def test_an_app_factory_that_raises_ends_in_a_traceback_and_exit_1_not_the_modules_line(
+    pki: Pki,
+) -> None:
+    """What ``docs/operations/README.md`` says of a start-up error: the module
+    catches its own failures only. The context is built from the real PKI; the
+    real factory then finds no settings (none of ours in its environment)."""
+    environment = {k: v for k, v in os.environ.items() if not k.startswith("MERIDIAN_")}
+    words = chart_arguments(pki, app=UNCALLED_FACTORY)
+
+    done = subprocess.run(
+        [sys.executable, "-m", "meridian.platform.common.tlsstart", *words],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+        env=environment,
+    )
+
+    assert done.returncode == 1
+    assert "Traceback" in done.stderr
+    assert "SettingsError" in done.stderr
+    assert "tlsstart:" not in done.stderr

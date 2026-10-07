@@ -197,7 +197,11 @@ probes:
 # (S055). Its command starts through `python -m
 # meridian.platform.common.tlsstart`, which takes uvicorn's own flags and reads
 # the certificate once, for the server and for /healthz (S069); the Claims API
-# keeps `uvicorn`. Apart from that command it is one value and nothing else:
+# keeps `uvicorn`. `tls: true` on a command that starts `uvicorn` serves TLS
+# but reads the certificate twice (the fault S069 closed: /healthz can then
+# watch a newer certificate than the one served); the chart does not refuse it,
+# and test_helm_identity.py pins the five commands in this file. Apart from
+# that command it is one value and nothing else:
 # the template adds the flags, the probes' scheme, the DNS name in the
 # certificate and the prefix the service reads its callers' identity with. The
 # chart fails for a service that

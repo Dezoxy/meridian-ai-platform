@@ -202,8 +202,10 @@ def hand_over_certificate(
     ``source`` the file it came from, which ``/healthz`` reads again inside the
     margin; the share comes from ``environ``, as in ``load_certificate``.
 
-    Raise ``SettingsError`` as ``load_certificate`` does, naming the variable and
-    carrying neither the bytes nor the path; nothing is handed over then.
+    Raise ``SettingsError`` carrying neither the bytes nor the path: for bytes
+    that are no certificate it names what was read, the served certificate
+    (``--ssl-certfile``), and for a bad share the variable; nothing is handed
+    over then.
     """
     global _handed_over
     share = _restart_share(environ)
@@ -211,18 +213,27 @@ def hand_over_certificate(
         loaded = _parse_certificate(data, source)
     except ValueError:
         raise SettingsError(
-            f"{CERT_FILE_ENV} cannot be read as a certificate"
+            "the served certificate (--ssl-certfile) cannot be read as a certificate"
         ) from None
     _handed_over = dataclasses.replace(loaded, share=share)
     return _handed_over
 
 
+def forget_handed_over_certificate() -> None:
+    """Take the hand-over back. For tests and nothing else: no service calls it,
+    and a process that handed a certificate over keeps it until it ends."""
+    global _handed_over
+    _handed_over = None
+
+
 def load_certificate(environ: Mapping[str, str]) -> LoadedCertificate | None:
     """The certificate the server handed over (see ``hand_over_certificate``)
-    when it did; otherwise the dates of the first certificate in the file
-    ``MERIDIAN_TLS_CERT_FILE`` names (cert-manager writes the leaf first), or
-    None when it is unset or empty. The file is read here, and again only inside
-    the margin (see ``LoadedCertificate.verdict``).
+    when it did; in that case ``environ`` is not read at all, neither
+    ``MERIDIAN_TLS_CERT_FILE`` nor the restart share (the hand-over took the
+    share from its own ``environ``). Otherwise the dates of the first
+    certificate in the file ``MERIDIAN_TLS_CERT_FILE`` names (cert-manager writes
+    the leaf first), or None when it is unset or empty. The file is read here,
+    and again only inside the margin (see ``LoadedCertificate.verdict``).
 
     Raise ``SettingsError`` naming the variable when the file cannot be read or
     parsed. The text of the failure can quote the path or the file's content,

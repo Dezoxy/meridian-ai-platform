@@ -24,12 +24,6 @@ from meridian.platform.common.tls import CERT_FILE_ENV
 GARBAGE = b"not-a-certificate-canary-5521"
 
 
-@pytest.fixture(autouse=True)
-def nothing_handed_over(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The hand-over is the process's: put it back as it was after each test."""
-    monkeypatch.setattr(certlife, "_handed_over", None)
-
-
 @pytest.fixture
 def ca(tmp_path: Path) -> CertificateAuthority:
     return make_ca(tmp_path, "handover-ca")
@@ -107,7 +101,9 @@ def test_bytes_that_are_no_certificate_are_refused_without_their_content() -> No
     with pytest.raises(SettingsError) as refused:
         hand_over_certificate(GARBAGE, Path("/nowhere/tls.crt"), {})
 
-    assert CERT_FILE_ENV in str(refused.value)
+    # It names what was read, the served certificate, not the variable.
+    assert "--ssl-certfile" in str(refused.value)
+    assert CERT_FILE_ENV not in str(refused.value)
     assert GARBAGE.decode() not in str(refused.value)
     assert "/nowhere" not in str(refused.value)
     assert refused.value.__cause__ is None

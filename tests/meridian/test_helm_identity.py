@@ -489,6 +489,19 @@ def test_the_flags_are_not_written_in_the_values() -> None:
         assert "--http" not in service["command"]
 
 
+def test_every_tls_service_in_the_values_starts_through_the_start_module() -> None:
+    """Read from values.yaml, not from a render: a render of an override that
+    sets ``tls`` on a ``uvicorn`` command is a shape two tests make on purpose,
+    so the template does not refuse it; this is what keeps the values right."""
+    chart = yaml.safe_load((CHART_DIR / "values.yaml").read_text(encoding="utf-8"))
+
+    serving = {n: s for n, s in chart["services"].items() if s.get("tls") is True}
+
+    assert set(serving) == set(TLS_SERVICES)
+    for name, service in serving.items():
+        assert service["command"][: len(START_COMMAND)] == START_COMMAND, name
+
+
 def test_the_claims_api_command_has_no_tls_flag() -> None:
     command = container_of(workloads(rendered_chart())["claims-api"])["command"]
 
