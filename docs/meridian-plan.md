@@ -12036,7 +12036,7 @@ branch at the commit named; "tests" means stand-ins, never a cluster):
 | R4b | 2026-10-07 03:56 to 04:07 | The rule checks at 5c01f81 | A rule's `for` changed on the object (2m to 59m): named, with `make deploy or make up`; `make deploy` put it back; the rule object removed: named, and `make deploy` made it again with five groups; and the `jq` argument-limit failure of check 7 from the second smoke on (above) | A changed expression |
 | R4c | 2026-10-07 04:16 to 04:22 | `make deploy` and smoke at 3d15ada (K4b, K8) | K8: 17 Jobs in the namespace, a list of 123,794 bytes, smoke 45 PASS three times in six minutes; K4b: the CronJob keeps three, a by-hand Job after a scheduled run did not evict the schedule's success, the line passed with its note; a failed scheduled Job of the night kept without turning the line red | The list above 131,072 bytes again; the "cannot tell" case itself |
 | R4d | 2026-10-07 05:00 to 05:03 | `make deploy` (an image build: K6 changed the service) and smoke at 16d0318 (K5), after an overload | Every pod Ready again, with nothing restarted by hand (eight minutes after the load fell); smoke 46 PASS: the database line passed, "the earliest of 3 is platform-db-ca, with 89 days left" | The database line failing; K6's word on a real 503 |
-| R4e | R4E-RESULT | R4E-RESULT | R4E-RESULT | R4E-RESULT |
+| R4e | 2026-10-07 06:14 to 06:17 | `make deploy` (an image build, 99 s) and smoke at 3270162 (K9, K10), after a second overload | Every pod Ready again before the deploy, nothing restarted by hand; the deploy with K9's outer bounds on every waiting call (none fired); smoke 46 PASS, 0 FAIL, 0 SKIP; the rate store's new pod with both probes at `timeoutSeconds: 5`, Ready, 0 restarts, 0 defunct processes on the node; restart counts since the cluster's making after four overloads: Envoy Gateway 19, the Prometheus operator, the log agent and the CloudNativePG operator 18 each | K9's outer bound firing (it needs an API server that accepts and never answers: R5); the sentence smoke now shows from a `wait` a bound ended; `cert-renew` with the rate store's name or after a refused write; `images.sh` on a read that fails |
 
 Run R4e is the run at the branch's tip before this record, 3270162, the first
 to carry K9 and K10 (the outer bound on waits and Helm, the probes'
@@ -12102,7 +12102,9 @@ of the step's branch at 3270162, before this record):
   fails a healthy schedule, the rule checks naming a changed `for` and a
   removed object, smoke past the Job list that broke it, and the database
   line passing: smoke 45 and then 46 PASS with no FAIL and no SKIP (R4d).
-  Run R4e: R4E-RESULT.
+  Run R4e deployed K9 and K10 on the same cluster and smoke stayed at 46
+  PASS: nothing regressed, and nothing of K9 or K10 that needs a fault was
+  seen.
 - **Tested with stand-ins and not seen on a cluster** is everything else of
   the ten contracts, and it is named in the next list.
 - **Gates, run by the main session on the final tree:** FINAL-SUITE-RESULT.
