@@ -4,11 +4,12 @@ A second Terraform root module, beside [the managed one](../aws/README.md): a
 cluster whose control plane runs on plain virtual machines and is brought up
 by kubeadm (one control-plane node, two workers, a network plugin, a join
 command passed through one Parameter Store parameter). Status: **implemented
-as code**, validated by `terraform validate` run by hand on a copy (nothing in
-CI runs it: see "What checks this module") and checked by tests on its text and
-on its two boot scripts against stand-in programs; **never planned and never
-applied**. No command creates it yet: there is no `make` target and no wrapper
-for it, and those come in a later change. The full text (what it creates, the
+as code**, validated by `terraform validate` (`make aws-kubeadm-validate`;
+nothing in CI runs it: see "What checks this module") and checked by tests on
+its text and on its two boot scripts against stand-in programs; **never planned
+and never applied**. No command creates it yet: the two `make` targets of this
+module check it and nothing else, and the ones that plan, apply and remove it
+come in a later change. The full text (what it creates, the
 apply and the removal) comes with the step's documents.
 
 Every sentence below about a control says which of three things it is: code
@@ -103,16 +104,21 @@ never done.
 ## What checks this module
 
 Nothing in CI runs `terraform validate` or the scan on this module yet.
-`make aws-validate` and `make aws-scan` name the managed module only. A later
-contract of the step that made this module (after the first contract of the
-Google Cloud step has merged) gives `aws.sh validate` this module's name. Until
-then `terraform validate` and the configuration scan were run by hand on a
-copy, by the sessions that changed the module, and what this README says of
-them rests on those runs; the tests read `.trivyignore` as text and never run
-the scanner. The tests also hold every name and description of a security group
-and of its rules to the character set and the length the EC2 API reference
-gives (read 2026-10-07; an apostrophe is not in the set); the API itself was
-never asked, so that is **tested with stand-ins**, not seen.
+`make aws-validate` and `make aws-scan` name the managed module only. This
+module has two targets of its own, which need no account and change nothing in
+AWS: `make aws-kubeadm-validate` runs `infra/terraform/aws.sh validate
+aws-kubeadm` (`terraform fmt -check`, `init -backend=false` and `validate`, in
+this directory), and `make aws-kubeadm-scan` runs Trivy's configuration scan
+from the image `make aws-scan` uses, offline, and fails on a HIGH or CRITICAL
+finding that `.trivyignore` does not list. No target plans, applies or removes
+this module. Before the targets existed, `terraform validate` and the
+configuration scan were run by hand on a copy, by the sessions that changed the
+module, and what this README says of them rests on those runs; the tests read
+`.trivyignore` as text and never run the scanner. The tests also hold every name
+and description of a security group and of its rules to the character set and
+the length the EC2 API reference gives (read 2026-10-07; an apostrophe is not in
+the set); the API itself was never asked, so that is **tested with stand-ins**,
+not seen.
 
 ## The Kubernetes minor and the container runtime
 

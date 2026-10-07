@@ -65,8 +65,8 @@ PYTEST_WORKERS      ?= 10
 # command line (make PROMTOOL_IMAGE=...) CAN override it: only `override` would
 # stop that. .github/renovate.json reads it as it reads PYTEST_DB_IMAGE.
 PROMTOOL_IMAGE      := quay.io/prometheus/prometheus:v3.15.0-distroless@sha256:b2a413d5a03ea6a76782a508d1c7947440bba3b973931a25676e278431891b01
-# Trivy's configuration scan for `make aws-scan` (S036) and `make gcp-scan`
-# (S078), one image for both: 0.75.0, read on
+# Trivy's configuration scan for `make aws-scan` (S036), `make gcp-scan` (S078)
+# and `make aws-kubeadm-scan` (S079), one image for all: 0.75.0, read on
 # 2026-10-06. The digest is the multi-arch index's (`docker buildx imagetools
 # inspect` shows an OCI index; `docker pull` of the tag prints the same digest);
 # := so an environment variable does not change it, but a variable on make's
@@ -101,7 +101,7 @@ EVAL_INPUTS         := src config/registry data/synthetic data/evaluation/record
 
 STRUCTURIZR := docker run --rm -v "$(CURDIR)/$(ARCH_DIR):/w:ro"
 
-.PHONY: help validate inspect check docs test secret-scan view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db alerts eval eval-compare eval-baseline eval-record synthetic up deploy images helm-lint demo smoke gateway-upkeep grafana grafana-password cluster-holder down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry aws-validate aws-scan aws-plan aws-apply aws-destroy gcp-validate gcp-scan
+.PHONY: help validate inspect check docs test secret-scan view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db alerts eval eval-compare eval-baseline eval-record synthetic up deploy images helm-lint demo smoke gateway-upkeep grafana grafana-password cluster-holder down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry aws-validate aws-scan aws-plan aws-apply aws-destroy gcp-validate gcp-scan aws-kubeadm-validate aws-kubeadm-scan
 .DEFAULT_GOAL := help
 
 ## help            list the targets
@@ -382,3 +382,16 @@ gcp-validate:
 gcp-scan:
 	@ls "$(CURDIR)"/infra/terraform/gcp/*.tf >/dev/null 2>&1 || { echo "gcp-scan: no .tf file in infra/terraform/gcp, nothing to scan" >&2; exit 1; }
 	docker run --rm --network none --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges -e TRIVY_CACHE_DIR=/tmp/trivy --mount type=bind,source="$(CURDIR)/infra/terraform/gcp",target=/work,readonly -w /work $(TRIVY_IMAGE) config --quiet --skip-check-update --skip-version-check --disable-telemetry --skip-dirs .terraform --skip-files gcp.tfplan,terraform.tfstate,terraform.tfstate.backup --severity HIGH,CRITICAL --exit-code 1 .
+
+# ── AWS self-managed cluster module (S079: checked, not yet planned or applied) ─
+# infra/terraform/aws-kubeadm/README.md says what this is. These two checks need
+# no account and no credential. No target here plans, applies or removes it yet.
+
+## aws-kubeadm-validate terraform fmt -check, init with no backend and validate of the AWS self-managed cluster module; needs no account and changes nothing in AWS
+aws-kubeadm-validate:
+	infra/terraform/aws.sh validate aws-kubeadm
+
+## aws-kubeadm-scan Trivy's configuration scan of the AWS self-managed cluster module from the same pinned image as aws-scan: offline, changes nothing in AWS, needs no account; fails on a HIGH or CRITICAL finding that infra/terraform/aws-kubeadm/.trivyignore does not list (needs Docker)
+aws-kubeadm-scan:
+	@ls "$(CURDIR)"/infra/terraform/aws-kubeadm/*.tf >/dev/null 2>&1 || { echo "aws-kubeadm-scan: no .tf file in infra/terraform/aws-kubeadm, nothing to scan" >&2; exit 1; }
+	docker run --rm --network none --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges -e TRIVY_CACHE_DIR=/tmp/trivy --mount type=bind,source="$(CURDIR)/infra/terraform/aws-kubeadm",target=/work,readonly -w /work $(TRIVY_IMAGE) config --quiet --skip-check-update --skip-version-check --disable-telemetry --skip-dirs .terraform --skip-files aws-kubeadm.tfplan,aws-kubeadm.tfplan.meta,terraform.tfstate,terraform.tfstate.backup --severity HIGH,CRITICAL --exit-code 1 .

@@ -4,11 +4,14 @@
 #   validate  format check, init with no backend, validate. Needs no AWS
 #             credential (it is run with none) and no local file, and never
 #             calls the aws CLI. It takes the name of a module, one of aws
-#             (the default) and gcp: `validate gcp` runs the same three commands
-#             on infra/terraform/gcp (S078), with no credential of any cloud.
-#             The Google Cloud module is never planned and never applied, so
-#             validate is the one command that takes a word and plan, apply and
-#             destroy refuse one.
+#             (the default), gcp and aws-kubeadm. `validate gcp` runs the same
+#             three commands on infra/terraform/gcp (S078), and
+#             `validate aws-kubeadm` on infra/terraform/aws-kubeadm (S079, the
+#             self-managed cluster's module), with no credential of any cloud.
+#             The Google Cloud module is never planned and never applied, and
+#             this script does not plan, apply or remove the self-managed one
+#             (yet), so validate is the one command that takes a word and plan,
+#             apply and destroy refuse one.
 #   plan      init, then plan into aws.tfplan; changes nothing in AWS. Records
 #             the commit, the time and the plan file's SHA-256 beside the plan,
 #             unless the module's directory has uncommitted changes: the plan is
@@ -61,8 +64,8 @@ unset BASH_XTRACEFD PS4
 readonly AWS_MODULE_DIR="${TF_DIR}/aws"
 readonly AWS_LOCAL_ENV="${TF_DIR}/local.env-aws"
 # The directory tf_plain works in. Only validate moves it, to a module of its
-# closed list (aws, gcp) at the end of this file; every other command works on
-# the AWS module's.
+# closed list (aws, gcp, aws-kubeadm) at the end of this file; every other
+# command works on the AWS module's.
 module_dir="${AWS_MODULE_DIR}"
 readonly PLAN_FILE=aws.tfplan
 readonly PLAN_RECORD_FILE=aws.tfplan.meta
@@ -113,7 +116,7 @@ done < <(compgen -e | grep '^TF_VAR_' || true)
 
 usage() {
   printf 'usage: %s <validate|plan|apply|destroy>\n' "$(basename "$0")" >&2
-  printf '       %s validate [aws|gcp]  (the module to check, aws if none; the other commands take no word)\n' "$(basename "$0")" >&2
+  printf '       %s validate [aws|gcp|aws-kubeadm]  (the module to check, aws if none; the other commands take no word)\n' "$(basename "$0")" >&2
   exit 2
 }
 
@@ -615,7 +618,7 @@ case "$1" in
   validate)
     module="${2-aws}"
     case "${module}" in
-      aws | gcp) ;;
+      aws | gcp | aws-kubeadm) ;;
       *) usage ;;
     esac
     module_dir="${TF_DIR}/${module}"

@@ -162,7 +162,7 @@ docs/
   governance/       provider onboarding and service acceptance: two designed processes, applied on paper (onboarding once, acceptance to claims triage and to the claim brief)
 infra/kind/         local platform: pinned chart versions, values, Grafana dashboards, alert rules; up, deploy, demo, smoke and down scripts
 infra/helm/         the Meridian chart: the six services, the Jobs, the sweep, their budgets and network policies
-infra/terraform/    Azure foundation: Terraform root module, state bootstrap, plan, apply and smoke scripts; aws/ and aws.sh: the AWS module and its wrapper script, checked without an account and never applied (S036); gcp/: the Google Cloud module, checked by `make gcp-validate` and `make gcp-scan` and never planned or applied, with no script of its own (S078)
+infra/terraform/    Azure foundation: Terraform root module, state bootstrap, plan, apply and smoke scripts; aws/ and aws.sh: the AWS module and its wrapper script, checked without an account and never applied (S036); gcp/: the Google Cloud module, checked by `make gcp-validate` and `make gcp-scan` and never planned or applied, with no script of its own (S078); aws-kubeadm/: the AWS module for a self-managed cluster, checked by `make aws-kubeadm-validate` and `make aws-kubeadm-scan` and not planned or applied (S079)
 scripts/            documentation checker, PDF and Mermaid tooling, Codex agent generator, the alert rules' extraction for promtool
 spikes/             throwaway experiments (S005 and S037 uv projects of their own, S038 on the root environment); never deployed
 src/meridian/       the one Python package (src layout)
@@ -219,6 +219,8 @@ make aws-apply    # apply exactly that saved plan: SPENDS MONEY; the owner runs 
 make aws-destroy  # remove the AWS environment: Terraform asks its own question; the owner runs it, in a terminal (not done: nothing was applied)
 make gcp-validate # fmt check, init with no backend and validate of the Google Cloud module; needs no project and no credential and changes nothing in Google Cloud (needs terraform)
 make gcp-scan     # Trivy's configuration scan of the Google Cloud module from the pinned image, network off; changes nothing in Google Cloud (Docker); no command plans, applies or removes that module
+make aws-kubeadm-validate # fmt check, init with no backend and validate of the AWS self-managed cluster module; needs no account and changes nothing in AWS (needs terraform)
+make aws-kubeadm-scan     # Trivy's configuration scan of that module from the pinned image, offline; changes nothing in AWS (Docker); no command plans, applies or removes it yet
 ```
 
 Agent instructions are in [CLAUDE.md](CLAUDE.md) and its twin

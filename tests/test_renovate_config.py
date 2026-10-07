@@ -478,7 +478,7 @@ class Readers(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertFalse(any(fnmatch.fnmatchcase(name, p) for p in patterns))
 
-    def test_the_terraform_note_names_the_checks_of_the_three_modules(self) -> None:
+    def test_the_terraform_note_names_the_checks_of_the_modules(self) -> None:
         rules = self.config["packageRules"]
 
         (group,) = [r for r in rules if r.get("groupName") == "terraform"]
@@ -491,11 +491,21 @@ class Readers(unittest.TestCase):
             "`make aws-scan`",
             "`make gcp-validate`",
             "`make gcp-scan`",
+            "`make aws-kubeadm-validate`",
+            "`make aws-kubeadm-scan`",
             "Google Cloud module",
+            "self-managed AWS module",
         ):
             with self.subTest(words=words):
                 self.assertIn(words, note)
-        for target in ("aws-validate", "aws-scan", "gcp-validate", "gcp-scan"):
+        for target in (
+            "aws-validate",
+            "aws-scan",
+            "gcp-validate",
+            "gcp-scan",
+            "aws-kubeadm-validate",
+            "aws-kubeadm-scan",
+        ):
             with self.subTest(target=target):
                 makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
                 self.assertIn(f"\n{target}:", makefile)

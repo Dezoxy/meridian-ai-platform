@@ -1304,9 +1304,12 @@ def test_the_apply_list_names_each_thing_the_review_said_only_an_apply_settles(
         "A second apply is never done: remove, then apply",
         "a recreated control plane leaves a stale join command",
         "`lifecycle { ignore_changes = [ami] }`",
-        # M8: no door yet.
+        # M8: the door (S079, K2a): two targets, no CI yet, no target that plans.
         "Nothing in CI runs `terraform validate` or the scan on this module yet",
-        "gives `aws.sh validate` this module's name",
+        "`make aws-kubeadm-validate` runs `infra/terraform/aws.sh validate "
+        "aws-kubeadm`",
+        "`make aws-kubeadm-scan` runs Trivy's configuration scan",
+        "No target plans, applies or removes this module",
         # L5: Calico.
         "The Calico facts in `security.tf`'s comment are from the project's "
         "documentation",
