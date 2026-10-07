@@ -288,7 +288,7 @@ def run_alert_rules(
             f'        [[ -e "${{file}}" ]] || file="{sequence}/last.json"',
             '        cat "${file}"',
             "      else",
-            "        printf '%s' \"${RULES_ANSWER}\"",
+            f'        cat "{tmp_path}/rules-answer.json"',
             "      fi ;;",
             f"    *api/dashboards/uid/{HEALTH_UID}*)",
             '      printf "%s" "${HEALTH_SERVED}" ;;',
@@ -341,6 +341,11 @@ def run_alert_rules(
         ]
     )
     rules = answer if answer is not None else prometheus_answer()
+    # A file, not the environment: an answer over 131,072 bytes cannot be one
+    # string of it (test_smoke_argument_limit.py builds one).
+    (tmp_path / "rules-answer.json").write_text(
+        rules if isinstance(rules, str) else json.dumps(rules)
+    )
     done = subprocess.run(
         ["bash", "-c", script],
         capture_output=True,
@@ -350,7 +355,6 @@ def run_alert_rules(
             "RULE_OBJECT": rule_object,
             "NOT_FOUND": NOT_FOUND,
             "FORBIDDEN": FORBIDDEN,
-            "RULES_ANSWER": rules if isinstance(rules, str) else json.dumps(rules),
             "PROMETHEUS_DOWN": "yes" if prometheus_down else "no",
             "GRAFANA_OPENS": "yes" if grafana_opens else "no",
             "QUERY_ANSWER": query_answer,

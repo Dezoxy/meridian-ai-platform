@@ -738,6 +738,19 @@ node image, Kubernetes components and the platform).
    `MeridianSweepStale` reads the CronJob's last successful time, which a
    by-hand success moves too (seen on kind on 2026-10-07): a by-hand run can
    hide a stopped schedule from the alert for one staleness window.
+   Seen on kind on 2026-10-07 as well: after seven runs of `make smoke` in an
+   hour this line failed with `jq: Argument list too long`. It listed every
+   Job of the namespace and handed the list to `jq` as one argument, which the
+   kernel limits to 131,072 bytes; each run leaves four Jobs of its own (the
+   telemetry and log probes, kept 15 minutes after they finish), and 28 of them
+   made the list 227,658 bytes. The cause was older than S073. Now the line
+   lists the Jobs by the sweep's label (`app.kubernetes.io/name=meridian-sweep`,
+   which the CronJob gives every Job it makes, scheduled or by hand), and no
+   answer of the cluster or of Prometheus goes to `jq` as an argument anywhere
+   in the script: each goes in on standard input or as a file from a process
+   substitution (a test reads the script for it). The fix is tested with
+   stand-ins and the real `jq`, with a list above the limit, not yet seen on a
+   cluster.
    The second line (S064) asks Prometheus, through Grafana's datasource proxy
    as check 5 does, whether the six findings of the pass have arrived: the
    gauge `meridian_sweep_last_pass` for job `claims-sweep`, each of

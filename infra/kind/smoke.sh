@@ -246,6 +246,18 @@
 #                 with the timestamps alone. What it does not prove: that the
 #                 sweep did its work (only that a Job finished), and a database
 #                 whose clock is wrong would be believed.
+#                 The Jobs are listed by the sweep's label
+#                 (app.kubernetes.io/name=meridian-sweep, which the CronJob's
+#                 jobTemplate gives every Job it makes, scheduled or by hand),
+#                 not the namespace's: seen on kind on 2026-10-07 (S073, K8),
+#                 smoke's own four Jobs a run, kept 15 minutes, made the list
+#                 227,658 bytes and jq refused it as one argument (131,072
+#                 bytes: "Argument list too long"). The verdict still filters
+#                 by owner; a Job the CronJob owns without the label is not
+#                 listed (the chart makes none). No cluster or Prometheus
+#                 answer is a jq argument anywhere in this script: they go in
+#                 on standard input or as --slurpfile of a process substitution
+#                 (a test reads the script's text for it).
 #                 A Job made by hand (`kubectl create job --from=cronjob/...`)
 #                 has the CronJob as its owner too, so by the owner alone a
 #                 recent one would read as the schedule's success (S073, K4).
@@ -686,6 +698,14 @@ readonly ADJUSTER_DECISION_URL=http://claims.meridian.localhost:8088/adjuster/cl
 # The first sentence of the banner every page carries (templates/base.html).
 readonly ADJUSTER_BANNER="Synthetic data only."
 readonly SWEEP_CRONJOB=meridian-sweep
+# The label of the sweep's Jobs: the CronJob's jobTemplate carries it (the chart's
+# meridian.labels), so a Job the schedule made and one made by hand from the
+# CronJob both have it. Check 7 lists the Jobs by it and not the namespace's,
+# which smoke's own Jobs, the migrations and the ingestion fill (S073, K8: a
+# list of 227,658 bytes was more than one argument of jq may hold). A Job the
+# CronJob owns without the label (none the chart makes) is not listed; the
+# verdict still filters by owner.
+readonly SWEEP_JOBS_SELECTOR=app.kubernetes.io/name=meridian-sweep
 # The CronJob's schedule is every five minutes; a run is overdue after three
 # periods (900 s). The period is read from the CronJob's own schedule when it
 # is "*/N * * * *"; SWEEP_PERIOD_SECONDS is what is used for any other form.
@@ -2355,11 +2375,16 @@ sweep_period() {
 # judged, and that the Job the verdict rests on carries neither annotation. The
 # prefix keeps it from being empty, so that it survives command substitution.
 sweep_verdict() {
-  jq -nr --arg cronjob "${SWEEP_CRONJOB}" --argjson cj "$1" --argjson jobs "$2" \
+  # The CronJob and the Jobs are the cluster's answers and can be any size, so
+  # they go in as files (process substitutions: nothing on disk), not as
+  # arguments, of which one may be 131,072 bytes.
+  jq -nr --arg cronjob "${SWEEP_CRONJOB}" \
+    --slurpfile cj <(printf '%s' "$1") --slurpfile jobs <(printf '%s' "$2") \
     --argjson now "$3" --argjson period "$4" \
     --argjson tolerance "$(($4 * SWEEP_STALE_PERIODS))" '
     def epoch: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
-    ($cj.status.lastScheduleTime // null) as $scheduled
+    $cj[0] as $cj | $jobs[0] as $jobs
+    | ($cj.status.lastScheduleTime // null) as $scheduled
     | (($cj.status.active // []) | length) as $active
     | [$jobs.items[]
         | select(any(.metadata.ownerReferences[]?; .kind == "CronJob" and .name == $cronjob))
@@ -2498,7 +2523,7 @@ check_sweep_job() {
     skip "sweep: cronjob/${SWEEP_CRONJOB} is suspended (spec.suspend), so it makes no runs and none can be overdue"
     return
   fi
-  if ! jobs="$(kctl -n meridian get job -o json)"; then
+  if ! jobs="$(kctl -n meridian get job -l "${SWEEP_JOBS_SELECTOR}" -o json)"; then
     fail "sweep: could not read the Jobs in meridian (kubectl's error is above)"
     return
   fi
@@ -3464,7 +3489,7 @@ rules_changed() {
   local tree
   tree="$(tree_exprs | jq -Rsc 'split("\n") | map(select(. != "") | split("\t")
     | {group: .[0], rule: .[1], hold: .[2], expr: .[3]})')" || return 1
-  jq -r --arg prefix "${ALERT_GROUP_PREFIX}" --argjson tree "${tree}" '
+  jq -r --arg prefix "${ALERT_GROUP_PREFIX}" --slurpfile tree <(printf '%s' "${tree}") '
     def canon:
       gsub("\\s+"; " ")
       | gsub("(?<![\\w.])(?<d>(?:[0-9]+(?:ms|[smhdwy]))+)(?![\\w])";
@@ -3477,7 +3502,7 @@ rules_changed() {
     [.data.groups[] | select(.name | startswith($prefix)) | .name as $group | .rules[]
       | {key: ($group + "\t" + .name), query: (.query // ""), alerting: (.type == "alerting"),
          seconds: (.duration // 0)}] as $cluster
-    | $tree[] | . as $file
+    | $tree[0][] | . as $file
     | ($cluster[] | select(.key == ($file.group + "\t" + $file.rule))) as $loaded
     | [(if ($file.expr | canon) != ($loaded.query | canon) then "expression" else empty end),
        (if $loaded.alerting

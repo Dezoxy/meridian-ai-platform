@@ -3802,6 +3802,15 @@ def run_sweep_check(
         jobs = []
     if now is None:
         now = newest_stamp(cronjob, jobs)
+    # The Jobs go through a file, not the environment: one string of the
+    # environment is as limited as an argument (131,072 bytes), and a test of
+    # that limit needs a list above it (test_smoke_argument_limit.py).
+    cronjob_file = tmp_path / "cronjob-answer.json"
+    cronjob_file.write_text(
+        cronjob if isinstance(cronjob, str) else json.dumps(cronjob)
+    )
+    jobs_file = tmp_path / "jobs-answer.json"
+    jobs_file.write_text(jobs if isinstance(jobs, str) else json.dumps({"items": jobs}))
     script = "\n".join(
         [
             "set -euo pipefail",
@@ -3819,12 +3828,12 @@ def run_sweep_check(
             '      if [[ "${CRONJOB}" == FAIL ]]; then',
             '        echo "Error from server" >&2; return 1',
             "      fi",
-            '      printf "%s" "${CRONJOB}" ;;',
+            f'      cat "{cronjob_file}" ;;',
             '    *"get job"*)',
             '      if [[ "${JOBS}" == FAIL ]]; then',
             '        echo "Error from server" >&2; return 1',
             "      fi",
-            '      printf "%s" "${JOBS}" ;;',
+            f'      cat "{jobs_file}" ;;',
             '    *"get deployment"*) printf "%s" "${DEPLOYED}" ;;',
             '    *"get pod"*) echo platform-db-1 ;;',
             '    *" exec "*)',
@@ -3853,8 +3862,8 @@ def run_sweep_check(
         env={
             "PATH": os.environ["PATH"],
             "DEPLOYED": deployed,
-            "CRONJOB": cronjob if isinstance(cronjob, str) else json.dumps(cronjob),
-            "JOBS": jobs if isinstance(jobs, str) else json.dumps({"items": jobs}),
+            "CRONJOB": "FAIL" if cronjob == "FAIL" else "FILE",
+            "JOBS": "FAIL" if jobs == "FAIL" else "FILE",
             "NOW": str(now),
         },
         check=True,
