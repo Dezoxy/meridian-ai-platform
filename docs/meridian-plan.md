@@ -928,10 +928,11 @@ that day; the rest stand as their step recorded them.
 | Nothing in CI runs `make aws-validate`, `make aws-scan` or a plan, and no pipeline identity exists for AWS: a bump of the provider or of the Trivy pin, or a change to the module, is checked by whoever merges it, by hand (Part A says so); S022 owns Terraform and the scan in the pipeline, for Azure first | S036 (README; the infrastructure review) | open | S022 |
 | What a Google Cloud scaffold should copy from S036 and what it should avoid. Copy: the provider's own pin of the account or project beside the script's (`allowed_account_ids` is the one pin that holds for a hand-typed command: find the counterpart in the provider's documentation); a local file that is read and never run, owner's and mode 600, with a name the guard's reader rule covers; an environment the script chose; a saved plan bound to its commit, its age and its hash; sensitive variables for an address and an e-mail; closed lists of instance types as a cost ceiling; managed policies and roles read by name, since two AWS pages disagreed on one ARN's path; trust conditions on the workload identity's tokens; a state outside the checkout, a default-workspace check and a removal that refuses over an empty state; a scan ignore file whose entries are one check ID with a reason above, held by tests (an inline `trivy:ignore` or `tfsec:ignore` and a YAML configuration refused); the scan offline from an image pinned by digest; a test that holds the script's exports to the module's variables; and a redaction written for Google Cloud's identifiers before a plan is read. Avoid: sourcing the local file; a variable that is not marked sensitive; `cidrhost` on an IPv6 range; a README sentence that says a control holds before a test has tried to break it (the second review found seven, the third one more); and a test parameter built from the clock | S036 (all six reviews) | closed by S078 (2026-10-07), by the design: kept are (i) the provider's own pin, as a precondition on the text that no run has seen refuse (the provider has no list of projects; the counterpart is the module's own check, not a provider setting), (v) sensitive variables, (vi) closed lists, (vii) in kind only (a Google role is a name, there is no ARN whose path two pages could give differently, and whether the one node role exists as named is not seen: ADR 7, question 16), (viii) in kind only (the binding's principal names one namespace and one ServiceAccount; it is not a set of conditions on a token), (x) an ignore file of one check ID with a reason above, held by tests, with inline ignores and a configuration file refused (it holds no entry), and (xi) the scan offline from the pinned image; fell away because no plan or apply path exists: (ii) the local file, (iii) the script's environment, (iv) the saved plan's record, (ix) the default-workspace check and the removal over an empty state (the state's place is a sentence of the README), (xii) the exports test, and (xiii) the redaction before a plan is read (listed in the README as what to build first). Avoided: no sourced file, every variable naming a project, billing account or address is sensitive, the address is a validated IPv4 /32, the README labels each control and says what no one has seen, and no test parameter comes from the clock | S078 |
 | Rules for the command guard and the settings for Google Cloud, owed on the day a credential for it could exist on a machine where a session runs: `gcloud` beyond the two verbs it reads (a secret's value, an access or identity token), `gsutil`, `~/.config/gcloud` and the `gcp-*` targets; with them a redaction for Google's identifiers (a project ID, `*.googleapis.com` names, a Cloud SQL connection name) and, if the module were ever applied by more than one careful person, a wrapper of S036's kind. None exists by decision: no credential exists, and a hand-typed `terraform plan` in the module's directory is allowed and reaches nothing. The next rule of the guard goes into the development base first | S078 (design; README) | open; not built, by design | S079 |
-| The open questions of ADR 7 that only an apply settles, and the README's list of what `validate` and the scan cannot see (the project pin never seen to refuse, the Cloud Resource Manager API that must already be on, `billing_project`'s API and role, the node role's name and its reach into Artifact Registry, Private Service Connect with `ipv4_enabled = false` and no `private_network`, the forwarding rule's empty scheme, the DNS left off, the public-range setting beside private nodes, a cluster without `network_policy` beside Dataplane V2, the generated instance name, a budget with no currency, the quota of a trial account, how long an enabled API takes, and whether workload identity reads the one secret) | S078 (README; ADR 7) | open; the module is never applied, so nothing settles these unless the owner applies it | no step: the owner's word |
+| The open questions of ADR 7 that only an apply settles, and the README's list of what `validate` and the scan cannot see (the project pin never seen to refuse, the Cloud Resource Manager API that must already be on, `billing_project`'s API and role, the node role's name and its reach into Artifact Registry, Private Service Connect with `ipv4_enabled = false` and no `private_network`, the forwarding rule's empty scheme, the DNS left off, the public-range setting beside private nodes, a cluster without `network_policy` beside Dataplane V2, the generated instance name, a budget with no currency, the quota of a trial account, how long an enabled API takes, whether workload identity reads the one secret, whether the nodes' one reader grant is enough to pull the image, whether the cluster's temporary default pool is created under an organization's default-grants constraint, whether `SYSTEM_COMPONENTS` alone is accepted beside the default `logging_service`, and the instance's first disk size against the ceiling of 20 GB) | S078 (README; ADR 7) | open; the module is never applied, so nothing settles these unless the owner applies it | no step: the owner's word |
 | What the Google Cloud module leaves to production, each beside its test value in its README and none built: deletion protection and a final backup, more retained backups, a regional cluster and database, a chosen release channel and version, Cloud SQL's logging flags and subnet flow logs (the scan's six MEDIUM and one LOW finding), a private control-plane endpoint, a managed firewall at the edge, a remote state bucket, customer-managed keys, a node-pool `network_policy`, and a role per team. S079 builds a twin beside this module, so it is the step that decides which of these its own takes | S078 (scan; README) | open; not built, by design | S079 |
 | A second Google Cloud module (S079's self-managed cluster) cannot sit in `infra/terraform/gcp/`: the scan's tests hold one cluster and one subnet block to the directory because an ignore-file entry covers every resource of it, and `make gcp-validate` and `make gcp-scan` each name that one directory. The validate door takes a module's name from a closed list (`aws`, `gcp`), so a new name or a new directory, with its own scan recipe, is the shape | S078 | open | S079 |
 | The Google provider is pinned `~> 8.6` and its lock holds 8.6.0, which was published on 2026-10-06, a day before the module was written (8.5.0 a week before); no run has used it beyond `init` and `validate`. Renovate's `terraform` group moves the lock after a week and its note names `make gcp-validate` and `make gcp-scan`; the release notes of the 8 series are unread. S079's twin pins the same provider and is the next step to read them | S078 (G1's report) | open | S079 |
+| The Google Cloud module's `workload_service_account` may be up to 253 characters, but the secret's ID is the 18-character prefix `meridian-gcp-test-` and that name, against Secret Manager's limit of 255: a name of more than 237 characters passes the validation and fails an apply. A bound of 237 on the variable would close it | S078 (G4's report) | open; low | S079 |
 
 ## Part C — Step details
 
@@ -13165,8 +13166,10 @@ the design was written before the first contract and is in the handoff files):
   binding, and a budget. G1 chose, where the ADR is silent: private nodes with
   Cloud NAT (the cost sketch assumes them), release channel `REGULAR` with no
   version, the instance's name left to the provider (so no second provider),
-  `gcp_public_cidrs_access_enabled = false`, and the zone `<Region>-a`. No
-  Kubernetes or Helm provider, no model access.
+  `gcp_public_cidrs_access_enabled = false`, and the zone `<Region>-a` (wrong
+  for `europe-west1`, which has no zone a: the review found it and G4 replaced
+  it with a zone for each Region). No Kubernetes or Helm provider, no model
+  access.
 - **The project is pinned in the module.** The provider has no list of allowed
   accounts, so a sensitive variable for the project's number, a data source and
   a precondition on a `terraform_data` that every resource names in
@@ -13239,10 +13242,80 @@ the design was written before the first contract and is in the handoff files):
   the amount is in the account's currency.
 - **A review of the module** ran beside G3 (infrastructure and security, G1 and
   G2 together); its result is below.
+- **G4, the review's fixes** (7131189): the module's `.tf` files and its test
+  file only. A zone for each Region, the nodes' reader grant on the repository,
+  system-component logs, a storage ceiling, backups in the Region, the corrected
+  comments and the stronger tests.
+- **G5, the documents again:** the module's README and this section carry what
+  G4 changed and the sentences the review's lows asked for, ADR 7's note gains
+  the zone of each Region and the logs' gap, and one backlog row is added. It
+  changed no `.tf` file and no test.
 
 **Reviews:**
 
-REVIEW-RESULT
+One infrastructure and security review read the module's first commit (G1 and
+G2 together). It found no critical finding, one HIGH, six medium and twelve low
+findings. It ran `terraform fmt -check`, `bash -n` and `shellcheck` on `aws.sh`
+and sixteen `terraform console` runs of the variables; it ran no `validate` and
+no tests. Several findings were given from memory, and a Google page settled
+each before a fix.
+
+- **The HIGH (a zone that does not exist).** The module built the cluster's zone
+  as `<Region>-a`, and `europe-west1` (St. Ghislain) is on the allowed list and
+  has no zone a: Google's page "Regions and zones" lists b, c and d for it. A
+  by-hand apply there would have passed `validate`, made the network and the
+  database, and failed at the cluster with the database already billing.
+  Confirmed on the page and fixed: a zone for each of the eleven Regions, read
+  from the page on 2026-10-07 (`europe-west1` on zone b), as a plain index with
+  no fallback, and a comment that had stated the old claim as read was
+  corrected.
+- **Six medium findings: five fixed, one not built.**
+  - M1, the state comment was wrong: a bare `init` writes the state in the
+    directory. The comment is corrected and the README's first step is `init`
+    with a path outside every checkout.
+  - M2, the nodes could not pull from the module's own repository: one
+    `roles/artifactregistry.reader` grant on that repository, and nowhere else.
+  - M3, a plan does print the project: Google's resource IDs, the data source's
+    line and a failed precondition name it. The comments and the README say so.
+  - M4, default logs land in the global `_Default` bucket: the cluster now ships
+    system-component logs only. That narrows the gap and does not close it, and
+    the README says plainly that it is a residency gap of the scaffold, not
+    solved.
+  - M6, a comment pointed at README text that did not exist: the README and the
+    comment now say to enable Cloud Resource Manager and Service Usage by hand
+    before the first `init`, and why.
+  - **M5 was not built.** The review proposed a cluster-level `node_config` for
+    the cluster's temporary default pool. The provider's page advises against
+    one beside a separately managed node pool, so the cost (the pool runs as the
+    Compute Engine default service account for a few minutes and may fail to be
+    created under an organization's default-grants constraint) is written in the
+    comment and the README instead.
+- **Twelve low findings.** The cheap ones were fixed: the ServiceAccount name no
+  longer accepts a dot, the database's storage has a ceiling of 20 GB, the
+  provider constraint's comment says what `~> 8.6` allows and what runs, and the
+  backups are kept in the instance's Region. The others are carried as sentences
+  in the README and not built: the budget's missing currency, a pin not
+  evaluated at a removal and not tied to the billing account, two non-public
+  ranges the address check still accepts, `ENCRYPTED_ONLY` being encryption and
+  not verification, a regional secret's endpoint going through Cloud NAT,
+  unbounded egress, and the logging flags and flow logs of the scan's findings.
+  One (L12) was an error in an implementer's report and not in the lock.
+- **The weak tests were strengthened,** each shown to fail under a mutation: an
+  exact list of 18 resource addresses on the pin (the count of 15 would have
+  passed with one resource gone), two distinct lock hashes, and a comment
+  stripping helper that no longer cuts a `#` inside a string. New one-line tests
+  hold settings that had none (release channel, shielded nodes, automatic
+  upgrade and repair, secure boot, integrity monitoring, zonal availability,
+  credits excluded, no final backup, retained backups); four deliberate
+  mutations were each caught.
+- **Found sound:** the project pin's reach, the exposure of the control plane
+  and the database, the workload principal's form, every IAM grant being an
+  `_iam_member` and none an owner or editor, and `aws.sh`'s change: the word is
+  matched against a literal list, plan, apply and the removal refuse any word,
+  and nothing reaches the module directory but `validate`. The scan stayed clean
+  at HIGH and CRITICAL after the fixes, by the fix contract's own run.
+- **Nobody reviewed the fix contract (G4) itself.** Its proof is the Google and
+  provider pages it names and read on 2026-10-07, and the mutations above.
 
 **Result / verification:**
 
@@ -13317,10 +13390,11 @@ REVIEW-RESULT
   Google Cloud, a redaction and a wrapper, on the day a credential could exist
   (S079, the base first); what the module leaves to production (S079); a
   second module for Google Cloud, S079's, which cannot sit in this directory
-  (S079); the provider's version, one day old when it was pinned (S079); and the
-  open questions of ADR 7 that only an apply settles (no step: the owner's
-  word). Two rows homed here are closed: the threat rows (T-02, T-15, T-19,
-  T-20) and what a Google Cloud scaffold copies and avoids.
+  (S079); the provider's version, one day old when it was pinned (S079); the
+  length of the workload ServiceAccount's name against the secret's ID, low
+  (S079); and the open questions of ADR 7 that only an apply settles (no step:
+  the owner's word). Two rows homed here are closed: the threat rows (T-02,
+  T-15, T-19, T-20) and what a Google Cloud scaffold copies and avoids.
 - For the owner: the decisions above.
 
 ## Part D — Open questions
@@ -13902,6 +13976,6 @@ REVIEW-RESULT
   each gain a dated note; T-02, T-15, T-19 and T-20 gain their Google Cloud
   reading from documentation alone and T-100 one clause (no new threat). One
   implementer built the budget past a STOP and the session accepted it, as a
-  recorded slip. Part A's Renovate list gains the two commands. Five backlog
+  recorded slip. Part A's Renovate list gains the two commands. Six backlog
   rows new, one of them with no step (the open questions only an apply
   settles), two closed (the threat rows and what a scaffold copies and avoids).

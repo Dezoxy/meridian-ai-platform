@@ -635,7 +635,20 @@ departs from a row, or settles on paper what a row left open, it is here:
   `europe-southwest1`, `europe-west1`, `europe-west3`, `europe-west4`,
   `europe-west8`, `europe-west9`, `europe-west10` and `europe-west12`, with
   `europe-west3` the default as chosen above. London and Zurich are left out, as
-  finding 6 says they must be, and a test holds both out by name.
+  finding 6 says they must be, and a test holds both out by name. The cluster
+  is zonal, so the module also holds a zone for each of the eleven, read from
+  the same page on 2026-10-07: the first zone it lists, which is `-a` for ten of
+  them and `europe-west1-b` for `europe-west1`, because that Region has no zone
+  a (the page lists b, c and d).
+- **Row 23.** The cluster ships system-component logs only, and they still
+  land in the project's `_Default` bucket, which Google's page "Regionalize your
+  logs" (read on 2026-10-07) puts in the `global` location, promises no EU
+  location for and cannot be moved once it exists. Choosing a Region for the
+  cluster, the database and the secret does not choose one for the default log
+  bucket. This is a residency gap of the module, not solved by it: a bucket and
+  a sink, or the organization's default log location, outside the module, would
+  close it. The module also grants the nodes `roles/artifactregistry.reader` on
+  its one repository, which row 19's question about the pull role pointed at.
 
 Questions 13, 14 and 16 and the others in the table below are not answered: no
 apply happened, so the node role's name and its reach into Artifact Registry,

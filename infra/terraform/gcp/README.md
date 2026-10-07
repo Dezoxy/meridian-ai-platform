@@ -32,30 +32,43 @@ service account's ID: one at a time) and carries the labels `project=meridian`,
 `environment=gcp-test` and `managed-by=terraform`. It installs nothing into the
 cluster: no Helm release, no Kubernetes provider, no model access (a model is
 not a resource on Google Cloud, ADR 7 item 10). Running the Meridian chart on
-this cluster is not part of S078.
+this cluster is not part of S078. The module declares 18 resource addresses
+(the eight API enablements are one address with `for_each`), and a test holds
+the exact list.
 
 - `versions.tf`: Terraform `~> 1.16`, the `hashicorp/google` provider `~> 8.6`
-  (the lock file holds 8.6.0, with hashes for `linux_amd64` and `darwin_arm64`,
-  as the AWS lock does), and `backend "local" {}` with no path.
+  (any 8.x from 8.6 and never 9; the lock file holds 8.6.0, with two distinct
+  `h1:` hashes for `linux_amd64` and `darwin_arm64`, as the AWS lock does, and
+  `-lockfile=readonly` makes the lock decide what runs), and `backend "local"
+  {}` with no path. **A bare `terraform init` therefore writes
+  `terraform.tfstate` in this directory**, which in a worktree is a file a
+  session deletes (see "How the owner would apply it by hand").
 - `providers.tf`: the provider's `project` and `region` from variables, and
   `user_project_override` and `billing_project`, which ADR 7 row 3 asks for the
   budget. No credential, token or impersonation argument: the provider reads an
   operator's own application default credentials.
-- `main.tf`: the names, `data "google_project"`, eight `google_project_service`
-  resources with `disable_on_destroy = false`, and the project pin.
+- `main.tf`: the names, a zone for each Region of the list (below),
+  `data "google_project"`, eight `google_project_service` resources with
+  `disable_on_destroy = false`, and the project pin.
 - `network.tf`: one VPC with no automatic subnets, one regional subnet
   (`10.10.0.0/24`) with a Pod range (`10.20.0.0/16`) and a Service range
   (`10.30.0.0/20`) and Private Google Access, a router and Cloud NAT.
 - `cluster.tf`: a node service account with the one role ADR 7 names
-  (`roles/container.defaultNodeServiceAccount`), one GKE Standard cluster in one
-  zone (`<Region>-a`) with Dataplane V2, workload identity, the Gateway API's
-  configuration, private nodes and one authorized range for the control plane,
-  and one node pool of two nodes by default.
+  (`roles/container.defaultNodeServiceAccount`, at the project: Google's page
+  lists logging, monitoring and autoscaling permissions in it), one GKE
+  Standard cluster in one zone (the zone the Region's entry in `main.tf` names)
+  with Dataplane V2, workload identity, the Gateway
+  API's configuration, private nodes, one authorized range for the control plane
+  and system-component logs only, and one node pool of two nodes by default.
 - `registry.tf`: one Artifact Registry repository for Docker images with
-  immutable tags.
+  immutable tags, and one `google_artifact_registry_repository_iam_member` that
+  gives the node service account `roles/artifactregistry.reader` on that one
+  repository, so the nodes may read the module's own images and nothing else.
+  Written, held by a test on the text, never planned or applied.
 - `database.tf`: one Cloud SQL for PostgreSQL 17 instance in the Enterprise
-  edition (written out), backups and point-in-time recovery (written out), no
-  public address, TLS required, reached by Private Service Connect: the
+  edition (written out), backups kept in the instance's own Region and
+  point-in-time recovery (written out), storage that grows to a ceiling of 20
+  GB, no public address, TLS required, reached by Private Service Connect: the
   instance's setting, an internal address and a forwarding rule to its service
   attachment. No database user and no password: nothing in the module holds a
   secret.
@@ -74,12 +87,16 @@ variable. The database has no public address. Two Google settings the ADR does
 not mention were written out, `gcp_public_cidrs_access_enabled = false` on the
 control plane's authorized networks and `ENCRYPTED_ONLY` on the database's
 connections: both are **held by a test on the text**. Neither has met Google
-Cloud.
+Cloud. `ENCRYPTED_ONLY` is encryption and not verification: the endpoint is
+reached by an address and the server's certificate names a DNS name, so a client
+would use `require` or `verify-ca` and not `verify-full`, and Private Service
+Connect's DNS is left off.
 
 ### Inputs
 
 Four variables have no default and are sensitive, so that no value of theirs is
-in the repository and a plan would print none. A validation is a condition
+in the repository and a plan or an apply prints none (what else a plan prints is
+under "The project pin"). A validation is a condition
 Terraform checks before it plans; the module's tests run each of them through
 `terraform console` on a scratch copy of `variables.tf` with no provider, with
 values it accepts and values it refuses, so each validation was **seen to
@@ -91,12 +108,12 @@ refuse** at that level. None was seen in a plan.
 | `project_id` | The ID of the existing project; the module never creates one | yes, no default | 6 to 30 characters: lowercase letters, digits and hyphens, a letter first, no hyphen last |
 | `expected_project_number` | The number the project pin compares with | yes, no default | Digits only, 6 to 15 |
 | `billing_account` | The Cloud Billing account the budget is made on | yes, no default | Three groups of six digits or capital letters A to F, joined by hyphens |
-| `api_access_cidr` | The one address that may reach the control plane | yes, no default | One public IPv4 address written as a /32, no leading zero in an octet, not `0.0.0.0/32`, and not a loopback, private, link-local, shared (`100.64.0.0/10`) or multicast address; an IPv6 value is refused |
+| `api_access_cidr` | The one address that may reach the control plane | yes, no default | One public IPv4 address written as a /32, no leading zero in an octet, not `0.0.0.0/32`, and not a loopback, private, link-local, shared (`100.64.0.0/10`) or multicast address; an IPv6 value is refused. It still accepts `192.0.0.0/24` and `198.18.0.0/15`, which are not public addresses: harmless, it only locks the owner out |
 | `node_machine_type` | Machine type of the node pool; default `e2-standard-2` | no | `e2-standard-2` or `e2-standard-4` |
 | `node_count` | Nodes in the pool; default 2 | no | A whole number from 1 to 5 |
 | `database_tier` | Cloud SQL tier; default `db-g1-small` | no | `db-f1-micro` or `db-g1-small` |
 | `workload_namespace` | The Kubernetes namespace of the one ServiceAccount; default `meridian` | no | A valid namespace name |
-| `workload_service_account` | The ServiceAccount's name; default `model-gateway` | no | A valid ServiceAccount name |
+| `workload_service_account` | The ServiceAccount's name; default `model-gateway` | no | A ServiceAccount name without a dot (the secret's ID is built from it, and a secret's ID takes none); up to 253 characters, which a secret's ID can exceed (see the end of this section) |
 | `budget_monthly_limit` | The budget, in whole units of the billing account's own currency; default 25 | no | A whole number above 0 and at most 500 |
 
 The closed lists of two are a cost ceiling: a stray variable cannot ask for a
@@ -111,6 +128,13 @@ built the budget anyway where it had been told to stop (the plan's section
 records that as a slip, which the session accepted). Before any apply the owner
 reads the account's currency and chooses the amount in it: 25 is a small amount
 in one currency and a negligible one in another.
+
+**A name too long for the secret is not refused.** The secret's ID is the
+18-character prefix `meridian-gcp-test-` and the ServiceAccount's name, and a
+secret's name takes at most 255 characters (Google's page "Create secrets and
+access secret versions"), while the variable allows a name of up to 253. A name
+of more than 237 characters would pass the validation and fail an apply. Noticed
+by the fix contract and left alone; it is a backlog row.
 
 ### Outputs
 
@@ -131,7 +155,15 @@ module was written for. `data "google_project"` reads the number of the project
 the provider is configured for. A precondition on `terraform_data.project_pin`
 compares the two, and every other resource names that one in its `depends_on`,
 so a plan against another project stops before it proposes anything. The
-messages name neither number.
+pin's own messages name neither number.
+
+**What a plan or an apply prints of the project.** No variable value is
+printed, because the variables that name the project are sensitive. But Google's
+own resource IDs (`projects/<ID>/...`), the data source's `Read complete` line
+and a failed precondition do name the project: the precondition prints the
+number of the project the provider reached, because that value is not marked
+sensitive. Nothing redacts any of it, because there is no wrapper here, as there
+is for the AWS module. Read a plan before pasting it anywhere.
 
 **Written, held by tests on the text, never seen to refuse.** `terraform
 validate` does not evaluate a precondition, and nothing was planned, so no run
@@ -141,9 +173,17 @@ neither number, that every resource but the pin and the data source names the
 pin, and that the variable is sensitive with no default. A pin that nobody has
 seen refuse is a statement about the text, not a barrier.
 
-The project data source needs the Cloud Resource Manager API already on, before
-any `google_project_service` could switch it on, so that one API is a
-precondition of the project and the module cannot enable it for itself.
+**Before the first `init`, enable Cloud Resource Manager and Service Usage on
+the project by hand** (the console, or `gcloud services enable` in the
+operator's own session). The module cannot do it: the resource that enables an
+API hangs on the pin, the pin on the data source, and the data source on that
+API; Service Usage is what `google_project_service` itself needs. A project that
+has neither stops at the data source on the first plan and proposes nothing.
+
+**The pin is not a full tie.** The review's reading, not seen, is that it is not
+evaluated at a removal (a removal is not stopped by it), and it does not tie
+the billing account to the project: a billing account that does not pay for
+this project is not noticed.
 
 ## The checks that exist
 
@@ -274,35 +314,41 @@ module's text and ADR 7 imply, not a record of a run. Where a step says what
 happens, it is a reading of the provider's and Google's pages. The module is
 for a test that lives for hours.
 
-1. **Choose the machine.** One where no agent session runs and no credential is
+1. **The first Terraform command is `terraform init
+   -backend-config=path=<a path outside every checkout>`, and never a bare
+   `init`.** The backend block has no path, so a bare `init` writes
+   `terraform.tfstate` in this directory, which in a worktree is a file a
+   session deletes, and a state lost with its checkout leaves a cluster and a
+   database billing. The path is a file in a directory of mode 700, and the
+   operator keeps it. (`.gitignore` and the scan's skip list name
+   `terraform.tfstate`, and a test fails if one sits in the directory, but that
+   is a guard against a commit and not a place to keep a state.) Run this after
+   steps 2 and 3 below: the APIs of step 3 are enabled before the first `init`.
+2. **Choose the machine.** One where no agent session runs and no credential is
    readable by one: another machine, or another operating-system user. No guard
    rule stands between a session and a Google Cloud command (above).
-2. **Have what the module cannot make.** An existing project, with a billing
-   account linked to it. The Cloud Resource Manager API on, because the project
-   data source is read before the module can enable anything. The Service Usage
-   API on and the caller allowed to use it as the billing project
-   (`serviceUsageConsumer`), because the provider is configured with
+3. **Have what the module cannot make.** An existing project, with a billing
+   account linked to it. **Enable Cloud Resource Manager and Service Usage on
+   the project by hand**, before the first `init`: the console, or `gcloud
+   services enable` in the operator's own session. The module cannot, because
+   the resource that enables an API hangs on the pin, the pin on the project
+   data source, and the data source on the Cloud Resource Manager API; Service
+   Usage is what `google_project_service` itself needs, and the caller needs
+   `serviceUsageConsumer` on it, because the provider is configured with
    `billing_project`. Which roles the applying account needs for everything
    else was not worked out; that is one of the open questions.
-3. **Sign in** with application default credentials (ADR 7, row 14), as the
+4. **Sign in** with application default credentials (ADR 7, row 14), as the
    owner, on that machine.
-4. **Supply the four variables without defaults** as `TF_VAR_` variables in that
+5. **Supply the four variables without defaults** as `TF_VAR_` variables in that
    shell, or in a variable file kept outside the checkout: never in a file
    inside it (`.gitignore` ignores `*.tfvars`, the settings deny reading them,
    and a test fails if one sits in this directory). Read the billing account's
    currency first and choose `budget_monthly_limit` in it.
-5. **Choose the state.** The backend block has no path, so `init` needs one:
-   `-backend-config=path=` with a file in a directory of mode 700 outside the
-   checkout, because the sessions of this repository work in worktrees that are
-   deleted and a state lost with its checkout leaves a cluster and a database
-   billing. Without the option, the local backend writes `terraform.tfstate`
-   beside the module; `.gitignore` and the scan's skip list name that file, and
-   a test fails if one sits in the directory, but it is a copy in a worktree
-   that may be deleted.
 6. **Plan into `gcp.tfplan`** and read it. This is the first moment the project
    pin would be tried, and the first moment `validate`'s blind spots (below) meet
    the real provider. A saved plan holds the values that the state would, and is
-   to be kept like it; remove it after the apply.
+   to be kept like it; remove it after the apply. Read what it prints of the
+   project (under "The project pin"): it is not redacted.
 7. **Apply that saved plan.** Read the cost first: ADR 7's sketch says about USD
    0.37 an hour at list prices read on 2026-10-06, for a similar shape with a
    global Application Load Balancer that this module does not make. It is a
@@ -316,15 +362,15 @@ for a test that lives for hours.
    be done in Terraform either (ADR 7, row 20). The Meridian chart is not
    installed.
 9. **Remove it** from this directory, with the same state and variables, by
-   Terraform's own removal command. The repository's rules treat that as the
-   owner's act in a terminal.
+   Terraform's own removal command, in the order of "Removal" below. The
+   repository's rules treat that as the owner's act in a terminal.
 
 ### What a local state would hold, in clear
 
 No state exists. This is derived from the module's text, the provider's schema
 read with `terraform providers schema` and Terraform's own documentation, which
 says that a state holds sensitive values in plain text. Walking the schema of
-the sixteen resource types the module declares, nested blocks included, the
+the seventeen resource types the module declares, nested blocks included, the
 provider marks four attributes as sensitive: the cluster's
 `master_auth.client_key`, and the database's `root_password`, `server_ca_cert`
 and `replica_configuration.password`. The module gives a value to none of them,
@@ -352,12 +398,17 @@ The module sidesteps one of ADR 7's fragile points and leaves the others:
   Service Connect, which has no peering (ADR 7's note of 2026-10-07).
 - **Sidestepped: the instance name.** The name is the provider's generated one,
   so a removal followed by a new apply never meets a name that cannot be reused.
-- **Left: controller-made resources.** The module installs no controller, so it
-  makes no load balancer, network endpoint group or firewall rule outside
-  Terraform, and no volume claim. If the chart is installed later, they would
-  block the network's removal: delete the Gateway and the claims first, wait,
-  then remove. Deleting a cluster only attempts the load balancer's cleanup and
-  keeps persistent disks.
+- **Left: what GKE and controllers create outside the state, and the order of a
+  removal.** The module installs no controller, so it makes no load balancer,
+  network endpoint group or firewall rule of its own and no volume claim; but
+  GKE adds its own cluster rules, and anything the chart is later given to make
+  (a Gateway's load balancer, forwarding rules, network endpoint groups,
+  volume claims) lives outside Terraform's state. Those can block the network's
+  removal, and persistent disks outlive the cluster. The order is: delete the
+  Gateway and the volume claims first, wait, then remove the module; if the
+  network's removal still fails on a rule or an endpoint group, delete it by
+  hand; delete the disks that remain. Deleting a cluster only attempts the load
+  balancer's cleanup.
 - **Left: backups.** ADR 7 lists Cloud SQL's retained backups among what keeps
   billing after an instance is gone: Google says they become independent of the
   instance and are stored at the project level. The database keeps three
@@ -374,6 +425,20 @@ The module sidesteps one of ADR 7's fragile points and leaves the others:
   If the state is lost, nothing removes what exists: the console and `gcloud`
   would, by hand, one resource at a time.
 
+## A residency gap this scaffold does not solve: logs
+
+The cluster ships system-component logs only (`logging_config` with
+`SYSTEM_COMPONENTS`); the platform's chart ships its own workload logs to Loki.
+Those system logs still land in the project's `_Default` bucket. On Google's
+page "Regionalize your logs" (read on 2026-10-07) the `_Default` and `_Required`
+buckets are in the `global` location, which promises no EU location, and the
+location of an existing bucket cannot be changed; `_Required` stays global
+whatever is set here. Regionalizing needs a bucket and a sink, or the
+organization's default log location, outside this module. **This is a gap in
+the scaffold and it is not solved:** narrowing what is shipped narrows what
+reaches the global bucket and does not regionalize it. Whether `SYSTEM_COMPONENTS`
+alone is accepted beside the default `logging_service` is not seen.
+
 ## What `validate` and the scan cannot see
 
 `terraform validate` reads the text against the provider's schema and evaluates
@@ -389,8 +454,32 @@ an apply would settle it:
   enabled API takes before its first use (question 14).
 - `billing_project` needs the Service Usage API on and `serviceUsageConsumer` on
   the caller.
-- Whether `roles/container.defaultNodeServiceAccount` exists as written and lets
-  the nodes pull images from Artifact Registry (question 16).
+- Whether `roles/container.defaultNodeServiceAccount` exists as written
+  (question 16), and whether the one reader grant on the repository is all the
+  nodes need to pull the chart's image. Google's pages say the project role
+  holds no Artifact Registry permission and that a user-provided node service
+  account must be granted access on the repository, so the module grants
+  `roles/artifactregistry.reader` on its one repository and nowhere else:
+  written, held by a test on the text, never planned or applied.
+- Whether the cluster is created at all where an organization enforces the
+  default-grants constraint. The cluster's temporary default pool, removed once
+  the cluster exists, runs for a few minutes as the Compute Engine default
+  service account, and where that constraint is enforced (by default in every
+  organization made on or after 2024-05-03) the account may lack the role GKE
+  needs, and the creation fails. The provider's page advises against a
+  cluster-level `node_config` beside a separate node pool, so the fix the
+  review proposed (a service account on the default pool) is **not built**.
+  Only an apply shows which.
+- Whether `SYSTEM_COMPONENTS` alone is accepted beside the default
+  `logging_service` (see the logs section above), and the instance's first disk
+  size against the ceiling of 20 GB (Cloud SQL's own first size is not stated on
+  any page read, and it has to be below the ceiling).
+- Whether a regional secret's endpoint (a `*.rep.googleapis.com` host) is
+  reached from private nodes. Private Google Access does not cover it (ADR 7,
+  row 22), so the traffic would go through Cloud NAT.
+- Egress is unbounded: Cloud NAT lets every node reach any address, and the
+  module has no counterpart of T-19's FQDN policy (that needs Dataplane V2 and a
+  policy in the chart, not here).
 - Whether Cloud SQL accepts Private Service Connect with `ipv4_enabled = false`
   and no `private_network`: the provider's page says in its general text that an
   instance needs one of the two, and its own example for Private Service Connect
@@ -425,6 +514,10 @@ None of this is built. Each line is a production value beside the test value.
   with no version, so it starts on whatever the channel offers on the day.
 - Cloud SQL's logging flags (the five MEDIUM findings above).
 - Subnet flow logs (the MEDIUM and LOW finding above) and Cloud NAT's logging.
+- Logs in the Region: a bucket and a sink, or the organization's default log
+  location, in place of the global `_Default` bucket (see the logs section).
+- Egress bounded by host name, and Private Service Connect's DNS with a client
+  that verifies the server's certificate (`verify-ca` at least).
 - A private control-plane endpoint behind a VPN, or a short list of fixed
   addresses, instead of one `/32`: a shared exit address admits everyone behind
   it, and an address that changes locks the owner out of `kubectl`.
@@ -452,6 +545,17 @@ states, written from Google's own page "Regions and zones"
 (Germany), `europe-west4` (Netherlands), `europe-west8` (Italy), `europe-west9`
 (France), `europe-west10` (Germany) and `europe-west12` (Italy). The default is
 `europe-west3`, as ADR 7 chose.
+
+**The zone of each Region** is written in `main.tf` from the same page, read on
+2026-10-07: the cluster is zonal, and a Region's zones are not always a, b and
+c. The page lists a, b and c for ten of the Regions and **b, c and d for
+`europe-west1`, which has no zone a**, so a zone built as `<Region>-a` would
+have passed `validate` and failed an apply at the cluster, after the database
+was made and billing. The module uses the first zone the page lists for each
+Region: `-a` for every Region but `europe-west1`, which uses `europe-west1-b`.
+The machine types the list allows (E2) are on the page in every one of these
+zones. There is no fallback: a Region added to the list without an entry fails
+the plan at the index, and a test holds the two lists equal.
 
 London (`europe-west2`) and Zurich (`europe-west6`) are on that page and are
 left out: they are in Google's "Europe" and not in the EU, and the repository's
