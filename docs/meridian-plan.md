@@ -19701,7 +19701,8 @@ the main session's own run is in the pull request):
   lines), was listed with the same reason as the 51 the check started with: a
   row of S074 homes its split. The overview's table no longer names an
   Application Gateway at the edge (ADR 11).
-- The whole suite on the final tree: FINAL-SUITE-RESULT.
+- The whole suite on the final tree, with coverage: `20563 passed, 8 skipped, 8
+  warnings in 247.74s (0:04:07)`, 99.11 per cent of 13,869 statements.
 
 **Not seen** (the whole of it; each is a statement about what has not met
 Azure):
@@ -20750,4 +20751,4 @@ model no longer do.
   T-42 amended, the Azure platform document brought to it, five backlog rows,
   and Part D question 5 answered (stay in the trial's tenant). The wrapper and
   the guard's rules, the upgrade, a firewall decision, the apply and the second
-  half wait. The whole suite: FINAL-SUITE-RESULT.
+  half wait. The whole suite: 20,563 passed, 8 skipped.
