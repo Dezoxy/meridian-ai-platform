@@ -55,6 +55,8 @@ RUNTIME = "agent-runtime.meridian.svc:8000"
 API_SERVER = "kubernetes.default.svc:443"
 DATABASE = "platform-db-rw.meridian.svc:5432"
 PROBE_TIMEOUT = "4"
+# What the harness's ``date +%s`` answers, so two runs name the probe Pod alike.
+FIXED_EPOCH = 1790000000
 DEPLOYED = "deployment.apps/claims-api"
 POLICY = "networkpolicy.networking.k8s.io/default-deny"
 PART_OF = "app.kubernetes.io/part-of"
@@ -210,6 +212,11 @@ def run_in_bash(
             'fail() { echo "FAIL  $*"; }',
             'skip() { echo "SKIP  $*"; }',
             "sleep() { :; }",
+            # The probe Pod is named by the clock's second; a test that compares
+            # two runs must not see the clock pass a second between them.
+            'date() { if [[ "$*" == +%s ]]; then echo "${FIXED_EPOCH}"; '
+            'else command date "$@"; fi; }',
+            f"FIXED_EPOCH={FIXED_EPOCH}",
             *PROBE_DEFINITIONS,
             one_line_function(SMOKE_SH, "clean_lines"),
             STUB,
