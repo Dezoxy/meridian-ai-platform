@@ -1,0 +1,121 @@
+# ---- shared by both boot scripts (templates/node-common.sh.tftpl) ----------
+#
+# The rendered text of this file sits inside the control plane's script and
+# inside the worker's. It needs ROLE, REGION, API_PORT and BOOT_ROOT to be set
+# before it, and it defines the log lines, the bounded download, the strict
+# reading of a join command and the installation of containerd and kubeadm.
+#
+# Terraform renders this file: every shell parameter expansion is written with
+# a doubled dollar sign here, and no percent sign is followed by a brace.
+
+KUBERNETES_MINOR='${kubernetes_minor}'
+KUBERNETES_APT_KEY_FINGERPRINT='${kubernetes_apt_key_fingerprint}'
+
+# What a join command looks like: kubeadm join <IPv4 address>:<port> --token
+# <6 characters, a dot, 16 characters> --discovery-token-ca-cert-hash sha256:
+# <64 hexadecimal digits>, and nothing before, between or after (one trailing
+# space at most). The text is only ever matched against this pattern and read
+# through its groups: it is never run, evaluated or piped into a shell.
+JOIN_PATTERN='^kubeadm join ([0-9]{1,3}(\.[0-9]{1,3}){3}):([0-9]{1,5}) --token ([a-z0-9]{6}\.[a-z0-9]{16}) --discovery-token-ca-cert-hash sha256:([0-9a-f]{64}) ?$'
+
+log() {
+  printf '%s: %s\n' "$ROLE" "$*"
+}
+
+# One clear line on the error stream, then the end of the script. cloud-init
+# keeps both streams in /var/log/cloud-init-output.log.
+die() {
+  printf '%s: ERROR: %s\n' "$ROLE" "$*" >&2
+  exit 1
+}
+
+# A bound is a number of attempts, not a clock: $1 is the name of a setting.
+require_number() {
+  local name=$1
+  local value=$${!name}
+  [[ $value =~ ^[0-9]{1,6}$ ]] || die "$name must be a whole number, found '$value'"
+}
+
+# Download $1 to $2 over HTTPS only (redirects too), with a bound on the time
+# of each try and on the number of tries.
+fetch() {
+  curl --fail --silent --show-error --location \
+    --proto '=https' --proto-redir '=https' --tlsv1.2 \
+    --retry 5 --retry-delay 3 --connect-timeout 10 --max-time 120 \
+    --output "$2" "$1" || die "could not download $1"
+}
+
+# Succeeds, and sets JOIN_TOKEN and JOIN_HASH, only when $1 is exactly a join
+# command for the API server at $2 (address:port). The address in the text has
+# to be the expected one: whoever may write the parameter can then choose a
+# token and a hash but not the server the node joins.
+parse_join_command() {
+  local text=$1
+  local expected=$2
+  JOIN_TOKEN=''
+  JOIN_HASH=''
+  [[ $text =~ $JOIN_PATTERN ]] || return 1
+  [[ "$${BASH_REMATCH[1]}:$${BASH_REMATCH[3]}" == "$expected" ]] || return 1
+  JOIN_TOKEN=$${BASH_REMATCH[4]}
+  JOIN_HASH=$${BASH_REMATCH[5]}
+}
+
+# The AWS command line, from the snap that AWS documents for it ("Installing or
+# updating to the latest version of the AWS CLI", read 2026-10-07). The snap
+# daemon seeds its own packages at first boot, so the script waits for that,
+# with a bound. `snap wait system seed.loaded` is from the session's general
+# knowledge of snapd and cloud-init: no page for it was read.
+install_aws_cli() {
+  log "installing the AWS CLI"
+  timeout 300 snap wait system seed.loaded || die "snapd did not finish seeding within 300 seconds"
+  timeout 300 snap install aws-cli --classic || die "the AWS CLI snap did not install within 300 seconds"
+}
+
+# containerd from the distribution, kubeadm, kubelet and kubectl from the
+# Kubernetes project's package repository for ONE minor version, whose signing
+# key must have the pinned fingerprint.
+install_node() {
+  export DEBIAN_FRONTEND=noninteractive
+  local keyring_dir="$BOOT_ROOT/etc/apt/keyrings"
+  local key_file="$keyring_dir/kubernetes-release.key"
+  local keyring="/etc/apt/keyrings/kubernetes-apt-keyring.gpg"
+  local config="$BOOT_ROOT/etc/containerd/config.toml"
+  local listing fingerprint
+
+  log "enabling IPv4 forwarding"
+  mkdir -p "$BOOT_ROOT/etc/sysctl.d"
+  printf 'net.ipv4.ip_forward = 1\n' >"$BOOT_ROOT/etc/sysctl.d/k8s.conf"
+  sysctl --system >/dev/null
+
+  log "installing the packages"
+  apt-get update
+  apt-get install -y apt-transport-https ca-certificates curl gpg containerd
+
+  mkdir -p "$keyring_dir" "$BOOT_ROOT/etc/apt/sources.list.d"
+  chmod 755 "$keyring_dir"
+  fetch "https://pkgs.k8s.io/core:/stable:/v$KUBERNETES_MINOR/deb/Release.key" "$key_file"
+  listing=$(gpg --show-keys --with-colons "$key_file") || die "could not read the package signing key"
+  fingerprint=$(awk -F: '$1 == "fpr" { print $10; exit }' <<<"$listing")
+  [[ $fingerprint == "$KUBERNETES_APT_KEY_FINGERPRINT" ]] ||
+    die "the package signing key is not the pinned one (found '$fingerprint'); refusing to trust it"
+  gpg --dearmor --yes --output "$BOOT_ROOT$keyring" "$key_file"
+  chmod 644 "$BOOT_ROOT$keyring"
+  printf 'deb [signed-by=%s] https://pkgs.k8s.io/core:/stable:/v%s/deb/ /\n' \
+    "$keyring" "$KUBERNETES_MINOR" >"$BOOT_ROOT/etc/apt/sources.list.d/kubernetes.list"
+  apt-get update
+  apt-get install -y kubelet kubeadm kubectl
+  apt-mark hold kubelet kubeadm kubectl
+
+  # containerd's own default configuration, with the systemd cgroup driver the
+  # Kubernetes page "Container Runtimes" asks for. The setting is one line of
+  # the runc options table; the check makes a changed layout stop the script.
+  log "configuring containerd"
+  mkdir -p "$BOOT_ROOT/etc/containerd"
+  containerd config default >"$config"
+  sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' "$config"
+  [[ $(grep -c 'SystemdCgroup = true' "$config") -eq 1 ]] ||
+    die "containerd's default configuration has no single SystemdCgroup setting to change"
+  systemctl enable containerd
+  systemctl restart containerd
+  systemctl enable kubelet
+}

@@ -1,0 +1,72 @@
+#!/bin/bash
+# A worker node's boot script (cloud-init user data), rendered by nodes.tf. It
+# has never run on a real node: tests/meridian/test_aws_kubeadm_bootstrap.py
+# runs it against stand-in programs.
+#
+# It holds NO secret. The workers boot before the control plane has written
+# the join command, so the script polls the parameter, with a bound, until the
+# value is a join command, and then joins.
+#
+# THE PARAMETER'S TEXT IS NEVER RUN. Whoever can write that parameter (the
+# control plane's role and the owner) must not thereby get a shell on a worker.
+# The value is matched against one strict pattern, the address in it must be the
+# control plane's own, and the token and the CA hash that the pattern captured
+# are handed to kubeadm as arguments. A value of any other shape, the
+# placeholder and an empty value included, is "not a join command yet".
+#
+# The two settings below the "Bounds" heading have defaults and may be set in
+# the environment: a test shortens them. cloud-init sets none of them.
+#
+# Terraform renders this file: every shell parameter expansion is written with
+# a doubled dollar sign, and no percent sign is followed by a brace.
+set -euo pipefail
+export PATH="$PATH:/snap/bin"
+
+ROLE='worker'
+REGION='${region}'
+CONTROL_PLANE_ADDRESS='${control_plane_address}'
+API_PORT='${api_port}'
+JOIN_PARAMETER_NAME='${join_parameter_name}'
+
+# Bounds: a number of tries and the seconds between two of them.
+BOOT_ROOT="$${BOOT_ROOT:-}"
+JOIN_ATTEMPTS="$${JOIN_ATTEMPTS:-120}"
+POLL_SECONDS="$${POLL_SECONDS:-10}"
+
+${common}
+
+# Reads the parameter until it holds a join command for the control plane's
+# address, and leaves its token and hash in JOIN_TOKEN and JOIN_HASH. The value
+# is never printed: it is a secret for an hour, and it may be anything.
+wait_for_the_join_command() {
+  local attempt value
+  for ((attempt = 1; attempt <= JOIN_ATTEMPTS; attempt++)); do
+    value=$(aws ssm get-parameter --region "$REGION" --name "$JOIN_PARAMETER_NAME" \
+      --with-decryption --query Parameter.Value --output text 2>/dev/null) || value=''
+    if parse_join_command "$value" "$CONTROL_PLANE_ADDRESS:$API_PORT"; then
+      log "the parameter holds a join command"
+      return 0
+    fi
+    log "the parameter does not hold a join command yet (try $attempt of $JOIN_ATTEMPTS)"
+    sleep "$POLL_SECONDS"
+  done
+  die "gave up after $JOIN_ATTEMPTS tries: $JOIN_PARAMETER_NAME never held a join command for $CONTROL_PLANE_ADDRESS:$API_PORT"
+}
+
+join_the_cluster() {
+  [[ ! -e $BOOT_ROOT/etc/kubernetes/kubelet.conf ]] || die "this node has already joined: kubeadm join runs once per node"
+  log "running kubeadm join"
+  kubeadm join "$CONTROL_PLANE_ADDRESS:$API_PORT" \
+    --token "$JOIN_TOKEN" \
+    --discovery-token-ca-cert-hash "sha256:$JOIN_HASH" || die "kubeadm join failed"
+}
+
+for setting in JOIN_ATTEMPTS POLL_SECONDS; do
+  require_number "$setting"
+done
+
+install_aws_cli
+install_node
+wait_for_the_join_command
+join_the_cluster
+log "done"
