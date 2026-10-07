@@ -686,3 +686,80 @@ claim carries its tenant (question 7).
 - Threats: T-02, T-12, T-15, T-19, T-20, T-37, T-43
 - Other ADRs: [1. Run on Azure and kind, design AWS](0001-run-on-azure-and-kind-design-aws.md),
   [3. Build a thin model gateway](0003-build-a-thin-model-gateway.md)
+
+## Note of 2026-10-07 (S079): GKE against a self-managed twin
+
+Amended on 2026-10-07 (S079): this record chose GKE in Standard mode, and S078
+wrote it as a Terraform module in `infra/terraform/gcp/` that is never applied.
+S079's design adds a self-managed twin of that cluster, to be called
+`infra/terraform/gcp-kubeadm/`: three Compute Engine instances in the shape of
+the AWS self-managed cluster, with the same cloud-init and the join command in
+Secret Manager, validated and scanned and never applied, with no command that
+creates it. A later contract of S079 writes it as a scaffold. **It does not
+exist yet: every cell of the twin's column below is designed.** The text above
+stands as it was decided; this note adds the comparison and changes no row.
+
+**Nothing was applied on Google Cloud.** No project exists for this repository,
+no billing account was opened for it and no credential for Google Cloud is on
+any machine that works on it (`infra/terraform/gcp/README.md`). The left column
+is what the scaffold declares, not what Google's service did. The right column
+is a design, and it says "not yet decided" wherever the step's design is
+silent: nothing is extrapolated from the AWS module's files.
+
+What the comparison is for. A reader who must choose between a managed and a
+self-managed Kubernetes cluster should see what each asks of the person who
+runs it, written from what this repository built and not from a vendor's list
+of features. The project has chosen, in the owner's words of 2026-10-06 as the
+plan's S079 row quotes them: "we will build it on aws, gcp just scafold". In
+practice: on Azure the managed cluster (AKS) is the one the plan builds and
+runs (S020: a plan row, not built); on AWS a cluster whose control plane the
+owner's account runs itself is validated code (`infra/terraform/aws-kubeadm/`),
+to be applied once by the owner for about an hour after its cost is stated and
+the owner says yes, and it has not been applied; on Google Cloud the managed
+cluster is validated code that is never applied, and a self-managed twin is
+designed and not written. Every capability below is labelled validated code,
+tested with stand-ins or designed, and none of the three means deployed.
+
+The labels are those of the AWS note in
+[6. Map the Azure platform to AWS](0006-map-the-azure-platform-to-aws.md),
+which also says what the self-managed work on AWS turned out to be, row by row,
+and which this table does not repeat. **Validated code**: `terraform validate`
+accepts it and an offline scan has read it, and tests read its text; nothing was
+seen to work. **Designed**: named in a document, with no file; no cell here is
+"tested with stand-ins", because the twin has no script. "Not declared" means
+the scaffold has no file for it; "not read" means the cell would need a vendor
+page that no file of this repository cites, and none was fetched for this note.
+In the table `gcp/` is `infra/terraform/gcp/`. The sources are the scaffold, its
+README and comments, the rows and sketch of this record (Google's pages as they
+name them, read on 2026-10-06 and 2026-10-07), and the step's design for the
+twin.
+
+| Row | GKE, as the scaffold declares it | A self-managed twin, designed and not written | Label |
+|---|---|---|---|
+| Who runs and patches the control plane | Google. `google_container_cluster.main` (`gcp/cluster.tf`): GKE Standard in one zone, with a release channel, Dataplane V2, workload identity and one authorized range for the control plane; no instance or disk of a control plane is declared. The cluster is zonal because the free-tier credit covers a zonal cluster and not a regional one (the comment in `gcp/cluster.tf`; this record's table of Autopilot against Standard). What Google does to the control plane: not read | Designed: the owner, on three Compute Engine instances in the AWS cluster's shape (one control-plane node, two workers) with the same cloud-init. How the instances are patched: not yet decided | GKE: validated code. Twin: designed |
+| etcd and its backup | Not declared and not visible: no etcd resource, setting or volume, and no backup. Not read | Designed: the same cloud-init means the same `kubeadm init`, so a stacked etcd on the control-plane instance, as the AWS cluster has. A backup: not yet decided | GKE: not declared. Twin: designed |
+| The cluster's certificates and their renewal | Not declared. The control plane is reachable from one address range with Google Cloud's own public addresses refused (`master_authorized_networks_config`, `gcp_public_cidrs_access_enabled = false`, `gcp/cluster.tf`). How Google issues and renews the cluster's certificates: not read | Designed: kubeadm's own, made on the node by the same cloud-init. The name the API server's certificate carries and any renewal: not yet decided | GKE: not declared. Twin: designed |
+| How a node joins | `google_container_node_pool.main` (`gcp/cluster.tf`): a node service account, a machine type, a count, and `auto_repair` and `auto_upgrade` on; the service makes the nodes join. That they do: not seen (`gcp/README.md`, "What `validate` and the scan cannot see") | Designed: the join command is kept in a Secret Manager secret. How workers read it, which identity may, and what makes the text safe to use: not yet decided. The AWS note in ADR 6 lists what that join needed there (a strict pattern, a Deny on reading other parameters, an order of creation); whether the twin needs the same is not decided | GKE: validated code, the join not seen. Twin: designed |
+| Package and image supply | `image_type = "COS_CONTAINERD"` and Shielded nodes with secure boot and integrity monitoring (`gcp/cluster.tf`). No package and no image version is pinned: the cluster starts on what the release channel offers on the day of an apply (no minimum version). Google's own images: not declared, not read | Designed: the same cloud-init. The AWS scripts call the `aws` CLI and AWS's metadata service (`aws-kubeadm/templates/`), so "the same cloud-init" can mean the same steps and not the same files. Which package source, key pin, manifest check and image the twin uses: not yet decided | GKE: validated code. Twin: designed |
+| The network plugin | Dataplane V2 (`datapath_provider = "ADVANCED_DATAPATH"`), fixed at creation and chosen so that the chart's NetworkPolicies are enforced; `network_policy` is left unset beside it, and whether GKE accepts that is not seen (`gcp/cluster.tf`). One VPC, one subnet with Pod and Service ranges, private nodes behind Cloud NAT (`gcp/network.tf`) | Designed: not yet decided. The AWS cluster uses Calico, because the chart needs NetworkPolicy | GKE: validated code. Twin: designed |
+| Node identity and what a pod can reach of it | A node service account of the module's own with one project role, `roles/container.defaultNodeServiceAccount`, and read access on one Artifact Registry repository (`gcp/cluster.tf`, `gcp/registry.tf`); private nodes; `workload_metadata_config { mode = "GKE_METADATA" }` on the pool. The default pool, removed at once, runs for minutes as the broad Compute Engine default account (the comment cites Google's "About service accounts in GKE", read 2026-10-07). What a pod reaches of a node's credentials under that mode: not declared, not read | Designed: not yet decided | GKE: validated code. Twin: designed |
+| How a pod gets a cloud identity | Workload identity: `workload_identity_config` with the pool `PROJECT.svc.id.goog`, the GKE metadata server on the nodes, and one IAM binding for one Kubernetes ServiceAccount on one regional secret (`gcp/cluster.tf`, `gcp/identity.tf`). Whether a pod gets credentials: not seen | Designed: none is named for the twin; the AWS self-managed cluster has none and the design calls that the largest single thing a managed cluster gives. Not yet decided | GKE: validated code. Twin: designed |
+| Storage and load balancers | Nothing installed into the cluster. `gateway_api_config` on the standard channel is declared (`gcp/cluster.tf`); no Gateway, volume claim or load balancer is. This record says GKE retains persistent disks of claims when a cluster is deleted and attempts, without promising it for every case, to delete the load balancer parts it made (Google's pages, read 2026-10-06): both are outside the state | Designed: not yet decided. If the twin's cloud-init installs only a network plugin, as the AWS one does, a volume claim and a `LoadBalancer` Service would stay pending | GKE: validated code. Twin: designed |
+| Upgrades | `release_channel = REGULAR` and `auto_upgrade = true` on the pool, with no minimum version (`gcp/cluster.tf`): Google moves the versions. What happens during one: not seen | Designed: not yet decided. The AWS self-managed module has no upgrade path | GKE: validated code. Twin: designed |
+| Logs and audit | `logging_config` with `SYSTEM_COMPONENTS` only (`gcp/cluster.tf`). They land in the project's `_Default` bucket, which Google's "Regionalize your logs" (read 2026-10-07, cited in the file) puts in the `global` location: a residency gap the module does not close. Admin Activity audit logs are always written and Data Access logs are off by default (this record's diagnostic-settings row, Google's pages read 2026-10-06); the scaffold declares no audit configuration | Designed: not yet decided | GKE: validated code. Twin: designed |
+| What bills (the resources and their units, no amount) | A cluster management fee per cluster-hour, with a free-tier credit that covers one zonal cluster of a billing account; the two nodes by hour each; boot disks per GiB-hour; Cloud NAT per VM-hour, per address-hour and per GiB processed (`gcp/network.tf`); persistent disks of claims, which outlive the cluster (this record's cost sketch, Google's pricing pages read 2026-10-06). In the same module, not the cluster: Cloud SQL, Artifact Registry, Secret Manager and the budget | Designed: three Compute Engine instances by time and one Secret Manager secret. What else the twin would create: not yet decided | GKE: validated code, billing never observed. Twin: designed |
+| What breaks at night, and who is paged | Nobody is paged: the scaffold declares no alert, and its budget alerts on spend at 50, 80 and 100 percent (`gcp/budget.tf`). The control plane's failures are Google's: not read. The one automatic recovery that any of the three modules declares is `auto_repair = true` on this node pool (`gcp/cluster.tf`) | Designed: nothing is declared, so nobody is paged. The twin has one control-plane instance, so the API would have a single point of failure, as on AWS | GKE: not declared for paging. Twin: designed |
+| What each needs before an apply | None of it exists: no project, no billing account, no credential. Four values with no default (`project_id`, `expected_project_number`, `billing_account`, `api_access_cidr`). No command plans, applies or removes the module, on purpose (`gcp/README.md`); the owner's words for this cloud are "gcp just scafold" | Designed: it is never applied and no command creates it, so nothing is needed | GKE: validated code, no command. Twin: designed |
+
+Why the platform's default stays managed: the reasons are in the AWS note in
+[6. Map the Azure platform to AWS](0006-map-the-azure-platform-to-aws.md), which
+is where the self-managed work was done, and they do not depend on the cloud.
+The self-managed cluster as built on AWS has no backup of etcd, no certificate
+renewal, no pod identity, no volumes, no load balancers, no upgrade path and no
+pager, and what it does have (the join, the supply of packages, the network
+plugin) the reviews showed to be easy to get wrong where no test can see. The
+platform is run by one person and its chart needs volumes, a load balancer and
+an ingress. So on Google Cloud too the default is the managed cluster, and the
+twin exists only to show that the same cluster is the same work on another
+cloud. A row that an apply falsifies is corrected by a further dated note here;
+no apply on this cloud is planned.

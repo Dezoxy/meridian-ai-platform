@@ -8,7 +8,8 @@ keeps true when it lands, not a choice: the choices are in
 [1. Run on Azure and kind](../decisions/0001-run-on-azure-and-kind-design-aws.md)
 and [3. Build a thin model gateway](../decisions/0003-build-a-thin-model-gateway.md).
 It is the side that a mapping to another cloud maps from, so it names no other
-cloud.
+cloud, except in its last section, a comparison that cannot be made without
+saying where the self-managed cluster was written.
 
 ### What this document does and does not own
 
@@ -181,3 +182,72 @@ So that two mappings can be read side by side, each says, for its cloud:
 4. What evidence of the route exists on the provider's side.
 5. What in the repository's code or registry would have to change to carry
    that provider (item "Designed, not built" above), without changing it.
+
+### Managed and self-managed Kubernetes: a comparison for the reader, not a plan
+
+This section is a comparison for the reader and not a plan: it sets AKS, which
+the plan builds, beside a cluster on virtual machines that is not built and not
+planned for Azure. It is the one place where this document names another cloud,
+because the only self-managed cluster the project wrote is on AWS, and the
+comparison cannot be made without saying so (the opening's sentence "it names no
+other cloud" carries that exception and no other). It adds no fact the
+repository does not hold: every cell on the AKS side says what a file holds or
+that none does, and every cell on the other side is what the AWS module declares
+and its reviews found. Written on 2026-10-07 (S079).
+
+What the comparison is for. A reader who must choose between a managed and a
+self-managed Kubernetes cluster should see what each asks of the person who
+runs it, written from what this repository built and not from a vendor's list
+of features. The project has chosen, in the owner's words of 2026-10-06 as the
+plan's S079 row quotes them: "we will build it on aws, gcp just scafold". In
+practice: on Azure the managed cluster (AKS) is the one the plan builds and
+runs (S020: a plan row, not built); on AWS a cluster whose control plane the
+owner's account runs itself is validated code (`infra/terraform/aws-kubeadm/`),
+to be applied once by the owner for about an hour after its cost is stated and
+the owner says yes, and it has not been applied; on Google Cloud the managed
+cluster is validated code that is never applied, and a self-managed twin is
+designed and not written. Every capability below is labelled validated code,
+tested with stand-ins or designed, and none of the three means deployed.
+
+**Nothing in the table was applied, and nothing on Azure exists.** AKS is a plan
+row (S020 is `todo`): in the table's AKS column "plan row only" is this
+document's own status word for that, and where no file says anything the cell
+says "not described". The right-hand column is not an Azure design. It is what
+the AWS module `infra/terraform/aws-kubeadm/` declares, which is validated code
+that `terraform validate` accepts (run by hand on a copy), with two boot scripts
+tested with stand-ins, that is, run against programs that pretend to be the real
+tools; never planned and never applied. That the same work carries over to
+virtual machines on Azure is the design's expectation, which nothing on Azure
+tests, and Azure's own parts (its network, a place to keep a join command, a
+pod's identity) are not designed. The full table of the AWS pair, with the file
+behind each cell and the reviews' findings, is in the note of 2026-10-07 in
+[6. Map the Azure platform to AWS](../decisions/0006-map-the-azure-platform-to-aws.md);
+the Google Cloud pair is in the note in
+[7. Map the Azure platform to Google Cloud](../decisions/0007-map-the-azure-platform-to-google-cloud.md).
+No price is stated here, and no vendor page was fetched for this section.
+
+| Row | AKS, as the repository holds it | A cluster on virtual machines: not built, not planned for Azure. What the AWS module declares | Label |
+|---|---|---|---|
+| Who runs and patches the control plane | Managed is the plan's word for AKS, so the provider's; no file holds an AKS setting yet (S020) | The owner: one instance runs `kubeadm init` once at first boot, and nothing declared patches it afterwards | AKS: plan row only. Other: not planned |
+| etcd and its backup | Not described in any file | A stacked etcd on the control-plane instance's volume, with no backup and no copy off the node | AKS: not described. Other: not planned |
+| The cluster's certificates and their renewal | Not described. The application's certificates are another matter: cert-manager and the certificate form are the same on AKS, only the issuer changes (ADR 4) | kubeadm's own, made on the node; nothing declared renews them, because the cluster is made to live an hour; how long they last was not read | AKS: not described. Other: not planned |
+| How a node joins | Not described: S020 writes the node pool | A one-hour join command kept in a parameter and polled by the workers; the reviews found four faults in it by reading, which no test could see | AKS: not described. Other: not planned |
+| Package and image supply | Not described. The registry is Azure Container Registry, the pipeline pushes to it and deploys by image digest after a manual approval (plan S020 and S022 rows; the rollback runbook): plan row only | Packages from one repository under a pinned signing key that expires on 2026-12-29, a pinned network-plugin manifest, images named by tag, an operating-system image that moves | AKS: plan row only. Other: not planned |
+| The network plugin | Not described. The chart's NetworkPolicies need a plugin that enforces them (the AWS module's choice rests on that); which Azure setting would is S020's | Calico, pinned by version and digest | AKS: not described. Other: not planned |
+| Node identity and what a pod can reach of it | Not described | Session Manager's managed policy on each node role, which allows more than a node needs, and a metadata service at version 2 with hop limit 1, which a pod on the host network is not stopped by | AKS: not described. Other: not planned |
+| How a pod gets a cloud identity | AKS Workload Identity to Key Vault and to Azure OpenAI: plan row only (S020; the arrow's technology string is "HTTPS, workload identity"; T-18, T-42) | None: not built on AWS, and the design calls it the largest single thing a managed cluster gives | AKS: plan row only. Other: designed, not built |
+| Storage and load balancers | Not described. The Azure edge is open between two names (table above) | None: claims and `LoadBalancer` Services stay Pending, so the chart does not run there as it is | AKS: not described. Other: not planned |
+| Upgrades | Not described | None: remove, then apply | AKS: not described. Other: not planned |
+| Logs and audit | Not named anywhere: Log Analytics, Application Insights and Azure Monitor as a backend (list above); diagnostic settings are a plan row with no destination | No audit policy and no log shipped; a node's own boot log only | AKS: plan row only. Other: not planned |
+| What bills (the resources and their units, no amount) | Not described. A subscription budget exists and alerts at 50, 80 and 100 percent of actual spend: it detects and does not stop spend (table above) | Instances by time, root volumes by size, public addresses by time, no control-plane fee | AKS: not described. Other: not planned |
+| What breaks at night, and who is paged | Not described: no Azure monitoring is named and no one is paged; the project's alert rules and runbooks are written for the kind cluster (`docs/operations/README.md`) | Nobody is paged; one control-plane instance is a single point of failure | AKS: not described. Other: not planned |
+| What each needs before an apply | S020 depends on S007, S019, S055 and S056; the subscription is a free trial whose upgrade is pending (table above) | On AWS: a look at the account's vCPU quota and an apply path that does not exist yet. On Azure: nothing is planned, so nothing is needed | AKS: plan row only. Other: not planned |
+
+Why the platform's default stays managed. The self-managed cluster as built on
+AWS has no backup of etcd, no certificate renewal, no pod identity, no volumes,
+no load balancers, no upgrade path and no pager, and what it does have (the
+join, the supply of packages, the network plugin) the reviews showed to be easy
+to get wrong where no test can see. The platform is run by one person and its
+chart needs volumes, a load balancer and an ingress. So on Azure the default is
+AKS, as the plan has it, and no self-managed cluster is planned there. The
+reasons, row by row, are in the AWS note.
