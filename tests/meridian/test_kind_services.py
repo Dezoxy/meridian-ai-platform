@@ -51,6 +51,7 @@ from kindsupport import (
 )
 from servicesupport import REGISTRY_DIR, REPO_ROOT
 
+from meridian.platform.common.certlife import RESTART_SHARE_ENV
 from meridian.platform.common.db import DATABASE_URL_ENV
 from meridian.platform.common.env import REGISTRY_DIR_ENV
 from meridian.platform.common.http import HEALTH_PATH, SMALL_BODY_LIMIT_BYTES
@@ -200,6 +201,9 @@ def test_a_tool_server_accepts_the_host_and_port_its_callers_address_carries(
         # Every container that mounts its certificate names its files, so
         # /healthz watches the one the server serves (S056).
         *TLS_ENV,
+        # Its share of the restart margin, so the services do not all restart
+        # in the same minute at a renewal (S073).
+        RESTART_SHARE_ENV,
     }
     if name == KNOWLEDGE_SERVER:
         expected |= {GATEWAY_URL_ENV}

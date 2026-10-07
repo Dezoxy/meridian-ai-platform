@@ -8,7 +8,8 @@ not Ready.
 Status (S056, S062): written from the policies, the chart and the alert
 rules. The procedure at the end of this page, which watches a renewal, was
 run on the kind cluster on 2026-10-06 and its table says what was seen; the
-steps of "Confirm" and "What to do" were not exercised. cert-manager's
+steps of "Confirm" and "What to do" were not exercised, but for the command
+of step 3 (S073: what one run saw of it is in that step). cert-manager's
 metrics reach Prometheus through the ServiceMonitor `cert-manager` in
 `observability`. That monitor and the first two alerts have been seen on
 the kind cluster (2026-10-05): the target up, the series for the CA and the
@@ -34,11 +35,13 @@ duration, fail the render with a message that names the value. The service's
 restart margin is the application's, the smaller of 24 hours and a sixth of
 the certificate's lifetime
 (`src/meridian/platform/common/certlife.py`), so it is 10 minutes for a
-certificate of one hour. A `renewBefore` under 5 minutes is refused by
-cert-manager's webhook too (asked by a server-side dry run on 2026-10-06:
-1 minute and 4 minutes refused, 5 accepted). The values are tested without
-a cluster; the procedure at the end of this page ran with `duration: 1h`
-and `renewBefore: 30m` on the kind cluster on 2026-10-06.
+certificate of one hour; each service looks at the file its chart-given share
+of one more margin earlier than that (up to five sixths of a margin). A
+`renewBefore` under 5 minutes is refused by cert-manager's webhook too (asked
+by a server-side dry run on 2026-10-06: 1 minute and 4 minutes refused, 5
+accepted). The values are tested without a cluster; the procedure at the end
+of this page ran with `duration: 1h` and `renewBefore: 30m` on the kind
+cluster on 2026-10-06.
 
 ## What you see
 
@@ -122,8 +125,37 @@ k get certificaterequestpolicy
    (`shouldBackoffReissuingOnFailure` in cert-manager v1.21.2, with its
    default minimum and maximum). It does not wait when the Certificate's
    spec no longer matches the pending request. So after a repaired policy
-   the Certificate is not Ready at once; `cmctl renew <name> -n
-   <namespace>` asks again now, where `cmctl` is installed.
+   the Certificate is not Ready at once. On the kind cluster `make
+   cert-renew CERT=<name>` asks again now, for one Certificate of the
+   namespace `meridian` (the names: `k -n meridian get certificate`). It does
+   what `cmctl renew` does and nothing else: it sets the Certificate's
+   `Issuing` condition to `True`, with the reason `ManuallyTriggered`,
+   through the status subresource (cmctl v2.6.1, `pkg/renew/renew.go`, lines
+   216 to 218), carrying every other condition and the version it read, so a
+   Certificate that cert-manager changed in between is refused and the
+   command is run again. cert-manager's issuing controller then makes a new
+   request: the failed one of the earlier attempt is told from a new one by
+   its failure time being before the condition's time (`issuing_controller.go`
+   in cert-manager v1.21.2), which is why the command sets the time to now.
+   The request is Approved or Denied again, so read it as in "Confirm"; a
+   policy that is still wrong denies it again, and the next wait is longer.
+   A Certificate whose `Issuing` condition is already `True` is being issued
+   and is left alone. Status: tested against a stub `kubectl` (the patch it
+   sends, each refusal, the bound on each call). Seen on kind on 2026-10-07
+   (run R3, on the script as it was then): a refusal for no name, for a name
+   that is no Certificate (the names found are listed) and for a name that is
+   no DNS label, each with nothing written; and one renewal of a healthy
+   Certificate (`policy-mcp`), where the status subresource took the patch,
+   cert-manager acted on a write made by `kubectl`, the revision went from 1
+   to 2 within the same second and a new request was Approved and issued; the
+   service's pod kept running on the certificate it had loaded, since a
+   renewal by hand restarts nothing. Not seen: a request after a denied or
+   failed one, which is what the command is for (it needs a policy narrowed
+   before a first deploy), a refusal by a `409` between the read and the
+   write, the script as it is now (it has since changed its holder record and
+   gained a line for `CERT=rate-store`, which no run has met), and a renewal
+   by the operator or of the rate store. `cmctl renew <name> -n <namespace>`
+   does the same where `cmctl` is installed, and is the alternative.
 4. The certificate was renewed but a service still serves the old one:
    a Deployment loads its certificate once, when it starts. Restart it
    with `kubectl -n meridian rollout restart deploy/<service>` and watch
@@ -228,6 +260,19 @@ documentation says it renews a certificate seven days before the end. A
 cluster made again starts the ninety days again, and `make down` and `make up`
 do that.
 
+On kind CloudNativePG renews the database's certificates, and what says when
+it did not is the fifth line of check 10 of `make smoke` (S073), which reads
+the three dates above and fails when the earliest is less than 84 hours away,
+half of the operator's seven days; tested with a stand-in and the real `jq`.
+Seen on kind on 2026-10-07 (run R4d): a pass on the real Cluster, naming
+`platform-db-ca` as the earliest of the three, with 89 days left. Not seen: the
+line failing (no certificate on kind is near its end, and the operator's
+lifetime is in whole days, so the shortest is one) and a renewal by the
+operator. Nothing alerts between two smoke runs: no series holds these dates
+(read on the cluster on 2026-10-06: none of Prometheus's 1,728 series names
+contains `cnpg`), so no rule can read them, and that gap is open. On Azure the
+database and its certificates are the provider's, and the line is not there.
+
 What a renewal needs of the services, read from the code and not seen on a
 cluster: each service mounts the authority's public certificate as a file
 (`/etc/meridian/db-ca/ca.crt`, a directory mount the kubelet refreshes) and
@@ -286,9 +331,15 @@ procedure before step 5.
    `k -n meridian rollout restart deployment`.
 3. Watch, counting from the issuance. About 30 minutes in cert-manager
    renews (a new CertificateRequest, Approved; the Certificate's
-   `notAfter` moves an hour on); at 50 minutes each service sees the newer
-   file and answers 503; about a minute later the kubelet restarts the
-   container. Each of these only reads:
+   `notAfter` moves an hour on); each service sees the newer file and
+   answers 503 from its own time, which the chart spreads across 10 to 18
+   minutes before the end (50 minutes in for the first service by name, about
+   41 for the last; tested with the clock injected. Seen on kind on
+   2026-10-07, run R2: the shares are set on the six services, 0, 1/6, 2/6,
+   3/6, 4/6 and 5/6 in name order. Not seen: the restarts at a renewal, which
+   needs this procedure run again); about a minute later the kubelet restarts
+   the container. Each of
+   these only reads:
 
    ```sh
    k -n meridian get certificate -o custom-columns=NAME:.metadata.name,READY:.status.conditions[0].status,NOTAFTER:.status.notAfter,RENEWAL:.status.renewalTime
@@ -329,9 +380,24 @@ machine:
 
 Two things the watch showed:
 
-1. All six services restart in the same minute, because one deploy issues
+1. All six services restarted in the same minute, because one deploy issues
    their certificates in the same second. With one replica each, nothing
-   answered for about a minute.
+   answered for about a minute. That was before S073: the chart now gives
+   each service a share of its restart margin (its place in the sorted list
+   of services over their count, `MERIDIAN_TLS_RESTART_SHARE`), so the
+   restarts are spread across the margin (100 seconds apart for a one-hour
+   certificate, four hours apart for 90 days) and none comes later than it
+   did. Two replicas of one service would still restart together. This is
+   tested with the chart rendered and the clock injected. The shares were seen
+   set on the six pods on kind (2026-10-07, run R2); the spread of the
+   restarts at a renewal has not been seen on a cluster. The spread holds when
+   the renewal comes before the
+   earliest look at the file: always with the default `renewBefore`, and with a
+   set one when it is longer than one and five sixths of the margin (the
+   one-hour watch's 30 minutes is). A shorter `renewBefore` is not refused: a
+   service whose time has passed stays healthy until the file holds the renewed
+   certificate and then restarts, so those services restart together when the
+   file changes, as all six did, and it costs the spread, never availability.
 2. While the short certificates are in place `make smoke` fails on check 11,
    because a Meridian alert is firing (smoke was not run then: the failure
    follows from the alert firing and from the check's rule). Any

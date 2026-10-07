@@ -55,6 +55,8 @@ RUNTIME = "agent-runtime.meridian.svc:8000"
 API_SERVER = "kubernetes.default.svc:443"
 DATABASE = "platform-db-rw.meridian.svc:5432"
 PROBE_TIMEOUT = "4"
+# What the harness's ``date +%s`` answers, so two runs name the probe Pod alike.
+FIXED_EPOCH = 1790000000
 DEPLOYED = "deployment.apps/claims-api"
 POLICY = "networkpolicy.networking.k8s.io/default-deny"
 PART_OF = "app.kubernetes.io/part-of"
@@ -66,6 +68,7 @@ LABEL_ATTEMPTS = int(
     re.findall(r"^readonly NETWORK_LABEL_ATTEMPTS=(\d+)$", SMOKE_SH, re.M)[0]
 )
 CHECK_FUNCTIONS = (
+    "deployed_services",
     "network_sweep_leftovers",
     "network_probe",
     "network_expect",
@@ -75,6 +78,7 @@ CHECK_FUNCTIONS = (
     "network_database_lines",
     "check_network_database",
     "network_outsider_delete",
+    "check_network_service_policies",
     "check_network_policy",
 )
 PROBE_DEFINITIONS = (
@@ -170,12 +174,17 @@ kctl() {
       [[ ! -e "${STATE}/status-${key}" ]] || return "$(<"${STATE}/status-${key}")" ;;
     *"get deployment claims-api -o json"*)
       cat "${STATE}/deployment.json" ;;
-    *"get deployment claims-api"*)
+    *" get deployment -l "*)
       [[ "${DEPLOYED}" != FAIL ]] || { echo "Error" >&2; return 1; }
       printf "%s" "${DEPLOYED}" ;;
     *"get networkpolicy default-deny"*)
       [[ "${POLICY}" != FAIL ]] || { echo "Error" >&2; return 1; }
       printf "%s" "${POLICY}" ;;
+    *" get networkpolicy -o name"*)
+      # Unset: the default-deny and the Claims API's own policy.
+      [[ "${POLICY_LIST-}" != FAIL ]] || { echo "Error" >&2; return 1; }
+      printf "%s" "${POLICY_LIST-networkpolicy.networking.k8s.io/default-deny
+networkpolicy.networking.k8s.io/claims-api}" ;;
     *" create "*)
       cat >"${STATE}/created.json"
       [[ "${CREATE_STATUS}" == 0 ]] || { echo "Error: create" >&2; return 1; } ;;
@@ -203,6 +212,11 @@ def run_in_bash(
             'fail() { echo "FAIL  $*"; }',
             'skip() { echo "SKIP  $*"; }',
             "sleep() { :; }",
+            # The probe Pod is named by the clock's second; a test that compares
+            # two runs must not see the clock pass a second between them.
+            'date() { if [[ "$*" == +%s ]]; then echo "${FIXED_EPOCH}"; '
+            'else command date "$@"; fi; }',
+            f"FIXED_EPOCH={FIXED_EPOCH}",
             *PROBE_DEFINITIONS,
             one_line_function(SMOKE_SH, "clean_lines"),
             STUB,
@@ -238,6 +252,7 @@ def run_network_policy_check(
     *,
     deployed: str = DEPLOYED,
     policy: str = POLICY,
+    policy_list: str | None = None,
     answers: dict[str, str] | None = None,
     database_before: str = "blocked\n",
     database_after: tuple[str, ...] = ("reached\n",),
@@ -251,8 +266,11 @@ def run_network_policy_check(
 ) -> tuple[list[str], str]:
     """``check_network_policy`` from smoke.sh in bash against a stub ``kctl``.
     ``deployed`` and ``policy`` are what the two lookups print (empty: absent;
-    ``FAIL``: the lookup fails). ``answers`` overrides, by ``host:port``, what
-    the probe in the Claims API's pod prints; ``database_before`` is what the
+    ``FAIL``: the lookup fails): ``deployed`` the Meridian Deployments, one name
+    a line, and ``policy_list`` the NetworkPolicies of the namespace (the
+    default-deny and the Claims API's own). ``answers`` overrides, by
+    ``host:port``, what the probe in the Claims API's pod prints;
+    ``database_before`` is what the
     probe pod prints before it is labelled and ``database_after`` what it prints
     on each try after (the last repeats). ``failing`` maps a target, or ``pod``,
     to the exit status and stderr of its probe; the other statuses are those of
@@ -286,6 +304,7 @@ def run_network_policy_check(
         environment={
             "DEPLOYED": deployed,
             "POLICY": policy,
+            **({} if policy_list is None else {"POLICY_LIST": policy_list}),
             "CREATE_STATUS": str(create_status),
             "WAIT_STATUS": str(wait_status),
             "LABEL_STATUS": str(label_status),
@@ -343,12 +362,14 @@ def test_the_check_skips_while_the_claims_api_is_not_deployed(tmp_path: Path) ->
     assert " create " not in asked
 
 
-def test_the_check_fails_when_it_cannot_look_for_the_claims_api(tmp_path: Path) -> None:
+def test_the_check_fails_when_it_cannot_look_for_the_deployments(
+    tmp_path: Path,
+) -> None:
     lines, asked = run_network_policy_check(tmp_path, deployed="FAIL")
 
     (line,) = lines
     assert line.startswith(
-        "FAIL  network policy: could not look for deployment/claims-api"
+        "FAIL  network policy: could not look for the Meridian deployments"
     )
     assert " exec " not in asked
 

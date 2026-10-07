@@ -154,12 +154,14 @@ def test_deploy_migrates_seeds_installs_ingests_and_then_waits_in_that_order() -
     # approver-policy with its five policies. So is the rate store's Secret
     # (S066), which `make up` makes: a pod that cannot read it would not start,
     # after the Jobs had run. The store is waited for before the gateway, whose
-    # every call (the ingestion's too) needs it.
+    # every call (the ingestion's too) needs it. Meridian's alert rules (S073)
+    # are the first change, after the checks and before the build.
     assert main_sequence() == [
         "require_database",
         "require_issuer",
         "require_approval",
         "require_rate_store_secret",
+        "apply_alert_rules",
         "build_image",
         'run_job "meridian-migrate-${tag}" migrate',
         'run_job "meridian-seed-${tag}" seed',
@@ -266,14 +268,21 @@ def run_ingest_corpus(count: str) -> tuple[list[str], str]:
             "set -euo pipefail",
             "NAMESPACE=meridian; tag=abc; image=meridian:abc; ingested_at=''",
             *re.findall(r"^readonly CHUNK_COUNT_SQL=.*$", COMMON_SH, re.M),
+            *re.findall(
+                r"^readonly (?:PSQL_OPTIONS|DELETE_TIMEOUT)=.*$", DEPLOY_SH, re.M
+            ),
             'log() { echo "LOG $*"; }',
             'die() { echo "DIE $*"; exit 1; }',
+            function_definition(COMMON_SH, "printable_ascii"),
             "job_state() { echo succeeded; }",
             'run_job() { echo "RUN $*"; }',
             "kctl() {",
             '  case "$*" in',
             '    *"delete jobs"*) echo DELETE ;;',
-            '    *" exec "*) [[ "${COUNT}" != FAIL ]] || return 1; echo "${COUNT}" ;;',
+            # FAIL is psql's own error: kubectl says the command ended with a status.
+            '    *" exec "*) if [[ "${COUNT}" == FAIL ]]; then',
+            '      echo "command terminated with exit code 2" >&2; return 1; fi',
+            '      echo "${COUNT}" ;;',
             '    *"get pod"*) echo platform-db-1 ;;',
             '    *"get job"*) echo job.batch/meridian-ingest-abc ;;',
             "  esac",
@@ -303,15 +312,29 @@ def test_a_succeeded_job_with_chunks_in_the_store_is_not_ingested_again() -> Non
     assert ingested_at == "ingested_at="
 
 
-@pytest.mark.parametrize("count", ["0", "FAIL", "", "not-a-number"])
-def test_a_succeeded_job_with_no_chunks_or_no_answer_ingests_again(count: str) -> None:
-    lines, ingested_at = run_ingest_corpus(count)
+def test_a_succeeded_job_with_no_chunks_ingests_again() -> None:
+    lines, ingested_at = run_ingest_corpus("0")
 
     assert not [line for line in lines if "already in the store" in line]
-    (reason,) = [line for line in lines if "ingesting again" in line]
-    assert "not-a-number" not in reason  # an answer is never quoted
+    assert len([line for line in lines if "ingesting again" in line]) == 1
     assert [line for line in lines if line.startswith("RUN")]
     assert re.fullmatch(r"ingested_at=\d+", ingested_at)  # the wait is armed
+
+
+@pytest.mark.parametrize("count", ["FAIL", "", "not-a-number"])
+def test_a_succeeded_job_with_no_number_for_a_count_stops_and_ingests_nothing(
+    count: str,
+) -> None:
+    # K13: an error of psql's own, an empty answer and a garbled one are not "no
+    # rows" (the table exists: migrate ran before). The only answer that ingests
+    # again is 0. Every case of the kind is in test_kind_deploy_chunk_count.py.
+    with pytest.raises(subprocess.CalledProcessError) as stopped:
+        run_ingest_corpus(count)
+
+    lines = stopped.value.stdout.splitlines()
+    assert [line for line in lines if line.startswith("DIE")]
+    assert not [line for line in lines if line.startswith(("RUN", "DELETE"))]
+    assert "not-a-number" not in stopped.value.stdout  # an answer is never quoted
 
 
 def test_deploy_prints_a_jobs_log_through_the_printable_ascii_filter() -> None:
@@ -424,6 +447,7 @@ def run_ingest_then_token_window(
             "}",
             "NAMESPACE=meridian tag=abc image=stub:abc",
             *re.findall(r"^readonly TOKEN_WINDOW_SECONDS=\d+$", DEPLOY_SH, re.M),
+            *re.findall(r"^readonly DELETE_TIMEOUT=.*$", DEPLOY_SH, re.M),
             'ingested_at=""',
             function_definition(DEPLOY_SH, "ingest_corpus"),
             function_definition(DEPLOY_SH, "wait_for_token_window"),
@@ -460,13 +484,12 @@ def test_deploy_says_it_skipped_the_token_window_when_the_ingestion_was_not_run(
     assert len([line for line in done.stdout.splitlines() if "skipped" in line]) == 1
 
 
-@pytest.mark.parametrize(
-    ("job", "chunks"), [("succeeded", "0"), ("succeeded", ""), ("absent", "")]
-)
+@pytest.mark.parametrize("job", ["succeeded", "absent"])
 def test_deploy_waits_as_before_and_prints_no_skip_when_this_run_ran_the_ingestion(
-    job: str, chunks: str
+    job: str,
 ) -> None:
-    done = run_ingest_then_token_window(job=job, chunks=chunks)
+    # The count is 0 where the Job succeeded; where it is absent nothing is counted.
+    done = run_ingest_then_token_window(job=job, chunks="0")
 
     assert done.returncode == 0, done.stderr
     lines = done.stdout.splitlines()

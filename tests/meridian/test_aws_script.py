@@ -500,6 +500,181 @@ def test_validate_runs_terraform_with_no_aws_credential_at_all(tree: Tree) -> No
     assert "PATH" in names  # the run did reach the stub, and it saw a path
 
 
+# ── validate takes the name of a module (S078) ───────────────────────────────
+
+GOOGLE_CREDENTIALS = {
+    "GOOGLE_APPLICATION_CREDENTIALS": "/nonexistent/a-key-file",
+    "GOOGLE_CREDENTIALS": "not-a-real-credential",
+    "GOOGLE_OAUTH_ACCESS_TOKEN": "not-a-real-token",
+    "GOOGLE_CLOUD_PROJECT": "example-project",
+    "CLOUDSDK_CORE_PROJECT": "example-project",
+    "CLOUDSDK_AUTH_ACCESS_TOKEN_FILE": "/nonexistent/a-token-file",
+    "CLOUDSDK_CONFIG": "/nonexistent/a-gcloud-directory",
+}
+# Every name that could carry a credential of a cloud: none may reach the
+# programs of a validate, whichever module it checks.
+CREDENTIAL_PREFIXES = ("AWS_", "GOOGLE_", "CLOUDSDK_", "ARM_", "AZURE_")
+
+
+def with_a_gcp_directory(tree: Tree) -> Path:
+    """The stand-in tree has the AWS module's directory only; the Google Cloud
+    one is made by the tests that name it."""
+    gcp = tree.root / "infra" / "terraform" / "gcp"
+    gcp.mkdir()
+    (gcp / "main.tf").write_text("# a stand-in module\n")
+    return gcp
+
+
+def run_words(tree: Tree, *words: str, **env: str) -> subprocess.CompletedProcess[str]:
+    """The script with these words exactly (tree.run takes one sub-command)."""
+    return subprocess.run(
+        tree.command(*words),
+        capture_output=True,
+        text=True,
+        env={**tree.base_env, **env},
+        cwd=tree.root,
+        stdin=subprocess.DEVNULL,
+        timeout=60,
+        check=False,
+    )
+
+
+def test_validate_with_the_word_gcp_runs_the_three_commands_on_the_gcp_directory(
+    tree: Tree,
+) -> None:
+    gcp = with_a_gcp_directory(tree)
+
+    done = run_words(tree, "validate", "gcp")
+
+    assert done.returncode == 0, everything_printed(done)
+    assert tree.subcommands() == ["fmt", "init", "validate"]
+    for call in tree.calls():
+        assert f"-chdir={gcp} " in call
+        assert f"-chdir={tree.module}" not in call
+    fmt, init, _ = tree.calls()
+    assert "-check" in fmt
+    assert "-backend=false" in init
+    assert "-lockfile=readonly" in init
+
+
+def test_validate_with_the_word_aws_checks_the_aws_directory_as_with_no_word(
+    tree: Tree,
+) -> None:
+    with_a_gcp_directory(tree)
+
+    done = run_words(tree, "validate", "aws")
+
+    assert done.returncode == 0, everything_printed(done)
+    assert tree.subcommands() == ["fmt", "init", "validate"]
+    for call in tree.calls():
+        assert f"-chdir={tree.module} " in call
+
+
+def test_a_format_difference_in_the_gcp_module_names_the_gcp_directory(
+    tree: Tree,
+) -> None:
+    with_a_gcp_directory(tree)
+    tree.write_stub_env({"STUB_FMT_STATUS": "3"})
+
+    done = run_words(tree, "validate", "gcp")
+
+    assert done.returncode != 0
+    assert "terraform -chdir=infra/terraform/gcp fmt" in done.stderr
+    assert "infra/terraform/aws" not in done.stderr
+    assert tree.subcommands() == ["fmt"]
+
+
+@pytest.mark.parametrize(
+    "words",
+    [
+        ["validate", "azure"],
+        ["validate", "foundation"],
+        ["validate", "GCP"],
+        ["validate", "gcp/"],
+        ["validate", "gcp "],
+        ["validate", ""],
+        ["validate", "infra/terraform/gcp"],
+        ["validate", "/nonexistent"],
+        ["validate", "."],
+        ["validate", ".."],
+        ["validate", "../aws"],
+        ["validate", "gcp/../aws"],
+        ["validate", "-chdir=/nonexistent"],
+        ["validate", "aws", "gcp"],
+        ["validate", "gcp", "gcp"],
+        ["validate", "gcp", "aws"],
+    ],
+)
+def test_validate_with_any_other_word_or_with_two_is_refused_before_a_program_runs(
+    tree: Tree, words: list[str]
+) -> None:
+    with_a_gcp_directory(tree)
+
+    done = run_words(tree, *words)
+
+    assert done.returncode == 2, everything_printed(done)
+    assert "usage:" in done.stderr
+    assert tree.calls() == []
+    assert tree.aws_calls() == []
+
+
+@pytest.mark.parametrize("subcommand", ["plan", "apply", "destroy"])
+@pytest.mark.parametrize("word", ["gcp", "aws"])
+def test_plan_apply_and_the_removal_take_no_word_and_refuse_one(
+    tree: Tree, subcommand: str, word: str
+) -> None:
+    with_a_gcp_directory(tree)
+    with_local_file(tree)
+    with_saved_plan(tree)
+
+    done = run_words(tree, subcommand, word)
+
+    assert done.returncode == 2, everything_printed(done)
+    assert "usage:" in done.stderr
+    assert tree.calls() == []
+    assert tree.aws_calls() == []
+
+
+def test_the_usage_line_names_the_modules_validate_takes_and_keeps_its_old_form(
+    tree: Tree,
+) -> None:
+    done = run_words(tree)
+
+    assert done.returncode == 2
+    assert "validate|plan|apply|destroy" in done.stderr
+    assert "validate [aws|gcp]" in done.stderr
+    assert tree.calls() == []
+
+
+def test_the_scripts_header_says_validate_takes_a_module_name() -> None:
+    header = (TERRAFORM_DIR / "aws.sh").read_text(encoding="utf-8").split("set +x")[0]
+
+    assert "validate gcp" in header
+    assert "never planned" in header
+
+
+@pytest.mark.parametrize("words", [["validate"], ["validate", "gcp"]])
+def test_validate_runs_terraform_with_no_credential_name_of_any_cloud(
+    tree: Tree, words: list[str]
+) -> None:
+    with_a_gcp_directory(tree)
+
+    done = run_words(
+        tree,
+        *words,
+        **GOOGLE_CREDENTIALS,
+        **CREDENTIALS,
+        AWS_REGION="eu-central-1",
+        AZURE_CLIENT_ID="00000000-0000-0000-0000-000000000000",
+    )
+
+    assert done.returncode == 0, everything_printed(done)
+    names = env_names(tree.terraform_env())
+    assert {n for n in names if n.startswith(CREDENTIAL_PREFIXES)} == set()
+    assert names - SHELL_ADDS <= BASE_NAMES
+    assert "PATH" in names  # the run did reach the stub, and it saw a path
+
+
 # ── the pin: what plan, apply and removal refuse ─────────────────────────────
 
 REFUSING = ("plan", "apply", "destroy")

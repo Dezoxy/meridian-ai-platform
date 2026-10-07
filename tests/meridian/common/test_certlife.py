@@ -4,6 +4,7 @@
 import dataclasses
 import logging
 from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
@@ -458,3 +459,197 @@ def test_a_pem_block_that_is_not_a_certificate_raises_too(tmp_path: Path) -> Non
 
     assert GARBAGE not in str(raised.value)
     assert str(broken) not in str(raised.value)
+
+
+# ── the share of the margin (S073): the services' restarts are spread ─────────
+SERVICES_IN_CHART = 6
+
+
+def shared(not_before: datetime, lifetime: timedelta, place: int) -> LoadedCertificate:
+    """A certificate of ``lifetime`` that the ``place``-th of six services loaded,
+    with the share the chart gives it (place over count), as text through the
+    environment's own parse."""
+    return LoadedCertificate(
+        not_before=not_before,
+        not_after=not_before + lifetime,
+        share=float(str(place / SERVICES_IN_CHART)),
+    )
+
+
+def restart_times(lifetime: timedelta) -> list[datetime]:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    return [
+        shared(start, lifetime, place).restart_at for place in range(SERVICES_IN_CHART)
+    ]
+
+
+def test_the_variable_is_named_in_the_style_of_the_certificates_others() -> None:
+    assert certlife.RESTART_SHARE_ENV == "MERIDIAN_TLS_RESTART_SHARE"
+
+
+@pytest.mark.parametrize("environ", [{}, {certlife.RESTART_SHARE_ENV: ""}])
+def test_an_absent_or_empty_share_is_zero(
+    ca: CertificateAuthority, environ: dict[str, str]
+) -> None:
+    pair, _, _ = issue(ca, timedelta(days=90))
+
+    loaded = load_certificate({**environ_of(pair), **environ})
+
+    assert loaded is not None
+    assert loaded.share == 0.0
+
+
+@pytest.mark.parametrize("text", ["0", "0.0", "0.5", "0.8333333333333334", "0.999"])
+def test_a_share_in_zero_to_below_one_is_read(
+    ca: CertificateAuthority, text: str
+) -> None:
+    pair, _, _ = issue(ca, timedelta(days=90))
+
+    loaded = load_certificate({**environ_of(pair), certlife.RESTART_SHARE_ENV: text})
+
+    assert loaded is not None
+    assert loaded.share == float(text)
+
+
+@pytest.mark.parametrize(
+    "text", ["1", "1.0", "1.5", "-0.1", "-1", "nan", "inf", "-inf", "abc", "0,5"]
+)
+def test_a_share_that_is_not_a_number_below_one_refuses_the_start(
+    ca: CertificateAuthority, text: str
+) -> None:
+    pair, _, _ = issue(ca, timedelta(days=90))
+
+    with pytest.raises(SettingsError) as raised:
+        load_certificate({**environ_of(pair), certlife.RESTART_SHARE_ENV: text})
+
+    assert certlife.RESTART_SHARE_ENV in str(raised.value)
+    assert text not in str(raised.value).replace(certlife.RESTART_SHARE_ENV, "")
+    assert raised.value.__cause__ is None
+    assert raised.value.__suppress_context__ is True
+
+
+def test_a_bad_share_is_refused_even_when_no_certificate_is_named() -> None:
+    with pytest.raises(SettingsError):
+        load_certificate({certlife.RESTART_SHARE_ENV: "1"})
+
+
+def test_a_share_of_zero_restarts_exactly_when_it_did_before() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    ninety_days = LoadedCertificate(start, start + timedelta(days=90))
+    one_hour = LoadedCertificate(start, start + timedelta(hours=1))
+
+    assert ninety_days.restart_at == ninety_days.not_after - timedelta(hours=24)
+    assert one_hour.restart_at == one_hour.not_after - timedelta(minutes=10)
+    assert ninety_days.share == one_hour.share == 0.0
+
+
+def test_six_services_of_a_one_hour_certificate_restart_100_seconds_apart() -> None:
+    times = restart_times(timedelta(hours=1))
+
+    gaps = {earlier - later for earlier, later in pairwise(times)}
+
+    assert gaps == {timedelta(seconds=100)}
+
+
+def test_six_services_of_a_90_day_certificate_restart_4_hours_apart() -> None:
+    times = restart_times(timedelta(days=90))
+
+    gaps = {earlier - later for earlier, later in pairwise(times)}
+
+    assert gaps == {timedelta(hours=4)}
+
+
+@pytest.mark.parametrize(
+    "lifetime", [timedelta(hours=1), timedelta(days=3), timedelta(days=90)]
+)
+def test_no_service_restarts_later_than_it_did_before_the_share(
+    lifetime: timedelta,
+) -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    before_the_share = LoadedCertificate(start, start + lifetime).restart_at
+
+    times = restart_times(lifetime)
+
+    assert times[0] == before_the_share
+    assert all(moment <= before_the_share for moment in times)
+
+
+@pytest.mark.parametrize(
+    "lifetime", [timedelta(hours=1), timedelta(days=3), timedelta(days=90)]
+)
+def test_every_restart_comes_after_the_renewal_at_the_default_renew_before(
+    lifetime: timedelta,
+) -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    renewal = start + lifetime - lifetime / 3  # cert-manager's default
+
+    times = restart_times(lifetime)
+
+    assert all(moment > renewal for moment in times)
+
+
+def test_the_last_service_restarts_at_most_one_and_five_sixths_margins_early() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    loaded = shared(start, timedelta(days=90), SERVICES_IN_CHART - 1)
+
+    early = loaded.not_after - loaded.restart_at
+
+    assert early < 2 * RESTART_MARGIN
+    assert abs(early - RESTART_MARGIN * 11 / 6) < timedelta(milliseconds=1)
+
+
+def test_a_share_moves_the_first_look_at_the_file_earlier_by_that_share_of_the_margin(
+    ca: CertificateAuthority,
+) -> None:
+    pair, not_before, not_after = issue(ca, timedelta(days=90))
+    loaded = LoadedCertificate(not_before, not_after, pair.cert, share=0.5)
+    reissue(ca, not_before + timedelta(days=60), not_after + timedelta(days=60))
+    unshared_restart = not_after - RESTART_MARGIN
+
+    assert loaded.restart_at == unshared_restart - RESTART_MARGIN / 2
+    assert loaded.verdict(loaded.restart_at - SECOND) == "far"
+    # The renewed file is read from the new time on, and at the time it was
+    # read before the share.
+    assert loaded.verdict(loaded.restart_at) == "renewed"
+    assert loaded.verdict(unshared_restart) == "renewed"
+
+
+def test_with_a_share_an_unrenewed_file_stays_healthy_over_the_wider_window(
+    ca: CertificateAuthority,
+) -> None:
+    pair, not_before, not_after = issue(ca, timedelta(days=90))
+    loaded = LoadedCertificate(not_before, not_after, pair.cert, share=0.5)
+
+    inside_the_widened_window = not_after - RESTART_MARGIN - SECOND
+
+    assert loaded.verdict(inside_the_widened_window) == "not-renewed"
+    assert loaded.near_end(inside_the_widened_window) is False
+    assert loaded.verdict(not_after) == "ended"
+
+
+def test_a_renewal_after_a_services_restart_time_costs_the_spread_not_health(
+    ca: CertificateAuthority,
+) -> None:
+    # One hour, a margin of 10 minutes; share 5/6 looks at the file 18 min 20 s
+    # before the end, share 0 at 10 minutes. The renewal comes 5 minutes before
+    # the end: after both looks, so the rule must read the file and not the
+    # clock alone.
+    pair, not_before, not_after = issue(ca, timedelta(hours=1))
+    now = not_before
+    last = LoadedCertificate(not_before, not_after, pair.cert, share=5 / 6)
+    first = LoadedCertificate(not_before, not_after, pair.cert, share=0.0)
+    last_check = expiry_check(last, lambda: now)
+    first_check = expiry_check(first, lambda: now)
+
+    eighteen_twenty_early = not_after - timedelta(minutes=18, seconds=20)
+    assert abs(last.restart_at - eighteen_twenty_early) < timedelta(milliseconds=1)
+    now = last.restart_at
+    assert last.verdict(now) == "not-renewed"
+    assert (last_check(), first_check()) == (False, False)
+    now = first.restart_at
+    assert (last_check(), first_check()) == (False, False)
+
+    now = not_after - timedelta(minutes=5)
+    reissue(ca, not_before + timedelta(minutes=30), not_after + timedelta(hours=1))
+
+    assert (last_check(), first_check()) == (True, True)

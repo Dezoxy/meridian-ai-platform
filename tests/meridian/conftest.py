@@ -51,6 +51,7 @@ from dbsupport import (
     require_loopback,
     session_passwords,
 )
+from jqsupport import stop_without_jq
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
 from redissupport import RateKeys
@@ -85,6 +86,13 @@ def pytest_configure_node(node: Any) -> None:
     """
     passwords = node.config.stash.setdefault(_PASSWORDS, new_passwords())
     node.workerinput[WORKERINPUT_KEY] = passwords
+
+
+@pytest.fixture
+def jq_installed() -> None:
+    """What ``requires_jq`` names (``jqsupport.py``): a missing ``jq`` skips the
+    test on a developer's machine and fails it under ``GITHUB_ACTIONS=true``."""
+    stop_without_jq()
 
 
 @pytest.fixture(autouse=True)

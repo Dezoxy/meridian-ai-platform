@@ -54,8 +54,11 @@ before rolling anything back.
 
 - **The image** is built from the working tree by `make deploy` and
   tagged with the first twelve hex digits of its own ID. An unchanged
-  tree gives the same tag. Old images stay on the node until the cluster
-  is deleted. `make deploy` takes no tag: it always builds what is
+  tree gives the same tag. Old images stay on the node until a person
+  removes them (`make images` prints the command for the ones nothing names)
+  or the cluster is deleted; the chart keeps two old ReplicaSets of each
+  Deployment (`revisionHistoryLimit`), and the images they name are a
+  rollback's targets. `make deploy` takes no tag: it always builds what is
   checked out.
 - **The registry** (`config/registry/`) is part of the image and is read
   once when a service starts. So a registry change is a release.

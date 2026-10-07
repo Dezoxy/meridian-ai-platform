@@ -388,6 +388,100 @@ def test_a_rollbacks_target_beside_an_unused_image_is_left_out_of_the_command(
     assert f"meridian:{THIRD}" not in "\n".join(removal_commands(done.stdout))
 
 
+def test_the_note_on_a_kept_image_names_the_charts_bound_on_old_replica_sets(
+    tmp_path: Path,
+) -> None:
+    running = rollout(replicasets=[f"meridian:{THIRD}"])
+
+    done, _ = run_images(tmp_path, running=running)
+
+    (kept,) = [
+        line for line in done.stdout.splitlines() if line.startswith("==> kept, with")
+    ]
+    assert "revisionHistoryLimit" in kept
+    assert "no command" in kept
+
+
+def in_use_by(*images: str) -> str:
+    """The workloads' JSON with one Deployment that runs ``images``."""
+    return workloads(deployment=list(images), cronjob=[f"meridian:{SECOND}"])
+
+
+@pytest.mark.parametrize(
+    "image",
+    [
+        "registry.example/meridian:{tag}",
+        "registry.example:5000/meridian:{tag}",
+        "localhost:5000/team/meridian:{tag}",
+        "meridian-other:{tag}",
+    ],
+)
+def test_a_reference_to_another_repository_is_not_the_local_image_in_use(
+    tmp_path: Path, image: str
+) -> None:
+    # THIRD is nothing's tag here: a lookalike of another registry (or with a
+    # port in its host) must not keep it from being listed, and must not break
+    # the read of the colon before the port.
+    in_use = in_use_by(f"meridian:{FIRST}", image.format(tag=THIRD))
+
+    done, _ = run_images(tmp_path, in_use=in_use)
+
+    assert done.returncode == 0, done.stderr
+    assert marks(done.stdout.split(f"kind node {NODE}")[0])[f"meridian:{THIRD}"] == (
+        "unused"
+    )
+
+
+@pytest.mark.parametrize(
+    "image",
+    [
+        "docker.io/library/meridian:{tag}",
+        "meridian:{tag}@sha256:" + "0123456789abcdef" * 4,
+        "docker.io/library/meridian:{tag}@sha256:" + "0123456789abcdef" * 4,
+    ],
+)
+def test_a_reference_to_the_local_image_is_read_with_its_registry_or_digest(
+    tmp_path: Path, image: str
+) -> None:
+    in_use = in_use_by(f"meridian:{FIRST}", image.format(tag=THIRD))
+
+    done, _ = run_images(tmp_path, in_use=in_use)
+
+    assert done.returncode == 0, done.stderr
+    assert marks(done.stdout.split(f"kind node {NODE}")[0])[f"meridian:{THIRD}"] == (
+        "in use"
+    )
+
+
+def test_a_reference_with_no_tag_is_the_latest_tag(tmp_path: Path) -> None:
+    engine = ENGINE + "meridian:latest 0123456789ab 100MB\n"
+
+    done, _ = run_images(
+        tmp_path, engine=engine, in_use=in_use_by(f"meridian:{FIRST}", "meridian")
+    )
+
+    shown = marks(done.stdout.split(f"kind node {NODE}")[0])
+    assert shown["meridian:latest"] == "in use"
+
+
+@pytest.mark.parametrize("where", ["a template", "a replica set"])
+def test_a_digest_only_reference_stops_the_listing_and_prints_no_command(
+    tmp_path: Path, where: str
+) -> None:
+    # `meridian@sha256:...` names no tag, so which tag it runs cannot be told:
+    # a listing that guessed could print a command for an image in use.
+    digest = "meridian@sha256:" + "fedcba9876543210" * 4
+    if where == "a template":
+        done, _ = run_images(tmp_path, in_use=in_use_by(digest))
+    else:
+        done, _ = run_images(tmp_path, running=rollout(replicasets=[digest]))
+
+    assert done.returncode != 0
+    assert removal_commands(done.stdout) == []
+    assert "no tag" in done.stderr
+    assert "fedcba98" not in done.stdout + done.stderr
+
+
 def test_a_pod_with_no_template_names_its_image_in_use_and_so_does_a_rollout(
     tmp_path: Path,
 ) -> None:
@@ -597,6 +691,61 @@ def test_a_listing_that_fails_alone_is_an_error_and_prints_no_removal_command(
     assert removal_commands(done.stdout) == []
     assert "image rm" not in done.stdout
     assert "unused by definition" not in done.stdout
+
+
+@pytest.mark.parametrize(
+    "answers",
+    [
+        {"in_use": "this is not json"},
+        {"in_use": "{}"},
+        {"in_use": ""},
+        {"in_use": "\n"},
+        {"running": "this is not json"},
+        {"running": "{}"},
+        {"running": ""},
+        {"running": "\n"},
+    ],
+    ids=[
+        "workloads-not-json",
+        "workloads-no-items",
+        "workloads-empty-answer",
+        "workloads-blank-answer",
+        "rollout-not-json",
+        "rollout-no-items",
+        "rollout-empty-answer",
+        "rollout-blank-answer",
+    ],
+)
+def test_a_read_of_the_tags_in_use_that_cannot_be_made_stops_with_a_sentence(
+    tmp_path: Path, answers: dict[str, str]
+) -> None:
+    # The cluster answered, but not with a list the script can read. The first
+    # of the two reads in "used" ended in an empty list that no check saw, and
+    # every image printed as unused with its removal command.
+    done, _ = run_images(tmp_path, **answers)
+
+    assert done.returncode != 0
+    last = done.stderr.strip().splitlines()[-1]
+    assert last.startswith("error: ")
+    assert "cannot read the tags in use" in last
+    assert removal_commands(done.stdout) == []
+    assert "image rm" not in done.stdout
+    assert marks(done.stdout) == {}
+
+
+def test_a_list_with_no_workload_that_names_the_image_is_still_a_valid_read(
+    tmp_path: Path,
+) -> None:
+    # The guard must not turn a true empty answer into an error: a namespace
+    # whose workloads name no meridian image reads as nothing in use.
+    done, _ = run_images(
+        tmp_path,
+        in_use=json.dumps({"kind": "List", "items": []}),
+        running=json.dumps({"kind": "List", "items": []}),
+    )
+
+    assert done.returncode == 0, done.stderr
+    assert set(marks(done.stdout).values()) == {"unused"}
 
 
 def test_an_engine_that_fails_is_an_error_and_prints_no_removal_command(

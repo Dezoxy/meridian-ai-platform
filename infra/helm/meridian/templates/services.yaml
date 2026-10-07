@@ -73,6 +73,7 @@ metadata:
     {{- include "meridian.labels" $name | nindent 4 }}
 spec:
   replicas: {{ $service.replicas }}
+  revisionHistoryLimit: {{ include "meridian.revisionHistoryLimit" $ }}
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ $name }}
@@ -114,6 +115,8 @@ spec:
             {{- with include "meridian.tlsEnv" (dict "root" $ "mounts" true "serves" $service.tls) | trim }}
             {{- . | nindent 12 }}
             {{- end }}
+            - name: MERIDIAN_TLS_RESTART_SHARE
+              value: {{ include "meridian.restartShare" (dict "root" $ "name" $name) | quote }}
           readinessProbe:
             {{- include "meridian.probe" (dict "probe" $.Values.probes.readiness "tls" $service.tls) | nindent 12 }}
           livenessProbe:
