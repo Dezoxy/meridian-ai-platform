@@ -16,8 +16,6 @@ names case IDs and counts.
 import hashlib
 import json
 import os
-import subprocess
-import sys
 from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
@@ -30,7 +28,6 @@ from evalsupport import (
     ToolCapture,
     another_database,
     call_lines,
-    golden_run_enabled,
     recorded_gateway,
     totals_line,
 )
@@ -654,72 +651,6 @@ def test_a_string_that_holds_a_cases_sentence_is_refused_by_the_writer() -> None
     check_no_case_text('{"note": "nothing of a case"}', cases)
 
 
-def test_the_injection_variable_alone_does_not_start_the_paid_run() -> None:
-    assert not injection_run_enabled({})
-    assert not injection_run_enabled({RECORD_ENV: "1"})
-    assert not injection_run_enabled({LIVE_ENV: "1"})
-    assert not injection_run_enabled({LIVE_ENV: "1", "MERIDIAN_EVAL_RECORD": "1"})
-    assert not injection_run_enabled({LIVE_ENV: "1", RECORD_ENV: "0"})
-    assert injection_run_enabled({LIVE_ENV: "1", RECORD_ENV: "1"})
-
-
-def _pytest_in_a_clean_environment(target: str, name: str, **variables: str) -> str:
-    """The summary lines of a pytest run of the tests named ``name`` in
-    ``target``, with every ``MERIDIAN_*`` variable removed and ``variables`` set.
-    No endpoint and no database address is given, so a test that started would
-    stop before any call."""
-    environment = {k: v for k, v in os.environ.items() if not k.startswith("MERIDIAN_")}
-    environment.update(variables)
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            target,
-            "-k",
-            name,
-            "-rs",
-            "-q",
-            "-p",
-            "no:cacheprovider",
-            "-p",
-            "no:xdist",
-        ],
-        cwd=REPO_ROOT,
-        env=environment,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=120,
-    )
-    return result.stdout
-
-
-def test_setting_the_golden_recordings_variable_does_not_start_the_paid_run() -> None:
-    output = _pytest_in_a_clean_environment(
-        "tests/meridian/test_injection_record.py",
-        "record_the_injection_cases_with_the_live_model",
-        MERIDIAN_EVAL_RECORD="1",
-        MERIDIAN_LIVE_AZURE="1",
-    )
-
-    assert "1 skipped" in output, output[-400:]
-    assert "make eval-injection-record" in output
-    assert "spends money" in output
-
-
-def test_setting_the_paid_runs_variables_does_not_start_the_golden_recording() -> None:
-    output = _pytest_in_a_clean_environment(
-        "tests/meridian/test_evaluation_stack.py",
-        "test_record_the",
-        MERIDIAN_EVAL_INJECTION_RECORD="1",
-        MERIDIAN_LIVE_AZURE="1",
-    )
-
-    assert "2 skipped" in output, output[-400:]
-    assert "make eval-record" in output
-
-
 # ── what a run may write, and how (S071, L3) ────────────────────────────────
 def small_run(db: DatabaseHandle, behaviour: str):
     """A complete run of the first two asked cases, the first answered by
@@ -800,32 +731,6 @@ def test_a_writer_killed_between_two_files_leaves_none_of_the_three_in_place(
 
     assert len(writes) == 1  # one file was written, to the staging directory
     assert list(out.iterdir()) == []  # none in place, and no staging left
-
-
-def test_the_golden_recording_needs_both_variables_as_the_injection_run_does() -> None:
-    assert not golden_run_enabled({})
-    assert not golden_run_enabled({"MERIDIAN_EVAL_RECORD": "1"})
-    assert not golden_run_enabled({LIVE_ENV: "1"})
-    assert not golden_run_enabled({LIVE_ENV: "1", "MERIDIAN_EVAL_RECORD": "0"})
-    assert not golden_run_enabled({LIVE_ENV: "0", "MERIDIAN_EVAL_RECORD": "1"})
-    assert golden_run_enabled({LIVE_ENV: "1", "MERIDIAN_EVAL_RECORD": "1"})
-
-
-@pytest.mark.parametrize(
-    "variables",
-    [{"MERIDIAN_EVAL_RECORD": "1"}, {"MERIDIAN_LIVE_AZURE": "1"}],
-    ids=["its own variable alone", "the live variable alone"],
-)
-def test_one_variable_alone_does_not_start_the_golden_recording(
-    variables: dict[str, str],
-) -> None:
-    output = _pytest_in_a_clean_environment(
-        "tests/meridian/test_evaluation_stack.py", "test_record_the", **variables
-    )
-
-    assert "2 skipped" in output, output[-400:]
-    assert "make eval-record" in output
-    assert "spends money" in output
 
 
 # ── the paid run ────────────────────────────────────────────────────────────

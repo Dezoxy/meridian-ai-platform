@@ -82,10 +82,14 @@ def live_settings_from(environ: dict[str, str]) -> GatewaySettings:
     ).model_copy(update={"identity_prefix": None})
 
 
-pytestmark = pytest.mark.skipif(
-    os.environ.get(LIVE_ENV) != "1",
-    reason=f"opt-in: set {LIVE_ENV}=1 (make gateway-live)",
-)
+# No time limit: the calls are real and paced (S074).
+pytestmark = [
+    pytest.mark.timeout(0),
+    pytest.mark.skipif(
+        os.environ.get(LIVE_ENV) != "1",
+        reason=f"opt-in: set {LIVE_ENV}=1 (make gateway-live)",
+    ),
+]
 
 
 def test_one_synthetic_prompt_is_answered_by_the_routed_deployment_and_audited(

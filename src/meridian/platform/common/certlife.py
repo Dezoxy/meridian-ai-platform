@@ -1,7 +1,10 @@
 """The certificate a process loaded, and when it should stop saying it is healthy
 (S056, T-89).
 
-A service reads its certificate when it starts. cert-manager renews the Secret
+A service reads its certificate when it starts (the five that serve TLS read it
+once, in ``tlsstart``, which hands this module the certificate its TLS context
+holds; the Claims API reads the file when its app factory runs). cert-manager
+renews the Secret
 before the end and the kubelet rewrites the mounted file, but the process keeps
 the old certificate in memory, and the kubelet's probe verifies no certificate.
 So the service itself says when a restart is worth asking for: ``/healthz``
@@ -167,28 +170,78 @@ def _log_first(verdict: Verdict, not_after: datetime) -> None:
         )
 
 
-def _read_certificate(path: Path) -> LoadedCertificate:
-    """The dates of the first certificate in ``path``. Raise ``OSError`` or
-    ``ValueError``, whose text can quote the path or the content."""
-    certificate = x509.load_pem_x509_certificate(path.read_bytes())
+def _parse_certificate(data: bytes, source: Path) -> LoadedCertificate:
+    """The dates of the first certificate in ``data``, read from ``source``.
+    Raise ``ValueError``, whose text can quote the content."""
+    certificate = x509.load_pem_x509_certificate(data)
     return LoadedCertificate(
         not_before=certificate.not_valid_before_utc.astimezone(UTC),
         not_after=certificate.not_valid_after_utc.astimezone(UTC),
-        source=path,
+        source=source,
     )
 
 
+def _read_certificate(path: Path) -> LoadedCertificate:
+    """The dates of the first certificate in ``path``. Raise ``OSError`` or
+    ``ValueError``, whose text can quote the path or the content."""
+    return _parse_certificate(path.read_bytes(), path)
+
+
+# The certificate a server handed over for this process (S069, R11): the one it
+# parsed from the very bytes its TLS context holds. None for a process that
+# serves no TLS (the Claims API) and for a test that handed none.
+_handed_over: LoadedCertificate | None = None
+
+
+def hand_over_certificate(
+    data: bytes, source: Path, environ: Mapping[str, str]
+) -> LoadedCertificate:
+    """Make the first certificate in ``data`` the process's certificate, and
+    return it: ``load_certificate`` gives it back from now on, whatever the file
+    holds. ``data`` is what the server's TLS context was loaded from and
+    ``source`` the file it came from, which ``/healthz`` reads again inside the
+    margin; the share comes from ``environ``, as in ``load_certificate``.
+
+    Raise ``SettingsError`` carrying neither the bytes nor the path: for bytes
+    that are no certificate it names what was read, the served certificate
+    (``--ssl-certfile``), and for a bad share the variable; nothing is handed
+    over then.
+    """
+    global _handed_over
+    share = _restart_share(environ)
+    try:
+        loaded = _parse_certificate(data, source)
+    except ValueError:
+        raise SettingsError(
+            "the served certificate (--ssl-certfile) cannot be read as a certificate"
+        ) from None
+    _handed_over = dataclasses.replace(loaded, share=share)
+    return _handed_over
+
+
+def forget_handed_over_certificate() -> None:
+    """Take the hand-over back. For tests and nothing else: no service calls it,
+    and a process that handed a certificate over keeps it until it ends."""
+    global _handed_over
+    _handed_over = None
+
+
 def load_certificate(environ: Mapping[str, str]) -> LoadedCertificate | None:
-    """The dates of the first certificate in the file ``MERIDIAN_TLS_CERT_FILE``
-    names (cert-manager writes the leaf first), or None when it is unset or
-    empty. The file is read here, and again only inside the margin (see
-    ``LoadedCertificate.verdict``).
+    """The certificate the server handed over (see ``hand_over_certificate``)
+    when it did; in that case ``environ`` is not read at all, neither
+    ``MERIDIAN_TLS_CERT_FILE`` nor the restart share (the hand-over took the
+    share from its own ``environ``). Otherwise the dates of the first
+    certificate in the file ``MERIDIAN_TLS_CERT_FILE`` names (cert-manager writes
+    the leaf first), or None when it is unset or empty. The file is read here,
+    and again only inside the margin (see ``LoadedCertificate.verdict``).
 
     Raise ``SettingsError`` naming the variable when the file cannot be read or
     parsed. The text of the failure can quote the path or the file's content,
     so it is not carried. The same for ``MERIDIAN_TLS_RESTART_SHARE`` when it is
     set and is not a number from 0 up to, not including, 1.
     """
+    if _handed_over is not None:
+        return _handed_over
     share = _restart_share(environ)
     path = environ.get(CERT_FILE_ENV)
     if not path:

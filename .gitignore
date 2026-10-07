@@ -24,6 +24,10 @@ __pycache__/
 data/evaluation/**/.*.tmp
 .alerts/
 dist/
+# What a COVERAGE=1 run leaves in the working directory: the combined data file
+# and, while the workers run, one per process.
+.coverage
+.coverage.*
 
 # Local secrets and environment
 .env

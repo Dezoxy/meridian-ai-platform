@@ -8,28 +8,16 @@ to it is never started, so each test here reads a result only a run that read
 its input can have.
 """
 
-import json
-from typing import Any
-
 import httpx
 import pytest
 from dbsupport import DatabaseHandle
-from servicesupport import REPO_ROOT, owner_rows
+from servicesupport import injection_case_claim, owner_rows
 from stacksupport import Stack, build_stack, stored_proposals
 from test_claim_brief_stack import Models, start_brief, triage_paused
 from test_claim_brief_stack import models as models  # a fixture, found here
 from test_claim_brief_stack import stack as stack  # a fixture, found here
 
 NAME_MASKED = ("CLM-1053", "CLM-1054")
-
-
-def name_masked_claim(case_id: str) -> dict[str, Any]:
-    path = REPO_ROOT / "data" / "synthetic" / "injection" / "cases.json"
-    (case,) = [
-        c for c in json.loads(path.read_text(encoding="utf-8")) if c["case"] == case_id
-    ]
-    claim: dict[str, Any] = case["claim"]
-    return claim
 
 
 class Refusing:
@@ -55,7 +43,7 @@ def test_a_name_masked_claim_is_stopped_by_the_flag_the_run_reads_from_its_input
     model = Refusing()
     built = build_stack(fresh_database, runtime_http=model.http())
 
-    posted = built.post(name_masked_claim(case_id))
+    posted = built.post(injection_case_claim(case_id))
 
     assert posted.status_code == 201, posted.text
     proposal = stored_proposals(fresh_database)[case_id]

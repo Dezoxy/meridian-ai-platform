@@ -26,13 +26,20 @@ jobs:
   python:
     name: python
     runs-on: ubuntu-26.04
-    # The tests run in parallel (make pytest, four workers). Measured over the
-    # 47 successful runs of 2026-10-04 (S057): 4 min 59 s to 7 min 30 s, the
-    # median 6 min 47 s, of which the Tests step is all but half a minute. The
-    # limit is twice the slowest: it ends a job that hangs and is no budget, so
-    # a run that comes near it is a finding. The suite grew from 4 min 50 s to
-    # this in a day; measure again before the median passes 10 minutes.
-    timeout-minutes: 15
+    # The tests run in parallel (make pytest, four workers) with line coverage
+    # on (S074). Measured: the 47 successful runs of 2026-10-04 (S057) took 4 min
+    # 59 s to 7 min 30 s. On 2026-10-07, with the suite at 20,000 tests and
+    # before coverage, the whole job of five pull requests took 12 min 13 s, 13
+    # min 36 s, 14 min 29 s, 10 min 1 s and 10 min 13 s. Coverage through the
+    # interpreter's monitoring costs 2.0 % of the suite's time on the
+    # development machine (252.52 s without, 257.63 s with; not measured on the
+    # hosted runner), which makes the slowest 14 min 29 s about 14 min 47 s.
+    # The limit is twice the slowest: it ends a job that hangs and is no
+    # budget, so a run that comes near it is a finding, and a test that hangs
+    # is stopped sooner by its own limit (pyproject.toml). The suite grew from
+    # 4 min 50 s to this in three days; measure again before the median passes
+    # 15 minutes.
+    timeout-minutes: 30
     env:
       # The database tests (S009) run against the service container below;
       # MERIDIAN_REQUIRE_DB makes a missing database a failure, not a skip.
@@ -122,6 +129,10 @@ jobs:
           # make hands this to pytest, which then prints the slowest tests: what
           # one test adds to the job can be read from any run (S057).
           PYTEST_ARGS: --durations=25
+          # The suite fails under the line coverage of src/meridian that
+          # pyproject.toml's [tool.coverage.report] fail_under holds (S074); the
+          # Makefile adds pytest-cov's switches for 1 and for nothing else.
+          COVERAGE: "1"
           # The recorded evaluation test writes its report here (S017, S050).
           MERIDIAN_EVAL_REPORT: ${{ runner.temp }}/claims-triage-report.json
           # The injection stack test writes its report here (S032).

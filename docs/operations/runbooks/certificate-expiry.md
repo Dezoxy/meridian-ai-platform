@@ -7,16 +7,24 @@ not Ready.
 
 Status (S056, S062): written from the policies, the chart and the alert
 rules. The procedure at the end of this page, which watches a renewal, was
-run on the kind cluster on 2026-10-06 and its table says what was seen; the
-steps of "Confirm" and "What to do" were not exercised, but for the command
-of step 3 (S073: what one run saw of it is in that step). cert-manager's
+run on the kind cluster on 2026-10-06 and again on 2026-10-07, and its two
+tables say what was seen; the steps of "Confirm" and "What to do" were not
+exercised, but for the command of step 3 (S073: what one run saw of it is in
+that step). cert-manager's
 metrics reach Prometheus through the ServiceMonitor `cert-manager` in
 `observability`. That monitor and the first two alerts have been seen on
 the kind cluster (2026-10-05): the target up, the series for the CA and the
 seven services, the rules loaded and inactive. `MeridianCertificateNotRenewed`
 was also seen pending and firing on 2026-10-06, in the renewal watch.
 `MeridianCertificateMetricsMissing` and `MeridianCertificateApproverDown`
-have not been seen on a cluster.
+have not been seen on a cluster. S073 added two: `MeridianCertificateRenewalOverdue`
+(the part "The renewal is overdue" below), loaded and quiet on kind on
+2026-10-07 (run R13: 22 rules healthy, none firing) and not seen firing, and
+`MeridianCertificateIssuingRestartLoop`, implemented and unit-tested, not yet
+loaded on a cluster and not seen firing. approver-policy has a liveness probe
+since S073, added by `make up` (not by the chart): a frozen approver process was
+restarted by the kubelet 140 seconds after it stopped, seen on kind on
+2026-10-07 (run R13).
 
 A service's certificate lasts 90 days and cert-manager renews it 30 days
 before its end; the CA's lasts a year and is renewed about four months
@@ -28,7 +36,9 @@ year like the CA's (the next section).
 
 The chart's values `certificate.duration` (90 days, `2160h`, by default) and
 `certificate.renewBefore` (empty: cert-manager's default, a third of the
-lifetime) change this for the seven service certificates, never the CA's. A
+lifetime) change this for the eight certificates of `meridian` (the six
+services, the ingestion Job's `meridian-ingest` and the rate store), never the
+CA's. A
 duration above `2160h` (the most the issuer's policy signs) or below `1h`
 (cert-manager's shortest), and a `renewBefore` that is not shorter than the
 duration, fail the render with a message that names the value. The service's
@@ -41,7 +51,7 @@ of one more margin earlier than that (up to five sixths of a margin). A
 by a server-side dry run on 2026-10-06: 1 minute and 4 minutes refused, 5
 accepted). The values are tested without a cluster; the procedure at the end
 of this page ran with `duration: 1h` and `renewBefore: 30m` on the kind
-cluster on 2026-10-06.
+cluster on 2026-10-06 and again on 2026-10-07.
 
 ## What you see
 
@@ -59,16 +69,37 @@ cluster on 2026-10-06.
   approver-policy has had no available replica for 15 minutes. Without
   the first nothing is requested, without the second nothing is approved,
   so no certificate is renewed, and a renewal that waits leaves the
-  Certificate Ready, so `MeridianCertificateNotReady` stays quiet.
+  Certificate Ready, so `MeridianCertificateNotReady` stays quiet. Since
+  approver-policy's liveness probe (S073) a hang of its process is no longer
+  this alert's signal: the kubelet restarts the container after about two
+  minutes, and the Deployment is available again, so this fires for a pod that
+  stays down; `MeridianCertificateIssuingRestartLoop`, below, is the signal of
+  a hang that returns.
 - `MeridianCertificateMetricsMissing`: for 15 minutes Prometheus has had
   no expiry series for the CA's certificate `meridian-services-ca`, or
   its scrape of cert-manager's controller is down. The two alerts above
   cannot fire without those metrics: a controller that is down, a
   Service whose labels changed so the ServiceMonitor selects nothing, or
   a ServiceMonitor that is gone all look like this.
+- `MeridianCertificateRenewalOverdue` (S073): a certificate's renewal time
+  has been in the past for an hour, so the renewal is due and has not
+  happened, for whatever reason: a request that waits for an approval, one
+  that was denied, an approver-policy that hangs while its HTTP still
+  answers, an issuer that is down. The Certificate is still Ready. This is
+  what `MeridianCertificateNotRenewed` shows about nine days later.
+- `MeridianCertificateIssuingRestartLoop` (S073): the container of
+  cert-manager's controller or of approver-policy restarted three times in 30
+  minutes. One restart is a liveness probe or a lost leader lease doing its
+  work; three is a hang that comes back and is restarted again and again,
+  with the Deployment available between restarts, which is why
+  `MeridianCertificateApproverDown` may never fire for it. Read the previous
+  container's log and the pod's events (step 1 of "What to do").
 - Later, if nothing was done: a service whose certificate is a day from
   its end turns unhealthy and restarts in a loop, because the file it
   loads is still the old one.
+- A service that is not Ready after a restart and whose output holds a line
+  that starts `tlsstart:`: the start module refused (step 5 of "What to
+  do").
 
 ## Confirm
 
@@ -106,9 +137,17 @@ k get certificaterequestpolicy
 
 ## What to do
 
-1. A pod of cert-manager or approver-policy is down: wait for the
-   kubelet, or read why it is not ready with
-   `k -n cert-manager describe pod <pod>`. Requests that were waiting are
+1. A pod of cert-manager or approver-policy is down or restarting: a frozen
+   approver is restarted by the kubelet about two minutes after it stops
+   (seen on kind on 2026-10-07, run R13: readiness fails first, so for those
+   two minutes the pod is not Ready and no request is decided; the restart
+   count goes from 0 to 1), so wait for it, or read why it is not ready with
+   `k -n cert-manager describe pod <pod>`: its events say "Liveness probe
+   failed" when the probe restarted it. After a restart the process that hung
+   is the previous container's: `k -n cert-manager logs <pod> --previous`. A
+   count of 1 is the probe doing its work; a count that climbs is
+   `MeridianCertificateIssuingRestartLoop`'s, and the previous container's log
+   says what each hung process was doing. Requests that were waiting are
    decided once it runs again.
 2. A policy is missing or not Ready, or the issuer is not: `make up`
    converges the issuer and the policies. Run it from a clean checkout of
@@ -164,6 +203,121 @@ k get certificaterequestpolicy
    infra/kind/kubeconfig`); on any other cluster it is the owner's to
    run. The health check restarts a service on its own a day before the
    end; do not wait for it.
+5. A service does not start after a renewal and its restart: its pod is not
+   Ready and its container exits and restarts with a back-off. For the five
+   services that serve TLS (everything but the Claims API) read the output
+   of the container that exited, with `k -n meridian logs
+   deployment/<service> --previous`, or in Loki `{service_name="<service>"} |
+   logger=""` (a line that is not JSON). If it holds a line that begins
+   `tlsstart:`, the start module (S069) refused to listen and exited with
+   status 3; the line names a flag or a variable and an error's class and
+   never a value or a file's content. The forms, from the module's code and
+   its tests (none was seen on a cluster; where a reading below is the
+   writer's and no run or report measured it, it says "reasoned"):
+   - `--ssl-certfile cannot be read (<class>)`: the certificate file could
+     not be opened; the class is the operating system's error for it (the
+     reviews' probes printed `FileNotFoundError` and `IsADirectoryError`).
+     Look at the Certificate (`k -n meridian describe certificate <service>`)
+     and at whether the Secret `<service>-tls` exists.
+   - `the TLS context cannot be built from --ssl-certfile, --ssl-keyfile and
+     --ssl-ca-certs (<class>)`: one of the three files could not be made into
+     a context. For an `SSLError` the line carries OpenSSL's reason, for
+     example `KEY_VALUES_MISMATCH` (a key that does not match the
+     certificate, which the module's tests produce with a mismatched pair; a
+     renewal that lands between OpenSSL's two opens of the certificate and
+     the key shows the same way, and the module then loads again, so the line
+     appears only when the bytes did not change) or `PEM_LIB` (the Python
+     review's example of a file that is not PEM). For any other class the line
+     gives the class alone and does not say which of the three files. Reasoned:
+     read the Certificate's events and ask cert-manager for a new certificate
+     (`make cert-renew CERT=<service>`, step 3) rather than editing the
+     Secret.
+   - `--ssl-certfile changed during each of 5 loads; not started`: the file's
+     bytes differed between the module's two reads in each of five loads.
+     Reasoned: a renewal is one change, so five in a row is not one; read the
+     Certificate's revision and events.
+   - `the served certificate (--ssl-certfile) cannot be read as a certificate
+     (SettingsError)`: the bytes the context was loaded from do not parse as a
+     certificate.
+   - `MERIDIAN_TLS_RESTART_SHARE must be a number from zero up to, but not
+     including, one (SettingsError)`: the variable the Deployment sets is
+     outside that range; the chart sets it. The Claims API's start ends in a
+     traceback and exit status 1 for the same value.
+   - `the command line is not one this start takes`: the Deployment's command
+     is not one the module takes: a word it does not know (an abbreviated flag
+     too), a missing certificate, key or CA flag, or a client-certificate
+     setting that is not 1 or 2. The line names no flag. Compare the `command`
+     in `k -n meridian get deployment <service> -o yaml` with the chart's
+     values; the five commands start `python -m
+     meridian.platform.common.tlsstart`, and a values override of the command
+     is the likely cause (reasoned).
+
+   A rollout that meets this stalls on the new pod and the old pod keeps
+   serving (the Deployments set no strategy, so the default rolling update
+   with one replica surges one pod and makes none unavailable: read from the
+   chart by the infrastructure review, not seen with a refused start). A
+   traceback with no `tlsstart:` line (a `SettingsError` that names a
+   variable, say) is an app factory's, as before, with exit status 1.
+   Status: the success was seen on kind (2026-10-07, K2: the five started
+   through the module, no `tlsstart:` line, a renewal of `policy-mcp` and its
+   restart); the refusal, each form above and the queries were not seen on a
+   cluster.
+
+## The renewal is overdue (S073)
+
+`MeridianCertificateRenewalOverdue` reads cert-manager's
+`certmanager_certificate_renewal_timestamp_seconds` for the three namespaces
+and fires when `time()` has been past it for an hour. It names no cause and
+restarts nothing. An ordinary renewal on kind takes seconds and sets the next
+renewal time months ahead, so an hour is never an ordinary renewal; the
+one-hour certificates of the watch below renew 30 minutes before their end
+and are not overdue. Status: implemented and unit-tested with promtool (an
+overdue renewal fires after the hour, one overdue for 50 minutes does not,
+one that completes clears it, another namespace and an absent series fire
+nothing); loaded and quiet on kind on 2026-10-07 (run R13), not seen firing on
+a cluster. Not established: how the series behaves while a renewal is pending
+(expected: it stays in the past until issuance sets the next time), and that
+Prometheus stores it at all (R13 saw the rule loaded and healthy, not the
+series).
+
+Read, in this order, with `k` as under "Confirm"; each only reads:
+
+```sh
+k -n <namespace> describe certificate <name>
+k -n <namespace> get certificaterequest
+k -n <namespace> describe certificaterequest <the newest one for the certificate>
+k -n cert-manager get pods
+k -n cert-manager describe pod <the approver's pod>
+k -n cert-manager logs deployment/cert-manager-approver-policy
+k -n cert-manager logs <the approver's pod> --previous
+k get clusterissuer
+k -n observability get issuer
+```
+
+1. The Certificate's conditions and events: `Issuing` is `True` while a
+   request is in flight, and its message says what the renewal waits for.
+2. The newest CertificateRequest's conditions, **Approved** or **Denied**. A
+   `Denied` names the field and the policy: "What to do", step 3. Neither
+   condition means nobody decided: go on to the pod.
+3. The approver's pod, its events and its log (the previous container's too,
+   after a restart: `--previous`; the events say "Liveness probe failed" when
+   the probe restarted it): not Running, restarts climbing or no available
+   replica (`MeridianCertificateApproverDown` or
+   `MeridianCertificateIssuingRestartLoop` is then firing too) is "What to
+   do", step 1. A pod that is Running and Ready with no restart while the
+   request stays undecided is a hang that no probe of the add-on can see (it
+   answers `/readyz` and decides nothing); its log, the policies' status
+   (`k get certificaterequestpolicy`) and the time of its last line say
+   whether it is working. Restarting its Deployment would clear a stuck
+   reconciler (reasoned, not tried); off the kind cluster that is the
+   owner's to run.
+4. The issuer: a ClusterIssuer or Issuer that is not Ready (the Certificate's
+   events name it) leaves an approved request waiting. `make up` converges
+   the issuers ("What to do", step 2).
+
+The controller down is not this alert's case: its series go stale and
+`MeridianCertificateMetricsMissing` and `MeridianCertificateApproverDown`
+speak.
 
 ## The collector's certificate and its authority (S063)
 
@@ -314,7 +468,7 @@ a renewal, restart them, and write down what was seen.
 - If the cause was a policy that did not match a legitimate request, the
   fix is a change to the policy or to the Certificate, with a test.
 
-## Watching a renewal on kind (run on 2026-10-06)
+## Watching a renewal on kind (run on 2026-10-06 and 2026-10-07)
 
 To see a renewal, the 503 and the restart in an hour instead of in 60 days,
 give the certificates a short life, then put it back. Nothing here deletes a
@@ -326,7 +480,7 @@ procedure before step 5.
 
 1. In a working copy of `infra/kind/values/meridian.yaml`, never committed,
    add `certificate:` with `duration: 1h` and `renewBefore: 30m` beneath it,
-   and run `make deploy`. It reissues the seven certificates and waits for
+   and run `make deploy`. It reissues the eight certificates and waits for
    them to be Ready.
 2. The services still hold the certificates they loaded, which last 90 days,
    and a service reads its file again only near the end of the one it
@@ -340,9 +494,9 @@ procedure before step 5.
    minutes before the end (50 minutes in for the first service by name, about
    41 for the last; tested with the clock injected. Seen on kind on
    2026-10-07, run R2: the shares are set on the six services, 0, 1/6, 2/6,
-   3/6, 4/6 and 5/6 in name order. Not seen: the restarts at a renewal, which
-   needs this procedure run again); about a minute later the kubelet restarts
-   the container. Each of
+   3/6, 4/6 and 5/6 in name order. The procedure run again on 2026-10-07, run
+   R7, saw the restarts at a renewal: the second table below); about a minute
+   later the kubelet restarts the container. Each of
    these only reads:
 
    ```sh
@@ -382,7 +536,37 @@ machine:
 | 04:51:46 to 05:51:46 | `MeridianCertificateNotRenewed` pending for the seven certificates, then firing (seen firing at 05:52:36) |
 | 05:54:53 | the two lines removed and `make deploy` run: the seven Certificates reissued for 90 days at once; the Deployments restarted once; within five minutes no Meridian alert was pending or firing, and `make smoke` passed |
 
-Two things the watch showed:
+What was seen, on 2026-10-07 (UTC), on the same cluster (the watch run again,
+with the shares): the six services each had a share of the margin (0, 1/6, 2/6,
+3/6, 4/6 and 5/6 in the sorted list: agent-runtime, claims-api, claims-mcp,
+knowledge-mcp, model-gateway, policy-mcp), certificates of one hour, a renewal
+at 30 minutes, and eight Certificates in all.
+
+| Time | What was seen |
+|---|---|
+| 09:42:00 | `make deploy` with `certificate.duration: 1h` and `renewBefore: 30m` in an uncommitted edit of kind's values: all eight Certificates reissued at once (revision +1), `notAfter` 10:41:59, renewal time 10:11:59 |
+| 09:42:01 | the six service Deployments restarted once by hand, to load the one-hour certificates (the new pods started at 09:42:01) |
+| 10:11:59 | cert-manager renewed all eight (revision +1 again, `notAfter` 11:11:59, read at 10:13:30) |
+| 10:13:02 | the rate store restarted itself, 63 seconds after the renewal: its liveness rule, as designed (it had also restarted once after the reissue, so the count on its pod went from 0 to 2) |
+| 10:24:32 | `policy-mcp`'s old container stopped (the share 5/6, the first to look at the file) |
+| 10:26:11 | `model-gateway` (99 seconds after the one before) |
+| 10:27:51 | `knowledge-mcp` (100 seconds) |
+| 10:29:31 | `claims-mcp` (100 seconds) |
+| 10:31:11 | `claims-api` (100 seconds) |
+| 10:32:51 | `agent-runtime` (100 seconds; the share 0, the last) |
+| samples, a line every 5 seconds from 10:20 to 10:35 | each service was not Ready for 41 to 46 seconds (`policy-mcp` from 10:23:52 to 10:24:37, for example) and never two at once; the fewest of the six Ready in any sample was 5 |
+| over the run | 8 Warning events in `meridian` said a liveness probe failed: the six services and the rate store's two |
+| 10:35:21 | the edit taken back and `make deploy` run (the 90-day certificates), the six services restarted once by hand; five minutes later `make smoke`, rc 0 at 10:41:36: 45 PASS, 0 FAIL, 1 SKIP (the cost-series line: the Model Gateway had settled no call since it started at 10:35:22, the designed skip after a restart) |
+
+By the chart's arithmetic (the certificate ends 10:41:59, the margin is 10
+minutes, each place is one sixth of the margin) the first look at the file is at
+10:23:39 and the last at 10:31:59. Each restart came 52 or 53 seconds after its
+computed moment, the same for all six: that is the liveness probe's period and
+failure threshold (the probe asks every 10 seconds and fails the container on
+the sixth 503), so a service's restart is that long after the moment the chart
+computes for it.
+
+Two things the watches showed:
 
 1. All six services restarted in the same minute, because one deploy issues
    their certificates in the same second. With one replica each, nothing
@@ -393,8 +577,18 @@ Two things the watch showed:
    certificate, four hours apart for 90 days) and none comes later than it
    did. Two replicas of one service would still restart together. This is
    tested with the chart rendered and the clock injected. The shares were seen
-   set on the six pods on kind (2026-10-07, run R2); the spread of the
-   restarts at a renewal has not been seen on a cluster. The spread holds when
+   set on the six pods on kind (2026-10-07, run R2). Seen on kind on
+   2026-10-07 (run R7, the second table): the spread of the restarts at a
+   renewal, with one replica of each service: six restarts 99 or 100 seconds
+   apart, in the reverse order of the shares, each service not Ready for 41 to
+   46 seconds, and never fewer than five of the six Ready: one at a time,
+   where the watch of 2026-10-06 had all six in the same minute. Not seen: two
+   replicas of one service (they would still restart together), a
+   `renewBefore` shorter than one and five sixths of the margin (the services
+   would then wait for the file and restart together when it changes), and the
+   alert `MeridianCertificateNotRenewed` in that run (it trips an hour after
+   issuance for a duration under 21 days, and the run gave the values back
+   before then). The spread holds when
    the renewal comes before the
    earliest look at the file: always with the default `renewBefore`, and with a
    set one when it is longer than one and five sixths of the margin (the

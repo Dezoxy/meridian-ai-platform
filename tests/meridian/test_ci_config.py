@@ -1,7 +1,9 @@
 """The CI job and ``make pytest-db`` must test against the same PostgreSQL."""
 
+import os
 import re
 import subprocess
+import tomllib
 
 import yaml
 from servicesupport import REPO_ROOT
@@ -424,7 +426,8 @@ def test_the_tests_step_prints_its_slowest_tests() -> None:
     assert tests["env"]["PYTEST_ARGS"] == "--durations=25"
     assert re.search(r"^PYTEST_ARGS\s*\?=\s*$", MAKEFILE, re.MULTILINE)
     assert re.search(
-        r"^pytest:\n\tuv run pytest -n \$\(PYTEST_WORKERS\) \$\(PYTEST_ARGS\)$",
+        r"^pytest:\n\tuv run pytest -n \$\(PYTEST_WORKERS\)"
+        r" \$\(PYTEST_COVERAGE_ARGS\) \$\(PYTEST_ARGS\)$",
         MAKEFILE,
         re.MULTILINE,
     )
@@ -443,11 +446,147 @@ def test_ci_sets_its_own_worker_count_whatever_the_makefiles_default_is() -> Non
 
 
 def test_the_jobs_limit_is_twice_its_slowest_measured_run() -> None:
-    # 47 successful runs on 2026-10-04: 4 min 59 s to 7 min 30 s. The limit
-    # ends a job that hangs; it is not a budget, and a run near it is a
-    # finding. Change the number and the workflow's comment together.
-    assert JOB["timeout-minutes"] == 15
-    assert "7 min 30 s" in WORKFLOW_TEXT
+    # 47 successful runs on 2026-10-04: 4 min 59 s to 7 min 30 s. On 2026-10-07,
+    # before coverage, the job of five pull requests took 12 min 13 s to 14 min
+    # 29 s at the most; coverage through the monitoring core adds 2.0 % (252.52 s
+    # to 257.63 s on the development machine), so the slowest is about 14 min
+    # 47 s, and twice that is 29 min 34 s, which is 30. The limit ends a job
+    # that hangs; it is not a budget, and a run near it is a finding. Change
+    # the number and the workflow's comment together.
+    slowest_seconds = 14 * 60 + 29
+    with_coverage = slowest_seconds * 257.63 / 252.52
+
+    assert JOB["timeout-minutes"] == 30
+    assert 2 * with_coverage <= JOB["timeout-minutes"] * 60
+    assert 2 * with_coverage > (JOB["timeout-minutes"] - 1) * 60
+    for text in ("14 min 29 s", "14 min 47 s", "252.52 s", "257.63 s"):
+        assert text in WORKFLOW_TEXT
+
+
+# ── a floor under line coverage (S074) ──────────────────────────────────────
+# The floor is read by pytest-cov from the pyproject, the one place it is
+# written. 99.11 % of the 13,783 statements of src/meridian were covered in the
+# whole suite as CI runs it (2026-10-07: 20,015 tests, six workers, the database
+# and Redis present); rounded down to 99 and one point taken off for the
+# variation between runs, that is 98. A person who raises the floor changes it
+# here as well.
+COVERAGE_FLOOR = 98
+COVERAGE_CONFIG = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text("utf-8"))[
+    "tool"
+]["coverage"]
+# Targets that call a live model or Azure, or change a cloud account; CI runs
+# none of them.
+PAID_TARGETS = (
+    "eval-record",
+    "eval-injection-record",
+    "gateway-live",
+    "azure-smoke",
+    "azure-apply",
+    "aws-apply",
+    "aws-destroy",
+)
+
+
+def test_the_floor_is_configured_in_one_place_and_equals_the_constant_here() -> None:
+    assert COVERAGE_CONFIG["report"]["fail_under"] == COVERAGE_FLOOR
+    # Without two decimals coverage.py rounds the total to a whole number before
+    # it compares it with the floor, and a total of 97.5 passes a floor of 98.
+    assert COVERAGE_CONFIG["report"]["precision"] == 2
+    assert COVERAGE_CONFIG["run"]["source"] == ["src/meridian"]
+    # Neither the Makefile nor the workflow repeats the number: pytest-cov takes
+    # it from the configuration when `--cov` is given without `--cov-fail-under`.
+    for text in (MAKEFILE, WORKFLOW_TEXT):
+        assert "--cov-fail-under" not in text
+        assert not re.search(r"fail[-_]under\W*\d", text)
+
+
+def test_a_run_with_a_failed_test_does_not_print_the_floors_failure_as_well() -> None:
+    # A failed or crashed test lowers the covered total, so the floor would fail
+    # too and print a second, noisy failure under the real one. A passing run
+    # below the floor still fails on it (proved in S074's second contract).
+    switches = re.search(r"^PYTEST_COVERAGE_ARGS\s*:=.*$", MAKEFILE, re.MULTILINE)
+
+    assert switches is not None
+    assert "--no-cov-on-fail" in switches.group(0)
+
+
+def test_the_help_lines_of_both_pytest_targets_say_what_coverage_does_to_a_subset() -> (
+    None
+):
+    for target in ("pytest", "pytest-db"):
+        (line,) = re.findall(rf"^## {target}\s+(.*)$", MAKEFILE, re.MULTILINE)
+
+        assert "with COVERAGE=1 a run of a part of the suite fails the" in line
+        assert "coverage floor" in line
+
+
+def test_the_suite_step_turns_coverage_on() -> None:
+    assert step_named("Tests")["env"]["COVERAGE"] == "1"
+
+
+def test_both_pytest_targets_can_turn_coverage_on() -> None:
+    for target in ("pytest", "pytest-db"):
+        recipe = MAKEFILE.split(f"\n{target}:\n", 1)[1].split("\n\n", 1)[0]
+        assert "$(PYTEST_COVERAGE_ARGS)" in recipe
+
+
+def test_coverage_is_measured_by_the_monitoring_core_and_by_lines_only() -> None:
+    # sys.monitoring costs far less than the trace function (S074); it is set in
+    # the file every pytest-xdist worker reads, not in one process's environment.
+    # It cannot measure branches on 3.13, so a person who turns them on would
+    # make coverage.py fall back to the trace function with a warning.
+    assert COVERAGE_CONFIG["run"]["core"] == "sysmon"
+    assert not COVERAGE_CONFIG["run"].get("branch", False)
+    assert "COVERAGE_CORE" not in MAKEFILE + WORKFLOW_TEXT
+
+
+def test_the_data_files_a_coverage_run_leaves_are_ignored_by_git() -> None:
+    for name in (".coverage", ".coverage.01-host.pid123.AbCdEf"):
+        done = subprocess.run(
+            ["git", "check-ignore", "--quiet", name],
+            cwd=REPO_ROOT,
+            check=False,
+        )
+
+        assert done.returncode == 0, f"{name} is not ignored by .gitignore"
+
+
+def test_a_run_without_the_switch_measures_no_coverage_and_cannot_fail_on_it() -> None:
+    # `make -n` prints the recipe without running it: no switch, no `--cov`; the
+    # switch, `--cov`, which is what makes pytest-cov apply the floor; and 0 or
+    # anything but 1 leaves it off.
+    def pytest_line(*arguments: str) -> str:
+        # CI sets COVERAGE=1 and PYTEST_ARGS in the environment of the run that
+        # runs this test, and make passes its own flags to a make it starts.
+        environment = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("COVERAGE", "PYTEST_ARGS", "MAKEFLAGS", "MFLAGS")
+        }
+        done = subprocess.run(
+            ["make", "-n", "pytest", *arguments],
+            cwd=REPO_ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return done.stdout
+
+    assert re.search(r"^COVERAGE\s*\?=\s*$", MAKEFILE, re.MULTILINE)
+    assert "--cov" not in pytest_line()
+    assert "--cov" not in pytest_line("COVERAGE=0")
+    assert "--cov " in pytest_line("COVERAGE=1")
+
+
+def test_no_workflow_runs_a_paid_target_or_a_recording_run() -> None:
+    # Every workflow, not only the python job's: a step's `run` or a comment.
+    for workflow in sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml")):
+        text = workflow.read_text(encoding="utf-8")
+        for target in PAID_TARGETS:
+            assert target not in text, f"{workflow.name} names {target}"
+        for variable in ("MERIDIAN_EVAL_INJECTION_RECORD",):
+            assert variable not in text, f"{workflow.name} names {variable}"
 
 
 # ── the secret scan a push needs (S057) ─────────────────────────────────────

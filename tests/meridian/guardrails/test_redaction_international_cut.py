@@ -514,9 +514,9 @@ def test_the_cut_rows_and_the_not_cut_rows_are_enough_and_distinct() -> None:
     assert len(set(texts)) == len(texts)
 
 
-# Linear time (T-73), under the bound of ``test_redaction_hungarian``: a text four
-# times as long takes four times as long, and the limit sits at twice the linear
-# growth, measured by the thread's CPU time and never the wall clock.
+# Linear time (T-73), under the bound of ``test_redaction_hungarian_across_kinds``:
+# a text four times as long takes four times as long, and the limit sits at twice
+# the linear growth, measured by the thread's CPU time and never the wall clock.
 SMALL_LENGTH = 10_000
 LARGE_LENGTH = 40_000
 PAIR = "+36 30 123 4567 06 20 765 4321 "

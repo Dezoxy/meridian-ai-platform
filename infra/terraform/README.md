@@ -4,7 +4,10 @@
 shows what the foundation would create, `make azure-apply` creates it and
 `make azure-smoke` proves it works. Status: **implemented** (S007) and applied
 only after the owner has reviewed the plan and confirmed it. The ephemeral
-platform environment (AKS, PostgreSQL, ACR) is S020, not here. The AWS module,
+platform environment (AKS, PostgreSQL, ACR) is S020, not here: it is written in
+[azure/](azure/README.md), checked by `make azure-platform-validate` and
+`make azure-platform-scan` (through `aws.sh validate azure`) and never planned
+or applied, with no command that does either. The AWS module,
 checked and not applied, is described in [aws/README.md](aws/README.md). The
 Google Cloud module, checked and never planned or applied, with no command that
 does either, is described in [gcp/README.md](gcp/README.md). The AWS module for
@@ -264,8 +267,10 @@ expected, with a ceiling of EUR 0.50 on the one tenant it charges. It is
 built and tested with a fake provider and has not been run: it spends
 money, and the owner's yes to a stated cost comes first.
 
-The gateway on kind stays in replay mode: a pod there has no Azure identity
-until workload identity arrives with S020.
+The gateway on kind stays in replay mode: a pod there has no Azure identity.
+Workload identity for a pod in AKS is written as code in
+[azure/](azure/README.md) and never applied; the second half of S020 gives the
+service accounts their side of it.
 
 ## Removal
 
@@ -286,16 +291,19 @@ owner runs it by hand from `infra/terraform/foundation` after
 
 - The West Europe account and the data-zone SKU: after the subscription's
   upgrade to pay-as-you-go, when the quota exists.
-- Private endpoints and IP rules for the vault, the account and the state
-  storage, and diagnostics settings: S020 adds the network; closing these
-  three to it is in the plan's follow-up backlog, with S020 as its proposed
-  home (S019 hardened the charts on kind, not these resources). Until then
-  they are reachable from the internet, protected by
-  Entra ID and RBAC only. The laptop's IP changes, which is why an allow list
-  is not used.
+- IP rules for the vault, the account and the state storage: closing these
+  three to the network is not done. The platform module (S020, written and
+  never applied) adds private endpoints for the vault and the account and an
+  audit-log setting on the vault, but it closes nothing: the three stay
+  reachable from the internet, protected by Entra ID and RBAC only, and the
+  vault would receive the database administrator's password. A firewall is an
+  open decision of the owner's, to be made before any apply (see the module's
+  README and T-104). The laptop's IP changes, which is why an allow list is
+  not used.
 - Terraform in CI and GitHub OIDC federation: S022. Nothing here stores a
   credential.
 - The ephemeral platform environment (virtual network, AKS, ACR, PostgreSQL
-  Flexible Server): S020.
+  Flexible Server): S020, written in [azure/](azure/README.md) and never
+  applied; the second half deploys the chart into it.
 - Secrets in the vault: none yet. The gateway's provider credentials are
   designed, not created.

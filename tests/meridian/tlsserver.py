@@ -1,7 +1,9 @@
 """A server of the platform's own TLS shape for the tests (S055): uvicorn in a
 thread with the flags the five services run under (a client certificate
 optional, ``PeerCertProtocol`` reading it), on a loopback port the system picks,
-with its certificate from ``tlssupport``."""
+with its certificate from ``tlssupport``. It is plain uvicorn: the services
+start through ``tlsstart`` (S069), whose context and ``Config`` the tests of
+that module compare with uvicorn's."""
 
 import json
 import ssl

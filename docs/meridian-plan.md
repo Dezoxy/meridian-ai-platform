@@ -462,7 +462,7 @@ and Pydantic, at the cost of one dependency.
 |---|---|---|---|---|
 | S019 | Hardened Helm charts | Probes, resource limits, default-deny NetworkPolicy, PodDisruptionBudgets, non-root read-only containers, pinned digests; `helm lint` and the infra reviewer pass | done | S018 |
 | S055 | Service-to-service identity | On kind, each service proves which service it is to the one it calls: the Agent Runtime, the Model Gateway and the tool servers refuse a call that carries no identity or comes from a service the registry does not map; the tenant and agent a caller may name come from that mapping, and a header that disagrees is refused; the tool servers accept the runtime alone (T-08, T-24, T-48, T-50); the mechanism is chosen with the owner when the step opens and recorded in an ADR | done | S019 |
-| S020 | Azure platform | Terraform adds the virtual network, AKS, ACR, PostgreSQL Flexible Server with pgvector and Workload Identity to Key Vault; the environment is created and removed with one command each | todo | S007, S019, S055, S056 |
+| S020 | Azure platform | Terraform adds the virtual network, AKS, ACR, PostgreSQL Flexible Server with pgvector and Workload Identity to Key Vault; the environment is created and removed with one command each. **First half, code only (2026-10-07): a module `infra/terraform/azure/` written, validated and scanned without an account and NEVER applied** (44 resources, two doors: `make azure-platform-validate` and `make azure-platform-scan`), its README, ADR 11, the deployment view `DeploymentAzure` (designed), the threat model's rows T-103 to T-107 and the Azure platform document brought to it. **What waits:** the wrapper and the command guard's rules for it (no door that plans, applies or removes exists); the owner's upgrade to pay-as-you-go by about 2026-10-30; the owner's decision on a firewall for the foundation's vault and account; the apply and its cost, stated at the paid stop; and the second half (the chart on the cluster, the roles, the egress rule, S022's push). The "done when" above is the whole step and is not met | doing | S007, S019, S055, S056 |
 | S021 | Identity | Entra ID sign-in for the UI and APIs; roles platform-admin, agent-developer, adjuster and auditor; a mock OIDC issuer on kind; the tenant is resolved from the token | todo | S020 |
 | S022 | Delivery pipeline | Build, SBOM, Trivy scan, cosign signing, push to ACR, kind smoke test, manual approval, deploy to AKS; the rollback runbook exercised; evidence attached to the release | todo | S020, S021 |
 | S023 | Mistral provider | Mistral Large 3 adapter on Azure AI Foundry, DataZoneStandard; the routing policy uses it; ADR 3's provider set updated | todo | S010, S020 |
@@ -497,7 +497,8 @@ S068 to S076 were made on 2026-10-06, at the owner's request, from the 83 open
 rows of the follow-up backlog that named no step, so that the step list is the
 whole of what is left. Like the others they harden what exists and need no new
 Azure resource. Two say what they cost: S071 calls a live model, and S070's
-first item is the owner's decision on uploads, the one capability among them.
+first item was the owner's decision on uploads, the one capability among them
+(answered on 2026-10-07: build them, as S080, after the table below).
 Each waits for the running steps that change its files (its last column).
 Several rows are observations seen once: their step closes them with a
 measurement or as not reproduced; it does not have to change code for each.
@@ -554,14 +555,59 @@ both readings the same hour ("yes both are right, go on").
 | S066 | Gateway ledger upkeep | A command of the gateway's own, under a role of its own and with an audit row, credits a tenant, closes a reservation a dead process left `reserved` and expires old ledger rows; the budget runbook names it; the rate windows are shared between gateway processes, so two pods in a rolling update do not each allow the full limits (T-45), the store chosen with the owner when the step opens | done | S058, S065 |
 | S067 | Triage rules and screening | The one step of these that changes the triage graph's rules: claims of one policy that are open at the same time count for `frequent_claims` (T-76); the injection screen reads the description as posted, before the claimant's name is replaced; the redaction knows Hungarian forms of names and identifiers; the stored wording is compared with the manifest after ingestion (T-27, T-57); a wording version missing from `wording.EXCLUSION_CLAUSES` fails with a message that names it (moved here from S060, which may not change how the triage routes a claim); golden-set cases on the fraud indicators' boundaries and for an unknown policy number; `make eval` passes, and a change that needs `make eval-record` waits for the owner's yes, since it costs money. Built as (2026-10-06; implemented and tested, none of it run on a cluster): the Claims API screens the description as posted and hands the run one boolean, `posted_text_addresses_the_model`, which the assessor reads as a hit of its own screen (CLM-1053 and CLM-1054 are stopped, 26 of 66 attacks); the redaction finds the Hungarian national phone, tax number, domestic account number and personal identification number on their own and the social security and tax identification numbers after their word, and the claimant's name is replaced with Hungarian endings after a capital letter; a wording pair the table has no count for fails the run with the fixed code `wording-version-unknown` where the rules would read it (the log line names the product and version only when both pass a closed check), not with a message that names it, and a claim that is not valid facts fails with `claim-not-valid` after a log of its fields; the golden set holds 47 claims, seven of them new, from a second random stream, and the model is not asked about them; claims that are still open count for `frequent_claims` by the strict date rule of a decided one, and a withdrawn claim never does (migration 0025, the owner's decision of 2026-10-06); `meridian knowledge verify` compares the stored clauses with the manifest-verified wordings and the ingestion Job runs it after its write (migration 0026). The free replay passed after each landing that could move a recorded answer, and no paid recording was made | done | S060, S061, S064 |
 | S068 | Database upkeep and retention | The owner names the retention periods for `audit.events` and `gateway.usage` first (open since S011; without them the step builds the mechanism and schedules nothing); an insert-only audit table has a way to expire rows; migration 0017's rewrite of a large audit table has a way through that is written down and tested; the static check on migrations says what it cannot see or sees it; `expire_ledger` works in batches; a holder of the upkeep credential cannot stall the gateway with an open transaction; a login that is a member of `claims_sweep` is confined or refused where the database is made; no role creates temporary tables it does not need. Built as (2026-10-07; implemented and tested against PostgreSQL, none of it run on a cluster; no number of days and no schedule is set anywhere): audit rows expire through one function of the owner's that only a session logged in as the upkeep role reaches, `meridian gateway expire-audit` with a dry run that counts, in batches of at most 10,000, each with an audit row, and the rows the upkeep role wrote itself are never removed by it (migrations 0027, 0028); the ledger expires in batches of 100 to 10,000 usage rows on one connection, with a closing call for the counters and credits (0029, 0030); 0017's way through is written down in the migrations' README as needed by no database that exists, a test shows that it fails closed at its first heavy statement and the two ways out are designed, not built; the static check on migrations sees more statements and the README lists what it does not see, each entry pinned by a test; a database default ends a transaction left idle after 60 s (0031), which stops a forgotten transaction and not a deliberate one, so a holder of the upkeep credential can still stall a counter for the statement timeout; a member of `claims_sweep`, or of `gateway_upkeep`, is refused at every `meridian db migrate` after the files are applied, which detects at the next deploy and does not prevent; `pg_temp` is last in the path of every trigger and definer function, with a test over the whole catalog, and the right to make temporary tables stays with PUBLIC (decided, not built). Not built: the periods and a schedule (the owner's, four questions in the section), the briefs' expiry (waits for the owner), a parser for the static check | done (the periods are the owner's and are not set, nothing is scheduled; not built: the briefs' expiry and the removal of PUBLIC's right to make temporary tables, see the Done-when cell and the section) | S066 |
-| S069 | Runtime and gateway edges | Without a change to a prompt or a rule: a validation error in the triage's two answers logs the field; the tool-call limits can differ by agent, or the plan says why not; a failed resumed leg does not leave the first leg's value to be read as the answer; `drafted_by` is right for a completion the filter withheld and the provider billed; the runtime's client of the gateway is bounded per call; a resumed leg that outlived its lease cannot write over the leg that took the run; `service_url_problem` refuses what the HTTP client refuses; a shed tool call's audit row names its run where that can be checked; the refusal flood's count covers the caller check and the throttles; an embedding input is bounded in tokens; the health check watches the certificate the server loaded; the ingestion's data class has a tenant of its own (T-60, the owner's decision when the step opens). Cut in two on 2026-10-06 (the design in Part C): a first half with no lane, and a second half on the cluster, the server's certificate and the health check (R11) and the ingestion's tenant (R12, which the owner decides at S020). Built as, first half (2026-10-07; implemented and tested, none of it run on a cluster, no real provider called): the Claims API logs the failed fields of the runtime's answer, of the triage proposal and of the brief's output, and counts a stored proposal as stored; a leg ends its run only over the `updated_at` its own start or claim wrote, with no new column, and a late leg answers the stored status with no output; a resume that carries a value is refused with a 422; the runtime's call to the gateway has a deadline of 30 s as a whole, a timeout per phase, a reply cap of 1 MiB and `Accept-Encoding: identity`; a refused prompt and a withheld completion are told apart on the wire (`X-Meridian-Completion: withheld` and three headers naming the deployment) and the withheld one has its drafter on record; `service_url_problem` also asks the HTTP client; a shed tool call's row names its run where the run's own row can be read; every service writes the summary of a refusal flood's last window through one writer; a module that exits at import is a failed load; the access log's path is unquoted to a fixed point and loses a userinfo part; the scaffold names the host; the tool span names its step. Not built, each as a decision with its reason in the section: limits per agent (R2), an embedding bound in tokens (R10), a ceiling on the rate limits (B13), a breaker shared between processes (B14), one word for the two limits (B18), a holder column and the second host's scaffold | doing: the first half is done (2026-10-07); R11 waits for the cluster lane and R12 for the owner's decision at S020 | S064, S037 |
-| S070 | Claims intake and what the adjuster is told | The owner decides first whether uploads are built or stay out (T-38: the largest item here; if built it is a step of its own, split off when this one opens); a report dated as a recent loss is seen for what it is, or T-66 says why it cannot be; the adjuster's page marks a recommendation that rests on the model's answer, so a steered model's `approve` does not read as the rules'. Built as, first half (2026-10-07; implemented and tested against PostgreSQL and in the pages' own tests, none of it run on a cluster, nothing paid, no fingerprint moved): the adjuster's claim page says beside a recommendation whether it rests on a model's reading of the exclusion clauses or on the rules alone, and the queue marks it in a column, from one function over the stored fields (no new field, no migration); it reaches the 6 steered recommendations that wait for an adjuster and not the 28 automatic approvals, which no page lists; the page labels the loss date and the report date as not checked and shows two gaps in days, with no rule or bound, and T-66 says why; the claimant's name pattern is built from a read before the claim's row is locked and only for a request the claim can go on with, so a refused request pays no compile (a stale page and a documents post past the cap still do); the redaction is split into six modules by a proven move; the differential test classifies every lost run, its generator writes the forms it lacked and both date guards are pinned from both sides; the e-mail pass reads its placeholder from the mapping; and an international Hungarian phone number is cut at a space before a second number, in a form narrowed after a review (R3b) and narrowed again after a second (R3c, 951b72c), so that it turns the plain shape and not every text the row quoted. Not built, each with its reason in the section: uploads (the owner's decision is open), a bound on what a name may replace, a reorder of the assessor's checks, the wider cut of a dotted number with a `06` group and a third date guard (the owner's questions), and the fix of three known leaks of the phone matcher | doing: the first half is done (R3c and its review stand; the whole suite is the main session's); the owner's decision on uploads and four more questions are open, and the second half holds what the owner decides; so far it has built, with no word of the owner's, the property test's missing forms, the queue's judgment of a stored proposal by the claim page's function with a received time refused when it has no zone, and one shaped 500 for an answer that cannot be built after the proposal is stored (the section), and it did not build `drafted_by`, which waits for the owner | S067 |
+| S069 | Runtime and gateway edges | Without a change to a prompt or a rule: a validation error in the triage's two answers logs the field; the tool-call limits can differ by agent, or the plan says why not; a failed resumed leg does not leave the first leg's value to be read as the answer; `drafted_by` is right for a completion the filter withheld and the provider billed; the runtime's client of the gateway is bounded per call; a resumed leg that outlived its lease cannot write over the leg that took the run; `service_url_problem` refuses what the HTTP client refuses; a shed tool call's audit row names its run where that can be checked; the refusal flood's count covers the caller check and the throttles; an embedding input is bounded in tokens; the health check watches the certificate the server loaded; the ingestion's data class has a tenant of its own (T-60, the owner's decision when the step opens). Cut in two on 2026-10-06 (the design in Part C): a first half with no lane, and a second half on the cluster, the server's certificate and the health check (R11) and the ingestion's tenant (R12, which the owner decides at S020). Built as, first half (2026-10-07; implemented and tested, none of it run on a cluster, no real provider called): the Claims API logs the failed fields of the runtime's answer, of the triage proposal and of the brief's output, and counts a stored proposal as stored; a leg ends its run only over the `updated_at` its own start or claim wrote, with no new column, and a late leg answers the stored status with no output; a resume that carries a value is refused with a 422; the runtime's call to the gateway has a deadline of 30 s as a whole, a timeout per phase, a reply cap of 1 MiB and `Accept-Encoding: identity`; a refused prompt and a withheld completion are told apart on the wire (`X-Meridian-Completion: withheld` and three headers naming the deployment) and the withheld one has its drafter on record; `service_url_problem` also asks the HTTP client; a shed tool call's row names its run where the run's own row can be read; every service writes the summary of a refusal flood's last window through one writer; a module that exits at import is a failed load; the access log's path is unquoted to a fixed point and loses a userinfo part; the scaffold names the host; the tool span names its step. Not built, each as a decision with its reason in the section: limits per agent (R2), an embedding bound in tokens (R10), a ceiling on the rate limits (B13), a breaker shared between processes (B14), one word for the two limits (B18), a holder column and the second host's scaffold. Built as, second half (2026-10-07; implemented and tested, and seen on kind in two runs, K1 and K2): the five services that serve TLS start through `python -m meridian.platform.common.tlsstart`, which reads the certificate once, for uvicorn's own context and for the health check, so `/healthz` watches the certificate the server loaded (R11); the module refuses a start that would not ask for a client certificate and ends a start it cannot make with one `tlsstart:` line and exit status 3; K1 saw the 422 for a resume that carries a value, one `suppressed` row from each of the five services that keep a throttle and the access log's path for an address encoded twice, and K2 saw the deploy, the served certificates of four of the five equal to the issued ones, a renewal and a restart, and smoke's 46 lines twice | doing: both halves are built and seen on kind (2026-10-07); left: R12 for the owner's decision at S020, what no kind run could show (the withheld completion's four headers, which S071 measures; a shed call's row, a takeover past the lease and `not-started`; the module's refusal line, the race itself and a renewal that splits OpenSSL's two opens), smoke's line for the sweep's findings, and the new rows of the second half | S064, S037 |
+| S070 | Claims intake and what the adjuster is told | Uploads (T-38: the largest item here) are a step of their own, S080, split off when the owner chose on 2026-10-07 to build them ("Build now"); this step no longer holds them; a report dated as a recent loss is seen for what it is, or T-66 says why it cannot be; the adjuster's page marks a recommendation that rests on the model's answer, so a steered model's `approve` does not read as the rules'. Built as, first half (2026-10-07; implemented and tested against PostgreSQL and in the pages' own tests, none of it run on a cluster, nothing paid, no fingerprint moved): the adjuster's claim page says beside a recommendation whether it rests on a model's reading of the exclusion clauses or on the rules alone, and the queue marks it in a column, from one function over the stored fields (no new field, no migration); it reaches the 6 steered recommendations that wait for an adjuster and not the 28 automatic approvals, which no page lists; the page labels the loss date and the report date as not checked and shows two gaps in days, with no rule or bound, and T-66 says why; the claimant's name pattern is built from a read before the claim's row is locked and only for a request the claim can go on with, so a refused request pays no compile (a stale page and a documents post past the cap still do); the redaction is split into six modules by a proven move; the differential test classifies every lost run, its generator writes the forms it lacked and both date guards are pinned from both sides; the e-mail pass reads its placeholder from the mapping; and an international Hungarian phone number is cut at a space before a second number, in a form narrowed after a review (R3b) and narrowed again after a second (R3c, 951b72c), so that it turns the plain shape and not every text the row quoted. Not built here, each with its reason in the section: uploads (S080's: the owner decided to build them), a bound on what a name may replace, a reorder of the assessor's checks, the wider cut of a dotted number with a `06` group and a third date guard (the owner's questions), and the fix of three known leaks of the phone matcher | doing: the first half is done (R3c and its review stand; the whole suite is the main session's); four questions of the owner's are open (a fifth, uploads, was answered on 2026-10-07 and S080 holds them), and the second half holds what the owner decides; so far it has built, with no word of the owner's, the property test's missing forms, the queue's judgment of a stored proposal by the claim page's function with a received time refused when it has no zone, and one shaped 500 for an answer that cannot be built after the proposal is stored (the section), and it did not build `drafted_by`, which waits for the owner | S067 |
 | S071 | Measurements that need a live model | Costs money (52 chat calls for the injection cases, 40 attacks and 12 benign, about EUR 0.12 expected, where the golden recording's 55 chat calls cost EUR 0.12 as measured, and some embedding calls; the owner says yes before any, and the amount is stated first): a real model's answers to the injection cases the screen lets through, recorded beside the golden recording; a model's refusal of a structured request seen from a real provider; retrieval measured with a real embedding, in the evaluation and in S038's one failing check; the judge compared with labels a person wrote for a sample; a held-out set for the injection screen, and a decision on what a false alarm may cost; CLM-0034's `unsure` settled by a prompt or recorded as the right answer; retrieval over a graph measured again only if the synthetic data gains something relational to find | doing: the free half is done (2026-10-07; implemented and tested, no paid call made, no fingerprint of the evaluation changed): the label worksheet and its comparison, the run's own ceiling that the gateway holds and that a paid run refuses to start without, the live run of the injection cases with its refusal of an incomplete run and of what it would write, the held-out set (the screen stopped 6 of 48 blind attacks and flagged 0 of 24 look-alikes), and the command guard's ask before a paid target and its second round; the paid half is open and waits for the owner's yes to a stated cost: every paid run (none has been made), the live embedding (E9), the owner's labels and the owner's reading of CLM-0034 | S067 |
 | S072 | The cluster outside `meridian`, second round | On kind: the Prometheus and CloudNativePG operators' reach into Secrets and ConfigMaps of every namespace is narrowed or recorded as accepted with its reason; DNS and the collector cannot carry data out unseen (T-84), or the residual is stated; writes to Prometheus and Loki pass a policy, and the three hops behind the collector are encrypted or the plan says why not; egress from `observability` and the admission webhooks' port are bounded; `cnpg-system` and `envoy-gateway-system` have Pod Security labels and a policy; the owner decides whether node-exporter stays off; Tempo mounts no API token | doing: the first part is on `main` (2026-10-07; implemented and tested, and seen on a warm cluster by run R8 in the limits the section gives: both pods run with no token, the labels applied, smoke's 46 lines and the 21 rules passed, the Certificates Ready but issued before under the old policy; the cold run R9 then approved all eight under the exact lists from nothing): Tempo's and Loki's pods mount no service-account token (three keys); the namespaces of the CloudNativePG operator and of Envoy Gateway warn and audit at Pod Security `restricted` from a render (the gateway's namespace confirmed by the API server's dry run with its proxy pod running, R9; the operator's namespace is gone); the certificate policy for the services names the eight URIs and six DNS names the chart renders, not a wildcard; an alert on the rate store's restart loop. The documents record the four accounts that read Secrets in every namespace (not two), the accepted reaches, the residuals and the one measurement (seen on kind: the API server's calls arrive from the node's address on the pod network and pass a default-deny ingress). The cluster batch is written in files, tested without a cluster and seen on kind by the cold run R9 (2026-10-07, 11:08 to 11:17 UTC, from the batch's commit; five contracts, W, E, C, N and S, and the fix contract F2; not seen: the guard, the fall-backs, a webhook failing closed, Loki's usage report refused, the four other pods of the node rule on the kubelet's port): no pod reaches the webhooks' port 10250 but Prometheus, on the operator's; egress from `observability` is denied by default and admitted by rule; the CloudNativePG operator is released into `meridian` under `config.clusterWide=false` and a policy of its own (`cnpg-system` is gone); `envoy-gateway-system` is denied by default and admitted by rule, and `make deploy` refuses a cluster without the operator's policy; smoke compares a Deployment's name as text. The infrastructure review of the batch is in (nothing critical or high; four medium findings answered by F2); left: the merge of `main`, the whole suite and the pull request, and the rows (the cluster on this machine is the one made from the batch's commit: no `make up` from `main` on it until the batch is merged); the owner decides the writes clause and node-exporter (stays off) | S064, S066 |
-| S073 | Renewals, upgrades and what smoke cannot see | On kind: a renewal is seen for the collector's certificate and the database's, and something alerts before the database's end; the services do not all restart in the same minute at a renewal; approver-policy is restarted when it hangs, and a repaired policy does not wait an hour for cert-manager's retry; a first install that fails has a way back that was tried; the chart bounds its rollback history and `make images` says what to remove; the scripts' `kubectl` calls have a request timeout; a manual sweep Job does not hide a stopped schedule; the failure paths of smoke's newer lines are seen once on a cluster with something broken on purpose; the line that reads approver-policy's wording says so when it fails; probes that time out under load have a recorded answer for the machine the cluster runs on now | doing: the first half is done (2026-10-07: the builds and the runs R0 to R4e, with the answer for the machine recorded); the second half is open: the ingestion's 503 word on a real refusal, the node paused with three deploys, certificates of one hour with all eight renewed, the cold run and a rotation of the rate store's password (the owner's to run or to accept as not seen); approver-policy's liveness probe is not built | S064, S066 |
-| S074 | Test suite and file sizes | Without the cluster: `infra/kind/smoke.sh`, `test_kind_manifests.py` and the four test files over 800 lines are split along the lines their own tests already cut; the six functions over 50 lines are under it (counted by signature plus body without the docstring, as the section says: by the whole count the row used, four of the six, `assess`, `build_report`, `build_injection_report` and `summarise`, are still over); the template-database fixture survives a test that patches the runner's file list; the tests that failed once under load (a lost connection in a parallel run, a tool server's timeout, the gateway's fallback test) are run repeatedly on the machine the suite runs on now and either hold by construction or are closed as not reproduced, with the numbers; the slowest test of the job is under ten seconds; one CPU-time helper; `unused_port()` on macOS has its answer written down; the owner decides whether CI gates on coverage | doing: the first half is done (2026-10-07; tested, none of it run on a cluster): the two upkeep test files, `test_toolserver_meters.py`, `test_claims_graph.py` and `test_kind_manifests.py` are split by moves a script proves, the template database's builder passes the list it read at import, the stack and demo tests that failed under load no longer rest on the machine's speed (argued; the measurement run, 25 loops of each beside a whole suite, has not run), the counting test takes 0.03 s alone where CI saw 47 s, and one CPU-time helper serves nine files; three questions wait for the owner (coverage in CI, a size check, a pytest-level timeout); the second half is built except what waits (2026-10-07; implemented and tested, none of it run on a cluster): S076's leftovers are closed or accepted row by row (the registry `schemas` link and `--check` line, the services edit's small ends, the scaffold's undo, the import walker's limits pinned, the golden set's workload tied to `Report` by its own validator, the claimant's closed tables read-only and three stale sentences), `run_command`, `build_report` and `render_summary` are under 50 lines by signature plus body (37, 47 and 29) with `--help`, every report and the committed summary byte for byte the same, and two of the half's own commits carried a defect that the review reproduced and a contract fixed; the third part (2026-10-07; moves a script proves, tested; seen on kind once: `make smoke` from the split as it stands printed 46 PASS, 0 FAIL, 0 SKIP, the same lines as the unsplit script's, the trace ID apart): `infra/kind/smoke.sh` is an entry of 1,185 lines and ten files under `infra/kind/smoke.d/` (`shared.sh` and nine checks, 36 to 644 lines), and checks 8 and 10 are still in the entry; what waits: the last cut (checks 8 and 10, after S072's cluster batch), the loaders' helper and the split of `test_redaction_hungarian.py` (S070), and the rows the section's last table keeps | S064, S066, S037 |
+| S073 | Renewals, upgrades and what smoke cannot see | On kind: a renewal is seen for the collector's certificate and the database's, and something alerts before the database's end; the services do not all restart in the same minute at a renewal; approver-policy is restarted when it hangs, and a repaired policy does not wait an hour for cert-manager's retry; a first install that fails has a way back that was tried; the chart bounds its rollback history and `make images` says what to remove; the scripts' `kubectl` calls have a request timeout; a manual sweep Job does not hide a stopped schedule; the failure paths of smoke's newer lines are seen once on a cluster with something broken on purpose; the line that reads approver-policy's wording says so when it fails; probes that time out under load have a recorded answer for the machine the cluster runs on now | doing: the first half is done (2026-10-07: the builds and the runs R0 to R4e, with the answer for the machine recorded); the second half is under way (runs R5a, R5b, R7, R8, R9a, R9, R10 and R11 of 2026-10-07: the one-hour watch run again saw the restarts spread across the six services, the node paused ended every call at the clients' own timeout, with the history limit holding at three ReplicaSets, the cold run gave its timings, and the ingestion's word `rate-store-unavailable` was seen on a real 503); approver-policy is restarted when it hangs: seen for a frozen process on 2026-10-07 (run R13: a liveness probe on `/readyz`, applied by `make up`; the kubelet restarted the container 140 seconds after the process was stopped), and the alert for a stuck one (`MeridianCertificateRenewalOverdue`) loaded and quiet and not seen firing; still open: the ingestion's other three words, a call that a bound of the wrapper ends, a first install made to fail, a policy narrowed before the first deploy and a rotation of the rate store's password (the owner's to run or to accept as not seen) | S064, S066 |
+| S074 | Test suite and file sizes | Without the cluster: `infra/kind/smoke.sh`, `test_kind_manifests.py` and the four test files over 800 lines are split along the lines their own tests already cut; the six functions over 50 lines are under it (counted by signature plus body without the docstring, as the section says: by the whole count the row used, four of the six, `assess`, `build_report`, `build_injection_report` and `summarise`, are still over); the template-database fixture survives a test that patches the runner's file list; the tests that failed once under load (a lost connection in a parallel run, a tool server's timeout, the gateway's fallback test) are run repeatedly on the machine the suite runs on now and either hold by construction or are closed as not reproduced, with the numbers; ~~the slowest test of the job is under ten seconds~~ (not met, and not what the step did: the gates' measurement of 2026-10-07 found the slowest test at 45.0 s without coverage, with seven of the ten slowest over ten seconds; the step gives every test a limit of 600 s instead); one CPU-time helper; `unused_port()` on macOS has its answer written down; ~~the owner decides whether CI gates on coverage~~ (answered 2026-10-07: yes, with a file size check and a per-test timeout; built) | doing: the first half is done (2026-10-07; tested, none of it run on a cluster): the two upkeep test files, `test_toolserver_meters.py`, `test_claims_graph.py` and `test_kind_manifests.py` are split by moves a script proves, the template database's builder passes the list it read at import, the stack and demo tests that failed under load no longer rest on the machine's speed (argued; the measurement run, 25 loops of each beside a whole suite, has not run), the counting test takes 0.03 s alone where CI saw 47 s, and one CPU-time helper serves nine files; three questions wait for the owner (coverage in CI, a size check, a pytest-level timeout); the second half is built except what waits (2026-10-07; implemented and tested, none of it run on a cluster): S076's leftovers are closed or accepted row by row (the registry `schemas` link and `--check` line, the services edit's small ends, the scaffold's undo, the import walker's limits pinned, the golden set's workload tied to `Report` by its own validator, the claimant's closed tables read-only and three stale sentences), `run_command`, `build_report` and `render_summary` are under 50 lines by signature plus body (37, 47 and 29) with `--help`, every report and the committed summary byte for byte the same, and two of the half's own commits carried a defect that the review reproduced and a contract fixed; the third part (2026-10-07; moves a script proves, tested; seen on kind once: `make smoke` from the split as it stands printed 46 PASS, 0 FAIL, 0 SKIP, the same lines as the unsplit script's, the trace ID apart): `infra/kind/smoke.sh` is an entry of 1,185 lines and ten files under `infra/kind/smoke.d/` (`shared.sh` and nine checks, 36 to 644 lines), and checks 8 and 10 are still in the entry; the leftovers are done (2026-10-07; tested, none of it run on a cluster): the five loaders of the name-masked cases are one helper, `servicesupport.injection_case_claim`, whose missing case fails by name, and `test_redaction_hungarian.py` (858 lines) is three files and `hungariansupport.py`, the largest 368 lines, by a move a script proves with the collected count unchanged; the last cut (2026-10-07; moves a script proves, tested; seen on kind once, run R12: `make smoke` from the cut printed 46 PASS, 0 FAIL, 0 SKIP, the same lines as the run before it): checks 8 and 10 are `smoke.d/08-network-policy.sh` and `10-certificate-policy.sh`, the entry is 88 lines and every file of the script, twelve parts and the entry, is under 800 lines (the largest 647); the three gates (2026-10-07; the owner answered all three questions; implemented and tested, the numbers measured on the development machine and none of it yet run by the hosted runner: see "The three gates"): `make lint` runs a size check of 800 lines with 51 files listed as a ratchet, every test stops after 600 s, and CI's suite step measures line coverage and fails under 98 (99.11 % measured, 2.0 % of the suite's time), with the job's limit at 30 minutes (coverage's first run on the hosted runner, the `python` job of pull request 128, took 14 minutes 0 seconds, inside the 10 min 1 s to 14 min 29 s measured without coverage the same day); what waits: the rows the section's last table keeps, the backlog rows with home S074 (among them two of the three new ones: the 46 splits no row homed and the ten least covered files; the third, coverage's cost on the hosted runner, is read and closed) and the measurement run of the load-sensitive tests beside a whole suite (not run) | S064, S066, S037 |
 | S075 | Harness, guard and Renovate | `make docs` notices a blank line that splits a table; the command guard's known gaps to a Secret's values and to superuser SQL are closed or listed where a session reads them, and a hook that times out has a known outcome; a rule for an implementer that edits through the shell, and a guard or a rule for `make up` and `make down` from an old checkout (both the owner's); the workflow linter knows the runner label; Renovate's week of waiting is a required check or the plan says why not (the owner's decision), an image is not proposed before the chart that installs it, and the two pgvector versions are one | done (not built: the two pgvector versions are not one, because the newest CloudNativePG image still holds 0.8.6; the owner chose package-manager holds over a required check, and uv's `exclude-newer` cannot go in before 2026-10-10; N4, the guard's own files, is the owner's open question 6; the shell-edit hook is inert until the owner sets `bashEditDiffEnabled`) | — |
 | S076 | CLI, scaffold and loader small ends | No registry entry lets the runtime name an agent that no tenant lists without a check saying so (T-81); `services_edit` refuses an alias or a merge key by itself; the scaffold says which write failed and names the line it refuses in every case; the two entry-point loaders answer a bad entry in the same fixed words; the screen's fingerprint covers what it claims to; the workload's report builders refuse another workload's manifest; `meridian registry schemas` answers an unwritable directory with a message; the scaffold can write an agent with workers, or the plan says why a second graph of subgraphs is not built. Built as: `meridian registry validate` prints one NOTE, exit code unchanged, for each graph agent the runtime may name and no tenant lists, and `load_registry` refuses nothing new, so the owner's S061 decision stands; `services_edit` itself refuses an anchor, an alias or a merge key, naming the line; a refusal about a line of the person's file names the parser's line where the parser gives one; a failed or interrupted write names its kind and the error's class, the undo puts back every file that still holds the command's own bytes and names every path it did not restore (the scaffold's write and undo are in `scaffold_writes.py`); the two loaders word a refusal in one table of fixed sentences that quote no distribution's name and no import error's text, with the registry's agent ID in front for the graphs; the screen's digest is unchanged and the documents say what it covers and does not; both report builders compare the manifest's workload with their own; `meridian registry schemas` answers a directory it cannot update with one line; a second graph of subgraphs is not built, as a decision (the section says why). Implemented and tested, not run on a cluster | done | S037 |
+| S080 | File uploads for a claim, before sign-in | A claimant uploads one PDF, JPEG or PNG of at most 1 MiB to a claim, five and 3 MiB to a claim, through the JSON route or the status page's form; the file is told by its first bytes and never by its declared type or name, and its name is not stored; an upload is not a document arrival and starts no triage; the adjuster lists a claim's files with "not scanned" beside each and, behind a second switch, downloads them as an attachment under a sandbox policy, with an audit row before the first byte; both switches are off by default, and the chart allows either only for a route host name that ends in `.localhost`; the app has brakes of its own besides the edge's second route, buffer and rate limit; nothing scans a file (designed, not built) and nothing deletes one. Built as (2026-10-07; implemented and tested against PostgreSQL and **run once on kind on 2026-10-07 with both switches on for that run only** (run RU1: by script, through the edge, not in a browser), nothing paid, no evaluation fingerprint moved, the owner's "Build now" of the same day for the uploads and "Build now, local-only switch" for the download): migration 0032 (`claims.claim_files`, `claims_api` may insert and select), the route and the form, the ceilings under advisory locks, the edge route and policies in the chart, the adjuster's list and download with brakes of their own, synthetic sample files from the seeded generator, and five reviews (database, security twice, FastAPI, platform boundary). Not built: a scanner, a delete or a retention period, a sign-in, a second host name for downloads | doing: built, reviewed and run twice on kind (RU1, RU2); the pull request is left | S070 |
+
+### Toward services: a database each and six images
+
+Made on 2026-10-07 from the owner's answers of the same day (S081's section,
+and [ADR 10](architecture/decisions/0010-split-the-platform-into-services-with-a-database-each-and-their-own-releases.md)):
+a database per service on one PostgreSQL server, five databases, six images
+with independent versions, the tool servers trusting the authenticated caller,
+the audit trail as an outbox per service, a fresh baseline per database, and
+the building after the steps in flight. These steps are the building. They
+are **designed**: nothing in S082 to S088 exists, and S081 is the record that
+decides what they are. S080 is kept for the uploads step, which another branch
+adds.
+
+- **"Depends" on the steps in flight** means their pull requests are merged,
+  not that the steps are `done`: S020 and S069 are not `done` when their pull
+  requests merge, because S020's apply and S069's R12 wait on the owner.
+  S082's row names S020 and the range S069 to S074 as the owner's "the
+  steps in flight" was read. S071 is in that range and its paid run waits on
+  the owner's yes: S082 waits for the pull request of S071's free half (it
+  changes the tests' support code the split moves), not for the paid run,
+  which is a measurement and changes no service. This is the session's
+  reading; the owner may say otherwise.
+- **Two checkpoints for the owner:** after S083 the images half of the choice
+  is delivered (six images, on one database, with no independent release safe
+  before S088's contracts); after S087 the data half is.
+- **Lanes (Part A):** S083 and S087 change what the cluster runs, so each is
+  the cluster lane's. S085 adds migrations and S087 replaces the migration
+  tree: the database lane's. S084 may add or change a tool's contract and then
+  moves an evaluation fingerprint. S083 and S084 may run side by side.
+- **The owner's two answers of the sixth round** are in Part D's 7 (the audit
+  outbox, for S085) and 8 (a fresh baseline per database, for S087). What they
+  leave open is the steps' own design: the gateway's audit row, how the
+  adjuster's page reads the central trail, and where the archive lives.
+
+| ID | Step | Done when | Status | Depends |
+|---|---|---|---|---|
+| S081 | The decision record for the move toward services | [ADR 10](architecture/decisions/0010-split-the-platform-into-services-with-a-database-each-and-their-own-releases.md) is accepted and indexed: it says what the owner decided (five databases on one server, six images with independent versions, the tool servers trusting the authenticated caller with the lost double check accepted as a risk, the audit trail as an outbox per service, a fresh baseline per database, the building after the steps in flight) apart from the session's own design, lists the ten couplings with the step that replaces each, what stays shared, the consequences and the two checkpoints; this table exists and Part D's questions 7 and 8 are answered; `make docs`, `make check` and `make test` pass. Nothing is built. `doing` until the pull request is merged, then `done` | doing | — |
+| S082 | Code in the wrong place moves; import contracts per service | With no change in behaviour and no assertion of an existing test changed: the claims tool server leaves the claims workload's package, the Claims API no longer imports the runtime's models or its sweep's constants (the models both sides use sit in a module of their own), the sweep's runtime SQL sits with the runtime, and the workloads' graphs sit in a package of their own; an import contract keeps each service's package from importing another service's; `make lint`, `make pytest` and `make smoke` pass. Designed | todo | S081, S020, S069 to S074 |
+| S083 | Six packages, six images, a tag per service | A `uv` workspace holds a common library (`common`, `registry` and `guardrails`), the tool-server library and one package per service, each with its own dependencies and version; the runtime's image installs the graphs' package; the jobs ship with the service that owns their data; one build file makes six images; the chart takes a tag per service and `make deploy` builds and loads all six; `make demo` and `make smoke` pass on kind with six images on one database. First checkpoint: the images half of the owner's choice. Designed | todo | S082 |
+| S084 | The tool servers take the binding from the caller; two reads become calls | A tool server takes a call's run, agent, tenant and claim from the Agent Runtime's authenticated call and reads neither `runtime.runs` nor `claims.claims`; a call without a binding is refused; the knowledge server asks the policy server for a policy's wording version and the policy server asks the claims tool server for a policy's other claims, each over mutual TLS under a registry entry, a chart value and a NetworkPolicy; ADR 4's one-caller rule is changed for the two paths and the change recorded; T-22 is rewritten with the accepted risk, stating what the double check caught and what is left. Designed | todo | S082 |
+| S085 | The audit outbox, the relay and the central trail | Each service writes its audit row into an audit table of its own in the transaction of its business write, with the insert-only and stamp triggers; a relay copies the rows into a central audit table that owns retention and serves the adjuster's trail by claim; a relay that lags or stops is seen by an alert, and the services keep writing; the gateway's audit row is settled in the design and said (in the ledger's transaction, or kept apart); built inside the one database, as a table per schema (the owner's decision, Part D's question 7). Designed | todo | S082 |
+| S086 | The sweep in two | The runtime sweeps its own runs and checkpoints under its own role, and the claims side asks the runtime for a run's state and moves its own claims; no statement spans runs and claims; each half is safe to run twice, and a test stops a pass between the halves; whether the claims side has an identity of its own towards the runtime is decided and recorded. Designed | todo | S082 |
+| S087 | Five databases | `claims`, `runtime`, `gateway`, `policy` and `knowledge` each have their own migration tree and ledger from a baseline, with no replay (the owner's decision, Part D's question 8); the 31 files and their 59 test files are archived outside the package's path; each role and the server's rules name one database; kind, the tests' template databases, smoke, the runbooks' queries and the database lists of the Azure and AWS modules follow; the audit database exists; `make up`, `make smoke` and `make demo` pass on a recreated kind cluster. Second checkpoint: the data half of the owner's choice. T-25 is rewritten. Designed | todo | S083, S084, S085, S086 |
+| S088 | Contracts, versions and independent release | A committed, versioned contract for the gateway, the runtime and the Claims API's routes, each side tested against it, and a rule for how long an old version is served; the registry directory has a version of its own; CI builds, tests what changed and publishes the six images to a place the step chooses and records; one service is released alone while the others stay on their versions, and the run is recorded. Designed | todo | S083, S087 |
 
 ### M3 — Reliability and operations
 
@@ -646,7 +692,7 @@ that day; the rest stand as their step recorded them.
 | The tool-call limits are the same for every agent | S014 | open; S031 looked and left it: the limits stay per run and per leg, shared by an agent's workers, and neither an agent nor a worker has one of its own | closed by S069 as a decision, not built: one agent runs under the limits (the triage), the second (the claim brief) makes one model call and five tool calls, far under them; a registry field would have to be left out at its default to keep the `tools` fingerprint still; and the lease test bounds the product of the limits and the timeouts for every agent at once | S069 |
 | Pydantic's error for a claim that is not valid facts quotes the claim; only its class name is logged | S014 | closed by S060 for the Claims API (a stored submission, a stored proposal and the facts a run gets are logged as location and error type); the graph's own validation is S067's row below | S060 |
 | A migration that adds columns locks `claims.claims` for its backfill | S015 | closed by S065 (the rule is written in the migrations' README, column in one file and backfill in the next, and a test refuses a new file that adds a column to a table and updates it; no column was added in the step) | S065 |
-| After a failed resumed leg LangGraph keeps the first leg's value | S015 | open; S031 changed nothing here: the triage still ignores the resume value, and a workload that read it would read the first leg's. Measured beside it (ADR 5): a worker invoked from the pause node continues, after a failure, at the node that failed, with the state its first leg checkpointed | closed by S069 (E3): the runtime refuses a resume that carries a value (a 422, `input` must be `{}`), so no value is replayed and neither host is handed one; ADR 9 has a dated note; implemented and tested, not run on a cluster | S069 |
+| After a failed resumed leg LangGraph keeps the first leg's value | S015 | open; S031 changed nothing here: the triage still ignores the resume value, and a workload that read it would read the first leg's. Measured beside it (ADR 5): a worker invoked from the pause node continues, after a failure, at the node that failed, with the state its first leg checkpointed | closed by S069 (E3): the runtime refuses a resume that carries a value (a 422, `input` must be `{}`), so no value is replayed and neither host is handed one; ADR 9 has a dated note; implemented and tested; the 422 was seen on kind in the second half's run K1 (2026-10-07: a resume with `"input": {"x": 1}` from the Claims API's pod answered 422, "a resume delivers no value: send {}", and the same request with an empty input answered 404 and read no run); a value replayed from a failed leg on a cluster was not seen | S069 |
 | Reads of a claim's page are not audited | S016 | open | S021 |
 | The adjuster's queue shows at most 100 claims with no next page | S016 | closed by S060 (a keyset on the queue's own order and index, 100 to a page) | S060 |
 | `make eval-compare` alone reads whatever report `.eval/` holds, which may be stale | S017 | closed by S050 (it refuses a report older than a tracked file it is made from) | S050 |
@@ -657,7 +703,7 @@ that day; the rest stand as their step recorded them.
 | Audit rows of one transaction share a time, so the trail cannot order them | S048 | closed by S065 (`audit.events.seq`, stamped by the database, migrations 0017 and 0019; the adjuster's queries break a tie by it) | S065 |
 | `database_failure` without the claim's ID | S048 | closed by S060 (a wrapper of the workload's logs the ID at twelve call sites; the queue has no claim) | S060 |
 | A per-phase httpx timeout | S048 | closed by S060 (3 s to connect, 5 s to write, 3 s for the pool, 60 s to read) | S060 |
-| Uploads (T-38) | S048 | open; S070 stays open for it: the owner's decision, asked in three statuses and not answered, was not taken, and nothing was built for uploads; the session recommends out until S021, when a caller has an identity. If built, a step of its own | S070 |
+| Uploads (T-38) | S048 | ~~open; S070 stays open for it: the owner's decision, asked in three statuses and not answered, was not taken, and nothing was built for uploads; the session recommends out until S021, when a caller has an identity. If built, a step of its own~~ answered by the owner on 2026-10-07 ("Build now", against that recommendation) and built as S080: implemented, tested, off by default, **not seen on a cluster**; what it leaves open is in the rows that name S080 below (scanning, retention, the open host before sign-in) | S080 |
 | A shell poll test (`test_kind_manifests.py::test_poll_clears_the_last_error_on_success`) failed once and passed alone | S048 | closed by S052: the tests' one-second budget met bash's whole-second clock, so a tick skipped the loop; the budget is two seconds | none |
 | The CI python job near its time limit | S048 | closed by S054 (4 min 50 s in parallel) | none |
 | Running the tests in parallel | S049 | done in S054 | none |
@@ -669,7 +715,7 @@ that day; the rest stand as their step recorded them.
 | `unused_port()` in `toolsupport.py` closes its socket before the test uses the port | S054 | closed by S057 on Linux, where CI runs: the socket stays bound and never listens, so the port is refused and taken; macOS has a row of its own | S057 |
 | Wall-clock limits in four tests (0.5 s to 5 s, thirty times their measured time or more) | S054 | closed by S057 for five of the six there were: four compare CPU time at a length and at four times that length, one records which patterns are searched; the sixth has a row of its own | S057 |
 | `ensure_roles` has no lock timeout and relies on the default isolation level | S054 | closed by S065 (READ COMMITTED and a lock timeout of a minute, with an error that names the lock) | S065 |
-| A coverage gate in CI (measured once: 99.2 % of lines; coverage adds about a third to the run) | S054 | open, the owner's decision | S074 |
+| A coverage gate in CI (measured once: 99.2 % of lines; coverage adds about a third to the run) | S054 | closed by S074 (2026-10-07): the owner answered "Coverage threshold, File size check, Per-test timeout", all three; the floor is 98 against 99.11 % of 13,783 statements measured, and CI's Tests step sets `COVERAGE=1`. The "about a third" was the tracing core's cost (37.0 % and 40.1 % in two runs here); the interpreter's monitoring costs 2.0 % (257.63 s against 252.52 s), measured on the development machine and not yet on the hosted runner (a new row) | S074 |
 | Template databases, so a test database is copied and not migrated | S054 | closed by S065 (one migrated template per set of migrations; the whole suite beside the cluster went from 3 min 00 s to 2 min 11 s with 4 workers) | S065 |
 | A login that is a MEMBER of `claims_sweep` and does not `SET ROLE` has neither of the two names the sweep's triggers test, so it holds the sweep's grants and is not confined (true since 0014); a test holds that no login is a member on a test database, and nothing checks a deployed one | S065 | closed by S068 in the form the database allows: `meridian db migrate` counts at every run the roles that are members of `claims_sweep` through `INHERIT` or `SET` and the roles it is a member of, and a count above zero stops the deploy's migrate Job with the files applied; `gateway_upkeep` is checked the same way for the roles it is a member of. It detects at the next deploy and does not prevent, so a login granted in between is unconfined until then (T-77); implemented and tested against PostgreSQL, the Job's refusal not seen on a cluster. S063 did not take it: migration 0022 refuses a membership of its own two roles when it runs; its security review, low | S068 |
 | Migration 0017 rewrites `audit.events` twice under an exclusive lock, each statement under the connection's 10 s limit: above about five to six million rows the runner cannot apply it (it fails closed), and the ways out, a new table and a switch or a one-off longer timeout, are not built; it writes about twice the table in WAL | S065 | closed by S068 as the step's clause words it, written down and tested: no database that exists is in the state that needs a way through (kind's is short-lived and the Azure database of S020 starts empty), the migrations' README says what an operator of one would do, and a test shows that the runner fails closed and leaves the table as it was, for a cancel at the file's first heavy statement only, not during `CLUSTER` or the rewrite for the column (the README says so); the two ways out stay designed, not built. Measured by its PostgreSQL review (1.5 million rows: 2.4 s and 2.2 s) | S068 |
@@ -677,7 +723,7 @@ that day; the rest stand as their step recorded them.
 | A checkpoint thread whose ID is not UUID text is walked from a fixed place and may never be listed, and a leftover behind a long run of live threads is listed only when the random start lands inside that run; nothing counts or alerts on leftovers that stay | S065 | partly closed by S064: what a pass cleaned is a series (`meridian_sweep_last_pass`, finding `threads_cleaned`), so leftovers that are found are counted; a thread the walk never lists is still seen by nothing, and no rule reads the gauge's values. The runtime writes UUID text only; both reviews, low. S068 decided to build nothing for it and wrote no sentence in the sweep's docstring (its design had said the docstring would): a rule on a count of leftovers is a cluster item, so the row moves to the step that holds the alerts and the cluster | S073 |
 | The template database is built from the packaged migrations read at import; a test that patches the runner's file list and is the first on its worker to need the template makes the session's fixture fail for the tests after it. A `files` parameter on `apply_migrations` would let the builder pass its own | S065 | closed by S074 (first half): `apply_migrations(conn, files=None)` takes an optional list that only the tests' builder passes, the list `dbsupport.py` read at import, so a patch of the runner's list, or a rebinding of `PACKAGED_MIGRATIONS`, cannot reach the template; the ledger is compared with that list as a second net; `meridian db migrate` passes none and a test reads every call under `src/`; a given list is not sorted (new row, S068) | S074 |
 | The static check on migrations reads SQL text: it does not see an `UPDATE` inside a function body or dynamic SQL, an `ADD` without the word `COLUMN`, or a table reached by another name | S065 | closed by S068: the check sees five more statements (`DROP INDEX` and `REINDEX`, except their `CONCURRENTLY` forms, `DROP TABLE`, `DROP VIEW` and `TRUNCATE`) and, after the review, `DROP SCHEMA`, `DROP SEQUENCE`, `DROP MATERIALIZED VIEW`, `REFRESH MATERIALIZED VIEW`, `ALTER VIEW`, `ALTER MATERIALIZED VIEW`, `ALTER INDEX` and the `CASCADE` forms of `DROP FUNCTION`, `TYPE`, `DOMAIN` and `EXTENSION`, and reads a later `SET LOCAL lock_timeout` of 0, a `RESET` or a `DEFAULT` as taking the timeout away; the migrations' README holds the one list of what it does not see, and each entry has a test that pins it as not seen. No SQL parser is built (a dependency for a check on twenty files) | S068 |
-| The CI python job's limit of 15 minutes, once several parallel runs are measured | S054 | closed by S057 (kept at 15: twice the slowest of 47 successful runs, 7 min 30 s; the median is 6 min 47 s, and the job prints its slowest tests) | S057 |
+| The CI python job's limit of 15 minutes, once several parallel runs are measured | S054 | closed by S057 (kept at 15: twice the slowest of 47 successful runs, 7 min 30 s; the median is 6 min 47 s, and the job prints its slowest tests). Correction, 2026-10-07 (S074): the limit is 30 minutes now, by the same rule: the suite had grown to 20,000 tests and the whole job of five pull requests that day took 10 min 1 s to 14 min 29 s before coverage, so twice the slowest with coverage's cost added (14 min 47 s) is 29 min 34 s, rounded up | S057 |
 | Skip lint and tests in the python job for a pull request that changes only files no test reads (the job must still report) | S054 | open | S022 |
 | A model's refusal of a structured request (`message.refusal`) is read as `filtered` against a mocked transport only; no real one has been seen | S051 | open; not taken by S032, which makes no live call. A live run of the injection cases (the row below) is where one could be provoked | S071 |
 | The estimate of a response schema's tokens (its compact JSON's bytes over three) rests on one live measurement, 43 counted against 64 reserved | S051 | open | S050 |
@@ -775,7 +821,7 @@ that day; the rest stand as their step recorded them.
 | The harness's hook that denies printing a Kubernetes Secret matches only the bare command: with a namespace flag, a kubeconfig flag or a shell variable before `get`, as every command in the runbooks has, it gives no answer; a superuser `psql` through `kubectl exec` and `make grafana-password` are not covered either. Found by S024's security review, which ran the hook on samples. The hook comes from development-base: fix it there, then copy it in | S024 | closed on 2026-10-04 outside a step, in development-base first (its pull request 45), then copied in: the rule reads what follows `get` in a command segment, whatever stands before it, and denies a get of a Secret with any output format but `name` and `wide`; a command that lists the Secrets in one segment and prints what a variable or xargs hands it in another is denied as a pair, which a security review of the first version found missing by running the old and the new hook side by side. The owner decided the other two that day: `psql` through `kubectl exec` asks on every call, and `make grafana-password` asks (a person's own terminal never meets the hook). 125 cases added; 38 mutants of the patterns each fail one | none |
 | The command guard is a pattern on what a session types, and these ways to a Secret's values or to superuser SQL give no answer: `kubectl exec` with `env`, `printenv` or `cat` of a mounted file, `kubectl get --raw`, `kubectl config view --raw`, `kubectl create token`, `helm get manifest`, a cloud CLI's secret commands, `pg_dump` or `pg_restore` through `kubectl exec`, and `psql` reached by `kubectl run`, `kubectl debug`, a plugin or `docker exec`. Listed by the security review of the Secret rule on 2026-10-04. A rule for one of them goes into development-base first; the hook stays a guard for habits, not a boundary, as its header says | S024 | closed by S075 after three security passes: the ways listed here are denied, ask, or are listed as not seen, the neutral rules went to development-base first (pull requests 50 and 51), and what the hook still does not see is listed in the secret-rotation runbook's section "What the command guard does not see", and in the hook's header (`docker exec` into the tests' own database is one of the items in the runbook) | S075 |
 | Nothing alerts on missing data: when the collector or the path to Prometheus stops, every gateway alert goes quiet, and a deleted Deployment or CronJob takes its alert with it; and any pod outside `meridian` can push a series under the gateway's name (T-68), which since S024 can raise or hide an alert | S024 | partly closed by S064: three rules compare the two ends of a hop (the gateway's series against the runtime's, the runtime's against the app's, the sweep's gauge against its CronJob) and one watches the log agent's DaemonSet; loaded and healthy on kind, none seen firing. Still open: with no traffic anywhere a stopped collector leaves nothing to compare; a deleted Deployment or CronJob still takes its alert with it; one of the six services can push under another's name (T-68) | S073 |
-| A renewed certificate reaches a service only with its next restart: nothing reloads it and nothing alerts before it expires (90 days, renewed at 60), so a pod that never restarts would serve an expired one, with its probes still green because the kubelet verifies no certificate (T-89). The infrastructure review's two ways out: `/healthz` answers 503 when the certificate loaded at the start is near its end, so liveness restarts the pod, or a restart on renewal with an alert on cert-manager's expiry metric | S055 | closed by S056 (inside the last 24 hours of the certificate it loaded, a service answers 503 on `/healthz` once the mounted file holds a renewed one, and from the certificate's end whatever the file holds; alerts at 21 days left, on a certificate that is not Ready, on the metrics going missing and on the two Deployments that issue). The restart itself was not seen on the cluster | S056 |
+| A renewed certificate reaches a service only with its next restart: nothing reloads it and nothing alerts before it expires (90 days, renewed at 60), so a pod that never restarts would serve an expired one, with its probes still green because the kubelet verifies no certificate (T-89). The infrastructure review's two ways out: `/healthz` answers 503 when the certificate loaded at the start is near its end, so liveness restarts the pod, or a restart on renewal with an alert on cert-manager's expiry metric | S055 | closed by S056 (inside the last 24 hours of the certificate it loaded, a service answers 503 on `/healthz` once the mounted file holds a renewed one, and from the certificate's end whatever the file holds; alerts at 21 days left, on a certificate that is not Ready, on the metrics going missing and on the two Deployments that issue). The restart itself was seen on the cluster with certificates of one hour: in the watch of 2026-10-06 (all six containers restarted once, in the same minute) and again on 2026-10-07 (S073, run R7, the restarts spread) | S056 |
 | Nothing revokes a service's certificate, and the `meridian-services` issuer signs a Certificate from any namespace with any URI, since cert-manager's built-in approver approves every request; the operators with a cluster-wide read of Secrets can read the CA's key (T-88) | S055 | partly closed by S056 (cert-manager's own approver is off and approver-policy lets the issuer sign only a request made in `meridian` with a URI under its prefix; on the cluster a request from another namespace was denied). Open, for before the chart goes to AKS: revocation; a CA key outside a Kubernetes Secret; inside `meridian` the policy does not tell one service's request from another's | S020 |
 | Telemetry from the services to the collector is clear text inside the cluster (T-90) | S055 | closed by S063: TLS 1.3 to the collector, verified against an authority of its own; on kind | S063 |
 | `meridian workload new` adds a new agent to the registry but not to the Agent Runtime's entry in `services.yaml`, so on a cluster the gateway would refuse the scaffolded workload's calls (S055's name rule) | S055 | closed in part by S055's review: `meridian registry validate` now fails for a graph agent a tenant may run that the runtime may not name, and says where to add it; closed by S061 for the agent (the scaffold writes it into the runtime's entry, the owner's decision of 2026-10-05); a new workload's own API still needs an entry and a chart entry by hand, which the command now says | S061 |
@@ -804,24 +850,24 @@ that day; the rest stand as their step recorded them.
 | `tests/meridian/guardrails/test_redaction.py` has its own copy of the CPU-time measurement that is now `tests/meridian/cputime.py` | S057 | closed by S074 (first half): `test_redaction.py` uses `cputime.growth`, and the helper retakes a measurement at or above the limit up to four times and refuses a small run under 1e-4 s | S074 |
 | The advisory hook reports `ubuntu-26.04` as an unknown runner label on every edit of a workflow: the laptop's actionlint is older than the label the runs use | S057 | closed by S075: `.github/actionlint.yaml` lists `ubuntu-26.04` with a comment that says when to remove it, and a test fails on a runner label that neither actionlint nor the file knows | S075 |
 | `test_misses_and_hits_are_counted_exactly_under_threads` in `tests/meridian/gateway/test_recorded.py` takes 33 s of one worker in CI, the third slowest test of the job (read from pull request 79, the first run that printed durations) | S057 | closed by S074 (first half): the test and its neighbour load the registry once, not once per call (0.03 s alone where CI saw 47 s, and 0.02 s where it saw 12 s); the time in CI is read at the final run | S074 |
-| The count of a refusal flood's last window is written for the gateway's own refusals only: the caller check's refusals (`common/identity.py`, in every service; their rows carry no purpose either) and the throttles of the tool servers and the runtime still lose it | S058 | closed by S069 (E2): one writer, `common/refusal_summary.py`, serves the gateway (its caller check has a throttle of its own, summarised under `model.call`), the runtime (two throttles: the caller check and name refusals, and tool refusals) and each tool server; a summary is written with the next request, call or run and at close, at least once; the caller check's rows still carry no purpose (T-49); implemented and tested, not run on a cluster | S069 |
+| The count of a refusal flood's last window is written for the gateway's own refusals only: the caller check's refusals (`common/identity.py`, in every service; their rows carry no purpose either) and the throttles of the tool servers and the runtime still lose it | S058 | closed by S069 (E2): one writer, `common/refusal_summary.py`, serves the gateway (its caller check has a throttle of its own, summarised under `model.call`), the runtime (two throttles: the caller check and name refusals, and tool refusals) and each tool server; a summary is written with the next request, call or run and at close, at least once; the caller check's rows still carry no purpose (T-49); implemented and tested; seen on kind in the second half's run K1 (2026-10-07): after refusals twice inside a minute, 125 seconds and one request that passes, the gateway, the runtime and each of the three tool servers wrote one row with the outcome `suppressed` and a count of 1 (on a tool server the summary row comes before the same call's own `refused` row); the Claims API keeps no throttle and writes none; a shed tool call's summary was not seen | S069 |
 | The gateway bounds an embedding input in bytes because it has no tokenizer, so it refuses non-Latin inputs the provider would take (Cyrillic past 4,095 characters, CJK past 2,730); a tokenizer that needs no download at start could count closer | S058 | closed by S069 as a decision, not built: a tokenizer in the gateway's image needs an encoding file that the image cannot fetch (it has no egress) or a vendored one, for a bound whose cost today is a refused long non-Latin input, and the byte bound is the safe side | S069 |
 | A reply's output count is held to the wire's cap of 1,024 tokens and not to the request's own `max_output_tokens`, because the replay provider ignores that cap; a model that bills reasoning tokens as completion tokens would be refused by the bound, as a bad response | S058 | open | S030 |
-| The health check reads the certificate file a moment after the server did: uvicorn builds its TLS context before it builds the application, so a renewal that lands between the two reads leaves `/healthz` watching a newer certificate than the one served, and green for the two months that one has left. The window is the time the application takes to import. The security review's way out: one read for both, through uvicorn's `ssl_context_factory` | S056 | open; the second half of S069, on the cluster, not built in the first: a start module that builds the TLS context itself and hands the app the certificate it loaded (the security review's first option; six commands in the chart change, to be seen on kind with a renewal) | S069 |
-| A service that restarts itself near its certificate's end was not seen on the cluster: every certificate lasts 90 days, and the chart has no value for another lifetime. With one (an hour is cert-manager's shortest) a run on kind could watch a renewal, the 503 and the restart | S056 | closed by S062: watched on kind on 2026-10-06 with one-hour certificates: renewed thirty minutes in, 503 ten minutes before the end of the certificate each process had loaded, each container restarted once by the kubelet | S062 |
+| The health check reads the certificate file a moment after the server did: uvicorn builds its TLS context before it builds the application, so a renewal that lands between the two reads leaves `/healthz` watching a newer certificate than the one served, and green for the two months that one has left. The window is the time the application takes to import. The security review's way out: one read for both, through uvicorn's `ssl_context_factory` | S056 | closed by S069's second half (R11) for the five services that serve TLS: `python -m meridian.platform.common.tlsstart` reads the file's bytes, has uvicorn's own default builder load the context, reads the bytes again and, when they are equal, hands `certlife` the certificate parsed from them (five commands in the chart, not six: the Claims API serves no TLS; and the window was the app factory's run up to its read of the file, not the import). Tests: the race for a service app and a tool app, a control that shows the fault without the hand-over, the retry, and the `Config` and the context equal to uvicorn's own; three reviews, none critical or high. Seen on kind (K2, 2026-10-07): the five started through the module with 0 restarts, the served end dates of four of them equalled the issued ones (agent-runtime's own was not handshaken), `/healthz` answered 200 on those four, a renewal of `policy-mcp` left the pod serving and watching what it loaded until a restart, and the restarted pod served the renewed certificate; smoke 46 PASS twice. Not seen on a cluster: the race itself (it cannot be provoked on kind), a renewal that splits OpenSSL's two opens, the module's refusal line, and the health check going red early with the module (S073's one-hour watch ran with plain uvicorn). Not closed by it, three rows below: the client's context, the Claims API, a values override | S069 |
+| A service that restarts itself near its certificate's end was not seen on the cluster: every certificate lasts 90 days, and the chart has no value for another lifetime. With one (an hour is cert-manager's shortest) a run on kind could watch a renewal, the 503 and the restart | S056 | closed by S062: watched on kind on 2026-10-06 with one-hour certificates: renewed thirty minutes in, 503 ten minutes before the end of the certificate each process had loaded, each container restarted once by the kubelet; watched again on 2026-10-07 (S073, run R7, with the restarts spread): each service's old container stopped once, 52 or 53 seconds after the moment the chart computes for it | S062 |
 | The pods of one deploy hold certificates that end in the same minute, so they turn unhealthy and restart together: about a minute without an answer from a service with one replica (readiness fails after 10 to 15 seconds, liveness after 60). With one replica each that is the shortest total; with more, the pods of one service should not go together, which needs a margin that differs per pod | S056 | open | S020 |
 | `make smoke` makes no request that the issuer must refuse (a Certificate in another namespace, read for its Denied condition and removed; done by hand in S056), so a change in how approver-policy reads a policy shows only at a renewal; its audit line accepts a row of the last two minutes, so a second run inside the gateway's minute passes on the first run's row; and `refused` is any TLS error or reset after the server's certificate verified, not the unknown-CA alert alone | S056 | closed by S062: check 10 asks for a certificate from another namespace on every run and passes only on a denial by the deny policy; the audit line is this run's own row or a skip; a reset is told from the unknown-CA alert, and a connection that ends after the request was sent is a failure | S062 |
-| approver-policy has a readiness probe and no liveness probe, so a hung pod is not restarted, and `MeridianCertificateApproverDown` sees a Deployment without a replica, not a hung one; its memory limit of 96 Mi (30 MiB used on kind) was not measured on a larger cluster; its image is pinned by tag, like cert-manager's; and Renovate raises the two charts separately, though v0.28.0 is built against cert-manager v1.21.2 | S056 | partly closed by S063: its image is pinned by digest and the two charts arrive in one Renovate group. Still open: no liveness probe (the chart has no value for one), and its memory limit was measured on kind alone | S073 |
+| approver-policy had a readiness probe and no liveness probe, so a hung pod was not restarted, and `MeridianCertificateApproverDown` sees a Deployment without a replica, not a hung one; its memory limit of 96 Mi (30 MiB used on kind) was not measured on a larger cluster; its image is pinned by tag, like cert-manager's; and Renovate raises the two charts separately, though v0.28.0 is built against cert-manager v1.21.2 | S056 | partly closed by S063: its image is pinned by digest and the two charts arrive in one Renovate group. closed for the probe by S073 (2026-10-07): a liveness probe on `/readyz` (the binary serves nothing at `/healthz`), applied by `make up` under the field manager `meridian-kind` because the chart has no value for one; seen on kind in run R13 (the probe on the Deployment, a second `make up` of the same chart a no-op with the field still owned by `meridian-kind`, ten quiet minutes, a frozen process restarted by the kubelet 140 seconds after it stopped); what it cannot see, a reconciler stuck while HTTP answers, is `MeridianCertificateRenewalOverdue`'s, and a hang that returns is `MeridianCertificateIssuingRestartLoop`'s (the first loaded and quiet, the second not loaded, neither seen firing). Still open: its memory limit was measured on kind alone | S073 |
 | The certificate policy is kind's: the namespace, the trust domain and the issuer are literals in `infra/kind/manifests/certificate-policy.yaml`, so the chart in another namespace, with another trust domain or with a namespaced Issuer is denied or never decided, and nothing says so before the pods wait for a Secret. The policy also lets a request made in `meridian` name any DNS name under `meridian.svc`, and a request with no usage gets cert-manager's default usages | S056 | open | S020 |
 | After a denied or failed request cert-manager waits before it asks again (an hour, doubling to 32), so `make deploy` fails again for that long after a policy is repaired; the runbook names `cmctl renew`, which the laptop does not have | S056 | open in part; S073 built `make cert-renew CERT=<name>` (K3) and it renewed one healthy Certificate on kind (run R3, 2026-10-07: revision 1 to 2, a new request Approved); not seen: the request after a denied one, which is what it is for (run R6), and a `409` | S073 |
 | `make deploy`'s check for approver-policy looks once and does not wait: right after a cold `make up` under load the add-on lost its leader election, exited and was back in twenty seconds, and a deploy started in that gap stopped with "run 'make up' first", which was not the remedy (seen once, 2026-10-05; the second run passed). A short wait, or a message that says a restart may be in progress | S056 | closed by S062 (it looks for a minute, and the refusal after that quotes what kubectl said) | S062 |
 | The kind cluster that S055 left was replaced before S056 began: its node was created at 18:16 UTC on 2026-10-04 by a `make up` of a checkout older than `main` (one without cert-manager), and the one S056 then proved its work on was gone again by 08:11 UTC on 2026-10-05, removed by something other than S056's session; the owner had it made again. Nothing tells `make up` or `make down` that the checkout is older than what the cluster runs, or that another session is using the cluster, and with several worktrees one of them always is older | S056 | closed by S075, with a residual: the cluster records its holder and the state of its last run, and `make up`, `make deploy` and `make down` stop for another holder unless `TAKE_CLUSTER=1` (Part A; seen on kind, see S075's section). It is a notice, not a lock, and a cluster made before the record has none, so it is anybody's until the first `make up` or `make deploy` writes one | S075 |
 | Retrieval over a graph was measured on data that has nothing relational to find: no customer holds two policies and no asset is on two (S038's census). Measure again if the synthetic data gains customers with several policies or assets with several claims | S038 | open | S071 |
 | S038's one failing check (all cited clauses, rank 10) is against a fusion whose vector half is the simulated embedding, a hashed bag of words; the comparison was not run against a real embedding, which needs a paid call | S038 | open; a rerun belongs with a step that can call an embedding deployment without a laptop | S071 |
-| At a certificate renewal every service restarts in the same minute: one deploy issues the seven certificates in the same second, so each process reaches its restart margin together, and with one replica each the platform answered nothing for about a minute (seen on kind, 2026-10-06). A second replica, or a margin spread per service, would stagger it | S062 | open in part; S073 built the spread (K2: a share of the margin by a service's place in the chart's list) and the shares were seen set on the six pods (run R2, 2026-10-07); not seen: the restarts at a renewal (the one-hour watch, the second half); two replicas of one service would still restart together, not built | S073 |
-| `infra/kind/smoke.sh` is about 2,300 lines and `tests/meridian/test_kind_manifests.py` about 3,900; the checks are cut out of the script by the tests, function by function, and could be files of their own | S062 | closed in part by S074 (first half): `test_kind_manifests.py` is thirteen `test_kind_*` files and two support modules (`kindsupport.py`, `kindharness.py`); closed in part by S074 (third part, 2026-10-07; seen on kind: one `make smoke` from the split, 46 PASS like the unsplit script's): `smoke.sh` is an entry and ten files under `infra/kind/smoke.d/`, nine checks and the shared code, each under 800 lines (36 to 644); open: the entry holds checks 8 and 10 and is 1,185 lines, over the ceiling, until the last cut, after S072's cluster batch | S074 |
-| The scripts' `kubectl` calls have no request timeout of their own: a hung API server stalls a wait between two checks. Smoke's reads of the database are bounded since S062; the pgvector lines of check 2 still hide psql's message | S062 | open in part; S073 bounded every call (K1, then K9 for the calls that wait; tested with stand-ins, `make deploy` and `make smoke` ran under the request flag and the `exec` bound on kind from run R2, 2026-10-07) and the pgvector lines keep psql's first line (K4); not seen: the outer bound of K9 and a frozen API server (run R5) | S073 |
-| The chart sets no `revisionHistoryLimit`, so every earlier image stays a rollback's target for as long as its ReplicaSet is kept; `make images` lists such an image and prints no command for it, and matches only images written `repository:tag` | S062 | open in part; S073 set `revisionHistoryLimit: 2` (K2; seen on the seven Deployments, run R2, 2026-10-07) and `make images` reads a registry, a port and a digest (tested with stand-ins); not seen: the limit removing an old ReplicaSet over three deploys (run R5) and `make images` with the new reading | S073 |
+| At a certificate renewal every service restarts in the same minute: one deploy issues the seven certificates in the same second, so each process reaches its restart margin together, and with one replica each the platform answered nothing for about a minute (seen on kind, 2026-10-06). A second replica, or a margin spread per service, would stagger it | S062 | closed by S073 for one replica each, seen on kind: S073 built the spread (K2: a share of the margin by a service's place in the chart's list), the shares were seen set on the six pods (run R2, 2026-10-07), and the one-hour watch run again (run R7, 2026-10-07) saw six restarts 99 or 100 seconds apart, never fewer than five of the six Ready, each service not Ready for 41 to 46 seconds. Residual, the row's own: two replicas of one service would still restart together (they mount one Secret), not built and not seen; nor was a `renewBefore` shorter than one and five sixths of the margin | S073 |
+| `infra/kind/smoke.sh` is about 2,300 lines and `tests/meridian/test_kind_manifests.py` about 3,900; the checks are cut out of the script by the tests, function by function, and could be files of their own | S062 | closed in part by S074 (first half): `test_kind_manifests.py` is thirteen `test_kind_*` files and two support modules (`kindsupport.py`, `kindharness.py`); closed in part by S074 (third part, 2026-10-07; seen on kind: one `make smoke` from the split, 46 PASS like the unsplit script's): `smoke.sh` is an entry and ten files under `infra/kind/smoke.d/`, nine checks and the shared code, each under 800 lines (36 to 644); closed by S074 (the last cut, 2026-10-07, commit 3efea92; seen on kind: run R12, 46 PASS equal to the run before it): checks 8 and 10 are parts too, twelve files under `smoke.d/` (36 to 647 lines) and an entry of 88 lines, so no file of the script is over the ceiling | S074 |
+| The scripts' `kubectl` calls have no request timeout of their own: a hung API server stalls a wait between two checks. Smoke's reads of the database are bounded since S062; the pgvector lines of check 2 still hide psql's message | S062 | open in part; S073 bounded every call (K1, then K9 for the calls that wait; tested with stand-ins, `make deploy` and `make smoke` ran under the request flag and the `exec` bound on kind from run R2, 2026-10-07) and the pgvector lines keep psql's first line (K4); a frozen API server was met once (run R5b, 2026-10-07, the node paused for thirty seconds): every call ended after 10 seconds with the client's own handshake error, before the wrapper's request timeout of 15 s and any outer bound, so no bound of the wrapper was seen to fire; not seen: a call that a bound of the wrapper ends (a waiting call against a node that completes the handshake and then never answers) | S073 |
+| The chart sets no `revisionHistoryLimit`, so every earlier image stays a rollback's target for as long as its ReplicaSet is kept; `make images` lists such an image and prints no command for it, and matches only images written `repository:tag` | S062 | open in part; S073 set `revisionHistoryLimit: 2` (K2; seen on the seven Deployments, run R2, 2026-10-07) and `make images` reads a registry, a port and a digest (tested with stand-ins); the limit was seen holding (run R5b, 2026-10-07: after six deploys of different commits that day every Deployment of `meridian` kept exactly three ReplicaSets, the current one and two old); not seen: `make images` with the new reading | S073 |
 | Check 10 of `make smoke` reads approver-policy's wording (the names of the policies in a denial's message) at the pinned version; an update of the add-on is when that line would fail without a fault | S062 | open; S063: the Renovate group that carries the add-on tells whoever merges it to run `make up` and `make smoke`, which is where the line would fail; closed by S073 as recorded, not seen failing: the line is in code and tested (`test_a_denial_in_a_form_the_check_does_not_read_is_a_fail_that_prints_it_cut`), and only a new version of the add-on would fail it | S073 |
 | The failure paths of the lines S062 added to `make smoke` were seen against stubs only (a missing store table, a deleted rule object, a request that is approved, a run interrupted by a signal); `make demo`'s alternating wording and `make images` in a checkout without the cluster's credentials likewise | S062 | open in part; each needs something broken on purpose on a cluster; S073 saw the deleted rule object (run R4b, 2026-10-07: smoke named the missing `PrometheusRule` and `make deploy` made it again); the others were not run | S073 |
 | A manual Job of the sweep hides a stopped schedule from `make smoke` for fifteen minutes; check 8 reads the Claims API alone as the sign that the services are deployed | S062 | closed by S073 for smoke: a by-hand Job is not the schedule's (K4, K4b), seen on kind on 2026-10-07 (run R4 showed the flaw, run R4c the fix), and check 8 reads every service's policy object (passes on kind, the FAIL not seen); the alert `MeridianSweepStale` still reads the CronJob's last successful time, which a by-hand success moves (threat model T-86) | S073 |
@@ -836,9 +882,9 @@ that day; the rest stand as their step recorded them.
 | A tenant's two rate limits are capped in the registry at a billion (S066), which keeps the script's arithmetic exact and binds nothing real; the rate store's memory is bounded by the request limit (about six entries per allowed request and tenant), and no ceiling tied to that memory exists | S066 (security review) | closed by S069 as a decision, not built: the registry already refuses tenants' limits that sum above a deployment's own (`check_tenant_limits`), a figure far below what the store's memory holds, for every candidate that states `rate_limits`; on a route of replay deployments alone only the billion applies, and the registry's README now says so | S069 |
 | A rotation of the rate store's password has no overlap: the store and the gateway restart one after the other, and model calls are refused with a 503 for the seconds between (the runbook says so) | S066 | open | S073 |
 | The rate store's own metrics are scraped by nothing (memory, connections, a slow script), and its own output is not in the platform's JSON format, is not redacted by it and is not shipped to Loki: it stays in the pod's output on the node | S066 | open; S072, 2026-10-07: stays as a stated residual (T-92 holds it), no contract of its first four took it; an exporter sidecar or a scrape and a longer include list for the log agent would be a chart change and a run, and nothing here asks for one | S072 |
-| The rate store's liveness script compares the certificate's time with the server's start, so a step of the node's clock can delay or repeat a restart (measured over 25 containers: never early) | S066 (infra review) | open | S073 |
+| The rate store's liveness script compares the certificate's time with the server's start, so a step of the node's clock can delay or repeat a restart (measured over 25 containers: never early) | S066 (infra review) | open, as accepted: a step of the clock stays the machine's. Seen on kind with the two-second form of the rule (K12): runs R5a and R7, 2026-10-07: no restart of a healthy store at any of the readings of R5a, and one restart per renewal in R7 | S073 |
 | A cold `make up` depends on the chart hosts answering in time: on 2026-10-06 the Tempo chart's download from GitHub timed out after 296 s and `make up` had to be run again; no chart is cached or mirrored | S066 (third cluster run) | open | S073 |
-| Not seen on a cluster for the rate store: a 503 from the gateway while the store is down, `MeridianRateStoreRefusing` firing, two gateway replicas sharing a window, a store frozen by a script and restarted by its probe, and `make deploy` refusing a Secret older than the ACL | S066 | open | S073 |
+| Not seen on a cluster for the rate store: a 503 from the gateway while the store is down, `MeridianRateStoreRefusing` firing, two gateway replicas sharing a window, a store frozen by a script and restarted by its probe, and `make deploy` refusing a Secret older than the ACL | S066 | open on all but the first: the 503 was seen on kind on 2026-10-07 (S073, run R11: the store scaled to 0 for 10 seconds, the gateway Ready with no restart and admitting again with the same pod, the error class `TimeoutError`); still not seen: the alert (one refused call is under its thresholds), two replicas, a frozen store and an old Secret | S073 |
 | The circuit breaker and the refusal throttles are per process: two gateway replicas each count failures on their own and may each write a throttled refusal row | S066 (design) | closed by S069 as accepted, as ADR 8 records, until a second replica of anything but the gateway exists; no code | S069 |
 | The rate store in Azure is designed only: a managed Redis in the same EU region, its cost and SKU, and whether Valkey replaces Redis 8 (run under its AGPLv3 option, unmodified) are open | S066 | open | S020 |
 | No rule reads the rate store's restarts: a store that restarts in a loop while few calls come (256 held connection slots do it every 70 to 90 seconds) resets every tenant's windows each time and stays under the refusal alert's two conditions | S066 (fourth security pass) | closed by S072 (contract R, `2fbf472`; unit-tested by `make alerts`; seen loaded on the warm cluster, R8, 2026-10-07: smoke's check 11 passed with the tree's 21 rules; not seen pending or firing): `MeridianRateStoreRestartLoop`, `warning`, three restarts of the store's container in 15 minutes (a renewal's restart and a start's liveness restart are at most two), with no wait; a loop slower than about seven minutes between restarts is not seen, which the kubelet's back-off cap rules out | S072 |
@@ -858,12 +904,12 @@ that day; the rest stand as their step recorded them.
 | Renovate proposes a chart a week after its release and an image at once (the docker datasource gives no dependable release date for quay.io and ghcr.io), so an image's tag can be proposed before the chart that installs it; a note on the pull request says to leave it | S063 (infra review) | closed by S075: one rule switches off Renovate's tag updates for the 17 images a chart installs by default and keeps digest updates, so an image is not proposed before its chart (the collector's two images are outside it until their pin and the chart's appVersion agree); the chart's pull request moves the tags by hand | S075 |
 | A renewal has not been seen for the collector's certificate (90 days), its authority (a year) or the database's three certificates (90 days), and nothing alerts on the database's: cert-manager's series do not cover CloudNativePG's | S063 | open in part; S073 built the database line of smoke (passed on the real Cluster, run R4d, 2026-10-07; no alert can read the dates, since CloudNativePG exports no series for them, read in run R0); not seen: a renewal of the collector's certificate, of its authority or of the database's three, which needs a forced renewal of the collector's certificate (not run in this half) and, for the database's, a lifetime in whole days that no run can wait out | S073 |
 | Every role of the database may create temporary tables (PUBLIC's right on the database); nothing a role can shadow with one was found | S063 (database review) | closed by S068 as decided: the right stays with PUBLIC, because taking it away is a database-level privilege that the tests' copies of the template do not carry and two tests use the right as their control; the defence is completed instead: the four older trigger functions pin `pg_temp` last in their search path (0031) and a test over the migrated catalog fails for any trigger or definer function of the owner's schemas that does not (T-101). Tested against PostgreSQL, not run on a cluster | S068 |
-| `infra/kind/smoke.sh` is near 2,900 lines; a new check would be better as a file of its own, which needs the script split first. Tempo's pod mounts an API token it does not use | S063 | closed for the mechanism by S074 (third part, 2026-10-07): a new check is a new file `smoke.d/NN-name.sh` and one source pair in the entry (`infra/kind/README.md` says how; `test_smoke_parts.py` holds the layout), and the script's size is closed in part (nine checks and the shared code are parts under 800 lines; the entry is 1,185 lines until the last cut, which is S074's and waits for S072's cluster batch); Tempo's API token is re-homed to S072, whose row names it ("Tempo mounts no API token"). Tempo's half is closed by S072 (contract T, `f690173`; implemented and tested, seen warm by R8, 2026-10-07): Tempo's and Loki's pods mount no token (Loki found by the render, with two keys); both pods were replaced, read `automountServiceAccountToken=false`, ran, and smoke's trace and log lines passed without a token | S074 |
+| `infra/kind/smoke.sh` is near 2,900 lines; a new check would be better as a file of its own, which needs the script split first. Tempo's pod mounts an API token it does not use | S063 | closed for the mechanism by S074 (third part, 2026-10-07): a new check is a new file `smoke.d/NN-name.sh` and one source pair in the entry (`infra/kind/README.md` says how; `test_smoke_parts.py` holds the layout), and the script's size is closed by the last cut (2026-10-07, commit 3efea92; seen on kind, run R12): the eleven checks and the shared code are parts under 800 lines and the entry is 88 lines; Tempo's API token is re-homed to S072, whose row names it ("Tempo mounts no API token"). Tempo's half is closed by S072 (contract T, `f690173`; implemented and tested, seen warm by R8, 2026-10-07): Tempo's and Loki's pods mount no token (Loki found by the render, with two keys); both pods were replaced, read `automountServiceAccountToken=false`, ran, and smoke's trace and log lines passed without a token | S074 |
 | No rule and no dashboard panel reads the values of S064's series: a jump in an assessment reason (`special-data`, `injection-suspected`, `filtered`), triages that fail by reason, a sweep finding that stays above zero, the tool servers' refusals, a runtime that cannot reach the gateway; and no rule reads a log line (kind's Loki runs no ruler) | S064 | open; thresholds need a measurement | S027 |
 | The log agent's own counters (its exporter's failures, the memory limiter's refusals) are scraped by nothing; a DaemonSet that does not exist leaves no series, so only smoke says the agent is gone; the kubelet's rotation can outrun the agent, and one flooding pod may stall the others' lines (not measured). The agent mounts the node's pod-log directory, so `logging` cannot be `restricted` and a compromised agent reads every pod's output on its node | S064 (infra review) | open; the second half is a stated residual (T-68). S072, 2026-10-07: the counters are not taken by the four contracts landed (an ingress rule from Prometheus to 8888, a monitor object and a rule, then a run); stays, and does not gate the step's close | S072 |
 | Not seen on a cluster after S064: any of the four telemetry alerts firing, a renewal of the telemetry authority with the log agent and the sweep as its readers, a line with an `exception` field, a run counted `not-saved` or `not-started`, a triage counted `failed`, a tool call counted `cancelled` | S064 | open; tests hold each | S073 |
 | `platform/common/telemetry.py` loads the web framework, so the sweep imports its meters late to stay a job with no web stack; `runtime/app.py` and `claims_triage/triaging.py` stand at 799 lines and `test_toolserver_meters.py` at 832 | S064 | closed in part by S074 (first half): `test_toolserver_meters.py` is four files (the largest 254 lines) and `metersupport.py`; the two source files are 669 and 603 lines on this branch, so "799" is stale; open: the sweep's late import of its meters, which no contract of S074 takes | S074 |
-| A log line's `exception` field holds frames and class names and no message, so an operator does not read what the exception said; its source lines are redacted by pattern only; a username in an absolute-form request target and an address encoded twice stay in the path | S064 (security review, second review) | closed in part by S069 (E1, E1b, F1): the path is unquoted until it stops changing (three rounds at most, else the word `[encoded]`) and loses a userinfo part from any `//` or `\\`, so an address encoded twice and a user name in an absolute-form target are gone (T-03; its residuals are listed there). Open: an exception's message stays out of the line, as the owner may overturn (an allowlist by exception class is the shape if so); the access log's path is not the route template (a row below) | S069 |
+| A log line's `exception` field holds frames and class names and no message, so an operator does not read what the exception said; its source lines are redacted by pattern only; a username in an absolute-form request target and an address encoded twice stay in the path | S064 (security review, second review) | closed in part by S069 (E1, E1b, F1): the path is unquoted until it stops changing (three rounds at most, else the word `[encoded]`) and loses a userinfo part from any `//` or `\\`, so an address encoded twice and a user name in an absolute-form target are gone (T-03; its residuals are listed there); an address encoded twice was seen on kind in the second half's run K1 (2026-10-07): through the edge a made-up address at example.com answered 404 and Loki held one line of the Claims API whose `path` was `/u/[email]`, no line with the address in clear; a path encoded four times (`[encoded]`) and the edge proxy's own log were not seen. Open: an exception's message stays out of the line, as the owner may overturn (an allowlist by exception class is the shape if so); the access log's path is not the route template (a row below) | S069 |
 | Counting, from S064's second review, all low: a leg is counted nowhere if settling it raises something other than a database error; a resume that cannot read its run is not counted; the tool server counts any exit without a result as `cancelled`; a response that fails validation after the proposal is stored counts a failed triage; the line that says metrics are not exported is asserted for two services of four; smoke's line for the sweep's findings can be met by an earlier pass; a record's `stack_info` is dropped without a sign | S064 (second review) | closed in part by S069 (E2, E3, E5): a leg is counted whatever ends its settling (`failed`, `unexpected`), a resume that cannot read its run is counted `not-started` (under its tenant when the registry holds it, with no agent label), a tool server's exit with no result is `unexpected` unless it was a cancellation, and a stored proposal is counted `stored` once. Open: the "not exported" line is asserted for two services of four, `stack_info` is dropped without a sign, and smoke's line for the sweep's findings can be met by an earlier pass (the last needs the cluster, so it is the second half of this step's) | S069 |
 | The registry derives a deployment's residency label from Azure SKU names, its provider kind is a closed list and its region check knows Azure's names: on Bedrock the label would come from the model ID's prefix and the Region called, on Google Cloud from the model and the location together. Designed in the two mapping ADRs, changed nowhere | S025, S077 | open; a second provider kind is the first to need it | S023 |
 | The threat model's rows on the edge's firewall, residency, egress and provider-side retention (T-02, T-12, T-19, T-20, T-43) speak of Azure alone; the mapping ADR says what each would mean on AWS, where the chosen edge has no managed firewall in front | S025 | open; they are corrected when a module is applied, not from documentation. S036's first half applied nothing, so none is corrected: it added T-100 and gave T-12, T-15, T-36, T-37 and T-42 an AWS clause, each as code and not applied, and the edge's firewall has still no AWS counterpart (the module makes no edge) | S036 |
@@ -889,7 +935,7 @@ that day; the rest stand as their step recorded them.
 | The claims workload's reports: the golden manifest is read three times in one build (the injection builder reads its own three times and the golden one twice), and a file that changes between two reads is not noticed | S076 (reports of C6 and F1) | closed in part by S074's second half (H16): `Report` refuses a report whose golden set names a workload other than its own, and passes one whose golden set names none; the read-once part is a row of its own below; low; S074 is the nearest that is still open and costs nothing (S071, which works with the reports, is the paid step) | S074 |
 | The injection import test's walker cannot see what its docstring lists (a non-literal argument of `import_module`, `__import__` or `getattr`, `builtins.__import__`, `sys.modules[...]`, an alias made by unpacking or stored on an object, a name reached by a string through `vars()`, `__dict__` or `setattr`, `global`, `nonlocal`, `eval`, `exec`), and it reports a few names that are not private uses (an alias rebound at module level, a `match` capture, a walrus inside a comprehension); it is a tripwire, not a proof | S076 (report of F2; second review) | accepted limit, pinned by S074's second half (H13): the docstring needed no correction, and each of eleven routes it cannot see and two uses it over-reports has a case in `test_injection_imports_limits.py` that fails when the walker's reach changes; it stays a tripwire, not a proof; low | S074 |
 | A merge of `main` into a step's branch was pushed after the cheap gates only and left `test_workload_new_note.py` red (S076, 842b977: S037's `claim-brief` changed a list the test pinned); Part A says the later session runs the gates again and not which, so a contract's gate does not yet say that the directories its change reaches are run after a merge | S076 (C10) | closed by S075: Part A now says that after a merge of `main` the whole suite runs on the merged tree before the branch is pushed, and that a contract's gates name every directory its change reaches | S075 |
-| On 2026-10-06 `make deploy` failed twice, a minute apart, at the ingest Job on a cluster that had been up for hours (the Model Gateway answered 503 to the embedding call: "the model gateway refused the embedding call (model gateway answered 503)"); the session's script then deleted the cluster before anyone had read the audit row's reason or the gateway's log, and a fresh cluster deployed the same commit (`make up` 299 s, `make deploy` 97 s, the Job passed). Two failures a minute apart and a pass on a fresh cluster point at the cluster's state, not at load. Candidates, none shown: the rate store not answering inside its 0.25 s read timeout or 1 s connect timeout, with no retry (`gateway/rate_store.py`; the gateway refuses, by design); the ledger's close failing (`gateway/walk.py`: a failed close answers 503; the database's pod had restarted that evening); and the ingestion not retrying a 503 (`knowledge_mcp/ingest.py` waits out a 429 and ends on any other status). The three logs of the commands are the only evidence left | S075 (the incident) | open; not explained for certain: S073 found a likely cause, not a proven one, in the rate store's probes, which left a defunct process per run until the container could not fork (run R1a, 2026-10-06: 2,024 under the Redis server, the pod not Ready, the gateway's 503 to every call; fixed by K7 and seen on kind in run R2, 2026-10-07), and built the ingestion's word for the gateway's four 503s (K6: tested with scripted replies, not seen on a real refusal, the second half); the ledger's close would show as `database-unavailable` | S073 |
+| On 2026-10-06 `make deploy` failed twice, a minute apart, at the ingest Job on a cluster that had been up for hours (the Model Gateway answered 503 to the embedding call: "the model gateway refused the embedding call (model gateway answered 503)"); the session's script then deleted the cluster before anyone had read the audit row's reason or the gateway's log, and a fresh cluster deployed the same commit (`make up` 299 s, `make deploy` 97 s, the Job passed). Two failures a minute apart and a pass on a fresh cluster point at the cluster's state, not at load. Candidates, none shown: the rate store not answering inside its 0.25 s read timeout or 1 s connect timeout, with no retry (`gateway/rate_store.py`; the gateway refuses, by design); the ledger's close failing (`gateway/walk.py`: a failed close answers 503; the database's pod had restarted that evening); and the ingestion not retrying a 503 (`knowledge_mcp/ingest.py` waits out a 429 and ends on any other status). The three logs of the commands are the only evidence left | S075 (the incident) | open; not explained for certain: S073 found a likely cause, not a proven one, in the rate store's probes, which left a defunct process per run until the container could not fork (run R1a, 2026-10-06: 2,024 under the Redis server, the pod not Ready, the gateway's 503 to every call; fixed by K7 and seen on kind in run R2, 2026-10-07), and built the ingestion's word for the gateway's four 503s (K6: tested with scripted replies, and seen on a real refusal on 2026-10-07, run R11: with the rate store down for 10 seconds the Job's one log line said `kind rate-store-unavailable`, the gateway's refusal and the ingestion's row shared one run ID, and the gateway recovered with no restart; the other three words are not seen); the ledger's close would show as `database-unavailable`. The 2026-10-06 failure itself stays not explained for certain: R11 made the fault on purpose and does not show what happened that evening | S073 |
 | The guard's local reader list and what its last review left: a mounted Secret or an `.env` read by `grep`, `awk`, `jq`, `cp`, `docker cp` or a glob is read by no rule (`reader_pre` and the pod's reader list name the plain readers); the pod rule for `env`, `printenv` and `set` tests only the last ` -- `; a fourth level of nested `sh -c`; secret-shaped variable names the `printenv` list does not match (`REDIS_PW`); a heredoc read by quote parity and a list of interpreters, not parsed; a hook file overwritten by a redirect; `-v=8` and `crictl inspect` read from documentation, run against no cluster. The hook's header and the runbook's section list each; S036's cloud rules edited the guard (2026-10-07) and closed none of these (they read the AWS module's names and add no reader for a mounted Secret), and S079, which reuses the wrapper and brings a second AWS module, edits it next, so it is the nearest step | S075 (third security review; F3b's and F4g's reports) | open; listed, not built; re-homed from S036, whose rules did not touch them. S079's first half edited no guard file either: the guard's rules for the second module wait for the owner to start the guard's task, the base first, so the row stays open at S079 | S079 |
 | The next rule to the command guard goes into the development base first: the base's copy is level with Meridian's since its pull request 51 (merged 2026-10-06, the guard's rounds two and three), and S036's guard rules for the AWS wrapper are the next ones, so they are now owed to the base (built here first, 2026-10-07; not yet sent). The neutral ones: the `aws` CLI's deny and ask rules with their read list, the ask for `boto3`, `botocore` and `awscli` and for `-auto-approve`, the deny of `TF_*` and `AWS_ENDPOINT_URL*` assignments before a tool, the readers of a state, a plan, `.tfvars.json`, `~/.aws`, `~/.terraformrc` and `~/.terraform.d`, the writers of `~/.terraformrc`, `~/.gitconfig`, `~/.config/git` and `~/.aws`, and the deny of tracing and start-up variables, with the fixes of the two later rounds (`-cm`, a quoted token, the backtick, the cut-out of `workspace select default`). Meridian's own stay out: whatever names `aws.sh`, a `make aws-*` target, `local.env`, `meridian-aws`, `TRIVY_IMAGE` or `PROMTOOL_IMAGE` | S075 | open; owed to the base before S079 changes the guard | S036 |
 | Not seen on a cluster after S075: `TAKE_CLUSTER=1`, a record left `changing` by a run that failed (the refusal that names it), `make up` on an existing cluster, and `make down` refused for a record at `changing`; tests with stand-in binaries hold each. Seen: the record through a deploy, a deploy refused while another runs, and `make down` refused with the record at `ok` (S075's section) | S075 | open in part; S073 saw `TAKE_CLUSTER=1 make deploy` take the record from S075 (run R2, 2026-10-07); a record left `changing` by a failed run and `make up` on an existing cluster were not seen | S073 |
@@ -914,7 +960,7 @@ that day; the rest stand as their step recorded them.
 | `meridian knowledge verify` runs in the ingestion Job, which a deploy skips when the image's ingestion has already succeeded and the store is not empty, and nothing runs it on a schedule; a Job that verifies without ingesting is not built, and the runbook says when to run it by hand (T-57) | S067 | open | S073 |
 | `meridian knowledge verify` writes its counts into `audit.events.reason`, a column documented as the reason a call was refused, because it is the one free-text column; its audit row has no tenant | S067 (C4v) | open; the owner may prefer a column of its own. S068 decided to build nothing: the data classification now says that the column holds a refusal's reason and, for this command, the counts it made. The console's audit search (S033) will read the column, so that step is where a column of its own would show | S033 |
 | Tests that failed under load in S067's runs and passed alone: `test_a_scripted_model_gives_the_oracle_s_proposals` (a `wording_search` call timed out), `test_the_decisions_trace_fails_too_when_one_of_its_services_has_no_span`, and, in one final run, three that were not read (`test_sweep.py::test_importing_the_sweep_loads_no_web_stack_no_langgraph_and_no_claims_api`, `test_claims_mcp.py::test_eight_threads_sending_one_key_leave_one_row_and_all_get_its_id[add_claim_note]` and `test_evaluation_http.py::test_loading_the_claims_evaluation_brings_in_no_agent_framework`); and a first database run of C4v's with 1,338 fixture errors that nobody explained | S067 | open in part: the wording search and the decisions-trace test were changed by construction in S074's first half (the stack's tool bound; the demo polls on a virtual clock) and passed 25 of 25 runs of S074's loop alone (2026-10-07, a load up to 9); the two import tests (subprocesses with a limit of 60 s) and the claims MCP test are untouched and passed the same 25 runs, so they are not reproduced short of a machine that swaps, where an import test and the claims MCP test failed again; beside a whole suite nothing is measured (two runs with a test database do not fit beside the cluster); the 1,338 fixture errors were not looked for | S074 |
-| Left by S067's reviews, all low: `redact` is 76 lines with its docstring and `redaction.py` 792, eight under the ceiling, so any growth needs a split (the Hungarian part, in a module of its own); `test_redaction_hungarian.py` is 858 lines and `test_claims_graph.py` about 2,300; five tests load the two name-masked cases each on its own (one helper in `servicesupport` would do); `VOWEL_FORMS` and `ARCHAIC_SOUNDS` are plain dicts; no test names `re._compiler`; `test_assessment.py` asserts the `["CLM-0012", "CLM-0044"]` literal beside a derived check; four docstrings and comments say what was true before: `claimant_name.py` ("one word", where two golden descriptions hold "Leon"), the first lines of `triaging.py` ("the run's facts"), and `evalsupport.py` and `test_evaluation_stack.py` ("the 40 golden claims") | S067 (reviews) | closed in part by S074: `test_claims_graph.py` is split (first half: ten files and `graphsupport.py`); second half (H12, H17): `VOWEL_FORMS` and `ARCHAIC_SOUNDS` are read-only, a test names `re._compiler`, "one word" says that "Leon" is in two golden descriptions, and `evalsupport.py`, `test_evaluation_stack.py` and `test_claims_graph_golden.py` no longer count the golden claims by a number; the redundant literal in `test_assessment.py` is replaced by a guard. S070 split `redaction.py` (292 lines, five modules beside it), which closes `redact`'s place in a file near the ceiling, and its own test of `re._compiler` (the fuller one) replaced the second half's at the merge. Stays: the five loaders of the name-masked cases (four of the five files are free, `test_triage_run_input.py` is S070's), `test_redaction_hungarian.py` at 858 lines (split after S070), `redact`'s length (S070's branches add the modules that take it apart), and the first lines of `triaging.py`, which say "the run's input" on `main` and not the phrase the row quotes (check with S070, whose file it is) | S074 |
+| Left by S067's reviews, all low: `redact` is 76 lines with its docstring and `redaction.py` 792, eight under the ceiling, so any growth needs a split (the Hungarian part, in a module of its own); `test_redaction_hungarian.py` is 858 lines and `test_claims_graph.py` about 2,300; five tests load the two name-masked cases each on its own (one helper in `servicesupport` would do); `VOWEL_FORMS` and `ARCHAIC_SOUNDS` are plain dicts; no test names `re._compiler`; `test_assessment.py` asserts the `["CLM-0012", "CLM-0044"]` literal beside a derived check; four docstrings and comments say what was true before: `claimant_name.py` ("one word", where two golden descriptions hold "Leon"), the first lines of `triaging.py` ("the run's facts"), and `evalsupport.py` and `test_evaluation_stack.py` ("the 40 golden claims") | S067 (reviews) | closed in part by S074: `test_claims_graph.py` is split (first half: ten files and `graphsupport.py`); second half (H12, H17): `VOWEL_FORMS` and `ARCHAIC_SOUNDS` are read-only, a test names `re._compiler`, "one word" says that "Leon" is in two golden descriptions, and `evalsupport.py`, `test_evaluation_stack.py` and `test_claims_graph_golden.py` no longer count the golden claims by a number; the redundant literal in `test_assessment.py` is replaced by a guard. S070 split `redaction.py` (292 lines, five modules beside it), which closes `redact`'s place in a file near the ceiling, and its own test of `re._compiler` (the fuller one) replaced the second half's at the merge. Closed by S074's leftovers (2026-10-07): the five loaders of the name-masked cases are one helper, `servicesupport.injection_case_claim`, and a missing case fails with its name and its file (T2, d4a0c63); `test_redaction_hungarian.py` is three files and a support module, the largest 368 lines (T1, e7128ec). Stays: `redact`'s length (S070's branches add the modules that take it apart), and the first lines of `triaging.py`, which say "the run's input" on `main` and not the phrase the row quotes (check with S070, whose file it is) | S074 |
 | A gateway that sends its response headers a few bytes at a time, each wait under the 30 s read timeout, is bounded by no timeout (httpx has none for a whole request, and the call's deadline is first read once the headers have come), so a leg is not provably under the 600 s lease; the security review's probe, with the deadline at 2 s and the read timeout at 1 s, ran 80.7 s against a server that sent a header every 0.4 s. The gateway is first-party and sends its headers in one write (T-10) | S069 (security and boundary reviews) | open | S069 |
 | A late leg's tool calls still bind by the run's status alone, so a leg that outlived its lease can call tools until it ends; closing it needs the holder of the run at the tool servers, a column on `runtime.runs` with its grants and a migration, which the first half of S069 left out on purpose (design, decision 1; T-10) | S069 (design) | open; the database lane, so S068 is the nearest step that holds it | S068 |
 | The runtime's and the gateway's close writes of the refusal summaries still run on the event loop (the tool servers' do not), a synchronous write at shutdown | S069 (E2, F1, boundary review) | open | S069 |
@@ -934,7 +980,7 @@ that day; the rest stand as their step recorded them.
 | S069's small ends, all low: `ModelCallFilteredError.withheld` is read by nothing in `src`; `except (Exception, SystemExit)` stands twice in `common/entry_points.py` where a named tuple would keep them equal; the userinfo cut takes the `y` out of a plain path with an empty segment (`/files/x//y@z` gives `//z`, logs only); `ResumeRequest.input` is a required field that must be `{}`; a `GeneratorExit` from a coroutine closed by the garbage collector is counted `unexpected`, where `cancelled` is arguable; the sweep's import tests deny named prefixes only, so a web stack arriving through `uvicorn`, `mcp` or `anyio` alone would pass; `test_tool_client.py` is 1,091 lines, `test_runtime_app.py` 3,143 and `test_tool_server.py` 2,433, and `test_claims_meters.py` about 790; the helpers `State`, `Clock`, `make_client`, `summaries` and `summary_write_fails` are copied across the new test files, and `make_client` of `test_runtime_leg_counts.py` hard-codes `raise_server_exceptions=False`; the comment in `workers.py` that the graph module must not pull in the web framework is false as written, since `claims_triage.models` already loads `fastapi`, `starlette` and `psycopg` through `common.http` and `runtime.models`, before F2 as after it; repeated `Content-Encoding: identity` lines and an empty value are refused by the runtime's client (fail closed, no gateway sends either) | S069 (python and boundary reviews, E4, E5) | open | S074 |
 | The knowledge service's embedding client (`knowledge_mcp/embedding_client.py`) posts with a buffered call, so the whole reply of the gateway, 2xx or not, is held in memory before the client reads it, and nothing caps its size (the timeout is per read); the runtime's client got a streamed read with a cap in this step, and the same change is owed here | S073 (its contract K6 stopped on it, 2026-10-07) | open; low: the gateway is a peer behind mutual TLS | S069 |
 | No real withheld completion and no real refusal of a structured request has been seen from a real provider, so `drafted_by` for a withheld completion rests on a mocked transport and a scripted provider, and the evaluation baseline's `model_asked` has not moved (no recorded or scripted case is one); the measurement costs money and the owner says yes first (T-67) | S069 (E6, boundary review) | open; S071's done-when already names the refusal of a structured request, and this adds the withheld completion | S071 |
-| Not seen on a cluster after S069's first half: any of its code. A kind run would show the 400's four headers on a withheld completion, the 422 for a resume that carries a value, one `suppressed` row from each service after a flood and from a tool server after a shed call with its run named, a takeover of a run left `Running` past the lease (`stale-running`) with the late leg's end matching nothing, the access log's path of a request with an encoded address, and the metric `not-started` of a resume that could not read its run | S069 (the step's evidence) | open; the second half of S069 holds the cluster and deploys this code | S069 |
+| Not seen on a cluster after S069's first half: any of its code. A kind run would show the 400's four headers on a withheld completion, the 422 for a resume that carries a value, one `suppressed` row from each service after a flood and from a tool server after a shed call with its run named, a takeover of a run left `Running` past the lease (`stale-running`) with the late leg's end matching nothing, the access log's path of a request with an encoded address, and the metric `not-started` of a resume that could not read its run | S069 (the step's evidence) | open in part. Run K1 (2026-10-07, the first half's code on kind, before R11) saw three of the seven: the 422 for a resume that carries a value (body `loc` `["body", "input"]`; the same request with an empty input answered 404 and read no run), one `suppressed` row from each of the five services that keep a throttle (the Claims API keeps none and writes none) and, through the edge, the access log's path `/u/[email]` for an address encoded twice, with no line holding the address in clear; smoke ended 46 PASS. Still not seen: the 400's four headers on a withheld completion (only the Azure adapter raises it, so S071's measurement is the place, as the row above says), a shed tool call's row with its run named (it needs eight held slots), a takeover of a run left `Running` past the lease (a leg hung past 600 s) and the metric `not-started` (a database the runtime cannot read): no request makes these, each needs a condition made on purpose, so the home moves to the step that does that | S073 |
 | What an apply of the AWS module would settle, none of it seen: whether `db.t4g.small` and a PostgreSQL 17 minor are offered in the Region (ADR 6, not verified); whether `CREATE EXTENSION vector` works on the instance; whether the secret RDS manages waits out a recovery window and keeps its name (ADR 6, not verified); whether ECR removes a repository that holds an image without the module's `force_delete` (ADR 6, not verified); whether a budget can be written in EUR (the module uses USD); the CPU-credit charges of burstable nodes (ADR 6, not verified); whether the Free plan withholds EKS, RDS or `t3.large`, and the quotas; the add-on defaults for Kubernetes 1.36; whether the Pod Identity trust conditions, the `eks-cluster-name` one in particular, let the EBS CSI driver and the workload get credentials, and whether the nodes join; whether an Identity Center principal is accepted as the access entry; how `allowed_account_ids` fed from a sensitive variable and the lookups of managed policies by name behave at plan; the real times of an apply and a removal; and what the whole costs against the sketch (about USD 0.35 an hour from ADR 6's prices, not from a bill). The module's README holds the list as its checklist | S036 (reports of T1, T2b and T2d; the infrastructure review) | open; only an apply settles them, and the apply is asked at S079's paid stop (it may be answered no, and S079's first half changed nothing in this module; the self-managed module's own list is a row of its own, further down) | S079 |
 | `aws.sh` never ran against a real `aws` CLI or a real Terraform with credentials, and its tests use stand-in programs: what a real plan prints for a sensitive variable (`(sensitive value)` is the documentation's word), whether the redaction meets a shape it does not know (a VPC, subnet or instance identifier, an IPv6 address, a host written with dashes, a `db-` identifier, the cluster's CA, the sign-in's start URL are not covered, and a four-part version number is hidden as an address), the plan file's real mode, `stat -f` and bash 3.2 on macOS, and a differently cased variable file on a case-insensitive file system; the last words of the removal's prompt show only after the answer is typed, because the filter holds a partial line and `sed -u` is GNU-only | S036 (reports of T2, T2c and T2d; the second and third reviews) | closed in part by S079 (2026-10-07, K2b): `redact` now hides the identifier of an instance, an image, a VPC, a subnet, a security group and its rules, a route table, an internet gateway, an Elastic IP, a network interface and a volume (`<resource-id>`), a host written with dashes that embeds an address (`<host>`) and compressed user data (`<user-data>`), with a whole synthetic plan excerpt of the self-managed module run through it (tested with made-up values; a filter, not a guarantee); open: the script has still never run against a real `aws` CLI or a real Terraform with credentials, an IPv6 address, a `db-` identifier, the cluster's CA and the sign-in's start URL are not covered (see the row on the wrapper's small ends), the plan file's real mode, `stat -f` and bash 3.2 on macOS, a differently cased variable file on a case-insensitive file system, and the removal's prompt | S079 |
 | What `aws.sh` does not close, each stated in the module's README and none built: `terraform`, `aws`, `git` and `sha256sum` come from the caller's `PATH`; `~/.terraformrc` (a credentials helper, `dev_overrides`), `~/.terraform.d`, a `credential_process` or sign-in helper in the AWS configuration, a shell start-up variable, an exported function and `LD_PRELOAD`; a clean filter in the repository's own `.git/config` runs during the status call; a changed `HOME` in the same checkout plans against an empty state without a stop (a count of the state's resources logged by `plan` is not built); a link at the plan's or the record's path is followed; a stray `terraform.tfstate` in the module's directory is not refused; a 777 parent directory of the local file is accepted; inherited file descriptors stay open | S036 (reviews 2 and 3; T2e) | open; listed, not built. Since S079's K2b the whole list holds for the second module word for word (its README's "What the wrapper does not stop"), and the state holds the rendered boot scripts, with the Elastic IP in them, in clear (from the provider's schema, not seen) | S079 |
@@ -946,7 +992,7 @@ that day; the rest stand as their step recorded them.
 | What the guard and the settings of S036 rest on was not verified in a live session: whether the harness's working directory follows a `cd` of an earlier call, whether an `ask` in the settings beats an `allow` (`Bash(terraform -chdir=*aws* plan*)` against `Bash(terraform -chdir=* plan*)`), whether the settings' `./` denies match a file reached by an absolute path from another checkout, and whether the bare `Grep` and `Glob` tools are held by the `Read` denies; Codex reads no settings file, so it has the hook's rules alone | S036 (reviews of T3 and T3b) | open; each needs a probe in a live session. S079's measurement of 2026-10-07 was the hook's own answer to lines read from a file (a probe of the hook, not a live session), so none of the four premises is settled by it | S079 |
 | Nothing in CI runs `make aws-validate`, `make aws-scan` or a plan, and no pipeline identity exists for AWS: a bump of the provider or of the Trivy pin, or a change to the module, is checked by whoever merges it, by hand (Part A says so); S022 owns Terraform and the scan in the pipeline, for Azure first | S036 (README; the infrastructure review) | open | S022 |
 | What a Google Cloud scaffold should copy from S036 and what it should avoid. Copy: the provider's own pin of the account or project beside the script's (`allowed_account_ids` is the one pin that holds for a hand-typed command: find the counterpart in the provider's documentation); a local file that is read and never run, owner's and mode 600, with a name the guard's reader rule covers; an environment the script chose; a saved plan bound to its commit, its age and its hash; sensitive variables for an address and an e-mail; closed lists of instance types as a cost ceiling; managed policies and roles read by name, since two AWS pages disagreed on one ARN's path; trust conditions on the workload identity's tokens; a state outside the checkout, a default-workspace check and a removal that refuses over an empty state; a scan ignore file whose entries are one check ID with a reason above, held by tests (an inline `trivy:ignore` or `tfsec:ignore` and a YAML configuration refused); the scan offline from an image pinned by digest; a test that holds the script's exports to the module's variables; and a redaction written for Google Cloud's identifiers before a plan is read. Avoid: sourcing the local file; a variable that is not marked sensitive; `cidrhost` on an IPv6 range; a README sentence that says a control holds before a test has tried to break it (the second review found seven, the third one more); and a test parameter built from the clock | S036 (all six reviews) | closed by S078 (2026-10-07), by the design: kept are (i) the provider's own pin, as a precondition on the text that no run has seen refuse (the provider has no list of projects; the counterpart is the module's own check, not a provider setting), (v) sensitive variables, (vi) closed lists, (vii) in kind only (a Google role is a name, there is no ARN whose path two pages could give differently, and whether the one node role exists as named is not seen: ADR 7, question 16), (viii) in kind only (the binding's principal names one namespace and one ServiceAccount; it is not a set of conditions on a token), (x) an ignore file of one check ID with a reason above, held by tests, with inline ignores and a configuration file refused (it holds no entry), and (xi) the scan offline from the pinned image; fell away because no plan or apply path exists: (ii) the local file, (iii) the script's environment, (iv) the saved plan's record, (ix) the default-workspace check and the removal over an empty state (the state's place is a sentence of the README), (xii) the exports test, and (xiii) the redaction before a plan is read (listed in the README as what to build first). Avoided: no sourced file, every variable naming a project, billing account or address is sensitive, the address is a validated IPv4 /32, the README labels each control and says what no one has seen, and no test parameter comes from the clock | S078 |
-| No pytest-level timeout: a hung test ends only with its own bound or CI's job limit of 15 minutes (the stack's tool bound, 30 s, keeps one run's 16 calls inside the 600 s lease and the job, and a hung fixture or any other test is not bounded at all); `pytest-timeout` is a new development dependency | S074 (review of the first half, M-2) | open; the owner's question c | S074 |
+| No pytest-level timeout: a hung test ends only with its own bound or CI's job limit of 15 minutes (the stack's tool bound, 30 s, keeps one run's 16 calls inside the 600 s lease and the job, and a hung fixture or any other test is not bounded at all); `pytest-timeout` is a new development dependency | S074 (review of the first half, M-2) | closed by S074 (2026-10-07): the owner answered question c yes; `pytest-timeout` 2.4.0 stops every test, fixtures included, after 600 s by signal (ten times the slowest test measured with coverage, 52.4 s, rounded up; 45.0 s without), the paid opt-in tests carry no limit, and CI's job limit is 30 minutes. A test stopped by the limit in a real run is not seen: only the gate's own tests, with a limit of 1 s | S074 |
 | The CPU-time floor (`MIN_SMALL_SECONDS` = 1e-4 s in `tests/meridian/cputime.py`) fails a test and does not skip it: the smallest small run of the nine callers measured 3.0e-4 s, so a machine about three times faster fails them by assertion, not by slow code | S074 (review of the first half, L-2) | open; low | S074 |
 | `apply_migrations(conn, files=…)` applies a given list in the order given and does not check the shape of a name; its one caller is the tests' builder and a test reads every call under `src/` (it requires one bare call and none with a list), but nothing in the runner enforces that | S074 (H3's decisions; review, L-5) | open; low; it is `src/`, so it goes with the step that next touches `runner.py` (S068's contract U2 adds a function to it) | S068 |
 | Limits of S074's first-half checks: growth between n^1.5 and n^1.7 passes the CPU-time test at load; the proof script counts comment lines one group added to a shared support module towards another group's coverage; the `ast` test on `apply_migrations` was never seen to fail (a call with `files=` planted in a scratch copy of `src/` would show it); the leak test checks something only after a bounded test in the same worker; the demo tests keep real-time margins of 80 s and 15 s | S074 (H7's report) | open; low; the second half plants the call and records the rest as accepted | S074 |
@@ -954,7 +1000,7 @@ that day; the rest stand as their step recorded them.
 | The command guard's test of the worst shape under the byte bound (`tests/test_guard_bash.sh`, a CPU bound of 1.5 s) took 1.736 s on the hosted runner in the first run of pull request 108 and 0.74 s on the development machine; S036's T3 adds patterns to the same hook | S074 (seen 2026-10-07) | open; seen once | S074 |
 | Two comments outside `tests/` and `docs/` name `tests/meridian/test_kind_manifests.py`, which no longer exists: `infra/kind/deploy.sh` (line 89) and `infra/helm/meridian/templates/services.yaml` (line 33); an applied migration's comment (`0020_gateway_upkeep.sql:179`) names a moved test too and stays | S074 (H4's and H6's reports) | open; low; `deploy.sh` is S073's ground, so after S073 merges | S074 |
 | `PYTEST_DB_PORT` defaults to 55432 in the `Makefile`, inside Linux's ephemeral range (32768 to 60999) that `docs/development-environment.md` says a test database's port should stay out of; a candidate to look at when S074 measures the lost-connection row | S074 (H4's report) | open | S074 |
-| A size check: a test that fails when a test file passes 800 lines, with today's 33 files (`tests/meridian/test_*.py`) listed as its exceptions, or the split stays a habit | S074 | open; the owner's question b | S074 |
+| A size check: a test that fails when a test file passes 800 lines, with today's 33 files (`tests/meridian/test_*.py`) listed as its exceptions, or the split stays a habit | S074 | closed by S074 (2026-10-07): the owner answered question b yes; `scripts/check_file_sizes.py` runs in `make lint`, and its exceptions file lists 51 files (all tracked source, not only `tests/meridian/test_*.py`), each ratcheted to its count; the 46 splits that no row homed are a new row | S074 |
 | Not seen on a cluster after S068: the migrate Job applying 0027 to 0031 (and refusing, by a file's guard, a missing role, or by the check after the files, a membership of `claims_sweep` or of `gateway_upkeep`), the upkeep Job's refusals and a dry run of `expire-audit` through the Job (a date only passes its word check), the database default of 60 s on the cluster's database (`ALTER DATABASE` needs the owner to own it; read in the kind values, not checked), a connected session picking up an altered function's path, and dead index entries slowing a long run until vacuum | S068 | open; tests hold each against PostgreSQL | S073 |
 | The upkeep Job's deadline of 120 s bounds one run to a number of rows that nobody measured on a disk: at the rate F2 measured (8 to 12 ms for a batch of 10,000 usage rows; one machine, data in memory, not a cold disk) it is about a hundred million, and U4's figure of about twelve million was the rate before the index changed; a larger backlog is several runs or a terminal, and a Job that is stopped prints nothing of what it removed | S068 (U4) | open | S073 |
 | `infra/kind/upkeep.sh` and the Makefile: the comment above `READ_BEFORE_RERUN` speaks only of credits (a failed `expire` or `expire-audit` may have removed batches); the `gateway-upkeep` help line and its test say four subcommands where there are five; a `helm get` that times out reads as "the release is not installed" | S068 (U3b, F2) | open; low; S073's contracts edit those files next | S073 |
@@ -962,7 +1008,7 @@ that day; the rest stand as their step recorded them.
 | The upkeep command's small ends: no guard on the isolation level (a caller at REPEATABLE READ would read stale snapshots in the closing call; the command's own connection is READ COMMITTED), no progress line on Ctrl-C or SIGTERM, and two sentences (`AUDIT_COUNT_CANCELLED` and what `_say_what_remains` prints) that blame the statement timeout alone for a cancelled statement, which an administrator can cancel too | S068 (reviews, F2) | open; low | S069 |
 | The command guard has no case for `--limit` or for `expire-audit`: the second asks in every form, the dry run included, by the shape of its pattern and not on purpose, and its sentence names no audit rows; no rule matches `meridian gateway ... --confirm` typed directly or a Job rendered with `helm template`, so the guard covers `make gateway-upkeep` and `upkeep.sh` only | S068 (reviews, F1, F2) | open; the guard is a guard for habits | S036 |
 | The state filter of the ledger's batch (`state <> 'reserved'`) has no test in which it decides, because a reserved row of a past month is refused before the delete; the lock timeout of 0029 firing, a reserve and a close that do not wait for an expiry, and the batch's plan from the fifth call of a connection on (a generic plan) are untested too | S068 (database review of U4) | open | S074 |
-| `test_kind_upkeep_script.py` (842 lines) and `test_migration_rules.py` (976) are over the 800-line ceiling, and a sibling test module cannot import the second (no `tests/meridian/db` path is on `sys.path`); `cli/gateway.py` is 779 lines | S068 (F1, F2) | open | S074 |
+| `test_kind_upkeep_script.py` (842 lines) and `test_migration_rules.py` (976) are over the 800-line ceiling, and a sibling test module cannot import the second (no `tests/meridian/db` path is on `sys.path`); `cli/gateway.py` is 779 lines | S068 (F1, F2) | open; since 2026-10-07 the two files are in the size check's exceptions list, at 845 and 976 lines, so neither can grow; their splits stay open | S074 |
 | The audit table's trigger can still be switched off by the owner, a superuser or a managed database's administrator, and nothing records it (T-25); a check that the owner role has no members and that the upkeep role owns no object is not built (on a managed database the administrator is a member of the owner role by necessity); what the Azure administrator may do (`session_replication_role`, creating and granting roles) is read, not assumed, and `pgaudit` on the managed database is the enterprise-grade option | S068 (security review) | open | S020 |
 | Every figure of S068's expiry was measured on one machine with the data in memory: the builds of 0027 and 0029 (each blocks writers of its table while it runs), a batch of 10,000 rows, the closing call (measured with no counters planted), the cost of an insert into the new indexes (argued, not timed), the write-ahead log of a batch (estimated, not measured) and a dry run's count over tens of millions of rows | S068 (reviews, F2) | open; the first database that is not in memory is the Azure one | S020 |
 | Rows the upkeep role wrote (every `audit.expire` and `ledger.expired` row, a credit's and a close's) are never removed by the audit expiry, so they stay for ever: a few rows for each operator action, with slugs and tenant IDs and no personal data; a period for them needs a function of their own and the owner's answer | S068 (F1) | open | S020 |
@@ -978,7 +1024,7 @@ that day; the rest stand as their step recorded them.
 | The tests that hold the variable validations of the three Terraform modules (170 of them: 63 in `test_aws_script.py`, 107 in `test_gcp_module.py`) need the `terraform` program and SKIP where it is missing, and the `python` workflow installs only Helm and uv: on the hosted runner they have never run. Those modules are never applied, so CI was meant to be their gate, and the pull requests of S036 and S078 said "the tests hold" of runs made on the development machine alone. Every other tool the suite needs fails in CI when it is missing (`jq`, Helm, the database, Docker); this one skips without a word. Install the pinned `terraform` in the workflow (a `_VERSION` there needs a Renovate reader) or make the marker fail under CI as the `jq` one does | S073 (K14's reading of the pull request's skipped tests: 178, where the run before S078 merged had 71 and the development machine has 8) | closed by S079 (2026-10-07, K2c), as far as a check can close it before it has run: the count was 225 in four files (63 in `test_aws_script.py`, 107 in `test_gcp_module.py`, 53 in `test_aws_kubeadm_module.py`, 2 in `test_aws_kubeadm_bootstrap.py`; K2b then moved the managed module's rules into a fifth file); the marker, `needs_terraform` in `tests/meridian/terraformsupport.py`, fails the test under `GITHUB_ACTIONS=true` with one line when the program is missing and skips elsewhere (shown by hiding the program: 107 failed with the variable set and 107 skipped without it, on one file); the `python` workflow installs Terraform 1.16.5 through `hashicorp/setup-terraform` pinned to a commit, read by a rule of Renovate's `terraform` group, and a test holds that the pin satisfies every module's `required_version`. Not seen on the runner until this pull request's check: no run of the workflow has used the step yet, so whether the program installs there and every marked test passes stays open until that check is green. Seen green on 2026-10-07 (pull request 121's `python` check: Terraform 1.16.5 installed by the step, `20009 passed, 8 skipped`, the development machine's own two numbers on that tree) | S079 |
 | Small ends of S068's last two commits, from a re-read that came back while its pull request was in its checks, none fixed there: the audit expiry's line after a failure does not say "at least" as the ledger's now does (the same commit of unknown outcome), and the kind script's test still holds the ledger's old line in its fixtures, so no test proves the script reads the new one; the two tests that plant a reserved row under a SHARE lock take the past month from a second reading of the clock, so a run in the milliseconds around a month's first instant would fail; a paragraph copied into two test files says the tests of the file call the expiry as the owner, which is true of their expiry tests only; no test asserts that a generic plan was in fact chosen on the sixth call; and only one of the two new concurrency tests was shown to fail under a mutation | S068 (a Python re-read of F3 and F4, 2026-10-07) | open; low | S074 |
 | Three small ends of the kind scripts that the infrastructure review of S073 left: `upkeep.sh` reads a `helm get` that timed out (status 124) as "the release is not installed" and says to run `make deploy`, though it stops and does no harm (L3); `smoke.sh` puts a Deployment's name unescaped into a basic regular expression, safe for a DNS label and not for a dotted name (L6); `kctl` gives a plain `delete` without `--wait=false` the request flag though it waits by default, and no call site is affected today (L7) | S073 (infrastructure review) | open in part: L6 is closed by S072's contract S (`0577663`; tested with stand-ins, and seen on kind by the cold run R9: smoke's 46 lines passed): `smoke.sh` compares a policy's name with the Deployment's as text, with no pattern, so a dotted name no longer matches its dash twin; L3 and L7 stay | S073 |
-| The restart share is read from `MERIDIAN_TLS_RESTART_SHARE` by `certlife._restart_share`: an empty value is 0, the old behaviour, so a chart typo that renders an empty share hides itself, while a value of only whitespace refuses the start (the Python review of S073, L4); a share written with Unicode digits or padded is read as a number | S073 (Python review) | open | S073 |
+| The restart share is read from `MERIDIAN_TLS_RESTART_SHARE` by `certlife._restart_share`: an empty value is 0, the old behaviour, so a chart typo that renders an empty share hides itself, while a value of only whitespace refuses the start (the Python review of S073, L4); a share written with Unicode digits or padded is read as a number | S073 (Python review) | open; S069's second half changed what the refusal looks like for the five services that serve TLS: the start module reads the share through `certlife` and ends a start with a value outside zero to one with one `tlsstart:` line that names the variable and exit status 3, where the app factory's traceback and exit status 1 were (tested, not seen on a cluster); the Claims API still ends in the traceback; the empty value and the padded or Unicode forms are as they were | S073 |
 | What a new 503 of the Model Gateway would have to look like to slip past `test_gateway_503_words.py`, so that the ingestion's word for it would be `unknown`: a status that is an attribute or an imported name (`status.HTTP_503_SERVICE_UNAVAILABLE`, `HTTPStatus.SERVICE_UNAVAILABLE`), a `JSONResponse` or `Response` with no `detail=` keyword, a site under `gateway/providers/` or outside `gateway/` and `common/` (the scan's glob is not recursive), a text from a second mapping like `LIMIT_ANSWERS`, or one of the four texts reused for another cause (the test passes and the word is then ambiguous); an f-string `detail` fails loudly | S073 (Python review) | open | S069 |
 | `meridian registry contracts` ends in a traceback and exit 1 for an output directory it cannot read (`--out` with mode 600, with or without `--check`), for a contract file it cannot read (mode 000) and for one that is not UTF-8, and it follows a dangling `--out` link and creates the link's target; `contract_problems` and `write_contracts` (`platform/toolserver/contracts.py`) catch nothing and `cli/registry.py` calls them bare. It predates S074 (the file is as on `main`); the smallest fix is `except (OSError, UnicodeDecodeError)` around both calls and a line through `_fail`, as `schemas` has | S074 (the re-read of the second half, L-e) | open; low | S074 |
 | The golden manifest is read three times in one build, and a file that changes between two reads is not noticed: `check_manifest_workload`, `auto_approval_limit` and `golden_set_of` in `build_report`; the injection builder reads its own manifest three times and the golden one twice. H16's estimate of the smallest change: a private helper in `claims_triage/evaluation.py` that reads and type-checks the document once, the workload check and the limit taking the document, and a `golden_set_from(document, root)` core in `platform/evaluation/fingerprints.py` with `golden_set_of` kept as a thin wrapper; three source files, no call of `golden_set_of` (41 in `test_fingerprints.py`) moves while its signature holds. It closes the "changed between reads" part only if the core takes the document, since `golden_set_of` also hashes the listed files and walks the directory. A contract of its own, before or after any rewrite of the two builders and not beside it | S074 (second half, H16; row 878's second part) | open; low | S074 |
@@ -991,8 +1037,8 @@ that day; the rest stand as their step recorded them.
 | Smoke's check 10 asks for a Certificate in `default` with the URI `.../sa/meridian-smoke-refused`. Since contract P the services' policy lists exact URIs, so that URI is also refused inside `meridian` and the check no longer proves the namespace selector alone (the test that held it says so: `test_the_request_is_in_a_namespace_the_services_policy_does_not_select`). Either `REFUSED_URI` becomes a listed name such as the gateway's and the old assertion returns, or the weaker check is accepted and the line says what it proves | S072 (contract P) | closed by S072 (F1), tested with stand-ins and seen warm (R8, 2026-10-07: `make smoke` from `main`, 46 PASS, 0 FAIL, 0 SKIP): `REFUSED_URI` is the Claims API's listed URI, so the namespace selector is again the one reason for the refusal, and the test holds the URI, the duration and the usages against the policy's manifest; check 10's refused request was refused for its namespace | S072 |
 | `BY_HAND` in `src/meridian/platform/cli/workload.py` lists what the scaffold leaves to a person (the service entry, a chart entry with a certificate) and does not say that a service with a Certificate needs its ID, and its `<service>.meridian.svc` name where it serves TLS, in the `meridian-services` policy's two lists or the issuer refuses its certificate (`config/registry/README.md` says so since contract P). Its test is read before the line is edited | S072 (contract P) | open; the cluster batch took none of it (a change under `src/`, outside a batch of manifests, scripts and documents): it stays, does not gate the close, and the closing record re-homes it to a step that exists | S072 |
 | Loki's chart renders a ClusterRole with no rules (`loki-clusterrole`) bound to the `loki` ServiceAccount, and a `loki-memcached` ServiceAccount although memcached is off, whose token key contract T's two keys do not touch; no pod uses either, so they grant and mount nothing. Envoy Gateway's chart leaves its certgen RBAC and its topology-injector webhook configuration on the cluster after the hook ran (no delete policy on them) and renders a cluster-wide ValidatingAdmissionPolicy. A value that switches the first two off was not looked for | S072 (render) | open; noticed, harmless as rendered | S072 |
-| The three manifests that prove S074's third part (`cut-1.manifest`, `cut-2.manifest`, `cut-3.manifest`: line ranges for `scripts/shell_split_proof.py`) are in the session's handoff folder, outside the repository, so no clone can run the proofs again; the plan holds the commands and their output. Cuts 1 and 2 cannot be run again on the tip in any case: the files they name as targets changed after them | S074 (third part) | open: keep the three manifests in the repository beside the proof script (about 200 lines of text in all, each with its `--ref` in a first comment), or accept the recorded output as the evidence; the owner's decision, or the last cut's | S074 |
-| `shellcheck` has no runner, and the split made the by-hand run narrower: the earlier gates' `shellcheck infra/kind/*.sh` does not reach `infra/kind/smoke.d/`; the parts are linted through the entry alone (`shellcheck infra/kind/smoke.sh` follows each `# shellcheck source=` hint through `.shellcheckrc`; exit 0 after each cut), and a part linted by itself warns (SC2034 on `PSQL_OPTIONS`, `COLLECTOR_ENDPOINT` and `poll_error` in `shared.sh`, which checks that are not sourced then read). A runner would be a `make` target or a CI step that lints the entry; S075's row does not name it | S074 (third part) | open: not built; no step owns CI checks for shell, so S074 takes it or closes it as by hand | S074 |
+| The four manifests that prove S074's cuts of the smoke script (`cut-1.manifest` to `cut-4.manifest`: line ranges for `scripts/shell_split_proof.py`) are in the session's handoff folder, outside the repository, so no clone can run the proofs again; the plan holds the commands and their output. Cuts 1 and 2 cannot be run again on the tip in any case: the files they name as targets changed after them; nor can cut 4, whose second state changed comment, blank and directive lines in four files (run on the tip it prints four FAIL lines, read 2026-10-07) | S074 (third part) | open: keep the four manifests in the repository beside the proof script (273 lines of text in all, each with its `--ref` in a first comment), or accept the recorded output as the evidence; the owner's decision (the last cut did not take it) | S074 |
+| `shellcheck` has no runner, and the split made the by-hand run narrower: the earlier gates' `shellcheck infra/kind/*.sh` does not reach `infra/kind/smoke.d/`; the by-hand line is `shellcheck infra/kind/smoke.sh infra/kind/smoke.d/*.sh`, which ends 0 with no flag on the last cut's tree (read 2026-10-07; `shared.sh` and the parts 08 and 10 each end 0 alone, since the review's directives and the last cut's), and nothing runs it but a person (the entry alone follows each `# shellcheck source=` hint through `.shellcheckrc`). A runner would be a `make` target or a CI step that lints the entry; S075's row does not name it | S074 (third part) | open: not built; no step owns CI checks for shell, so S074 takes it or closes it as by hand | S074 |
 | `tests/meridian/test_smoke_trap.py` waits 60 s for each of its tests that runs the whole script against stubs when a part fails to source (a part missing from the scratch copy, a misnamed `.` line): the failure is slow, not fast (S074's harness contract SA, with the copy of `smoke.d/` switched off: 5 failed, 1 passed in 181 s) | S074 (third part) | open: a bound on the stub run that a failed source reaches sooner, or a test that sources the parts first; not built | S074 |
 | Loki's usage report to its vendor's statistics host is now refused by `observability`'s egress policy (contract E, `cd1d3b9`), and no value switches it off: `values/loki.yaml` has no `analytics` block, so the chart's default stands, which the contract read as on (Tempo's and Grafana's reports and update checks are off in their values). Loki should log a failed report and go on; the cold run R9 did not show it: Loki's log holds no line about the report (no attempt was logged in the run's nine minutes), so the refusal is not seen. `loki.analytics.reporting_enabled: false` is one value and one test, to be set only if the default is confirmed on | S072 (contract E) | open; the cold run's log holds no line about the report, so the default is still not confirmed on and the row stays open: the value is set in S072's close if a run shows the line, or the row is re-homed there | S072 |
 | `api_server_matches_policy` (`infra/kind/common.sh`, used by `make deploy` and `make smoke`) reads and compares the address in the database's policy alone, though `make up` fills the placeholder in five policies (the database's, cert-manager's, `observability`'s, the CloudNativePG operator's and Envoy Gateway's): a node address that changes under a running cluster (Docker restarted) shows in the other four as an operator, a webhook or the edge that stops working, and nothing compares it. Its message says "run `make up`", which is true for all five. Contracts C and N both noticed it and did not change it | S072 (contracts C and N) | open: a row of the same read and comparison for each policy, with the policy named in the message | S073 |
@@ -1004,7 +1050,7 @@ that day; the rest stand as their step recorded them.
 | The settings' deny globs for Read, Edit and Write name `~/.local/state/meridian-aws/**` and not the second module's state directory `~/.local/state/meridian-aws-kubeadm/`, a sibling and not a child, so a file tool of Claude Code is not denied that state, its plan or its record by the settings (the hook's patterns read `.tfstate`, `.tfplan` and `meridian-aws` as substrings and do deny a `cat` of the new state file: measured on 2026-10-07 from lines in a file, not in a live session). The hidden-variable globs (`./infra/terraform/aws/.*tfvars*`) name the first directory only too, and whether `./**/*.auto.tfvars*` matches a dot-name is not measured (the wrapper itself refuses such files). The review of K2b found the same (M2) and read it from the file: the Read tool answered "File does not exist" for both state paths, so its probe could not tell them apart. A tightening that needs no ask: three more globs and the mirror in the guard's case file | S079 (K2b's report; the session's measurement; the security review of K2b, M2 and L5) | closed by S079 (K6, 974d6d1; implemented, with cases; reviewed): the settings deny the Read, Edit and Write tools the second state directory and the second module's hidden variable files, and the settings test asks for the entries of every directory of the family | S079 |
 | A `terraform` run by hand in the second module's directory passes the command guard unasked for a plan: measured on 2026-10-07 on this branch's hook, from lines in a file and not in a live session, `-chdir` into `infra/terraform/aws-kubeadm` and a `cd` there followed by a plan both answered nothing, and so did `init` (as `init` does for the first module, which makes no cloud call). The hook reads the first module's directory as `terraform/aws` followed by an end character, and `terraform/aws-kubeadm` is no such text (a hyphen does not end it); the same lines for the first module ask for the plan and deny a by-hand apply, whereas an apply by hand in the second module's directory asks by the generic rule and is not denied. The settings' ask for a plan with `-chdir` into a path that holds `aws` also matches the second module's name, but the form with a `cd` has no such rule, and whether an ask beats an allow is not verified (a row above). The wrapper's own lines are read: `aws.sh plan aws-kubeadm` and the applying line ask, the removing line is denied, and a `cat` of either state file is denied. The security review of K2b measured more: for the second module `show`, `output`, `state list`, `workspace new` and `plan -out` answer nothing either, and a `tee` into its plan's path passes (`aws\.tfplan` does not match `aws-kubeadm.tfplan`), where for the first module the plan, `show`, `output` and `state list` ask and `plan -out`, an apply, `import`, `state rm` and `workspace new` are denied. `show` is the one that matters: after the owner's apply it reads the state with no credential, and `terraform` is not in the reader rule's program list. The review's fix is the module name `aws(-kubeadm)?` in the three patterns (`aws_dir_re`, `aws_cwd_re`, `aws_steer_path`) and the mirror in the case file; a target named `aws-kubeadm-plan` does not contain `aws-plan`, so a rule for the creating targets must name it | S079 (K2b's report; the session's measurement, checked again by the documents contract; the security review of K2b, M1) | closed by S079 (K6, 974d6d1; reviewed: the second module gets the first's decision in 1,682 shapes of the review's own): a by-hand plan, `show`, `output` or state listing in the second module's directory asks, and a plan written to a file, an import, a change of the state, a new workspace or an apply by hand is denied. The creating targets and the base's two narrowings wait for the owner to start the guard's task | S079 |
 | What the command guard still does not stop around a Terraform state, for both AWS modules, after K7 denied the writers and the copies (the security review of K6 and K7's report): `rm` and `unlink` are not writer verbs (making them so would also deny removing a saved plan by hand: a decision); readers outside the guard's list (`rev`, `paste`, `fold`, `column`, `tr <`, a `read` loop) print a copy that was made before K7 or by a verb it does not know; `touch`, `chmod`, `wget -O` and `openssl -out` are not writer verbs; `terraform init -backend-config=path=<state>` gets no decision from the hook and falls to an allow entry; a working directory at the parent of the modules is read as neither module; a quote or a backslash inside the module's name hides it (the guard's header says so); and K7's known false alarm: a writer verb or a redirect on any line that holds the state directory's name is denied, also for a file of that name elsewhere (`git mv` included) | S079 (review of K6; K7) | open; low to medium: no state exists until the owner's one apply; decide with the owner's guard task | S079 |
-| The two files that K2b cut the wrapper's tests into are 1,406 lines (`test_aws_script.py`) and 1,436 (`test_aws_script_plan.py`), against the ceiling of 800; the original was 2,996 and over it already (S036). They are not named a deliberate exception: K2b's report gives the reason for the cut it made (by the wrapper's own concern, and a third file for the managed module's `.tf` rules) and none why the halves cannot be cut again, and each finding's test runs once per module through one fixture, which is the only argument for keeping a concern together. Either cut them along that fixture's own concerns (the local file and the environment; the plan, the record and the apply; the state and the removal) or list them among the exceptions S074's size check holds | S079 (K2b's report) | open | S074 |
+| The two files that K2b cut the wrapper's tests into are 1,406 lines (`test_aws_script.py`) and 1,436 (`test_aws_script_plan.py`), against the ceiling of 800; the original was 2,996 and over it already (S036). They are not named a deliberate exception: K2b's report gives the reason for the cut it made (by the wrapper's own concern, and a third file for the managed module's `.tf` rules) and none why the halves cannot be cut again, and each finding's test runs once per module through one fixture, which is the only argument for keeping a concern together. Either cut them along that fixture's own concerns (the local file and the environment; the plan, the record and the apply; the state and the removal) or list them among the exceptions S074's size check holds | S079 (K2b's report) | open in part; listed since 2026-10-07 (the size check's exceptions file records 1,491 and 1,512 lines, with the reason "cut once from a larger file; a row of S074 homes cutting it again or keeping it"), so neither can grow; this row is that home: whether to cut them again along the fixture's concerns or to keep them stays to decide | S074 |
 | What only an apply of the self-managed AWS module would settle, none of it seen (the module's README holds the list as its checklist): whether the hairpin rule or the own-address rule was needed and which source address the Elastic IP gives a packet; that `ssm put-parameter --value file://` reads the file; whether the default key `aws/ssm` needs no `kms:` statement; that the managed policy on the node roles allows what the account's version of it says (`aws iam get-policy-version` settles that and needs no apply) and whether the explicit Deny on parameter reads stops the Systems Manager agent from registering a node, in which case Session Manager, the only way onto a node, is lost; that the Ubuntu image carries the agent; that `kubeadm init --skip-token-print` keeps the token out of cloud-init's log; that `ip_protocol = "4"` is accepted; that containerd's default configuration has exactly one `SystemdCgroup` line and that containerd 2.2.1 and kubelet 1.36 work together (read from pages, not seen); that kubeadm writes the Elastic IP into every kubeconfig; that snapd seeds inside its bound; the digest of the Calico manifest against the release's own file (one fetch); the account's vCPU quota for the Standard family (six vCPUs at the defaults; a quota of five fails after two instances bill); the real times of an apply and a removal, the join window of 240 tries and the first boot at all; the default tags on the root volumes; and what an hour costs against a bill | S079 (the security review and the two infrastructure reviews; the reports of K1, K1c, K1d and K1e) | open; only an apply settles them, and the apply is asked at S079's paid stop | S079 |
 | The Google Cloud twin rests on premises that no page settled, each read from the report of K3 and none tested against Google: the character set of a firewall rule's description and name (the AWS module's review found an apostrophe the API refuses; no test holds the twin's descriptions to a set); the regional Secret Manager URL for adding a version and for reading one (the regional host with the path by analogy; the reference pages hide the regional form); which subnet addresses Google reserves; how long an IAM grant takes to apply; that an instance has no setting that limits a pod's reach to the metadata server; that a new service account has no role; that `curl -H @file` needs curl 7.55 or later; and the role names for OS Login and IAP. The twin is never applied, so a page read, not an apply, settles each | S079 (K3's report) | open; a contract that reads those pages can close part of it with no project | S079 |
 | The Calico pin and the signing key's fingerprint of the self-managed modules have no reader: Renovate reads a version in a workflow, a `Makefile` or `pins.env`, and the AWS module holds `calico_version`, `calico_manifest_sha256` and the key's fingerprint as variable defaults, the twin holds copies, and a test holds the twin equal to the AWS module; the repository's rule says a pin of another shape needs a line in `tests/test_renovate_config.py` that says why it has none, and none exists, and `make test` does not fail on it. Calico v3.33.0 was out on 2026-10-01 against the pinned v3.32.2, and the package key expires on 2026-12-29 | S079 (K1's report) | open; before the apply, which reads both | S079 |
@@ -1014,6 +1060,42 @@ that day; the rest stand as their step recorded them.
 | `requires_jq` in `tests/meridian/kindsupport.py` is a plain `skipif`, so a test that needs `jq` skips without a word under CI, where the plan's Part A and the contract that built the Terraform marker both said it fails; the runner image probably ships `jq`, so it has not been seen to matter | S079 (K2c's report) | open; low | S074 |
 | ADR 6's note of 2026-10-07 holds three sentences that the later contracts made false and that S079's documents contract could not edit (the ADR is the owner's to amend by a further dated note, as the note says): that the twin on Google Cloud is "designed and not written" (it is written, K3), that the self-managed module's `validate` was run by hand on a copy because nothing runs it (`make aws-kubeadm-validate` exists since K2a; nothing in CI runs it), and the row on what each needs before an apply, which says an apply path does not exist (the wrapper is the path, K2b). The Azure platform document's section had the same three and was corrected | S079 (the documents contract) | open; a further dated note in ADR 6 at the paid stop, with whatever the apply falsifies | S079 |
 | `make aws-kubeadm-validate` and `make gcp-kubeadm-validate` (and by the same recipe the two managed modules' targets) leave the provider's `.terraform/` directory in the module's directory. Two tests of the Google kubeadm module then fail in the same tree until it is removed: `test_no_variable_file_override_file_or_state_sits_in_the_modules_directory` forbids the directory and `test_no_text_of_the_module_states_a_price` tries to read it as text. Seen once, by K8's implementer, who ran the validates and then the tests in the order its contract listed. The directory is ignored by git and no check in CI runs a validate before the tests, so a pull request does not show it; a person who validates and then runs the suite does. Either the tests skip the directory or the wrapper's `validate` keeps its provider cache outside the module (`TF_DATA_DIR` is set by the script itself, never by a caller: the guard denies a `TF_*` assignment in front of the program) | S079 (K8, 2026-10-07) | open | S020 (it widens the `validate` door for the Azure module) |
+| The add-ons' pods restart and nothing sees it. Read on 2026-10-07, before run R8: `tempo-0` had 12 restarts (the last 5 h 1 min before, about 05:40) and `loki-0` 2 (the last 5 h 51 min before), both in `observability`, and `platform-db-1` in `meridian` 9 (the last at 05:39): the hours of the four overloads of the machine that morning. Run R9a (2026-10-07 11:04, read only, before the cluster was deleted) read the cluster's 22 restarted containers: every last end lay between 05:33 and 05:50, in the fourth overload (05:27 to 05:42); the database's previous container ended cleanly at 05:39:35 (exit 0, "Shutdown signal received" in its log), a restart by the kubelet under the stall and not a crash; the node's kernel log held no out-of-memory kill. Nobody read Tempo's and Loki's previous logs (`make up` had replaced their pods, a new template), and the cluster those pods ran on is gone (run R9 made it again), so those logs are too. No smoke line and no alert reads restarts outside the rate store's (`MeridianRateStoreRestartLoop`, S072: smoke's check 11 compared the new alert rule in run R8) | S073 (run R8) | open. Home S072, which owns that alert and the cluster batch that is next on the lane; a smoke line that reads the counts would be S073's kind of work, so the home may move there | S072 |
+| `make smoke`'s sentence for a cluster that exists and does not answer says "run 'make up'" (seen with the node paused, run R5b, 2026-10-07: "cluster meridian is not reachable; run 'make up'", rc 2, no line printed), which is not the remedy for a frozen or overloaded node: the node is looked at first | S073 (run R5b) | open | S073 |
+| `INJECTION_CASES` in `tests/meridian/injectionsupport.py` and `INJECTION_CASES_JSON` in `tests/meridian/servicesupport.py` are two definitions of one path, `data/synthetic/injection/cases.json`; `test_claimant_name_capital_rule.py` (near line 159) reads the file a third way | S074 (leftovers, T2) | open: one of the two constants imports the other, or both read one; not built | S074 |
+| `NAME_MASKED = ("CLM-1053", "CLM-1054")` is written out in three test files: defined in `test_run_input_stack.py` and in `test_posted_text_screen.py`, and inline in `test_claims_app.py` (`tests/synthetic/test_injection_cases.py` holds the same two with their names as `NAME_MASKED_CASES`) | S074 (leftovers, T2) | open: one definition in `servicesupport.py` beside `injection_case_claim`; not built | S074 |
+| The client's TLS context (`ClientTls.ssl_context`, `src/meridian/platform/common/tls.py`) loads the certificate file itself, a third read of the file beside the server's context and the health check's, and the start module's hand-over does not reach it: a service's client can present a different certificate from the one its own server serves, and from the one the health check watches, when a renewal lands between the reads | S069 (R11: the map and the report) | open; the second half's decision was the server's context and `certlife` only; the fix is the same bracket around the client's load, or one context built once and shared; the tests hold the race for the server only | S069 |
+| The Claims API serves no TLS (the edge calls it over plain HTTP) and reads its certificate file when its app factory runs, for the health check and for its client context; the start module serves TLS or nothing, so the Claims API still starts under `uvicorn --factory` and nothing is handed over there, and the window stays | S069 (R11) | open; closing it takes a hand-over from its own factory (one read for its client context and its check) or the edge's TLS, which is S020's | S069 |
+| A values override that sets `tls: true` on a command that starts `uvicorn` serves TLS and brings the two-read start back, and the chart does not refuse it: the template appends the TLS flags to any command, a comment in `values.yaml` says what is lost, and a values-level test holds the default values only (the five `tls: true` services start through the start module). A `fail` in the template would break two tests that render that shape on purpose (`--set services.claims-api.tls=true` and the extra service of `test_helm_identity.py`), and what returns is a health check that can lag the served certificate, not an exposure | S069 (security review L4, infrastructure review) | open; low; a comment and a test, not a `fail`, by decision of the second half | S069 |
+| What R11's reviews left in the start module, all low: the refusal line for a command line the module does not take names no flag (argparse's text can quote a word, so a missing `--ssl-certfile` and a typo read the same); `UVICORN_*` environment variables, which uvicorn's own command read, are no longer read (nothing in `infra/` sets one); an `OSError` from the builder gives its class alone, so a missing certificate, key or CA file are not told apart; `app.endswith(":create_app_from_env")` in the chart test is a suffix check and two asserts are redundant; the subprocess test asserts exactly one stderr line and fails on an unrelated warning; `Path(str(config.ssl_certfile))` calls `str()` on a value the parser already requires; `PYTHONSAFEPATH=1` would drop the working directory from `sys.path` for both start paths | S069 (security, Python and infrastructure reviews of R11) | open; low | S074 |
+| The start module's premise stops where Kubernetes' ordering does: two equal reads around the load mean the context holds that certificate unless the Secret was set back to an earlier version during the load (a person re-applying an old Secret; cert-manager does not), `ca.crt` is outside the bracket, and a mount that is not a kubelet Secret volume is outside the premise (AKS's Secret driver, if one is chosen, was not looked at; in the chart the mounts are plain `secret:` volumes with no `subPath`). The first two are accepted as stated in the module's docstring | S069 (security review L3, R11b) | open; the third is S020's to read when the Secret driver is chosen | S020 |
+| The evidence for `reset` against `refused` in smoke's check 9 and in this kind README (an unknown CA's connection ends with no alert) was measured on 2026-10-06 against a test server built on a plain `uvicorn.Config`, not through the start module that the five services now use; a test holds the module's context equal to uvicorn's own and smoke passed 46 of 46 after K2's deploy (the ending that line read is not in the run's record), but the ending was not measured against the module | S069 (infrastructure review of R11) | open; low; the comments now say the evidence came from plain uvicorn | S073 |
+| approver-policy's liveness probe is a second writer of the Deployment (field manager `meridian-kind`), and what happens when a chart takes the field was reasoned and not seen: whether the probe survives an upgrade to a newer chart (R13 applied the same chart twice), the apply's refusal and Helm's own conflict message on a cluster that has the probe, the two-step remedy (apply a copy of the manifest without its probe lines, then delete the manifest and the function and set the chart's value; the alternative is one Helm upgrade with `--force-conflicts`), the probe under real load (the numbers were chosen for an overload R13 did not reproduce), and a cold install with the apply. No run can see most of it before a newer chart exists: Renovate's pull request for one is the occasion, and its note names the remedy | S073 (R13 and its infrastructure review) | open; the remedy is written in the apply's message, the manifest's header and the kind README, tried nowhere | S073 |
+| How `certmanager_certificate_renewal_timestamp_seconds` behaves while a renewal is pending (expected: it stays in the past until issuance sets the next time) and whether Prometheus stores it at all: R13 saw `MeridianCertificateRenewalOverdue` loaded and healthy and quiet, not the series, and neither it nor `MeridianCertificateIssuingRestartLoop` has been seen firing; seeing the first needs a certificate whose renewal is due while nothing decides its request (the one-hour certificates of the certificate runbook's watch, with the approver stopped, about 45 minutes) | S073 (R13 and its infrastructure review) | open; the inner `> 0` of the rule rests on the series reporting 0 for a Certificate with no renewal time, expected and not seen | S073 |
+| Documents that say "the one image" or its size: ADR 6 and ADR 7 ("one image of 0.5 GB", an estimate; no image was measured), the Azure platform document, and T-97 ("the one image"). They stay true until S083 makes six images; each is read again in the step that makes it false | S081 (the map) | open; designed, nothing built | S083 |
+| Runbook queries and smoke lines that name the one database `meridian` or one schema each (the budget-exhaustion, secret-rotation, rate-store, provider-outage and database-failure runbooks, run by `tests/meridian/test_runbook_queries.py`; smoke's `psql -d meridian` lines and the cost-panel and service-identity checks; `infra/kind/deploy.sh`'s chunk count) | S081 (the map) | open; designed, nothing built | S087 |
+| 46 source files over the 800-line ceiling have no row of their own: `scripts/file-size-exceptions.txt` lists 51, each with the line count it may not pass (a ratchet), and five of them are homed elsewhere (`scripts/check_docs_consistency.py`, a copy of development-base's file, whose copy is the one to split; the two AWS script test files and the two upkeep and migration-rule test files, which have the rows above). The other 46 carry the reason "over the ceiling before the check existed; a row of S074 homes its split", and this row is that row. Two are not tests (`infra/terraform/aws.sh`, 812 lines, and `src/meridian/platform/registry/checks.py`, 857) and 44 are, the largest `test_runtime_app.py` (3,160 lines), `test_adjuster_pages.py` (3,097) and `test_claimant_pages.py` (2,743). Each split is work nobody has homed: a cut by S074's method (a script proves the moves) and the removal of the file's line from the list | S074 (the size check, C1, 2026-10-07) | open; each file's split is a contract of its own, none is built | S074 |
+| The ten least covered files of `src/meridian`, from the whole suite of 2026-10-07 (99.11 % of 13,783 statements, 122 missed; the same lines with the tracing core and with the monitoring one): `workloads/claim_brief/evaluation.py` 82.2 %, `platform/evaluation/report.py` 94.2 %, `platform/evaluation/fingerprints.py` 94.8 %, `workloads/claims_triage/mcp_server/tools.py` 95.1 %, `platform/gateway/startup.py` 96.0 %, `workloads/claim_brief/workflow.py` 96.2 %, `platform/policy_mcp/seed.py` 96.3 %, `platform/cli/knowledge.py` 96.4 %, `workloads/claims_triage/evaluation_http.py` 96.7 % and `platform/gateway/providers/azure_openai.py` 96.7 %. The lines still missing are ordinary error paths; no file is reachable only through the paid opt-in tests, and nothing is omitted for them. The floor is 98 for the whole, so one of these files can lose coverage without failing the gate | S074 (the coverage floor, C1, 2026-10-07) | open; a list for a person who works in those files, no fix built | S074 |
+| Coverage's cost on the hosted runner is not measured: the 2.0 % (257.63 s against 252.52 s) is the development machine's, at six workers, and the CI job's limit of 30 minutes was set from it by arithmetic (the slowest of five jobs, 14 min 29 s, scaled by 257.63 / 252.52 to 14 min 47 s, doubled and rounded up). The first pull request whose `python` check runs with `COVERAGE=1` gives the number: the Tests step's time and the whole job's, against the 10 min 1 s to 14 min 29 s read before it; if the step costs much more than 2.0 %, the limit and the workflow's comment are reread | S074 (C1b, 2026-10-07) | closed (2026-10-07): the first pull request whose `python` check ran with `COVERAGE=1`, pull request 128, took 14 minutes 0 seconds for the job on the hosted runner, inside the 10 min 1 s to 14 min 29 s read before it without coverage the same day (the Tests step's own time is not recorded here; the limit of 30 minutes was not changed) | S074 |
+| No test reads the measuring core that coverage actually used. If the monitoring core is unavailable, or branch coverage or dynamic contexts are turned on, coverage.py 7.16.2 emits a `CoverageWarning` and falls back to the trace function without failing, and the suite then takes about 40 per cent longer (252 s to 346 s measured; on CI about 14.8 min to 20.7 min, still under the 30 minutes). The test of the configuration reads `core = "sysmon"` and the absence of `branch`, not the core in use, so the fallback would be a slow warning, not a failure | S074 (the review of the three gates, finding 7, 2026-10-07) | open; low; a check would read `coverage debug sys` or the data file's metadata after a small run | S074 |
+| The size check's scope has gaps. It reads Python under five directories and shell under two, so a new top-level Python directory is outside it, and so are `infra/kind/alerts/meridian.test.yaml` (2,184 lines, the one file over 800 outside the check), the chart's helpers (`_helpers.tpl`, 766), `tests/test_guard_bash.sh` (736), Terraform (largest 286 lines) and SQL (largest 526). A path with a space cannot be listed: the failure message suggests a line that the parser (`line.split()`) rejects, and no tracked path has a space today | S074 (the review of the three gates, finding 8, 2026-10-07) | open; low | S074 |
+| Code that runs only in a child process counts as not covered: pytest-cov 7.1 has no subprocess hook, `patch = subprocess` is not set and nothing sets `COVERAGE_PROCESS_START`, so what a test reaches only through a `python -m` child shows as missed (the reviewer ran a function reached only that way and its lines were missed). The 99.11 per cent does not rest on it, and a change in that share, up or down, is not visible in the number | S074 (the review of the three gates, 2026-10-07) | open; low; seen by the reviewer, not measured over the suite | S074 |
+| The Azure module has no door that plans, applies or removes it, and the command guard and the settings have no rule for its directory (a by-hand plan, `state` or `output` there asks no one; the only barrier is that no sign-in is on the machine, and S071 plans one): the wrapper (a clean environment, the lock read-only, no variable or override file, the default workspace, a plan record bound to its commit and hash, `TF_LOG*` and `TF_CLI_ARGS*` dropped, a check that a plan that creates or replaces the server rewrites the administrator's secret, a documented retry for role propagation, redaction of Azure's host shapes and of an address) comes together with the guard's and the settings' rules for the new names, before any target exists, with a security review of its own (S079's K6 form) | S020 (Z8; the two reviews' findings M1, M4, M7, M9) | open | S020's next contract, after S079 is on `main` |
+| The foundation's Key Vault and Azure OpenAI account are open to every address (public access on, default action Allow) and the vault would receive the database administrator's password: a firewall (default Deny plus the operator's address, a sensitive variable with no default and no example) is a change to the applied foundation, written free and applied by the owner at the paid stop; the decision is the owner's and comes before any apply (T-104) | S020 (infrastructure review HIGH-4) | open; owner | S020, the paid stop |
+| The Azure server's own logging is not built: list the server's log categories at the first sign-in, build one diagnostic setting for the category that holds the connection log in a workspace of its own or under a cap of its own, then the parameters `log_connections` and `log_checkpoints`; `connection_throttle.enable` after the bootstrap; the TLS floor (`require_secure_transport`, `ssl_min_protocol_version`) read and stated; the scan's `AZU-0019`, `AZU-0021` and `AZU-0024` stay listed until then | S020 (Z6b; the second review) | open | S020, second half |
+| The Azure audit log is purged with the environment, with no export, and there is no alert on the workspace's daily cap: read Microsoft's page on the cap and the operation it logs, then build the alert and decide on an export before a removal or the knowing loss (T-105) | S020 (security review M6) | open; owner | S020, second half |
+| What the Azure second half must do, nine items in the module's README: the secrets identity's standing read, egress (the Entra host, the metadata address, the policies measured under Cilium), a second administrator, Pod Security labels on Azure's namespaces, the password's version rule, the database's roles and the Entra administrator, the server's logging, the audit log's afterlife, and the edge's Service address and source ranges | S020 (Z8) | open | S020, second half |
+| Malware scanning of an uploaded file. A stored PDF, JPEG or PNG is checked by its first bytes and nothing else, and "not scanned" stands beside every file and link; a well-formed file that exploits the adjuster's viewer is stored and delivered (T-38, T-109). A scanner is a second workload whose signature database alone needs more memory than the machine has beside the cluster; on Azure the answer is the platform's malware scanning on the store that would replace the table | S080 (design U7) | open; designed, not built (the owner's chosen option of 2026-10-07 was "a malware-scan placeholder") | S080, later half |
+| Sign-in closes the open upload and the open download, and removes what stands in for it. Until S021 the upload route takes a file for any claim from anyone who reaches the host and, behind its switch, the download serves every claim's files (T-108, T-110); the chart's `.localhost` guard is the only stop and S021 takes it out when a caller has an identity. The same step makes an upload count as the document it is labelled with (the advisor's reading of 2026-10-07; today the rules read names only, T-66). An upload credential the app checks itself was weighed and not built, because it would be a second, throwaway sign-in beside the real one | S080 (the security review's H-2; F4b) | open; designed | S021 |
+| A second host name for downloads, with a Host check in the app, so that a stored file is served from an origin the pages' cookies do not reach (the security review's requirement 10). Not built: one more name to route and to explain, and S021's cookies do not exist yet. The download's headers keep a file from running in the pages' origin and do no more | S080 (F4b, D7) | open; not built | S021 |
+| The audit model has no field for a file. `claim.file_stored` and `claim.file_downloaded` hold the claim and the tenant (the claim ID is the `reference`, which `audit.claim_trail` joins on), so five files of one claim and a download of one differ only by time, and a row cannot be tied to the file it records (the platform-boundary review's M-2). A field for a file, or a place for the identifier in the reason, is a change of the audit model, which the services split's S085 (the audit outbox, on `main`) makes anyway | S080 (the boundary review; F4b) | open | S085 |
+| Retention and a delete path for uploaded files. `claims_api` holds SELECT and INSERT on `claims.claim_files` and no DELETE, no period is set, and the bytes are also in the write-ahead log and in every backup, so a stored file stays until the database is dropped (T-111; the data classification's row). The owner decides first: how long, who deletes, and whether the schema's owner may (the owner left retention open on 2026-10-05). A foreign key with no cascade means a file must be deleted before its claim | S080 (the database review; design U8) | open; the owner's decision comes first, and nothing is built | S068 |
+| The access log of the Claims API's server holds the file's identifier in the URL of a download, as it holds every route's path. F4d kept the identifier out of the route's span and of the framework's server span (a test reads the exported spans); the uvicorn access line was not changed. While the pages have no sign-in the identifier is a handle that anyone who reaches the host can use; with sign-in it is one that a log line hands out to nobody | S080 (F4b, noticed; the second security review, L-D) | open; narrowed by F4d to the access log | S021 |
+| The adjuster's page prints each file's full SHA-256 in a `title`, so any reader can confirm that a claim holds an exact file without uploading it (read-only; the same family as the duplicate answer of T-38) | S080 (the second security review, L-E) | open; the list could show twelve characters and no more | S021 |
+| The edge's rate-limit buckets: per route or per match. RU1 showed that GET and HEAD of the download share the named rule's bucket and that the uploads' and the downloads' buckets are separate, and six uploads a minute at the edge on the JSON route; it did not try the JSON route and the claimant's form against each other, so whether the two POST matches share one bucket (six a minute) or have one each (twelve) is not known. The app's 30 files a minute is the backstop for either | S080 (the second security review, M-E; run RU1) | open; narrowed by RU1 | S080 |
+| The multipart parser leans on Starlette internals that are not documented API: the class attribute `spool_max_size`, `UploadFile._max_mem_size` and `_rolled`. Starlette arrives through FastAPI, so a lock refresh can rename one and a part of 1.0 to 1.1 MiB would spill to `/tmp`, which the pod does not have room for. A test with no database feeds a 1,100,000-byte part and fails if the part rolls to disk, and the class's docstring names the coupling; nothing pins the version | S080 (the FastAPI review, L2; F4c) | open; guarded by a test, not pinned | S080, later half |
+| Envoy's handling of an encoded path on the upload route. Run RU1 showed that Envoy normalises the path before the app sees it (`POST /claims/CLM-0001/%66iles` was served as an upload, 201; a GET with the first character of the file identifier encoded was 200; `POST //claims/CLM-0001/files` reached the route, 409), so behind this edge the app's refusal of a raw path with a `%` never fires. What is still not known is whether the normalised request is matched by the uploads route, with its buffer and rate limit, or by the first route: the bodies were under 64 KiB, which either route passes. Run RU2 sent 100 KiB bodies to an encoded and to a double-slashed path: both reached the app, which the first route's 64 KiB would not have let through, and the seventh of seven uploads to the encoded path got the edge's own 429: the uploads route serves the normalised path and its six a minute count it. Not probed: an escaped slash. The app's own brakes do not depend on the answer | S080 (the security review, M-1; F2b; runs RU1 and RU2) | closed for this edge by RU2 (an escaped slash not probed) | S080 |
+| Small ends of S080, none of which changes behaviour: `test_claim_uploads_limits.py::test_the_upload_route_alone_takes_more_than_64_kib` says "alone" and now covers the JSON route only; the shared privilege snapshot (`tests/meridian/sweepmigrationsupport.py`) does not list `MAINTAIN`, which the migration's own test checks for ten roles; the Makefile's help line for `synthetic` does not mention the upload samples; one `UnsupportedFieldAttributeWarning` ('alias' for `claim_id`) appeared once in a directory run of the claims tests, in a test that touches no upload code | S080 (F1, F1b, F4a, F4c, F5 reports) | open | S080, later half |
 | What the command guard still does not read before a paid model call, after G2 (the security review of the guard's first round and G2's report; each shape measured on the hook as shipped, from lines in a file and not in a live session): a script on standard input (`bash -s <sub-command> < foundation.sh`) and the backslash and `$'...'` quote forms of a target; a target held in a variable or a substitution, a loop over targets and `echo <target> \| xargs make`; a quote inside a word (`m"a"ke`, or inside an opt-in's name); a copied, symlinked or process-substituted script and a variable sub-command; an opt-in set without `NAME=value` text (an environment file, `set -a; . ./file`, `export NAME` when already set, `printf -v`, `docker run -e NAME`, `os.environ[...]`); a Python script written to a file and run by name (the heredoc body that writes it is dropped), a credential named under another interpreter or in the repository's own code, `just` and a direct call of the evaluation CLI; and `az rest --help`, which asks (no exemption). The settings' ask over allow precedence is assumed and no test runs the matcher: `Bash(az * list*)` and `Bash(az * show*)` would match an `az rest` URL that holds those words if allow beat ask. The hook is the real layer and a file a session can edit (Part D, question 6) | S071 (security review of G1, G2's report, 2026-10-07) | open | S071 (its paid half: before the owner signs in on the machine the sessions run on) |
 | The documents that say what the command guard asks about and does not see do not name the paid model targets, the opt-in variables, the raw Azure request, the identity library or the flags variable: the hook's header list of what it does not see, the runbook's list ("What the command guard does not see"), `docs/development-environment.md` (the lines that describe what the guard asks about) and the module READMEs | S071 (G1's report and the review's A-9, 2026-10-07) | open | S071 |
 | The live embedding (E9): the evaluation stack and S038's one failing check measured with a real embedding, both opt-in; its paid run answers the golden set again (27 chat calls and about 170 embedding calls, EUR 0.05 expected), so the design question is open whether a second recording keyed on other clauses replaces the first, or sits beside it as the injection run's does | S071 (design E9, 2026-10-07) | open; not built in the free half | S071 (its paid half) |
@@ -12787,6 +12869,423 @@ on 2026-10-06 side by side; E3 waited for E2 (both edit the runtime's
   withheld completion (the provider adapter raises the same error for both),
   R12's timing at S020, and the homes chosen for the rows that no step fits.
 
+**Second half (2026-10-07): the certificate the health check watches is the
+one the server serves.**
+
+R11 is built, reviewed three times and seen on kind; R12 is still the owner's,
+at S020, so the step stays `doing`. Two runs on the local cluster frame the
+build: K1 before it, with the first half's code, for what requests alone can
+show, and K2 after it. Both ran on the cluster made at 11:08 UTC from S072's
+batch. Nothing was deleted, no Secret was printed and nothing cost money (the
+replay provider). Where a run did not see something, this part says "not
+seen".
+
+**Decisions** (the main session's, from the second design, unless marked; the
+owner may overturn any):
+
+- **R11 is built, on one condition, and not closed as an accepted residual.**
+  The alternative was to close the row with the window measured. The advisor
+  (below) put one condition on building: the pinned uvicorn must take a
+  prepared TLS context through a public seam. It does: uvicorn 0.54.0's
+  `ssl_context_factory`, a documented parameter of `uvicorn.run` and `Config`,
+  reachable from Python and not from its command line. Rejected: building a
+  `Config` and setting its context after `load()`, or any route into uvicorn's
+  internals (the advisor's reading was to close the row if that were the only
+  way). The services restart at every renewal by design, so the window recurs.
+- **What the map changed.** Three premises of the first design were wrong.
+  Five of the six services serve TLS; the Claims API serves plain HTTP (the
+  edge calls it so) and only watches its own certificate. The window is not
+  the import: on the old command line uvicorn imports the module before it
+  builds the context, so the window ran from the context's build to the app
+  factory's read of the file (the row's sentence "the time the application
+  takes to import" was wrong, and the row now says so). And a process makes up
+  to three reads of the file: the server's context, the client's context
+  (`ClientTls`) and `certlife`.
+- **A start module and not a change to the app factories.** `python -m
+  meridian.platform.common.tlsstart` takes the words the chart gave uvicorn,
+  spelled the same, and calls `uvicorn.run` with them and an
+  `ssl_context_factory`. The app factory is named by a string, so no platform
+  module imports a runtime or workload module (import-linter stays at 6 kept).
+  The five `tls: true` commands in the chart's values start through it; the
+  Claims API's command does not change.
+- **The context is uvicorn's own.** The module does not build a context by
+  hand: inside the factory it calls uvicorn's default builder, so the settings
+  are the ones the chart had. Two tests hold that. The `Config` the module
+  builds equals the one uvicorn's own command line builds from the same words,
+  on all 55 public attributes but the factory; the context that reaches
+  `create_server` equals `create_ssl_context`'s for the chart's flags on
+  protocol, minimum and maximum version, options, verify mode (exactly
+  `CERT_OPTIONAL`), verify flags, hostname check, ciphers, security level and
+  the CA store's counts. Rejected: a hand-built context (the map found that a
+  hand-built default context differs in its verify flags).
+- **One read, as a bracket, and not a copy.** The module reads the certificate
+  file's bytes, calls the default builder (which loads from the path), reads
+  the bytes again, and hands `certlife` the certificate parsed from those
+  bytes when the two reads are equal. Unequal reads load again, at most five
+  loads in all, then the process stops before it listens. Rejected (the
+  advisor's reading): building the context from the bytes in hand, because
+  Python's `ssl` loads a chain from a path only and a file made from the bytes
+  would hold the key outside its mount. The module never reads the key file
+  and makes no temporary file.
+- **What the bracket's premise is, and where it stops.** The premise is
+  Kubernetes', not Python's: a Secret volume moves its data link forward
+  atomically, certificate and key together, so two equal reads around the load
+  mean the load saw that version. The tests prove the retry path and not the
+  premise. After the security review the module's docstring names three
+  limits. (1) A Secret set back to an earlier version during the load (a
+  person re-applying an old Secret; cert-manager does not) leaves the context
+  on the newer certificate and the check on the older: if the newer ends
+  later the check turns red early, which is safe; if it ends earlier the
+  served certificate is not watched, the old fault, for a window of
+  microseconds. (2) `ca.crt` is not inside the bracket: a change of the CA
+  needs a restart, as before, and the health check never watched the CA. (3) A
+  mount that is not a kubelet Secret volume (a laptop, a copied directory, a
+  CSI driver that does not use the atomic writer, which was not checked) is
+  outside the premise. In the chart the mounts are plain `secret:` volumes
+  and no template uses `subPath`.
+- **The hand-over.** `certlife` gained an entry that builds a
+  `LoadedCertificate` from bytes (the file's path as its source, the share
+  from the environment) and keeps it for the process; `load_certificate`
+  gives the handed one back when there is one and reads the file as before
+  when there is none, which is the Claims API's path and the tests'. It
+  reaches the three kinds of app factory with no change to their signatures
+  (the service apps through `create_service_app`, the tool apps through
+  `create_tool_app`).
+- **It fails closed, with one line.** A certificate that cannot be read or
+  built into a context, bytes that never settle, a restart share that is not
+  a fraction and a command line the module does not take end the process
+  before it listens, with one line on standard error that begins `tlsstart:`,
+  names a flag or a variable and an error's class (for an `ssl.SSLError` also
+  OpenSSL's fixed reason), never a value, and exit status 3, uvicorn's own
+  status for a server that did not start. What an app factory raises is not
+  caught: it stays a traceback and exit status 1, as under uvicorn (a
+  subprocess test holds it). Before, a missing certificate file ended in a
+  traceback ending `FileNotFoundError: [Errno 2] No such file or directory`
+  and exit status 1; the map had said the traceback quotes the path, and it
+  does not.
+- **Scope: the server's context and `certlife`.** The client's context
+  (`ClientTls`) and the Claims API stay as they were; each is a backlog row
+  below.
+- **Choices the R11 contract made and the step kept.** `ATTEMPTS = 5` counts
+  the first load. A bad `MERIDIAN_TLS_RESTART_SHARE` is now caught in the
+  context factory for the five (one line, exit 3, where the app factory's
+  `SettingsError` traceback and exit 1 were); the Claims API is unchanged.
+  The share comes from `os.environ` and the served file's path from
+  `--ssl-certfile`, not from `MERIDIAN_TLS_CERT_FILE`; the chart test that
+  ties the health check's file to the flag keeps them equal. Only the
+  certificate's bytes are compared, since the key is never read, and a
+  mismatched key makes uvicorn's builder raise. The hand-over is per process
+  (the chart runs one worker) and the handed certificate wins over the file
+  whatever `MERIDIAN_TLS_CERT_FILE` says. R11's report says it used `sed -i`
+  on two tracked test files, which its contract forbade; the change was
+  `*given` to `**given` in wrapper functions, because uvicorn calls
+  `create_ssl_context` with keywords, and the Python review read both wrappers
+  and called them right.
+
+**Advisor:** consulted once for the second half, on 2026-10-07 at about 12:00
+UTC, on the design, before any contract went out and before K1. Four open
+questions went to it. (a) It said "load, read again, compare" is an honest one
+read only as a bracket, with the premise in the docstring and no file made
+from the bytes. (b) It said build, on the condition above, which the map
+then met. (c) It said the flood's rows in the audit table are fine, since the
+rule is against deleting and not against adding, and that the run's record
+names the rows it added. (d) It said run K1 now and map the module beside it.
+It changed three things in the design: for the tool servers the third probe
+must both run the summary writer and be refused, because the writer runs
+before the call is judged; the equal-settings test became the concrete list
+above; and the twice-encoded address in K1 is a made-up one at example.com and
+not a test's literal, which reads as a person's name.
+
+**Work log:** K1 first (12:02 to 12:07 UTC, the main session's), then a map of
+the start module, then the R11 contract to an implementer in a worktree of its
+own, carried to the step's branch by the session (d3fd9e1, 12:36 UTC), then
+three read-only reviews of that commit in parallel, then R11b, the fixes
+worth making now (fc40cb8), then K2 (12:54 to 13:01 UTC). The documents
+contract that wrote this part followed K2.
+
+- **K1, what it saw** (the cluster at the checkout of the first half, before
+  R11; 33 rows in the audit table before, 52 after, the last ones smoke's
+  own):
+  1. The 422 for a resume that carries a value. From the Claims API's pod,
+  with its certificate, `POST /runs/<a random UUID>/resume` at the Agent
+  Runtime with `"input": {"x": 1}` answered 422, body `loc` `["body",
+  "input"]` and `msg` "Value error, a resume delivers no value: send {}". The
+  same request with an empty input answered 404 "no such run": the request is
+  valid, and no run was read for the 422.
+  2. One `suppressed` row from each of the five services that keep a
+  throttle. Two rounds of refusals five seconds apart: the gateway refused a
+  chat call under a tenant the runtime may not name (403), each tool server
+  refused the tool probe (`unknown-run`) and the runtime refused a run under a
+  tenant the Claims API may not name (403). Round one wrote five `refused`
+  rows with a count of 0 and round two wrote none. After 125 seconds one
+  request per service that passes its checks (a chat call the replay provider
+  answered with 200, the tool probe, a resume for a run nobody has, a 404)
+  made each service write one row with `outcome='suppressed'` and `suppressed
+  = 1`: `model-gateway` (`model.call`, `caller-name-not-allowed`),
+  `policy-mcp`, `knowledge-mcp` and `claims-mcp` (`tool.call`, each with
+  `unknown-run`), and `agent-runtime` (`run.refused`,
+  `caller-name-not-allowed`). On a tool server the summary row is written
+  before the same call's own `refused` row, so the third probe gave both.
+  3. The access log's path for an address percent-encoded twice. Through the
+  edge, a `GET /u/` with a made-up address at example.com encoded twice
+  answered 404, and Loki held one line of the Claims API with status 404
+  whose `path` was `/u/[email]`; no line held the address in clear.
+  4. `make smoke` afterwards: 46 PASS, 0 FAIL, 0 SKIP, and no container had
+  restarted.
+- **K1, not seen**, because no request creates the condition: the 400's four
+  headers on a withheld completion (only the Azure adapter raises it and the
+  replay provider never does; it belongs to S071's paid measurements, whose
+  row already says so), a shed tool call's row with its run named (it needs
+  eight held tool slots), a takeover of a run left `Running` past the lease
+  (a leg hung past 600 s), and the metric `not-started` of a resume that could
+  not read its run (a database the runtime cannot read). Also not seen: a
+  `suppressed` row from the Claims API, which has no throttle and so writes
+  none (five of six services can); a path encoded four times (`[encoded]`);
+  the edge proxy's own log of the path, which the log agent does not ship.
+- **R11** (d3fd9e1): the module, `certlife`'s hand-over, the five commands in
+  the chart and the comments that said the five start under `uvicorn
+  --factory`. Tests in four new files: the race for a service app and for a
+  tool app (the certificate and key replaced between the context's build and
+  the app factory's read; a memory handshake proves which certificate the
+  context holds, and `/healthz` answers 503 `certificate-expiring` for the
+  served one, which had ended, where the renewed one was far from its end), a
+  control that shows the fault without the hand-over (the same race answers
+  200 while the served certificate has ended), the retry for a renewal during
+  the load, the five-round failure, equal `Config`, equal settings, the
+  caller's URIs read through the module's context over a real thread server,
+  and the fail-closed cases (a subprocess test runs the real `python -m` and
+  checks exit 3, empty standard output, one line, no traceback and no
+  directory name of a canary path). The chart tests that pinned `command[0] ==
+  "uvicorn"` moved to the start module's three words for the five and held
+  `uvicorn` for the Claims API. Red first, as seen: the hand-over test file
+  failed at import, ten chart tests failed against the new values, four tests
+  failed with the hand-over taken out and two with the bracket's second read
+  taken out; the rest of the module's tests were green on their first clean
+  run, and the two mutations are the evidence that they can fail. The R11
+  report's own run could not use the database, so 17 tests that need it were
+  skipped (the report names 15: 13 in `toolserver/test_http.py`, one in
+  `test_audit.py` and one in `test_logformat_services.py`); the three
+  `create_app_from_env` factories that need a database were not driven.
+- **The three reviews of d3fd9e1** (read-only, each with its own probes; the
+  checkout was untouched). None found a critical or a high finding, and none
+  found that the served context, the identity or the audit trail was weaker
+  than uvicorn's own. All three: approve with fixes.
+  - *Security review:* 0 medium and 7 low. It ran the module's tests (26
+    passed) and three mutations (the CA dropped, `--ssl-cert-reqs 0` and the
+    hand-over made a no-op: three, three and five tests red), probed the
+    parser on eleven command lines and read uvicorn's `config.py`, `main.py`
+    and `server.py`. It checked that the serving context is uvicorn's own
+    builder's, that every failure line is built from fixed text, a flag name
+    and a class name, that exit 3 comes before any listening and costs the
+    kubelet the same back-off as exit 1, and that `_handed_over` has one
+    writer and is never less strict than the file read.
+  - *Python review:* its summary line counts 3 medium and 7 low; its body
+    marks two medium and eight low (a count of the findings as written; the
+    two medium are the module-global that outranks the `environ` argument and
+    the broad `except Exception`). It ran the 26 tests
+    (26 passed in 3.69 s), ruff on the six paths and a scratch probe of the
+    real process. It checked the signature and order of `ssl_context_factory`
+    against 0.54.0, that `StartFailure` is not swallowed on the way out, and
+    that a bind failure still exits 3 with uvicorn's own line.
+  - *Infrastructure review:* 0 medium and 7 low. It rendered the chart with
+    the kind arguments (2,284 lines, `helm lint` 0 failed), parsed each
+    rendered command with the module's parser, ran the module twice from `/`
+    (a nonexistent certificate, an unknown flag: one line each, exit 3) and
+    ran the two chart test files (170 passed). It found that nothing in the
+    chart, the alerts or the smoke scripts reads a process name or an exit
+    status, that the rolling update of five one-replica Deployments keeps the
+    old pod until the new one is Ready, and that nothing under `infra/` but
+    the five command heads and comments changed. Its report says
+    the reviewer could not write its file (the Write tool was off in its
+    session) and gave the text in its answer.
+
+  What each finding became:
+
+  | Finding | R11b |
+  |---|---|
+  | Security L1, mutual TLS: the module served TLS with no client certificate asked for when `--ssl-cert-reqs` was missing or 0 or `--ssl-ca-certs` missing | point 3: both flags required, `--ssl-cert-reqs` 1 or 2 |
+  | Security L2 and Python low: a key and certificate straddle (a renewal between OpenSSL's two opens) was not retried | point 2: retried only when the bytes changed during that load |
+  | Security L3: the docstring's premise was stronger than it holds | point 5: the three limits |
+  | Security L4 and infra 6: a values override of `tls: true` on a `uvicorn` command brings the two-read start back | point 9: a comment and a values-level test; no `fail` in the template; and a row below |
+  | Security L5 and Python low: the error for unreadable bytes named `MERIDIAN_TLS_CERT_FILE`, not `--ssl-certfile`; `environ` is not read after a hand-over | point 4 |
+  | Security L6 and infra 1, 2 and 4: documents | this documents contract |
+  | Security L7 and Python low: the key-file test saw `Path.read_bytes` only; no test pinned `allow_abbrev=False` | points 6 and 3 |
+  | Python medium: the broad `except Exception` read a programming error as a bad file | point 1 |
+  | Python medium: a module-global outranks `environ` and three test files each reset it | point 4: one public reset for tests and one autouse fixture; the optional guard that returns the handed certificate only when its source equals `environ`'s path was left (it would tie `certlife` to the flag's spelling) |
+  | Python low: `from None` hid what an operator needs for an `SSLError` | point 1: OpenSSL's fixed reason; for an `OSError` the class alone, so a missing certificate, key or CA file is not told apart, which was left |
+  | Infra 3: the evidence for `reset` against `refused` was measured against plain uvicorn | point 8 reworded smoke's and the tests' comments; the measurement was not repeated (a row below) |
+  | Infra 5: no test ran the real chart command through the module for an app factory's failure | point 7: a subprocess test of the real `python -m` with the support PKI and a raising factory (traceback, exit 1, no `tlsstart:` line); the chart's own command was not run in a test, and K2 saw the JSON first lines on the cluster |
+  | Infra 7, Python low (the subprocess test's "exactly one line"), Python low (`Path(str(...))`, unreachable) | left: optional, or cannot be reached |
+  | Python low: `UVICORN_*` environment variables are no longer read | left (nothing in `infra/` sets one); a row below |
+  | Python low: the refusal line for a bad command line names no flag | left on purpose: argparse's text can quote a word of the command line; a row below |
+  | Infra, optional: `PYTHONSAFEPATH=1` | not done; outside the contract |
+
+- **R11b's nine points** (fc40cb8):
+  1. The builder's `except` is `(OSError, ssl.SSLError, ValueError)`; anything
+  else leaves as a traceback. An `ssl.SSLError` adds its `reason` when it is
+  a token of capitals, digits and underscores (`KEY_VALUES_MISMATCH`).
+  2. An `ssl.SSLError` is retried only when the certificate's bytes changed
+  during that load, counted in the five; unchanged bytes fail at once.
+  3. `parse_arguments` requires `--ssl-ca-certs` and an `--ssl-cert-reqs` of 1
+  or 2 with no default, so a start that would not ask for a client certificate
+  is refused; an abbreviated flag is refused too.
+  4. `certlife.forget_handed_over_certificate()` for tests, one autouse
+  fixture in `tests/meridian/conftest.py` in place of three private ones, the
+  hand-over's error names `--ssl-certfile`, and `load_certificate`'s docstring
+  says `environ` is not read after a hand-over.
+  5. The module's docstring states the premise as far as it holds (the three
+  limits above).
+  6. The key-file test fails if the module's own code opens the key path
+  through `Path.read_bytes`, `open`, `io.open` or `os.open`; uvicorn's builder
+  reads the key inside OpenSSL, which none of these sees, so a key opening
+  the hooks do see comes from Python code, and the test asserts that the
+  certificate path is seen, which shows the hooks work.
+  7. A subprocess test: an app factory that raises ends in a traceback and
+  exit status 1, with no `tlsstart:` line.
+  8. The docstrings of five app factories and two comment lines in smoke's
+  check 9 say the five no longer start under `uvicorn --factory` and that the
+  measured `reset` evidence came from plain uvicorn; the docstrings of the
+  test server and the client-TLS test say it is plain uvicorn (test files, read
+  by R11b as in the review's item).
+  9. `values.yaml` says in one sentence that `tls: true` on a command that
+  starts `uvicorn` serves TLS but reads the certificate twice, and a test
+  reads `values.yaml` (not a render) and checks that the services with `tls:
+  true` are exactly the five, each starting with the start module's three
+  words.
+
+  Red first, as seen: against the old module six of the new tests failed (the
+  key-mismatch reason, the bug-not-a-bad-file case, the renewal between
+  OpenSSL's two opens, and three refusal cases: no CA, no `--ssl-cert-reqs`,
+  `--ssl-cert-reqs 0`); with `allow_abbrev=True` only the abbreviated-flag case
+  failed; with a key opened inside the module the key-file test failed. Three
+  cases passed on their first run because the old code already failed closed
+  for them.
+- **K2, as run** (the module and the chart of fc40cb8 on the cluster; exit 0;
+  nothing deleted, no Secret printed):
+  1. Before: all six Deployments' commands began `uvicorn --factory`.
+  2. `make deploy` from fc40cb8: exit 0 in 94 s, and no pod not Ready after
+  it.
+  3. After: agent-runtime, claims-mcp, knowledge-mcp, model-gateway and
+  policy-mcp ran `python -m meridian.platform.common.tlsstart --factory ...`
+  and the Claims API still ran `uvicorn --factory ...`; each of the six pods
+  was 1/1 Running with 0 restarts.
+  4. The first two log lines of each of the five were the service's own JSON
+  lines (`"logger": "uvicorn.error"`, "Started server process [1]", "Waiting
+  for application startup."), so JSON from the first line holds through the
+  module and the server is process 1. No line began `tlsstart:` in any of the
+  five.
+  5. A TLS handshake from the Agent Runtime's pod, with its own certificate,
+  to claims-mcp, knowledge-mcp, model-gateway and policy-mcp: the served
+  certificate's end date equalled what cert-manager issued (2027-01-05 11:13:10
+  UTC, revision 1) for each, and `/healthz` answered 200.
+  6. `make smoke`: 46 PASS, 0 FAIL, 0 SKIP.
+  7. A renewal of policy-mcp's certificate (`make cert-renew CERT=policy-mcp`,
+  exit 0): the Certificate went to revision 2 with a new end (2027-01-05
+  12:57:58 UTC) within the same second. Before any restart the pod still
+  served the certificate it started with (the same serial, the earlier end)
+  with `/healthz` 200 and 0 restarts, and again 75 seconds later, when the
+  kubelet had had time to move the volume to the renewed Secret: the server
+  and the health check hold what was loaded at the start. After a rollout
+  restart of policy-mcp the new pod served the renewed certificate (another
+  serial, the new end, equal to the issued one), `/healthz` answered 200,
+  with 0 restarts and no `tlsstart:` line.
+  8. `make smoke` again: 46 PASS, 0 FAIL, 0 SKIP; no container on the cluster
+  had a restart and no pod was not Ready.
+
+  The cluster still runs fc40cb8's images and chart after the run, not
+  `main`'s (the holder record names S073 and that commit, state ok).
+- **K2, not seen on a cluster:** the module's refusal, a line that begins
+  `tlsstart:` and exit status 3 (it needs a certificate that cannot be read or
+  built, and none was broken); the race R11 closes (it cannot be provoked on
+  kind; the tests hold it in memory); a renewal that splits OpenSSL's two
+  opens (R11b's retry); the health check going red before the served
+  certificate's end with the module (S073's one-hour watch ran with plain
+  uvicorn); a rolling upgrade from plain uvicorn under load (the deploy
+  rolled five Deployments of one replica each with no traffic but the
+  probes'); a handshake to agent-runtime itself (the probe ran from its pod to
+  the other four).
+
+**Result / verification (second half):**
+
+- **What "tested" and "seen" mean here.** The module, the hand-over and the
+  chart are implemented and tested without a database for the files the
+  contracts named, and K2 saw the five services start through the module on
+  kind, serve the certificate cert-manager issued, answer `/healthz` and
+  survive a renewal and a restart. The refusal path and the race were not
+  seen on a cluster.
+- **Each implementer's own run** (from its report, last lines):
+
+  | Contract | Command | Last line |
+  |---|---|---|
+  | R11 | `GITHUB_ACTIONS=true uv run pytest tests/meridian/common/ tests/meridian/test_helm_identity.py tests/meridian/test_kind_services.py tests/meridian/toolserver/test_http.py tests/meridian/test_import_contracts.py -n 4 -q -rs` | `1123 passed, 17 skipped in 13.75s` |
+  | R11 | `make lint` | `Contracts: 6 kept, 0 broken.` then ruff: `All checks passed!` and `816 files already formatted` |
+  | R11 | `make test` | `Ran 372 tests in 3.909s`, `OK`, then `codex agents: 11 twins current` |
+  | R11 | `make docs` | `docs consistency: 14 checks passed` |
+  | R11 | the other chart tests (`test_helm_chart.py`, `test_helm_network_policy.py`, `test_helm_restart_spread.py`, `test_helm_certificate_lifetime.py`, `test_helm_telemetry.py`, `test_service_identity.py`, `test_certificate_smoke.py`, `test_kind_deploy.py`), four workers | `290 passed, 46 skipped` |
+  | R11b | the same pytest paths plus `tests/meridian/test_client_tls.py` | `1143 passed, 27 skipped in 13.94s` |
+  | R11b | `shellcheck infra/kind/smoke.sh infra/kind/smoke.d/*.sh` | no output, no failure |
+  | R11b | `make lint` | `Contracts: 6 kept, 0 broken.`, `All checks passed!`, `816 files already formatted` (one E501 in a docstring, fixed and run again) |
+  | R11b | `make test` | `Ran 372 tests in 4.227s`, `OK` |
+  | R11b | `make docs` | `docs consistency: 14 checks passed` |
+
+  The skips are all "set MERIDIAN_TEST_DATABASE_URL" (R11: 17; R11b: 27, the
+  new ones being 12 in `test_client_tls.py`); neither contract ran a database,
+  a whole suite or anything on the cluster. Exit statuses were read from the
+  harness's own reporting, which prints one for a bare command that fails;
+  two lines of R11's run that joined `; echo rc=$?` were refused and run bare.
+  Smoke 46 PASS twice is K2's.
+- **The whole suite on the final tree:** on b2f0062 (this half with `main`
+  5f2db56 merged in), at six workers: 20,058 passed, 8 skipped (3 min 48 s);
+  `make test` (385 tests), `make docs`, `make lint` and `make secret-scan`
+  ended 0.
+- **Not seen, and why:** the withheld completion's four headers (S071's paid
+  measurements), a shed tool call's row, a takeover past the lease and
+  `not-started` (K1: no request makes the condition), and, from K2, the
+  module's refusal line and exit 3, the race itself, a renewal that splits
+  OpenSSL's two opens, the health check going red early with the module, a
+  rolling upgrade under load and a handshake to agent-runtime.
+
+**Not done, by decision or left open (second half):**
+
+- **R12**, the ingestion's own tenant (T-60): the owner's decision at S020,
+  as the first half said.
+- **The row for what a kind run would show**, narrowed to what K1 and K2 did
+  not see (Part B).
+- **Smoke's line for the sweep's findings** (the first half's list put it in
+  the second half): no contract of this half touched it, and it stays in the
+  backlog row that holds it.
+- **The client's TLS context and the Claims API**, below.
+
+**Follow-ups (second half):**
+
+- New backlog rows, each with a home: `ClientTls` is a third read of the
+  certificate file, so a client can present a different certificate from the
+  one its own server serves (S069); the Claims API serves no TLS and reads the
+  file when its app factory runs, so nothing is handed over there (S069); a
+  values override that sets `tls: true` on a `uvicorn` command brings the
+  two-read start back and the chart does not refuse it (S069); the premise of
+  the start module for a Secret set back during the load and for a mount that
+  is not a kubelet Secret volume (S020, where AKS's Secret driver is chosen);
+  the `reset` against `refused` evidence, measured against plain uvicorn and
+  not the module (S073, which owns what smoke cannot see); and the small ends
+  the reviews left (the refusal line for a bad command line names no flag,
+  `UVICORN_*` variables are no longer read, and four more; S074, which takes
+  small ends). The homes are a choice the owner may overturn.
+- Rows judged: the health check's row (closed for the five services that
+  serve TLS), the row for what a kind run would show (narrowed), the 422 for a
+  resume that carries a value, the refusal flood's count, the access log's
+  path with an address encoded twice and the restart share's row (each with
+  what K1 or the module added); the rest of the S069 rows were read and left.
+- For the session: the plan's first-half section says the window is the
+  import and that six commands change; the map found five and a different
+  window, and this part is where that is corrected. The R11 contract forbade
+  `sed -i` and R11 used it once.
+- For the owner: each decision above, and in particular that the module
+  refuses a start with no client certificate asked for (the five serve mutual
+  TLS only), that `UVICORN_*` variables are not read, and that the guard
+  against a values override was a comment and a test, not a `fail` in the
+  template.
+
 ### S036 — AWS Terraform
 **Status:** doing · **Started:** 2026-10-06 · **Finished:** —
 **Goal:** an AWS Terraform module for what S025 maps (a network, a managed
@@ -13210,11 +13709,14 @@ first's last question to the owner ("The second half", below): the six
 functions over 50 lines and S076's leftovers are done, closed or accepted row
 by row. A third part, after S073's first half reached `main`, split
 `infra/kind/smoke.sh` into parts under `infra/kind/smoke.d/` (its record
-follows the second half's, "The third part"). What is NOT done, and keeps the
-step at `doing`: the last cut of that split (checks 8 and 10, which S072's
-cluster batch is still editing), the loaders' helper and the split of
-`test_redaction_hungarian.py` (both wait for S070), and the rows the second
-half's last table keeps open.
+follows the second half's, "The third part"). A short fourth part, "The
+leftovers", did the two things that waited for S070 (the loaders' helper and
+the split of `test_redaction_hungarian.py`) and, once S072's cluster batch was
+on `main`, the last cut of the smoke script's split (checks 8 and 10). A fifth
+part, "The three gates", records the owner's answer to the three questions
+(coverage in CI, a size check, a pytest-level timeout): all three are built.
+What is NOT done, and keeps the step at `doing`: the rows the second half's last table
+keeps open, and the rows with home S074 that the backlog still lists as open.
 
 **Decisions** (the main session's unless marked; the owner may overturn any;
 the design was written from a read-only map of `main` at 0064171 before any
@@ -14431,6 +14933,572 @@ S070.
 | `infra/kind/smoke.sh` is near 2,900 lines; a new check would be better as a file of its own | Closed for the mechanism; the size closed in part | A new check is a new file under `smoke.d/` and one source pair (`infra/kind/README.md`); `test_smoke_parts.py` holds the layout; Tempo's half was S072's |
 | Sentences in `infra/` that a render showed inexact (S072's row, the comment in `smoke.sh` near line 205) | Corrected in the row | The comment is in `smoke.d/05-cost-panel.sh` now; the row says so (a one-phrase fix of a place the split made stale) |
 
+**The leftovers** (2026-10-07; tests, one comment and, for the last cut, shell
+moves; no file under `src/`, no database in T1; T1 to T3 not run on a cluster,
+the last cut seen on kind once). S070's first half had merged (828c380), so the
+files that held the two things the earlier parts left for it were free: two
+contracts, each with an implementer of its own and no file in common, landed on
+this branch as e7128ec (T1) and d4a0c63 (T2); a third, T3, wrote this record
+and corrected one comment; the last cut (3efea92) and its record (T4) follow
+the T3 paragraph.
+
+**T1: `test_redaction_hungarian.py` (858 lines) is three files and a support
+module** (e7128ec). A move, proved by `scripts/split_proof.py`; no test's body,
+name, parameter or comment changed, and no test was written first because
+nothing new was built: the proof and the equal count are the evidence.
+
+- **The line it was cut along.** The production module each group of tests
+  exercises. The phone group (`redaction_phone.py`: the three tables of
+  codes and the phone tests) is one file; the tax number, the domestic account
+  number with its IBAN and card boundary tests, the personal identification
+  number with its weights helpers and the identifiers after their word
+  (`redaction_hungarian_ids.py` and the account part of `redaction_payment.py`)
+  is the second, which keeps the old name; what is about the whole redactor
+  (the new placeholders, every kind in one text, the second pass, a value
+  inside a longer token, JSON escapes, other spaces, linear time) is the
+  third. The account tests are about 80 lines alone, under the floor the
+  contract set (about 150), so they stay with the identifiers: a domestic
+  account number is a Hungarian identifier.
+- **A support module, because two files read the same constants.** `NBSP`,
+  `THIN_SPACE`, `PHONES`, `TAX_NUMBERS`, `ACCOUNTS` and `NATIONAL_IDS` are read
+  by two of the three files each (the lists by their own group's tests and by
+  `OWN_VALUES`; the two spaces by the lists and by the other-spaces test), and
+  one test module does not import from another. They moved to
+  `tests/meridian/hungariansupport.py`, unchanged; `OWN_VALUES` is read by one
+  file and stays in it.
+- **The old name stays** on the largest group (the identifiers), so no tracked
+  file was deleted. A comment in `test_redaction_findings.py` that names the
+  old file's left-alone list is still true; one in
+  `test_redaction_international_cut.py` named the file that held the
+  linear-time test and is corrected by T3 (below).
+- **The proof's whole output** (exit 0):
+
+```
+tests/meridian/guardrails/test_redaction_hungarian.py: 65 units, 65 found once
+  tests/meridian/guardrails/test_redaction_hungarian.py: 26 units, docstring 7 lines
+  tests/meridian/guardrails/test_redaction_hungarian_phone.py: 14 units, docstring 4 lines
+  tests/meridian/guardrails/test_redaction_hungarian_across_kinds.py: 19 units, docstring 6 lines
+  tests/meridian/hungariansupport.py (support): 6 units from the old file
+  new units (the old file had none like them): 0
+PROOF HOLDS: every unit moved once, unchanged
+```
+
+- **Sizes** (`wc -l`): `test_redaction_hungarian.py` 368,
+  `test_redaction_hungarian_phone.py` 231,
+  `test_redaction_hungarian_across_kinds.py` 232, `hungariansupport.py` 65.
+- **Gates, as run by T1.** The collected count of `tests/meridian/guardrails/`
+  before and after, `uv run pytest tests/meridian/guardrails/ --collect-only
+  -q | tail -1`: `1716 tests collected in 0.23s` both times. `uv run pytest
+  tests/meridian/guardrails/ -n 4 -q -p no:cacheprovider`, exit 0:
+  `1716 passed in 15.41s`. `make lint`, exit 0: `All checks passed!`, `808
+  files already formatted`, `Contracts: 6 kept, 0 broken.` No formatter ran.
+
+**T2: five loaders of an injection case's claim are one helper** (d4a0c63).
+Five tests each loaded one of the two name-masked cases (CLM-1053, CLM-1054)
+from `data/synthetic/injection/cases.json` in a function of their own.
+
+- **What the five did.** All five read the same file and selected by the same
+  key, `case["case"]`; four read it again on every call and one
+  (`test_posted_text_screen.py`) once at import into a module `CASES`. They
+  differed only after the lookup: two returned the plain claim dict
+  (`test_run_input_stack.py`, `test_claims_app.py`), two a `ClaimSubmission`
+  (`test_posted_text_screen.py`, `test_triage_run_input.py`) and one the run
+  input (`posted_case` in `test_claims_graph_posted_text.py`). None skipped,
+  and a missing case raised a `ValueError` about unpacking that named neither
+  the case nor the file.
+- **The helper.** `servicesupport.injection_case_claim(case_id)` returns the
+  case's claim dict, read afresh on every call, so a caller may change what it
+  gets. A name that matches no case, or more than one, fails with an
+  `AssertionError` that gives the count, the case ID and the file's path
+  relative to the repository root; it never skips. The name says "injection
+  case" and not "name masked" because it checks no masking and serves any case.
+  `assert` follows the neighbouring helpers, so `servicesupport.py` imports no
+  `pytest`. The constant `INJECTION_CASES_JSON` sits beside it.
+- **The five callers.** `test_run_input_stack.py` and `test_claims_app.py`
+  lost their loaders and call the helper; the other three keep a one-line
+  wrapper that builds what they need (`name_masked_submission`,
+  `name_masked_case`, `posted_case`). The module-level `CASES` is gone, so a
+  missing file now fails the test that asked for it and not the collection. No
+  test function and no parametrize line changed in the five files.
+- **A missing case fails by name.** The new
+  `tests/meridian/test_servicesupport.py` (4 tests, 7 cases, no database) pins
+  the helper: a known case loads as the claim the suite posts, each call
+  returns a claim of its own, an unknown case fails with a message that names
+  it and the file, and a name that is not a case fails and is not skipped. T2
+  saw it fail first, with an `ImportError` for the missing helper.
+- **Gates, as run by T2.** The files without a database, `uv run pytest
+  tests/meridian/test_servicesupport.py` and the three claims-workload files,
+  `-q -n 2 -p no:cacheprovider`: `130 passed in 3.78s` with exit 0 (a first
+  run under `GITHUB_ACTIONS=true` printed `130 passed in 5.12s`, its exit
+  status not read: the harness refused the line that would have read it). The
+  two files with a database, `make pytest-db` on T2's own containers, two
+  workers: `155 passed in 8.85s`; the exit status was not read for the same
+  reason and no `make: *** Error` line was printed. `make lint`, exit 0:
+  `806 files already formatted`, `Contracts: 6 kept, 0 broken.`
+
+**T3: the comment and this record.** The comment above the linear-time test in
+`test_redaction_international_cut.py` now names
+`test_redaction_hungarian_across_kinds`, the file the bound lives in; nothing
+else in that file changed. The backlog rows: the step's row and S067's "left
+by reviews" row say what is closed; two rows are new (T2's two "noticed").
+
+**The last cut: checks 8 and 10 are parts** (3efea92; contract SC4, record T4).
+S072's cluster batch had reached `main` (PR 120, which edited both checks), and
+`main` (3b1f42a) was merged into this branch (764159b), so the cut took its
+ranges from the entry as it stood there, 1,194 lines. Checks 8 and 10 are
+`infra/kind/smoke.d/08-network-policy.sh` (606 lines) and
+`10-certificate-policy.sh` (507); the entry `infra/kind/smoke.sh` is 88 lines
+(the preconditions, the source pairs, the trap and the run). Twelve files stand
+under `smoke.d/`, the eleven checks and `shared.sh`, and every file of the
+script is under 800 lines, the largest `04-telemetry.sh` with 647.
+
+- **What moved.** Each part is its first line, the check's paragraph from the
+  header, a blank line, its constants with their comments (the group comments
+  that stayed with their checks in the second cut move now, and with them
+  `NETWORK_OUTSIDER_NAMESPACE` and `REFUSED_NAMESPACE`), its globals
+  (`network_answer`; the `refused_*` ones that are not in `shared.sh`), its
+  banner and its functions. `network_outsider_delete`, `network_delete_pod`
+  and `refused_delete_request` are in `shared.sh` and stayed. Constants read
+  when another is defined keep their order (`NETWORK_PROBE_TIMEOUT` before
+  `NETWORK_PROBE`; `DATABASE_CERTIFICATE_RENEWAL_DAYS` before
+  `DATABASE_CERTIFICATE_MARGIN_SECONDS`). The source pairs are in file order,
+  08 between 07 and 09 and 10 between 09 and 11. Ranges, old line numbers on
+  764159b:
+
+| Part | Old ranges |
+|---|---|
+| `08-network-policy.sh` | paragraph 22-187, blank 437, constants 319-371, global `network_answer` 426, banner region 438-819 |
+| `10-certificate-policy.sh` | paragraph 188-292, blank 820, constants 372-425, globals 427-432, blank 433, banner region 821-1159 |
+
+- **State 1, the move, proved before anything else changed.**
+  `scripts/shell_split_proof.py` with the manifest `cut-4` (outside the
+  repository, in the session's handoff folder, like the first three) against
+  `--ref 764159b`. The implementer ran it, and the main session ran it again
+  from the saved first state. It ends `PROOF HOLDS` with 1,194 old lines each
+  used exactly once and six added lines (two first lines and two source
+  pairs). The implementer's run, whole:
+
+```
+python3 scripts/shell_split_proof.py --ref 764159b --manifest <folder>/cut-4.manifest --scope infra/kind/smoke.sh --scope infra/kind/smoke.d
+shell_split_proof: every line used once, every file byte for byte (NOTE: read from the working tree, which differs from HEAD in 3 files under the scopes)
+  infra/kind/smoke.sh: 6 ranges, 85 lines moved, 4 added
+  infra/kind/smoke.d/08-network-policy.sh: 22 ranges, 603 lines moved, 1 added
+  infra/kind/smoke.d/10-certificate-policy.sh: 31 ranges, 506 lines moved, 1 added
+  old infra/kind/smoke.sh: 1194 lines, each used exactly once
+added lines (6):
+  infra/kind/smoke.sh:43: # shellcheck source=smoke.d/08-network-policy.sh
+  infra/kind/smoke.sh:44: . "${KIND_DIR}/smoke.d/08-network-policy.sh"
+  infra/kind/smoke.sh:47: # shellcheck source=smoke.d/10-certificate-policy.sh
+  infra/kind/smoke.sh:48: . "${KIND_DIR}/smoke.d/10-certificate-policy.sh"
+  infra/kind/smoke.d/08-network-policy.sh:1: # shellcheck shell=bash
+  infra/kind/smoke.d/10-certificate-policy.sh:1: # shellcheck shell=bash
+notes (2):
+  NOTE infra/kind/smoke.d/08-network-policy.sh: infra/kind/smoke.sh 319-326 (manifest line 20) does not rise after 437-437 (line 19)
+  NOTE infra/kind/smoke.d/10-certificate-policy.sh: infra/kind/smoke.sh 372-378 (manifest line 44) does not rise after 820-820 (line 43)
+PROOF HOLDS
+```
+
+  Each note has the cause the third part's notes had: a part's blank after its
+  paragraph is the blank that stood before its banner, far below the
+  constants, so the constants rise only after it. In state 1 the index line
+  "Checks 08 and 10 are still in this file, below, until the last cut." was
+  still there and false: the price of a proof that proves moves only.
+- **State 2, comment, blank and directive lines only.** The second state
+  differs from the first in these lines and no others: the index line above is
+  gone (it had become false); one blank line before banner 8; one shellcheck
+  directive in part 8 above the test of `telemetry_pushed` (the only finding
+  of the linter there; `SC2154`, set by `check_telemetry` in
+  `04-telemetry.sh`); and the reasons of two older directives corrected, in
+  `shared.sh` (`COLLECTOR_ENDPOINT`) and in `04-telemetry.sh` (above
+  `telemetry_pushed=yes`), which named the entry as the holder of check 8. The
+  implementer's comparison with comment, blank and directive lines removed, of
+  the three files it touched:
+
+```
+OK   infra/kind/smoke.sh: code lines 46 -> 46
+   removed: -# Checks 08 and 10 are still in this file, below, until the last cut.
+OK   infra/kind/smoke.d/08-network-policy.sh: code lines 299 -> 299
+   added:   +
+   added:   +  # shellcheck disable=SC2154  # telemetry_pushed is set by check_telemetry (04-telemetry.sh)
+OK   infra/kind/smoke.d/10-certificate-policy.sh: code lines 258 -> 258
+COMPARISON HOLDS
+```
+
+  The definitions the entry sources, compared before and after (`declare -f`
+  and `declare -p` under `set -euo pipefail` with `env -i`, the entry up to the
+  trap with the three preconditions removed): the ref, state 1 and state 2 each
+  printed 2,808 lines, 145,814 bytes, and exit status 0; state 2 against state
+  1 and against the ref: no difference. `shellcheck infra/kind/smoke.sh
+  infra/kind/smoke.d/*.sh` ends 0 with no `-e` flag (the implementer's run, and
+  the T4 session's again on this tree), and each of `shared.sh`, `08` and `10`
+  alone ends 0. `bash -n` on all thirteen files printed nothing (no exit status
+  was captured).
+- **Sizes** (`wc -l infra/kind/smoke.sh infra/kind/smoke.d/*.sh`, run for this
+  record on this tree):
+
+```
+    88 infra/kind/smoke.sh
+    37 infra/kind/smoke.d/01-edge.sh
+   237 infra/kind/smoke.d/02-database.sh
+    36 infra/kind/smoke.d/03-tools.sh
+   647 infra/kind/smoke.d/04-telemetry.sh
+   303 infra/kind/smoke.d/05-cost-panel.sh
+    98 infra/kind/smoke.d/06-adjuster-pages.sh
+   488 infra/kind/smoke.d/07-sweep.sh
+   606 infra/kind/smoke.d/08-network-policy.sh
+   350 infra/kind/smoke.d/09-service-identity.sh
+   507 infra/kind/smoke.d/10-certificate-policy.sh
+   340 infra/kind/smoke.d/11-alert-rules.sh
+   199 infra/kind/smoke.d/shared.sh
+  3936 total
+```
+
+- **One test changed, where it reads the text.**
+  `test_smoke_says_where_the_operators_log_is_now` in
+  `tests/meridian/test_kind_cnpg_operator_confined.py` was added by PR 120 and
+  read `infra/kind/smoke.sh` directly; once check 10's text stood in a part it
+  failed (the contract gate's first run: 1 failed, 2,079 passed). It reads
+  `SMOKE_SH`, the rebuilt text from `kindsupport.py`, now: one added import
+  and one changed line. A search found no other test that reads the entry's
+  file for text that moved. The layout rules of `test_smoke_parts.py` and the
+  reader's counting test passed as they were.
+- **Gates, as run by the implementer.** The contract gate, `uv run pytest
+  tests/meridian/test_smoke_*.py tests/meridian/test_kind_*.py
+  tests/meridian/test_certificate_*.py tests/meridian/test_helm_identity.py
+  tests/meridian/test_alert_rules_telemetry.py -n 4 -q`, exit 0: `2080 passed
+  in 42.19s`. `make lint`, exit 0: `Contracts: 6 kept, 0 broken.` `make test`,
+  exit 0: `Ran 372 tests in 4.156s`, `OK`. `make docs`, exit 0: `docs
+  consistency: 14 checks passed`.
+- **Seen on kind (run R12, 2026-10-07, 12:27 to 12:28 UTC; the main session's,
+  seen).** On the cluster made at 11:08 UTC from S072's batch, with the cluster
+  checkout moved to 3efea92 for the run and put back on `main` after it:
+  `make smoke` ended 0 with 46 PASS, 0 FAIL, 0 SKIP. Its 46 PASS lines, with
+  numbers and the trace's identifier replaced, are equal to run R10's 46
+  (smoke from `main`'s tree on the same cluster): `diff` empty. Nothing else
+  was changed on the cluster.
+- **Not seen:** smoke from this tree on a cold cluster; a failing check's
+  message from a part (every check passed); the trap's cleanup after an
+  interrupted run from this tree. T1 to T3 touch no cluster, no model and no
+  database: their only runs are the tests named above.
+- **No review was sent for this cut:** it is a move proved line by line, the
+  same form the infrastructure reviewer read for the first three cuts, and the
+  second state holds comment, blank and directive lines alone.
+- **The whole suite on the final tree** (the main session fills the next line
+  when it has run):
+
+  On 3efea92 (the last cut, with `main` 3b1f42a merged in), the whole suite
+  at six workers: 18,304 passed, 8 skipped (3 min 30 s); `make test` (372
+  tests), `make docs`, `make lint` and `make secret-scan` ended 0. After that
+  only documents changed on the branch (T4), and `main` aa65a1b was merged in
+  (S079's first half, S073's records). The whole suite was NOT run again
+  locally on the merged tree: the machine's one database slot was held by
+  another step's implementer. Run on the merged tree instead: `make test`
+  (385 tests), `make docs`, `make lint`, `make secret-scan`, `shellcheck` on
+  the entry and every part (exit 0), and the tests of the smoke script, the
+  kind scripts, the certificates, the chart's identity and the guardrails
+  without a database: 3,800 passed. The pull request's `python` check runs
+  the whole suite on the merged tree.
+
+- **What is left of S074:** the smoke script's split is done (the entry and
+  every part under 800 lines). The rows the second half's last table keeps
+  open, the backlog rows with home S074 that are still open (the manifests
+  outside the repository, a runner for `shellcheck`, `test_smoke_trap.py`'s
+  60 s, the two rows of the leftovers and the rest of the S074 rows of the
+  table), the three questions to the owner (coverage in CI, a size check, a
+  timeout at the pytest level) and the measurement run of the load-sensitive
+  tests (25 loops beside a whole suite, not run). The sentences above that
+  name the last cut, or the loaders' helper and the split of
+  `test_redaction_hungarian.py`, as still waiting are the third part's record
+  and are out of date: all three are done here.
+
+**The three gates (2026-10-07): the owner's answer, and what was built.**
+Branch `s074-ci-gates`, cut from `main` at 5f2db56 (plan v0.81). Two code
+contracts built it, C1 (8c1f99e) and C1b (07a348a), and a documents contract
+(D5) wrote this part. The figures below are the implementers' reports and the
+commits' messages; where a figure is the development machine's and not the
+hosted runner's, it says so. No prompt, tool contract, screen or golden file
+changed, so no fingerprint moved. No migration, no model call, nothing run on
+a cluster.
+
+- **The owner's three questions are answered.** On 2026-10-07 the owner was
+  asked which gates should be added to CI and answered "Coverage threshold,
+  File size check, Per-test timeout": all three. Questions a, b and c of the
+  first half's "For the owner" list are answered yes, each. For a, the
+  session's recommendation there (report coverage, do not gate yet) is not
+  the owner's choice, and the sentences "Until answered: not built" are
+  history. The step's "done when" clauses on coverage and on the slowest test
+  are corrected in the step's row in Part B.
+- **The three gates, where they live and their numbers:**
+
+| Gate | Where | Number | Measured |
+|---|---|---|---|
+| File size check | `scripts/check_file_sizes.py`, run by `make lint` (so the CI `python` job runs it); the list `scripts/file-size-exceptions.txt`; `tests/test_check_file_sizes.py`, 20 tests run by `make test` | 800 lines; a ratchet list of 51 files (an entry can only be lowered or removed) | `make lint` ended 0 with `check_file_sizes: 810 source files, none over 800 lines without an exception (51 listed)` |
+| Per-test timeout | `pytest-timeout` 2.4.0 (development group, pinned with `==`), `timeout` and `timeout_method` in `pyproject.toml`; `tests/meridian/test_pytest_timeout_gate.py`, 8 tests | 600 s, method `signal`; never under 120 s | the slowest test took 45.0 s without coverage and 52.4 s with the trace function (53.5 s in a third run), at six workers on the development machine |
+| Coverage floor | `pytest-cov` 7.1.0, `fail_under = 98` in `pyproject.toml` (the one place), `COVERAGE=1` in the `Makefile` (`make pytest` and `make pytest-db`), set by the Tests step of `python.yml` | 98 % of lines of `src/meridian` | 99.11 % of 13,783 statements, 122 missed, 166 files |
+
+- **The file size check.** It reads the files git tracks: Python under
+  `src/`, `tests/`, `scripts/`, `data/synthetic/generator/` and `spikes/`,
+  shell under `infra/` and `scripts/`; nothing vendored (`.claude/`,
+  `.agents/`, `.codex/`), generated or data. Lines are counted as `wc -l`
+  counts them. A file over 800 fails unless the exceptions file names it. The
+  list is a ratchet: an entry can only be lowered or removed. A listed file
+  over its count fails (it grew), a listed file under its count and still
+  over 800 fails until the entry is lowered to the count it has now (the
+  review's fix: the first build let a file shrink and grow back unnoticed),
+  and a listed file that is 800 or under, gone or not source fails with the
+  line to remove. Its
+  failure line names the file, its count, the ceiling or the recorded count,
+  and what to do. Its tests build a real temporary git repository (over, at
+  and under the ceiling, a missing final newline, shell files, vendored
+  paths, ratchet growth, shrinkage and stale entries, malformed and duplicate
+  lines) and read the real repository. Two mutations were seen red: `<=
+  CEILING` changed to `<`, and the growth branch disabled. The list holds
+  51 files, each at its count of 2026-10-07 and with a reason of five words or
+  more: three reasons were written by the implementer (the base's copy of
+  `check_docs_consistency.py`, 828 lines; the two AWS script test files,
+  which the row on K2b's cut homes), two use the contract's phrase and have a
+  row (`test_migration_rules.py` and `test_kind_upkeep_script.py`, the row on
+  S068's F1 and F2), and 46 use the contract's phrase "over the ceiling
+  before the check existed; a row of S074 homes its split" with no row to
+  home them: the new row below is that row, and the phrase was not true until
+  it was written. The check reads `git ls-files`, so a file not yet added to
+  git is not counted until it is.
+- **The per-test timeout.** The number comes from one whole-suite run with
+  `--durations=40` (20,015 tests, six workers, coverage on: run 1 below). The
+  slowest test with the trace function took 52.4 s; ten times that is 524 s,
+  rounded up to 600, above the floor of 120 s; the slowest was under 60 s, so
+  the contract's stop did not apply. The ten slowest tests, in seconds
+  (`call` phase), by run 1 with coverage and run 2 without:
+
+  | Test | Run 1 | Run 2 |
+  |---|---|---|
+  | `test_evaluation_stack::test_a_fake_model_records_and_replays_the_whole_golden_set` | 52.40 | 45.04 |
+  | `test_injection_stack::test_the_injection_cases_run_through_the_stack_with_an_obedient_model` | 33.21 | 33.95 |
+  | `test_claims_mcp::test_eight_threads_sending_one_key...[add_claim_note]` | 22.43 | 9.69 |
+  | `test_triage_stack::test_the_golden_set_through_the_stack_with_the_replay_gateway` | 18.77 | 16.28 |
+  | `test_claims_mcp::...[request_approval]` | 18.22 | 8.30 |
+  | `test_evaluation_stack::test_the_recorded_model_answers_the_golden_set_through_the_gateway` | 17.72 | 13.17 |
+  | `test_triage_stack::test_a_scripted_model_gives_the_oracle_s_proposals` | 17.32 | 15.09 |
+  | `test_triage_stack::test_a_model_that_finds_no_exclusion_costs_four_wrong_approvals` | 15.56 | 22.20 |
+  | `test_workload_first_run::test_a_new_workload_validates_lints_runs_and_tests_in_an_installed_copy` | 13.22 | 13.68 |
+  | `test_claimant_name_capital_rule::test_no_span_replaced_before_s067...` | 12.41 | 9.45 |
+
+  This answers what the first half left unmeasured: seven of these ten are
+  over ten seconds even without coverage, among them the three triage-stack
+  tests (16.3, 15.1 and 22.2 s) and the scaffold's first-run test (13.7 s).
+  So "the slowest test of the job is under ten seconds" is not true, and the
+  step does not make it true; the step's row says so.
+  The method is `signal`: pytest-xdist runs a test on its worker's main
+  thread, so SIGALRM raises an ordinary failure and the worker and its later
+  tests live, where `thread` would end the worker and xdist would report a
+  crash. Nothing in the repository uses SIGALRM (`test_smoke_trap.py` resets
+  other signals only). The limit covers setup through teardown, so a hung
+  fixture is stopped too; a child process a test started is stopped only by
+  that test's own cleanup. The paid opt-in tests carry `pytest.mark.timeout(0)`,
+  no limit: the two `@OPT_IN` record tests of `test_evaluation_stack.py`, and
+  the module `test_live_azure.py`; `MERIDIAN_EVAL_INJECTION_RECORD` appears
+  nowhere in `src`, `tests` or the `Makefile`, so no test carries it. The
+  gate's own tests run a pytest in a subprocess: a test that sleeps past 1 s
+  fails with the plugin's message `Timeout (>1.0s)` and the next test still
+  runs, a hung fixture fails the same way, a test under its limit passes, and
+  the configured 600 and `signal` are compared with constants the tests name.
+- **The coverage floor.** Measured over the whole suite as CI runs it (the
+  database present): 99.11 % of 13,783 statements, 122 missed, in 166 files,
+  the same in runs 1 and 3. The floor is that percentage rounded down, 99,
+  less one point for the variation between runs: 98. It is written once,
+  `fail_under` in `pyproject.toml`; a test compares it with a constant and
+  checks that the `Makefile` and the workflow do not repeat it. `COVERAGE=1`
+  turns it on; anything else leaves it off, so a person who runs one file is
+  not refused: a one-file run with `COVERAGE=1` ended `Required test coverage
+  of 98.0% not reached. Total coverage: 6.08%` (pytest ended with 1, `make`
+  with 2), and the same file
+  without it exited 0. The paid opt-in tests are counted as uncovered and
+  nothing is omitted for them: no file is reachable only through them, and
+  the lines still missing are ordinary error paths. The ten least covered
+  files are a row below. `.coverage` and `.coverage.*` are ignored by git,
+  with a test that runs `git check-ignore` on both (seen to fail with the
+  second line removed).
+- **How coverage's cost was found and cut.** With the trace function, the
+  default core, coverage cost 37.0 % and 40.1 % of the suite's time in two
+  runs (346.06 s and 353.89 s against 252.52 s without), on either side of
+  the 40 % at which the contract said to stop. C1 stopped there and left the
+  workflow alone. C1b then measured with coverage.py's `sysmon` core, which
+  uses the interpreter's own monitoring (PEP 669, Python 3.12 and later) for
+  line coverage: 257.63 s against 252.52 s, +2.0 %, the same 13,783
+  statements and 122 missed lines, file for file (compared from the two JSON
+  reports). The core is `core = "sysmon"` under `[tool.coverage.run]` in
+  `pyproject.toml`, not in the `Makefile`: every xdist worker reads that file
+  as the main process does, and a local `COVERAGE=1` run uses it too. The
+  proof that it was in use: a whole-suite run with `COVERAGE_DEBUG=sys` wrote
+  each process's `coverage debug sys` block to a file, which holds 13 blocks
+  with `core: SysMonitor` (the main process and the workers), none with
+  `CTracer` or `PyTracer`, and, before start, `core: sysmon` from the
+  configuration (its 8 `core: -none-` blocks are snapshots taken before
+  start). What it does not do: coverage.py 7.16.2 falls back to the trace
+  function for branch coverage on 3.13, for dynamic contexts and for
+  greenlet, eventlet and gevent; none is set, and a test checks the core and
+  that branch coverage is off.
+- **The job's time limit, 15 to 30 minutes, and its arithmetic.** The rule
+  the workflow's comment and its test already held is twice the slowest
+  measured job. The slowest of five jobs of 2026-10-07, before coverage (12
+  min 13 s, 13 min 36 s, 14 min 29 s, 10 min 1 s, 10 min 13 s), is 14 min
+  29 s, 869 s. With coverage's cost: 869 x 257.63 / 252.52 = 886.6 s, about
+  14 min 47 s. Twice that is 1,773 s, 29 min 34 s, rounded up to
+  `timeout-minutes: 30`. The test
+  `test_the_jobs_limit_is_twice_its_slowest_measured_run` computes this and
+  checks that the comment names 14 min 29 s, 14 min 47 s, 252.52 s and
+  257.63 s. The 2.0 % is not the hosted runner's.
+- **A hang, and the two limits.** The per-test limit of 600 s is longer than
+  the Tests step on CI (the five whole jobs measured the same day took 10 min
+  1 s to 14 min 29 s), and 69 per cent of the slowest
+  whole job measured (869 s). Against the job's old limit of 15 minutes (900
+  s) a test that hung more than 300 s into the job would have met the job's
+  limit before its own, and the job would have been cancelled with no failure
+  that names the test; the jobs of that day ended at up to 869 s without a
+  hang. Against 30 minutes (1,800 s) a test that hangs in the first 1,200 s is
+  stopped by its own limit and pytest names it, and the slowest job measured
+  with coverage, about 14 min 47 s, ends inside that. Even if the ten minutes
+  were added whole to that job, an upper bound and no prediction, the sum is
+  24 min 47 s, under 30. This is arithmetic. A hang stopped by the 600 s
+  limit has not been seen in a real run.
+- **The whole-suite runs, as run** (four in all, six workers,
+  `GITHUB_ACTIONS=true`, the database and Redis present, the room check
+  passed; other sessions held the load at 4 to 6 during C1's three; C1b's
+  load is not recorded):
+
+  | Run | What | Last line |
+  |---|---|---|
+  | C1 run 1 | trace function, `--durations=40` | `7 failed, 20015 passed, 8 skipped, 9 warnings in 346.06s (0:05:46)` |
+  | C1 run 2 | no coverage | `7 failed, 20015 passed, 8 skipped, 8 warnings in 252.52s (0:04:12)` |
+  | C1 run 3 | trace function, coverage and timeout on, final | `1 failed, 20025 passed, 8 skipped, 8 warnings in 353.89s (0:05:53)`, then `Required test coverage of 98.0% reached. Total coverage: 99.11%` |
+  | C1b | `sysmon` core | `20028 passed, 8 skipped, 8 warnings in 257.63s (0:04:17)`, then `Required test coverage of 98.0% reached. Total coverage: 99.11%` |
+
+  The seven failures of runs 1 and 2 were the same seven, the gate's own new
+  tests, written before the configuration existed. The one failure of run 3
+  was
+  `test_ci_config.py::test_a_run_without_the_switch_measures_no_coverage_and_cannot_fail_on_it`:
+  it inherited the implementer's harness variable `PYTEST_ARGS`, which held
+  `--cov-report`. The fix strips `COVERAGE`,
+  `PYTEST_ARGS`, `MAKEFLAGS` and `MFLAGS` from the test's environment; the
+  test files `test_ci_config.py` and `test_pytest_timeout_gate.py` were then
+  run together with the old harness variables set (39 passed in 7.12 s), and
+  no fourth suite was run in C1. C1b ran no second suite either: after its
+  one, it changed only the workflow, `test_ci_config.py` and comments in
+  `pyproject.toml`, and ran the tests that read them (`test_ci_config.py`,
+  `test_pytest_timeout_gate.py` and `tests/test_renovate_config.py`: 77
+  passed, 80 subtests passed in 7.20 s).
+- **The implementers' other gates.** `make lint` ended 0 with the size
+  check's line above; `make test` ended 0 (`Ran 404 tests in 4.890s` and
+  `OK` in C1, `Ran 404 tests in 5.238s` in C1b); `make docs` ended 0 (`docs
+  consistency: 14 checks passed`); the secret scan of `scripts` and `tests`
+  ended `no leaks found` (C1, scanning 18.39 MB).
+- **Not seen.**
+  - Coverage's cost on the hosted runner: the 2.0 % is this machine's, and
+    the job's limit of 30 minutes was set by arithmetic from it (a new row).
+  - A test stopped by the 600 s limit in a real run: only the gate's own
+    tests, with a limit of 1 s, have failed by it.
+  - The size check refusing a real pull request: its tests build their own
+    repositories and the real tree passes.
+  - The paid opt-in tests under their `timeout(0)`: none ran.
+  - The `sysmon` core on the hosted runner: the same lines as the trace
+    function were seen on this machine only.
+- **Decisions the contracts left open** (the implementers'; the main session
+  and the owner may reverse any):
+  - C1 removed `COVERAGE: "1"` from the workflow after the two runs straddled
+    40 %, and left the switch and its test for C1b; C1b then switched it on
+    at 2.0 %.
+  - The runs were ordered coverage, none, final, so that the first gave both
+    the durations and the coverage.
+  - The exceptions file allows `#` comment lines and blank lines.
+  - `check_file_sizes.py` uses the standard library only and runs with `uv run
+    python` from `make lint`; its tests are `unittest` files under `tests/`,
+    because `make test` runs `unittest` and `scripts/` and `tests/test_*.py`
+    are excluded from ruff.
+  - Lines are counted as `wc -l` counts them.
+  - `[tool.coverage.run] patch = ["subprocess"]` is not set.
+  - The opt-in markers sit on the tests and the module, not inside `OPT_IN`,
+    and are 0 (no limit) and not a finite number, because the paced runs
+    could not be measured.
+  - The core is set in `pyproject.toml` and not beside `PYTEST_COVERAGE_ARGS`
+    in the `Makefile`, so that it reaches every worker and a local run.
+  - C1b rewrapped one overlong line of C1's own comment in `pyproject.toml`;
+    the workflow comment's "from 4 min 50 s to this in three days" reuses
+    the old comment's figure.
+  - C1 edited `pyproject.toml` and the `Makefile` with `sed -i`, which the
+    advisory hooks did not see; C1b's contract forbade it.
+  - D5, this record, kept the first half's sentences that name the three
+    questions as waiting (the goal paragraph's list, "There is no pytest-level
+    timeout", the owner's list and "What is left of S074") as they are:
+    they are that half's record, and this part says what changed.
+- **Found outside the contract.** The ratchet's reason for 46 files was not
+  true until a row homed them (done). `ruff` flags S607 on
+  `scripts/check_file_sizes.py`; `scripts/` is excluded from ruff, so no gate
+  fails. `.gitignore` had no `.coverage` entry (C1b added it).
+- **Reviews.** What was reviewed: nothing by a reviewer is recorded in C1's
+  or C1b's reports; each implementer ran its own gates (above). The workflow
+  change and the new dependencies were not read by an infrastructure
+  reviewer in the records read for this part.
+- **The review.** An infrastructure review of the workflow and the
+  configuration change (2026-10-07): approve with fixes, 0 critical, 0 high,
+  1 medium and 9 low. Changed for it (the second contract, C2): the
+  exceptions list is a real ratchet now (a listed file under its count fails
+  until the entry is lowered; the test that pinned "a shrunk file passes" was
+  turned around on purpose, and all 51 entries already equalled their files'
+  counts, so none was lowered); `precision = 2` under `[tool.coverage.report]`
+  (without it coverage.py rounds the total to a whole number before it
+  compares, so a total of 97.5 passed a floor of 98); one clause in the help
+  lines of `make pytest` and `make pytest-db` about `COVERAGE=1` and a part of
+  the suite, and "exit 2" made exact (pytest ends with 1, `make` with 2);
+  `--no-cov-on-fail` in the coverage switches, so that a run with a failed
+  test prints one failure and not the floor's as well (seen in a scratch
+  directory: a failing test with a floor it would miss printed one failure
+  and ended 1, a passing run below the floor still failed on the floor, a
+  passing run above it ended 0); and two counts (the timeout gate's file has
+  8 tests, not 9; the Tests step's "eight minutes or so" gave way to the five
+  jobs measured the same day, 10 min 1 s to 14 min 29 s). Accepted as they
+  are: the job-limit test pins one number and two arithmetic bounds, and two
+  tests pin strings that need a hand edit when the suite grows or a third paid
+  test appears; the hand edit is the guard's point. What the reviewer checked
+  by running: the workers' coverage data combine to the same total at one and
+  at two workers; the 600 s limit interrupts a sleep, a blocked socket read, a
+  thread join and an asyncio poll; a crashed worker fails the run. What nobody
+  checked: whether the limit interrupts a blocked psycopg call, and the cost
+  on the hosted runner. Three rows record what was left (the core in use, the
+  size check's scope, code that runs only in a child process).
+- **At the merge of `main` (2026-10-07, after PRs 125 and 126).** Three
+  listed files had grown on `main` while this branch was out, in pull requests
+  that the check did not yet read: `tests/meridian/test_alert_rules.py` (855 to
+  900), `tests/meridian/test_helm_identity.py` (1,047 to 1,086) and
+  `tests/meridian/test_smoke_alert_rules.py` (825 to 826). Their entries were
+  set to today's counts here, once, because the list records the tree on the
+  day the check starts to run. The same holds once for each branch that was
+  cut before the check reached `main` (on this day: the uploads, S072's client
+  certificates and S020's module each grew a listed file): it sets that entry
+  to the file's count at its own merge of `main`, and says so in its pull
+  request. A branch cut after this merge only lowers a count. And
+  the job's limit was seen from the other side the same day: the python job of
+  pull request 126 passed every step and was cancelled at 15 minutes 12
+  seconds, on a hosted runner that was slow during an incident at GitHub; its
+  re-run passed. The 30 minutes of this part are that limit's answer.
+- **The whole suite on the final tree** (the main session fills the next line
+  when it has run): `20097 passed, 8 skipped, 8 warnings in 263.88s
+  (0:04:23)`, coverage 99.11 per cent of 13,869 statements (123 missed), on
+  the tree merged with `main` at 02be181; the documents-only commits after it
+  changed no code
+- **Plan version of this part:** v0.85
+- **What S074 still holds after this.** The step stays `doing`. Open: the
+  rows the second half's last table keeps; the backlog rows with home S074
+  that are still open (among them the six new rows of this part, each file's
+  split of the 46, the ten least covered files, and coverage's cost on the
+  hosted runner, read since from pull request 128, the first to run it (the
+  `python` job took 14 minutes 0 seconds, inside the 10 min 1 s to 14 min 29 s
+  measured without coverage the same day; the row is closed); and
+  the rows on the manifests outside the repository, a runner for `shellcheck`,
+  `test_smoke_trap.py`'s 60 s, and the leftovers' two); and the measurement
+  run of the load-sensitive tests, 25 loops beside a whole suite, not run.
+  The three owner questions no longer wait. The step could not close: those
+  rows are open, and the main session decides what to do with them.
+
 ### S068 — Database upkeep and retention
 **Status:** done · **Started:** 2026-10-06 · **Finished:** 2026-10-07
 **Goal:** rows of the platform's insert-only audit table and of the Model
@@ -15213,7 +16281,10 @@ still not seen.
 design cut it by kind of work (the owner may overturn any of its decisions):
 builds, by implementers against stand-ins, and exercises, the session's own
 runs on the cluster. This record is the **first half**: the builds K1 to K10
-and the runs R0 to R4e. The **second half stays open and is not done**:
+and the runs R0 to R4e. The **second half stays open and is not done** (this
+list is as the first half left it; the part "The second half so far", after
+the first half's follow-ups below, gives each item's verdict from the runs of
+2026-10-07):
 
 - the ingestion's 503 word (K6) on a real refusal of the gateway;
 - R5: the node paused and three deploys, which shows the outer bounds of K9
@@ -15624,7 +16695,8 @@ of the step's branch at 3270162, before this record):
   compare of a changed expression;
 - the history limit removing an old ReplicaSet, and `make images` with the
   new reading of references;
-- K6's word on a real 503, and the 503 at the ingest Job explained for certain;
+- K6's word on a real 503 (seen in the second half, run R11), and the 503 at
+  the ingest Job explained for certain;
 - the failure paths of S062's lines but the deleted rule object (B13), the
   rate store's 503 and alert (B18), the four telemetry alerts and a renewal of
   the collector's certificate (B23): none was run;
@@ -15654,7 +16726,7 @@ status is brought to say so):
 | A rotation of the rate store's password has no overlap | Stays: the owner's to run or to accept as not seen |
 | The rate store's liveness script compares the certificate's time | Stays, as accepted: a clock step is a step of the machine's clock, for everything on it |
 | A cold `make up` depends on the chart hosts | Stays: run R6 records the cold time; a retry or a cache is accepted for now |
-| Not seen on a cluster for the rate store | Stays: the 503 with the store down, the alert, two replicas, a frozen store, the refusal of an old Secret were not run |
+| Not seen on a cluster for the rate store | Stays: the 503 with the store down, the alert, two replicas, a frozen store, the refusal of an old Secret were not run (the 503 was run in the second half, R11: seen) |
 | `make smoke` compares the loaded alert rules by group and rule name | Closed, runs R3, R4 and R4b: `make deploy` applies the rules and smoke compares each expression and `for` |
 | `make deploy` checks the rate store's ACL rules and not that the password | Stays: not touched by this half |
 | Under an overloaded machine Tempo, the collector and the database's pod | Closed: the answer and the rule above |
@@ -15662,7 +16734,7 @@ status is brought to say so):
 | Not seen on a cluster after S064 | Stays: no run of this half provoked the four alerts or the renewal of the authority |
 | A migration that is not applied fails one statement of the sweep | Stays: not touched by this half |
 | Not seen on a cluster after S037 | Stays: no run drove a brief |
-| On 2026-10-06 `make deploy` failed twice | Stays, with a likely cause and not a proven one: the store's probes (above, fixed); the ingestion's word is built and not seen on a real refusal |
+| On 2026-10-06 `make deploy` failed twice | Stays, with a likely cause and not a proven one: the store's probes (above, fixed); the ingestion's word is built and was not seen on a real refusal in this half (seen in the second, run R11) |
 | Not seen on a cluster after S075 | Closed in part: `TAKE_CLUSTER=1` was seen (R2); a record left `changing` and `make up` on an existing cluster were not |
 
 **Follow-ups:**
@@ -15699,12 +16771,290 @@ status is brought to say so):
   the session's choice; (3) approver-policy's liveness probe was not built in
   this half: build it in the second, or say it is not wanted.
 
+**The second half so far (runs of 2026-10-07).** Written while the step is
+`doing`: the main session's own runs on the local kind cluster, from the
+cluster checkout, after the first half merged (PR 113, main 6553e07). Seen
+means what a run printed; everything else is not seen. The step stays open.
+
+**Work log of the second half** (UTC; the local kind cluster, one entry per
+run):
+
+| Run | When | What it ran | What it saw | What it did not see |
+|---|---|---|---|---|
+| R5a | 2026-10-07 08:57 to 09:04 | The cluster checkout moved to main 6553e07 (the first half as merged: K9 to K14), every pod Ready before and nothing restarted by hand; `make deploy`, then `make smoke` | `make deploy` rc 0 (08:59:01); the rate store's pod was replaced by the deploy (its template changed) and the deployed liveness probe holds `written > started + 2`, read from the Deployment (the two-second form of K12); `make smoke` 46 PASS, 0 FAIL, 0 SKIP (09:00:08); the store read every thirty seconds for three minutes after smoke: restarts 0 at every reading, the last at an age past four minutes. With K11 to K13 in: the chunk count's new rule on the path where the count is a number, the three-timeout Helm bound not reached, and smoke's two network waits answered | A bound firing; the count's refusals; the liveness fault itself (this host's boot second has no fraction, so the old rule would not have fired here either) |
+| R5b | 2026-10-07 09:06 to 09:08 | `docker pause` of the node's container for thirty seconds, four calls against it, unpaused by a trap; every pod Ready before | The history bound: after six deploys of different commits that day every Deployment of `meridian` keeps exactly three ReplicaSets (the current one and two old), as the chart says. A frozen node does not reach the wrapper's bounds: every call ended after 10 seconds with the tool's own error, a plain read through `kctl` ("Unable to connect to the server: net/http: TLS handshake timeout"), a Helm read through `helmc` (the same, from Helm) and `make smoke` ("cluster meridian is not reachable; run 'make up'", rc 2, no line printed). The port still accepts a connection (Docker's forward), the server cannot finish the handshake, and the client gives up at its own ten seconds, before the request timeout of 15 s and any outer bound; so the paused node is ended by the clients themselves, and the wrapper's bounds are for a server that completes the handshake and then never answers, which this run did not produce. `make cluster-holder` failed at once at `kind export kubeconfig` (Docker refuses an exec into a paused container), with Docker's sentence. The cluster came back by itself: every pod Ready 15 seconds after the unpause, no container restarted across the pause, `make smoke` after it 46 PASS, 0 FAIL, 0 SKIP. A small finding: smoke's sentence for a cluster that exists and does not answer says "run 'make up'", which is not the remedy for a frozen or overloaded node (a backlog row, below) | A waiting call against a paused node: the call meant to exercise one (`rollout status` with its own timeout) was made through the wrapper's inner function instead of `kctl`, which classifies first, and the wrapper refused it as a call with no timeout ("a mistake in the script; nothing was run"): the right refusal for the wrong call. By what the other calls showed it would have ended at the handshake too, which is not seen |
+| R7 | 2026-10-07 09:41 to about 10:42 | The one-hour watch of the certificate runbook, run again: the cluster checkout at 6553e07 with `certificate.duration: 1h` and `renewBefore: 30m` in an uncommitted edit of kind's values, taken back at the end; samples of readiness every 5 seconds from 10:20 to 10:35 | The table of restart times is in the next list and in the runbook's second table. 09:42:00 `make deploy` rc 0, all eight Certificates reissued at once (revision +1, `notAfter` 10:41:59, renewal time 10:11:59), the shares on the six Deployments 0, 1/6, 2/6, 3/6, 4/6 and 5/6 (agent-runtime, claims-api, claims-mcp, knowledge-mcp, model-gateway, policy-mcp: the sorted list); the six restarted once by hand at 09:42:01; cert-manager renewed all eight at 10:11:59 (`notAfter` 11:11:59, read at 10:13:30); the six restarts, 99 or 100 seconds apart; readiness; the rate store's two restarts; 8 Warning events said a liveness probe failed (six services and the store's two); at 10:35:21 the edit taken back and `make deploy` rc 0 (the 90-day certificates), the six restarted once, then five minutes and `make smoke` rc 0 at 10:41:36: 45 PASS, 0 FAIL, 1 SKIP (the cost-series line: the gateway had settled no call since it started at 10:35:22, the designed skip after a restart). The script ended 0, the checkout is clean at 6553e07 and the holder's record says S073, state ok | The alert `MeridianCertificateNotRenewed` (it trips an hour after issuance for a duration under 21 days; the run gave the values back at 53 minutes, before it); two replicas of one service (they would still restart together); a `renewBefore` shorter than one and five sixths of the margin (the services would then wait for the file and restart together when it changes) |
+| R8 | 2026-10-07 10:42 to 10:48 | Main on the warm cluster, and the split smoke script beside the whole one: a run made for two other steps (S072's first part, PR 117, and S074's split of `smoke.sh`) on this step's lane; the checkout moved to main 064e5ab, then to the split's commit 804a6e7, then back | `make up` on the warm cluster rc 0 at 10:44:51, no pod not Ready after it; Tempo's and Loki's pods read `automountServiceAccountToken=false`, phase Running; `cnpg-system` and `envoy-gateway-system` carry warn and audit `restricted` and no enforce; the policy `meridian-services` lists 8 URIs and 6 DNS names; `make deploy` rc 0 at 10:46:31, all eight Certificates Ready under the exact lists; `make smoke` from main rc 0, 46 PASS, 0 FAIL, 0 SKIP (with the Claims API's listed URI in check 10's refused request and the new alert rule in check 11's comparison); at the split's commit (ten parts, an entry of 1,185 lines) `make smoke` rc 0, 46 PASS, 0 FAIL, 0 SKIP, and the PASS lines of the two runs, every number made N, differ in one line, the trace line, whose trace ID is random hex: with the ID masked the 46 lines are equal (nine other lines each, the log lines above and below the checks). The checkout is back at main 064e5ab, clean, and the holder's record says S073, commit 064e5ab, state ok. Read in passing before the run: `tempo-0` had 12 restarts and `loki-0` 2, `platform-db-1` 9 (a backlog row, below) | A cold `make up` of PR 117's content (the cluster batch's cold run is that); the labels' warnings from the API server (nothing violated them) |
+| R9a | 2026-10-07 11:04, read only | What had restarted on the cluster, read before it was deleted and made again for S072's cold run (the rule is that it is never deleted to clear a fault nobody has looked at) | 22 containers had restarted, 4 to 19 times each: the API server (4, its last end 05:33:22, exit 137: killed), the controller manager (13) and the scheduler (12), CoreDNS (1), cert-manager's four pods (10 to 12), the database operator (18), Envoy Gateway's controller (19) and its proxy (5 and 4), the log agent (18), the collector (17), kube-state-metrics (16), the Prometheus operator (18), Prometheus (7) and the database (9). Every one of those last ends lies between 05:33 and 05:50 UTC, inside the machine's fourth overload of that morning (05:27 to 05:42; recorded above, the session's own doing). Nothing but the rate store had restarted since (its 3 are the designed ones: the reissue, the renewal, the certificates put back). The database's previous container ended cleanly at 05:39:35 (exit 0, reason Completed; its log ends with the instance manager's "Shutdown signal received", "All workers finished", "Releasing primary lease"): a restart by the kubelet under the stall, not a crash. The node: no memory, disk or PID pressure, Ready; requests 3,042 Mi of memory (26 %), limits 6,996 Mi (61 %); the node container's kernel log holds no out-of-memory kill. The audit table (`audit.events`, the only copy on kind) held 171 rows, 2026-10-06 18:14:25 to 2026-10-07 10:48:46, all synthetic, which go with the cluster. The session's reading: one event with a known cause, nothing unexplained in the five hours since, so no fault that nobody had looked at | The API server keeps events for an hour, and none was left for the database pod; the earlier previous-container logs (one per container is kept), Tempo's and Loki's, whose pods run R8 replaced: not looked at, and gone with the cluster |
+| R9 | 2026-10-07 11:08 to 11:17 | The cold run, made for S072's cluster batch and this step's R6 in part: the cluster deleted and made again from S072's batch commit 4050156, exit 0 (the whole record is S072's) | Cold timings on the virtual machine (load about 1): `make down` 3 s, `make up` 273 s, `make deploy` 97 s, `make smoke` 70 s (46 PASS, 0 FAIL, 0 SKIP), and `make up` a second time 28 s; no container restarted during the run. The checkout is at 4050156 (detached) and the holder's record says S073, state ok | R6's other parts: a first install made to fail and its way back, and a policy narrowed before the first deploy (the case `make cert-renew` is for). Until S072's batch is on main, `make up` from main on this cluster is refused by nothing and would not converge backwards: cluster commands are run from the batch's commit or later |
+| R10 | 2026-10-07 11:30 | Smoke from the tree where the split script and S072's batch meet: the cluster checkout moved to cadf82b (S072's batch with main 8e2f4a1 merged in: ten parts under `smoke.d/`) | `make smoke` rc 0, 46 PASS, 0 FAIL, 0 SKIP; its PASS lines equal the cold run's (R9, the unsplit script) with the numbers and the trace ID masked. The checkout stays at cadf82b | Nothing else was run |
+| R11 | 2026-10-07 11:53 to 11:55 | The ingestion's word on a real 503, on the cluster made at 11:08 (checkout cadf82b); nothing cost money (the embeddings on kind are the replay provider's) and nothing was deleted. Before: image tag eba7324060d4, the kept Job `meridian-ingest-eba7324060d4` Complete, 85 chunks, 18 audit rows, the gateway's pod Ready with 0 restarts (started 11:13:10), the rate store's `spec.replicas` 1 owned by the field manager `helm`. The ingest Job rendered as `deploy.sh` renders it, one line changed (the Job's own name, `…-r11a`, and `…-r11b` for the second); 11:53:02 the rate store scaled to 0 (its pod gone at 11:53:04) | The Job `…-r11a` against the gateway with no store failed (11:53:11), and its one log line is the one K6 built: `ERROR the model gateway refused the embedding call (model gateway answered 503; kind rate-store-unavailable)`. Two audit rows at 11:53:07 with one run ID: the gateway's (`model-gateway \| model.call \| refused \| rate-store-unavailable`, deployment `replay-embedding`) and the ingestion's (`knowledge-ingestion \| knowledge.ingest \| refused \| gateway-failed`). The gateway's log, one ERROR line at 11:53:07.460: "the rate store is unavailable (RateStoreUnavailable): the rate store did not answer (TimeoutError)": with the store's Service at no endpoint the class is `TimeoutError` (the 1 s connect timeout), not `ConnectionError` (the run's map of the gateway's 503s had that as an open question, answered for this network plugin). The gateway's pod stayed Ready, 0 restarts, the same start time; the chunks stayed 85 (everything is embedded before anything is written). 11:53:12 the store back (scaled to 1, rollout done): down for 10 s, its new pod Running with 0 restarts. The Job `…-r11b`, the same render, succeeded at 11:53:18 (85 clauses, 85 stored, 0 differences; 5,773 input tokens; deployment `replay-embedding`) with the same gateway pod and no restart: the gateway admits again by itself once the store answers; audit: `knowledge.ingest \| completed` at 11:53:13 and `knowledge.verify \| verified` at 11:53:14, 28 audit rows in all. After 62 s `make smoke` rc 0, 46 PASS, 0 FAIL, 0 SKIP; no container on the cluster has restarted. The run left: the two extra Jobs (`…-r11a` Failed, `…-r11b` Complete, no TTL; the next deploy that ingests removes them by label); the NetworkPolicy and the ServiceAccount `meridian-ingest` carrying kubectl's `last-applied-configuration` annotation (the run applied the render with a client-side apply, two warnings said so; `deploy.sh` applies them another way); and, after the by-hand scale, no field manager listed as owning the store's `spec.replicas` (before: `helm`): the next `make deploy` applies the chart's literal 1 with force-conflicts and takes it back, by the code and not seen | `MeridianRateStoreRefusing` (one refused call is under its thresholds, by design); `MeridianServiceUnavailable` (10 s, far under five minutes); the gateway's three other 503 words; a 429 after the second ingestion; the search tool's log line for a refused embedding; the next `make deploy` taking `spec.replicas` back |
+
+**The second half's items, with a verdict each:**
+
+- **The ingestion's word on a real 503 (K6): SEEN (R11), for the word
+  `rate-store-unavailable`.** With the rate store scaled to 0 for 10 seconds
+  (11:53:02 to 11:53:12) an ingest Job failed at 11:53:11 and its one log line
+  was, verbatim: `ERROR the model gateway refused the embedding call (model
+  gateway answered 503; kind rate-store-unavailable)`. Two audit rows at
+  11:53:07 carried one run ID: the gateway's (`model.call`, `refused`,
+  `rate-store-unavailable`) and the ingestion's (`knowledge.ingest`,
+  `refused`, `gateway-failed`). The gateway stayed Ready with no restart and
+  the same start time, and the chunks stayed 85. The gateway's error class was
+  `TimeoutError`, not `ConnectionError` (the Service had no endpoint; the 1 s
+  connect timeout ended it). A second ingestion, made once the store was back,
+  succeeded with the same gateway pod (85 stored, 0 differences), and `make
+  smoke` 62 seconds later ended 46 PASS, 0 FAIL, 0 SKIP. Not seen: the
+  gateway's three other 503 words, the search tool's log line for a refused
+  embedding, and a 429 after the second ingestion.
+- **R5, the node paused and three deploys: seen in part.** What R5b saw: every
+  call ended at the client's own handshake timeout of ten seconds and never
+  reached the wrapper's bounds, there were three ReplicaSets per Deployment
+  (the history limit holding), and all pods were Ready 15 seconds after the
+  node was resumed. What it did not see: a call that the wrapper's bound ends.
+  Why: the session's script called an inner function for the waiting call, and
+  the wrapper refused it as a call with no timeout; a waiting call against a
+  frozen node is not seen, and by what the other calls showed it would end at
+  the handshake too. A server that completes the handshake and never answers
+  is the case the bounds are for, and it stays tested with stand-ins only.
+- **Certificates of one hour: SEEN (R7), with one replica of each service.**
+  The six restarts, each service's old container stopping once, in the reverse
+  order of the shares:
+
+  | Service | Share | Stopped | Gap |
+  |---|---|---|---|
+  | policy-mcp | 5/6 | 10:24:32 | |
+  | model-gateway | 4/6 | 10:26:11 | 99 s |
+  | knowledge-mcp | 3/6 | 10:27:51 | 100 s |
+  | claims-mcp | 2/6 | 10:29:31 | 100 s |
+  | claims-api | 1/6 | 10:31:11 | 100 s |
+  | agent-runtime | 0 | 10:32:51 | 100 s |
+
+  By the chart's arithmetic (the end 10:41:59, a margin of 10 minutes, one
+  sixth of the margin per place) the first look at the file is 10:23:39 and
+  the last 10:31:59: each restart came 52 or 53 seconds after its computed
+  moment, the same for all six (the liveness probe's period and threshold). The
+  readiness samples: each service was not Ready for 41 to 46 seconds (for
+  example policy-mcp from 10:23:52 to 10:24:37), never two at once, and the
+  fewest of the six Ready in any sample was 5; with one replica each, the
+  service that restarts answers nothing for those seconds, one at a time now,
+  where the watch of 2026-10-06 had all six in the same minute. The rate
+  store restarted itself twice, once after the reissue and once at 10:13:02,
+  63 seconds after the renewal: its liveness rule as designed (K12's
+  two-second form; the count on its pod went 0 to 2). Not seen: the alert, two
+  replicas of one service and a short `renewBefore` (the table above).
+- **R6, the cold run: cold timings SEEN, the rest open.** R9, made for S072's
+  cluster batch, gave the cold timings on the virtual machine (load about 1):
+  `make down` 3 s, `make up` 273 s, `make deploy` 97 s, `make smoke` 70 s (46
+  PASS, 0 FAIL, 0 SKIP) and a second `make up` 28 s, with no container
+  restarted during the run. Still open of R6: a first install made to fail and
+  its way back, and a policy narrowed before the first deploy (the case `make
+  cert-renew` is for).
+- **The rotation of the rate store's password: the owner's, unchanged**
+  (accept it as not seen or run it).
+- **approver-policy's liveness probe: not built, unchanged.**
+
+**The rows this part judged** (Part B's rows, whose verdicts are brought to
+say so; the first half's table above stays as it was written):
+
+| Row (its first words) | The second half so far |
+|---|---|
+| At a certificate renewal every service restarts in the same minute | Closed for one replica each, seen on kind (R7): six restarts 99 or 100 seconds apart, never fewer than five of the six Ready, each service not Ready for 41 to 46 seconds. Residual, the row's own: two replicas of one service would still restart together; stays as not built |
+| A service that restarts itself near its certificate's end was not seen on the cluster | Stays closed (by S062, 2026-10-06): R7 watched it again with one-hour certificates, and each service's old container stopped once, 52 or 53 seconds after its computed moment |
+| The scripts' `kubectl` calls have no request timeout of their own | Stays, in part: a frozen API server was met once (R5b) and every call ended at the client's own timeout; a call that a bound of the wrapper ends is not seen |
+| The chart sets no `revisionHistoryLimit` | Stays, in part: the limit seen holding at three ReplicaSets per Deployment (R5b); `make images` with the new reading not seen |
+| The rate store's liveness script compares the certificate's time | Stays, as accepted; the two-second form was seen to behave (R5a: restarts 0 at every reading; R7: one restart per renewal) |
+| The restart share is read from `MERIDIAN_TLS_RESTART_SHARE` | Stays: R7 saw six non-empty shares and the spread they make; a chart typo that renders an empty share was not seen and is not refused |
+| Not seen on a cluster for the rate store | Stays open, but the 503 is SEEN (R11): the store scaled to 0 for 10 seconds, the gateway Ready with no restart and admitting again with the same pod. Still not seen: the alert, two replicas, a frozen store, an old Secret |
+| On 2026-10-06 `make deploy` failed twice | Stays, with a likely cause and not a proven one: the ingestion's word is now seen on a real refusal (R11, for `rate-store-unavailable`); R11 made the fault on purpose and does not show what happened that evening |
+
+**New rows of this part** (Part B's follow-up backlog, each with a home that
+exists): the add-ons' pods restart and nothing sees it (`tempo-0` 12 restarts,
+`loki-0` 2, `platform-db-1` 9, read before R8), home **S072**, which owns the
+only alert on restarts and the cluster batch that is next on the lane, with
+S073 as the other candidate, which would own a smoke line that reads the
+counts; smoke's sentence "run 'make up'" for a cluster that does not answer
+(R5b), home **S073**. Not a row: smoke's cost-series line skips after every
+restart of the Model Gateway until a call is settled (R7's 45 PASS and 1 SKIP),
+which is by design and is written in the kind README at check 5; and each
+restart at a renewal coming 52 or 53 seconds after its computed moment, which
+is a sentence in the certificate runbook.
+
+- **The gates of this record:** this branch changes documents only (the plan,
+  the runbooks, the READMEs and the threat model), so its gates are `make
+  docs`, `make check`, `make test` and the pytest line that pins the READMEs'
+  and the runbooks' phrases (`uv run pytest tests/meridian/knowledge_mcp/
+  tests/meridian/test_kind_*.py tests/meridian/test_certificate_*.py
+  tests/meridian/test_helm_identity.py tests/meridian/test_runbook_queries.py
+  -n 2 -q`), run before this sentence was written: the pytest line ended `1825
+  passed, 234 skipped in 49.41s`, `make docs` ended `docs consistency: 14
+  checks passed`, `make check` ended with no ERROR line (its last line is a
+  structurizr `IGNORE` line) and `make test` ended `codex agents: 11 twins
+  current`.
+
+**The approver is restarted when it hangs (2026-10-07).** The last buildable
+item of the step, taken after the second half's runs (the branch
+`s073-approver`; Decision 4 of the design had not been built until now). The
+row's done-when, "approver-policy is restarted when it hangs", is **seen for a
+frozen process**, which is what a probe can see; the alert for a stuck one is
+loaded and **not seen firing**.
+
+*The map* (read-only: the repository, the chart's cached archive, the running
+cluster read with GETs, and upstream's files through a summarising fetch). Three
+findings changed the choice:
+
+1. The binary has no liveness endpoint. On its health port `/readyz` answers
+   (one check: that the webhook server has started) and `/healthz` and `/livez`
+   answer 404 on the running pod; a probe on `/healthz` would restart the pod
+   for ever, and `/readyz` sees a frozen process or a dead listener and not a
+   reconciler that is stuck while HTTP still answers.
+2. The chart (v0.28.0, the newest release; `main` has none either, and no
+   upstream issue exists) has a readiness probe, no value for a liveness probe,
+   and a values schema that refuses a key it does not know, so the probe cannot
+   be a chart value.
+3. Helm 4.3.0's `--post-renderer` takes the name of a plugin, not an
+   executable (an executable path was refused, seen), and no plugin is
+   installed on the machine or the runner.
+
+A symptom metric was already served and read by nothing:
+`certmanager_certificate_renewal_timestamp_seconds`.
+
+*The design.* A1: the probe is added after the install by one server-side
+apply in `up.sh` under the field manager `meridian-kind`, without forcing
+conflicts, on `/readyz` with a start delay of 30 s, a period of 20 s, a timeout
+of 5 s and six failures (two minutes without an answer before a restart, since
+the first half recorded probes timing out under load); a post-renderer plugin
+and a fork of the chart were rejected. A2: an alert on
+`time() - certmanager_certificate_renewal_timestamp_seconds` for the three
+certificate namespaces, with a `for` of an hour, for a renewal that waits for
+any reason, a stuck approver included.
+
+*The advisor's reading* (2026-10-07, before the contracts). A1 by an apply
+after the install is the right size ("leave it" does not meet the row's
+done-when, and a plugin is a machine prerequisite for one field); A2 is worth
+its rule as a contract of its own, so that A1 lands if A2 stalls. Provoking the
+hang with a stopped process on the shared cluster is acceptable (nothing is
+deleted, it is reversible), to be recorded as a frozen process and not a real
+hang, with no smoke during the window.
+
+*The contracts.* P1 (commit b03e6c4 on the step's branch): the manifest
+`infra/kind/manifests/approver-policy-liveness.yaml`, `apply_approver_liveness_probe`
+in `up.sh` between the install and the policies, and 19 tests (the manifest's
+shape, the health port's name the chart renders, the apply's flags, the stand-in
+`kctl` run). P2: `MeridianCertificateRenewalOverdue` in the group
+`meridian.certificates` (`for: 1h`, an inner `> 0` so that a Certificate with no
+renewal time stays quiet, which rests on the series reporting 0 for one and was
+not verified), eight promtool cases, the pins, the runbook's part "The renewal is
+overdue" and the rows in `slo.md` and the operations README; it landed on the
+branch with `main` merged in (tip c1a5e67), and the smoke script's rule count
+moved with it. P3, this contract, closes the infrastructure review's findings
+below and writes this record.
+
+*Run R13* (as run, from the run's own record: 2026-10-07, 14:17 to 14:33 UTC; the
+cluster made at 11:08; the checkout at c1a5e67 for the run and back to
+origin/main after it; nothing deleted). Before: no liveness probe on the
+Deployment, one pod, 0 restarts. `make up` on the warm cluster: exit 0 in 41 s;
+the probe on the Deployment with the four numbers (`/readyz` on the port named
+`healthcheck`, 30 s, 20 s, 5 s, 6); the field managers: `meridian-kind` (Apply)
+owns `livenessProbe`, and `helm` (Apply) and `kube-controller-manager` do not; a
+new pod was Ready with 0 restarts, the five policies Ready, the six services'
+pods untouched. Ten quiet minutes, one reading a minute: the same pod, Ready, 0
+restarts, no "Liveness probe failed" event. `make up` a second time: exit 0 in
+28 s, the same pod (no new rollout), the probe still there, the owner still
+`meridian-kind` alone. The approver's process stopped from the node (a STOP
+signal through the node's container): the kubelet restarted the container 140 s
+after the stop (the count 0 to 1); the events said "Liveness probe failed: ...
+/readyz: context deadline exceeded", "Container ... failed liveness probe, will
+be restarted" and "Started"; readiness had failed first, so the pod was not
+Ready for about two minutes, the window in which no request is decided; after
+the restart it was Ready. `make smoke`: 46 PASS, 0 FAIL, 0 SKIP, among them the
+refused request of check 10 decided by the restarted approver, "all 22 rules in
+them are healthy", the loaded rules the file's, and "no Meridian alert is firing
+(none pending)", so `MeridianCertificateRenewalOverdue` is loaded and quiet. The
+cluster keeps what the run installed: the probe (owned by `meridian-kind`; a
+`make up` from a branch without it does not remove it, because Helm does not own
+the field) and 22 rules (a `make up` from a branch without P2 loads 21).
+
+What R13 shows and does not: the done-when is seen for a frozen process, a dead
+listener, not a real hang; a reconciler stuck while HTTP answers is invisible to
+the probe and the new rule is the sight of it, **not seen firing** (it needs a
+certificate whose renewal is due while nothing decides its request). Not seen:
+the probe surviving an upgrade to a newer chart (the same chart was applied
+twice), the apply's refusal when a chart takes the field (no such chart exists),
+the probe under real load (the machine's load was under 3, and the overload the
+numbers were chosen for was not reproduced), and a first install on a cold
+cluster with the branch.
+
+*The review* (the infrastructure review of P1 and P2, read-only, nothing run on
+the cluster; it ran `shellcheck`, `bash -n`, a `helm template` of the chart and
+P2's promtool cases with the pinned image). Verdict: **approve with fixes**; 0
+critical, 0 high, 4 medium, 7 low. Each medium, and what P3 did:
+
+- **M1**, a chart that takes the field fails inside Helm on a warm cluster and
+  the failure names no manifest: `install_release` is untouched (a change there
+  was not asked); the Renovate group's note for cert-manager and approver-policy
+  now says that a conflict on `livenessProbe` owned by `meridian-kind` means the
+  chart has the probe and where the remedy is written, and its test pins the note.
+- **M2**, the remedy (delete the manifest and the function) leaves
+  `meridian-kind` owning the field on a cluster that has the probe, and Helm's
+  next upgrade conflicts again: the apply's message and the manifest's header
+  now give two steps in order. First apply once, under the field manager
+  `meridian-kind`, a copy of the manifest without its `livenessProbe` lines
+  (an apply that omits a field its manager owned drops it, and no force flag is
+  needed); then delete the manifest and the function and set the chart's value.
+  The other way the review offered, one Helm upgrade with `--force-conflicts`,
+  also works on paper and takes every conflicting field of the release, so it
+  was not chosen. **Neither was tried on a cluster.**
+- **M3**, after the probe a hang that recurs is a pod restarted every few
+  minutes, and `MeridianCertificateApproverDown` (no replica for 15 minutes)
+  may never fire: `MeridianCertificateIssuingRestartLoop`, three restarts in 30
+  minutes of the containers `cert-manager-controller` and
+  `cert-manager-approver-policy` in `cert-manager`, per pod, with the group's
+  labels, eight promtool cases and the runbook's sentences. It is unit-tested,
+  not loaded on a cluster, not seen firing.
+- **M4**, a test pinned the comment's "has not been seen", which R13 made false:
+  the comment in `up.sh`, the manifest's header and the test now say what R13
+  saw and what stays unseen.
+
+Lows: L2 (what a "Required value" error means) is in the apply's message and the
+header; L3 (the image tag) is pinned beside the chart's version, and the test
+fails with "read the binary's endpoints again" when `APPROVER_POLICY_IMAGE_TAG`
+moves; L6 (the previous container's log and the events) is in the runbook's step;
+L7's `runbook_url` stays the whole page, as the group's other rules have it, and
+the apply's silence stays, pinned by its test; L4 (a renamed health port
+disables the probe silently) and L5 (a bare Helm install after an uninstall has
+no probe until the next `make up`) are one sentence each in the kind README. **Not
+taken: L1**, a startup probe (a second field `meridian-kind` would own, for an
+allowance R13 did not need: the restart came 140 s after the stop, as designed).
+
+*Not seen, or not reached.* The probe across a newer chart and the remedy
+above; the probe under real load; a cold install with the apply; the renewal
+series while a renewal is pending, and that Prometheus stores it at all (R13
+saw the rule loaded and healthy, not the series); either new alert firing; the
+restart-loop rule loaded; whether the chart's own `KubePodCrashLooping` is
+loaded on the cluster, and how smoke selects "Meridian alerts"; Helm 4's actual
+conflict message; `controller-runtime`'s started-check internals (recalled).
+
+*Rows.* Part B's row on approver-policy's probe is brought to the tree (closed
+for the probe, with R13 as its evidence, and its memory limit still measured on
+kind alone); the step's row says what is now true and what S073 still holds;
+two rows are new (below). `slo.md`'s queries and rows that named two
+namespaces where the rules name three are corrected here, the matcher being the
+whole of the fix.
+
+*The gates of this record:* `bash -n` and `shellcheck` on `infra/kind/*.sh`,
+`make alerts`, the pytest line over `tests/meridian/test_kind_*.py`, the alert
+rule tests and `tests/test_renovate_config.py`, `make lint`, `make test`, `make
+docs` and `make check`: the main session's run of the suite before the merge
+ended `20080 passed, 8 skipped, 8 warnings in 266.07s (0:04:26)`, in plan v0.83.
+
 ### S070 — Claims intake and what the adjuster is told
 **Status:** doing · **Started:** 2026-10-07 · **Finished:** —
-**Left before it is done:** the owner's decision on uploads (the step
-started without it, and built nothing for them); four more questions of
-the owner's (For the owner); and `drafted_by`, which the second half did not
-build (For the owner, second half). The first half is written here as it
+**Left before it is done:** four questions of the owner's (For the owner;
+uploads are no longer one of them: the owner answered "Build now" on
+2026-10-07 and they are S080's, so this step builds none); and `drafted_by`,
+which the second half did not build (For the owner, second half). The first
+half is written here as it
 stands (R3c and its review are in; the whole suite is the main session's);
 the second half so far is written after it, and takes what the owner
 decides.
@@ -15715,7 +17065,7 @@ a claim's row is locked or for a request the claim refuses, and the phone
 matcher of the redaction is split into modules, tested against the matcher
 before it without a gap in its sweep, and made to replace a second number
 after an international one, all without a new recording of the model and
-without a payment. Uploads are not built.
+without a payment. Uploads are not built here (S080 builds them).
 
 **What the step is not:** it builds nothing for uploads, it sets no bound on
 what a name may replace, it does not reorder the assessor's checks, and it
@@ -15731,6 +17081,8 @@ has not answered. The row's own parenthesis settles what the step does
 either way: built, uploads are a step of their own, split off when this one
 opens; so the step opened on everything else, nothing in it forecloses
 uploads, and the question stays asked (T-38 says so, as it stands).
+*Answered on 2026-10-07, about 13:40 UTC, by the question tool: "Build now".
+The step they became is S080; this paragraph is what was true until then.*
 
 **Decisions** (the session's; the owner may overturn any; the design, with
 its threat note, was written before the first contract, and what follows is
@@ -16162,7 +17514,8 @@ redaction, the name or the assessor):
 **Backlog rows, judged** (the rows homed at S070, each by its text; the
 rows are in Part B):
 
-- Uploads (T-38): stays, asked of the owner; nothing built.
+- Uploads (T-38): ~~stays, asked of the owner; nothing built~~ answered on
+  2026-10-07 ("Build now"): the row is homed at S080.
 - The loss date as the claimant's word (T-66): closed by S070 (A1, A4) as a
   reasoned residual; the rules still do not see such a report.
 - A steered model's `approve` and the page's mark: closed by S070 in part
@@ -16212,7 +17565,8 @@ that nothing is built):
 - **(a) Uploads (T-38).** Built, as a step of its own with a design, a store
   for bytes, a scanner and a paid recording if content reaches the model, or
   out. The session recommends out until S021, when a caller has an identity:
-  without a sign-in anyone could upload to any claim.
+  without a sign-in anyone could upload to any claim. *Answered on 2026-10-07
+  (about 13:40 UTC): "Build now", against that recommendation; see S080.*
 - **(b) The mark on the adjuster's page.** Built, as a decision the session
   took; say so if it should not be, or if the rules should withhold a
   recommendation that rests on the model instead (it changes `decide`, the
@@ -16461,7 +17815,8 @@ part was merged in (fe36a2a) had 18,097 passed, 8 skipped.
 that nothing is built; the first half's (a) to (e) stand as written):
 
 - **Uploads (a), the bound on what a name may replace (c), and where the
-  three known phone leaks go (e).** Unchanged. The property test now writes
+  three known phone leaks go (e).** Unchanged (uploads (a) were answered on
+  2026-10-07, "Build now", after this was written: see S080). The property test now writes
   the forms it lacked and found no digit lost, which says nothing for or
   against a fix of the three leaks: they are not losses against the matcher
   before the cut.
@@ -16523,7 +17878,7 @@ cost statement named the price of (b) before the answer: a login where
 sessions run (on the trial a session's login ended within a day) and a guard
 that did not ask before a paid model call. The guard asks now (G1, G2), and
 that, with the ceiling (L1, L3), is what stands between a signed-in machine and
-a paid call. The guard is a habit-stopper and not a boundary (T-87, T-103).
+a paid call. The guard is a habit-stopper and not a boundary (T-87, T-112).
 
 **Lane.** The step holds the lane "changes what the evaluation fingerprints",
 and the free half changed none: L1's test asserts that the committed
@@ -16964,7 +18319,7 @@ of the step branch `s071-live-measurements` at 77675a7, before this record):
 | G1 | the guard's ask before a paid target | 4f2fc52 |
 | L3 | the ceiling required, the write check, EUR 0.50 | b6f3f6b |
 | G2 | the guard's second round | 77675a7 |
-| D1 | this record, the threat row T-103 and the sentences the half made false | with this commit |
+| D1 | this record, the threat row T-112 and the sentences the half made false | with this commit |
 
 **Follow-ups:**
 
@@ -18578,6 +19933,963 @@ real thing):
   here and kept.
 - For the owner: the decisions above and the four questions at the paid stop.
 
+### S080 — File uploads for a claim, before sign-in
+**Status:** doing · **Started:** 2026-10-07 · **Finished:** —
+**Left before it is done:** a browser, a slow body and the app's own limits
+seen on a cluster (two runs, RU1 and RU2, saw the edge's side: the second
+settled which route serves an encoded path); the whole suite on the final tree
+(done: 21,219 passed, 8 skipped); the pull request and its merge; and the
+owner's decision
+on retention and erasure of uploaded files, which comes before any use with
+real data (For the owner). The code is built and has been reviewed twice, and
+the path ran once on kind; this record is the documents contract that follows
+them. Plan version of this part: v0.87.
+
+**Goal:** a claimant attaches one PDF, JPEG or PNG to a claim, before any
+sign-in exists, and an adjuster sees that it is there and, behind a second
+switch, takes it; both switches are off by default and the chart turns either
+on only for a host name that ends in `.localhost` (a check of a string, not a
+network boundary: U11). The file's bytes are
+stored with the claim and nothing reads them. Everything else a document
+pipeline could do (extraction, a model that reads documents, a scanner, an
+object store, a delete) is **designed or not built**, and said so where it
+matters. Names: the commits and the code's comments call this work "S070
+uploads" and "F1" to "F5", because S070's section was its home until this
+step's number was taken at the documents (the design's rule: a step's number
+is taken when its first pull request is cut); S080 is the same work.
+
+**The owner's decisions**, as `owner-answers-2026-10-06.md` holds them:
+
+- 2026-10-07, about 13:40 UTC (question tool, second round): `S070 uploads:
+  "Build now"`. The session had recommended waiting for S021, when a caller has
+  an identity. The design records the option the owner chose as "Build uploads
+  against the current unauthenticated intake, with size and type limits and a
+  malware-scan placeholder", which is why scanning is **designed** here and was
+  not asked a second time.
+- 2026-10-07, about 15:30 UTC (a sixth round; the owner: "Ask me the
+  questions"): `Uploads, the adjuster's download: "Build now, local-only switch
+  (Recommended)". With the security review's eleven requirements, an audit row
+  per download, a second switch that is off by default and that the chart
+  refuses outside a local release. Not to be exposed before S021.`
+- The same round: `Uploads, the two defaults: "Keep both (Recommended)" (the
+  database verifies each file's hash; the same file twice on a claim is
+  refused).`
+
+**Design** (the session's, written before the first contract and kept in a
+file outside the repository; U1 to U11 as they ended, each with what the
+advisor or a review changed). Nothing here is the owner's unless the list above
+says so.
+
+- **U1, the route (changed by the advisor).** `POST /claims/{claim_id}/files`,
+  multipart with one `kind` (one of the four document codes the rules know, or
+  `other`) and one `file`, and an HTML twin, `POST
+  /claimant/claims/{claim_id}/files`, whose form is on the claimant's status
+  page (the design said the documents page). **An upload is not a document
+  arrival.** The first draft made each stored file also an arrival of that
+  name, so a file started a triage, which is the threat T-38 names ("each
+  upload starts a new, paid triage run"). The advisor changed it: the rules go
+  on reading names (T-66), the adjuster's page shows files and named documents
+  as two lists, and no upload moves a claim or touches the model's budget.
+  An upload counting as the document once a caller has an identity is a
+  backlog row at S021. The names-only route and its tests stand.
+- **U2, limits (corrected twice).** One file a request, at most 1 MiB, at most
+  five files and 3 MiB to a claim, and a ceiling on the whole store. The
+  design's 256 MiB default became **128 MiB and 2,000 files** (settings with a
+  floor and a cap: bytes up to 256 MiB, files up to 100,000), after the
+  database review said the volume's arithmetic had not been done and that a
+  byte ceiling does not bound rows (F-02, F-04). "Two inserts at the same
+  moment may pass it by one file" was withdrawn (F-03: with N inserts the
+  overshoot is N-1): a claim lock and a store lock, both advisory and taken in
+  that order, make the ceilings exact.
+  The design's "a 1 MiB file stays under the form parser's threshold for
+  spooling to disk" was **false** at the route's limit: a part of 1.0 to 1.1
+  MiB rolled to `/tmp`, which the pod has 16 Mi of, so F2 wrote a parser that
+  holds the part in memory (`MemoryOnlyParser`) and a test that fails if it
+  rolls. Past a ceiling the route answers 507 for everyone. The second security
+  review added a **byte budget** (F4d): the rate counted files, and 128 unique
+  files of 1 MiB reach the 128 MiB ceiling in about four minutes at 30 files a
+  minute, so the store now also refuses more than 8 MiB stored in a minute
+  (429; a constant, not a setting, since a setting would need a variable, a
+  parser, a field and a chart value): the default ceiling takes 16 minutes to
+  fill and the 256 MiB cap 32.
+- **U3, the body limit per route (the boundary reviewer read it).** The app's
+  64 KiB stays for every other route; the two upload paths take 1 MiB and
+  76 KiB of multipart envelope, 1,126,400 bytes. The mechanism is general
+  (`route_body_limits` and `RoutePattern` in `platform/common/http.py`; the
+  Claims API alone passes any) and a test holds that every other route keeps
+  64 KiB. At the edge the same number and a **local rate limit** of six a
+  minute for the whole route: the pinned Envoy Gateway (v1.9.2) offers a local
+  limit, read from its CRDs, so the design's STOP did not come. Run RU1 on kind
+  showed that the route wins over the first and that the policies attach (see
+  Result / verification); what the edge does with an encoded path is the one
+  thing about the route's matching still not shown (see Not seen).
+- **U4, type.** By the file's first bytes (`%PDF-`, `FF D8 FF`, the PNG
+  signature), never by the declared type or name; anything else is 415 and
+  nothing is stored. The declared name is not stored: a file is known by its
+  kind, its type, its size and its SHA-256.
+- **U5, storage (changed by the database review).** Migration 0032,
+  `claims.claim_files`, with `claims_api` holding SELECT and INSERT and no
+  other role anything. F1b took the review's changes into the unapplied file:
+  the database checks that the hash is the content's (`sha256 =
+  sha256(content)`), the same file twice on a claim is refused by a unique
+  key (the owner's "Keep both"), the content is stored uncompressed, and the
+  file's header says what lock it takes and for how long. The existing
+  `claim_documents` table and its three-column test stand.
+- **U6, read-back (changed by the security review, then by the owner).** The
+  adjuster's claim page lists a claim's files with kind, type, size, hash,
+  time and "not scanned"; the claimant's status page lists kind, size and time
+  (the design said a count and the kinds) and offers no download. **The
+  download was cut out** after the security review found that the adjuster's
+  pages are as anonymous as the claimant's, so an adjuster-side download is an
+  open file host (H-2); F4a built the list alone. **Then it was built behind a
+  switch of its own** when the owner chose "Build now, local-only switch": see
+  U11. The second security review then changed the page too (F4d): the trail
+  shows the newest 200 events in time order, says when older ones exist and
+  leaves the downloads out of the list, counting them on one line ("Downloads
+  of this claim's files: N, the latest at ..."), because an anonymous caller
+  who holds one file identifier could otherwise write 200 download rows and
+  push a claim's decision off the page.
+- **U7, scanning: designed, not built.** Said beside every file on the
+  adjuster's page. A scanner is a second workload whose signature database
+  alone needs more memory than the machine has beside the cluster. What stands
+  in for it: the type allow-list, the size limits, nothing parsing or
+  rendering a file on the server, and the download's headers. On Azure the
+  designed answer is the platform's malware scanning on the store that would
+  replace the table.
+- **U8, audit (the design's sentence on refusals was wrong).** One audit row
+  for each stored file (`claim.file_stored`) and, since F4b, one for each
+  download (`claim.file_downloaded`), in the transaction of the file and
+  before the first byte respectively. The design said the existing throttled
+  refusal rows would cover refusals; **they do not exist in this workload**,
+  and a refusal writes no row, by decision (see Accepted, and said).
+- **U9, synthetic files.** Four files in `data/synthetic/upload-samples/` with
+  a manifest of their own, made in code from the seed with the standard
+  library: a PDF whose text names a golden claim, a JPEG and a PNG that show
+  the word SYNTHETIC, and a text file named like a PDF that the route refuses.
+  They are outside the golden manifest on purpose, so no fingerprint moves.
+  The form repeats the banner (T-04): "Synthetic data only: never upload a real
+  document."
+- **U10, fingerprints.** None moved: no prompt, tool, screen, golden file or
+  recording changed (the reports show nothing changed under `config/`, and F5's
+  `git diff` of the golden manifest, the injection cases and `data/evaluation`
+  printed nothing; `make eval` was not run: it needs a database, and nothing
+  it reads changed).
+- **U11, exposure (the guard was added at F4b).** Each capability has its own
+  switch, off by default: `route.uploads.enabled` (the app's
+  `MERIDIAN_CLAIMS_UPLOADS`) and `route.downloads.enabled`
+  (`MERIDIAN_CLAIMS_DOWNLOADS`), which needs uploads (the chart and the app
+  both refuse it otherwise). The design cited a "local release" guard that
+  the chart did not have (the boundary review's M-5); F4b built the real one,
+  and the second security review made it exact (F4d): **the chart refuses
+  either switch unless the route's host name as a whole is a lower-case name
+  that ends in `.localhost`** and the switches are booleans (the string
+  "false" counted as true), and prints the name quoted (a value with a newline
+  passed the first guard and rendered two names), with a sentence that names
+  S021. The first version of the guard's words said such a name "cannot be
+  reached from another machine"; the review showed that **false**: the guard
+  checks a string, Envoy matches the Host header, which any client can set,
+  and on kind the boundary is the cluster config that binds the published port
+  to 127.0.0.1, not the chart. The guard stops a release that turns the
+  switches on beside a public name in one values file; it does not stop a
+  Gateway reachable from a network, a port-forward, other local users or
+  containers that reach the loopback port or the node's address, a
+  `parentRef` to another Gateway, or a variable set by hand outside the
+  chart. The documents say it in those words. S021 removes the guard.
+- **The app's own brakes (F2b, F4c, F4d).** The security review found that the
+  only brakes against many or slow uploads were the edge's. The app now takes
+  at most four uploads at once (503, before a body byte is read), 30 files and
+  8 MiB a minute for the whole store (429, counted under the store lock), a
+  body within 20 seconds (408), and refuses a raw path that holds a percent
+  sign (404; see Not seen for what RU1 showed of it); a lock wait that times
+  out is "busy", not "the database is unavailable"; a client that goes away
+  frees its place with one INFO line; `claims_api` has a connection limit of 50
+  on kind. **The download has its own** (F4d), because the second review showed
+  that an anonymous caller could write unlimited audit rows with it: a
+  cross-site check (a navigation from another site is the pages' 403 and
+  writes no row), 30 downloads a minute for the whole store, GET and HEAD
+  alike (429, a window per process, which a second replica would multiply),
+  and four at once (503), each before the content is read, and a HEAD that
+  reads the type and size and not the bytes. The file identifier is kept out
+  of the route's span and of the framework's server span; the access log still
+  holds it (a backlog row). `SecurityHeadersMiddleware` and the cross-site
+  check moved to `page_security.py` with no change in behaviour, so that
+  `adjuster.py` is 745 lines.
+
+**Advisor:** three consultations by the main session, recorded from the
+design's dated sections.
+
+- **About 13:55 UTC on 2026-10-07, at the design before the first contract.**
+  Changed: U1 (an upload is not a document arrival); the smallest cut stands
+  and scanning as designed needs no second ask, because it was the option the
+  owner chose; `bytea` is defensible at these sizes and the ceiling is
+  computed from the `size` column, never by summing content; the per-route
+  limit changes shared code, so the boundary reviewer reads it and a test holds
+  that every other route keeps 64 KiB; F1 goes out at once. (Its sentence that
+  two inserts may pass the ceiling by one file was later withdrawn, above.)
+- **About 15:11 to 15:13 UTC, at a surprise: the security review.** The review
+  (approve with fixes; no critical, two high) found two things the design did
+  not hold. The session's reading was F2b (a semaphore, a refusal of encoded
+  paths, a lock wait with its own sentence, a connection limit), F4 cut in two
+  (the form and the list now, the download later) and no upload credential
+  before S021. The advisor kept all three and changed two things: F2b gains a
+  **rate limit in the app**, so that "2,000 small files in seconds" does not
+  depend on which edge route served the path, and the semaphore's 503 carries
+  its own sentence; and the kind run comes **after** F2b so its probes test
+  the fixed app. The download's shape went to the owner as a stated choice.
+- **About 16:20 UTC, at the design of F4b.** D1 to D7 hold. It changed one
+  sentence: D3's claim about "local" was checked before it was written (the
+  edge's port is bound to 127.0.0.1, `infra/kind/cluster.yaml`), and the
+  guard's claim is the narrow one above.
+- **After F4b and F4d, and before the pull request:** not recorded. The
+  second security review (below) read F4b, which neither the advisor nor a
+  reviewer had read, and F4d answered it; no consultation about F4d is in the
+  records this section was written from.
+
+**Work log** (from `git log` of the step's branch, `s070-uploads`, which
+carries the work under the labels "S070 uploads" and F1 to F5; git's order is
+F1, F3, F1b, F2, F5, F2b, F4a, F4c, F4b, DU, F4d; each landing was carried from
+an implementer's worktree and ran the gates its report lists):
+
+- **F1**, `941d6e3`: migration 0032 and its test (80 cases).
+- **F3**, `ec6430d`: the edge: the second HTTPRoute, its buffer and rate limit
+  in a policy of its own, the chart's switch, `MERIDIAN_CLAIMS_UPLOADS`; 17
+  chart tests. The report could not prove the route's precedence and said so.
+- **F1b**, `cbd552a`: the database review's changes to the file and its test.
+- **F2**, `22dabd2`: the route, the sniffing, the three ceilings under two
+  advisory locks, the insert and its audit row in one transaction, the
+  per-route limit in `platform/common/http.py`, the settings, OpenAPI's test.
+- **F5**, `2686333`: the four sample files and their generator, with a line in
+  `.gitattributes` so that a PNG's CR LF survives a commit.
+- **F2b**, `a95424d`: the security review's brakes in the app (above).
+- **F4a**, `97032df`: the claimant's form and its HTML twin, and the adjuster's
+  list of files; the listing moved to `claim_files.py` to avoid an import
+  cycle.
+- **F4c**, `a90f2b1`: the FastAPI and boundary reviews' fixes (below).
+- **F4b**, `cb4ea93`: the adjuster's download, its switch, its policy of its
+  own, its audit row and the chart's `.localhost` guard.
+- **DU**, `4ca66e0`: the first documents: this step's row and section, the
+  threat model, the data classification, the kind README, the demo, the root
+  README.
+- **F4d**, `9f06436`: the second security review's fixes: the download's own
+  brakes, the trail, the byte budget, the chart's guard made exact, the file
+  identifier out of the spans, `page_security.py` split out of `adjuster.py`.
+- **DU2**, this record brought to F4d, the second review and run RU1, with the
+  merge of `main` (plan v0.86), which renumbered this step's four threat rows
+  from T-103 to T-106 to T-108 to T-111 because S020 took T-103 to T-107.
+
+**The five reviews** (a review of the code at the tip named; each read the
+code, none ran a cluster):
+
+- **Database, on F1 (941d6e3): approve with fixes; 0 critical, 0 high,
+  4 medium, 13 low.** Fixed in the unapplied file (F1b): F-01 the hash is
+  checked by the database, F-05 the same file twice on a claim is refused (the
+  owner's "Keep both"), F-06 the content is stored uncompressed, F-07 a CHECK
+  on two columns is a table constraint, F-08 the header's lock sentences, F-09
+  the drift guard reads the live constraint, F-10 and F-11 two test names, F-12
+  a superuser case, F-14 a test of what a delete of a claim with a file does.
+  Fixed in F2: F-02 a row ceiling, F-03 the advisory locks, F-13 no exception
+  detail in a log or an answer, and F-15 the file is looked up through the
+  claim and its tenant. F-17 became the connection limit in F2b. **Accepted:
+  F-16** (the review said not to rely on the file and its audit row sharing a
+  transaction; F2 does, as every audited route of the workload does, and a
+  database per service would end it: S085 and S087 take it into their design).
+  **Open: F-04**, the disk and the write-ahead log at the ceiling, to be
+  measured in the run on kind.
+- **Security, on F2 (22dabd2): approve with fixes; 0 critical, 2 high,
+  4 medium, 5 low.** H-1 (no bound on uploads at once) is fixed in F2b; H-2
+  (an adjuster-side download is an open file host) is answered by the cut in
+  U6, then by the owner's choice and F4b's eleven requirements. M-1 (the rate
+  limit can be skipped) is fixed by the app's rate and the encoded-path
+  refusal; M-3 by the connection limit and the lock-wait answer. **Open: M-2**
+  (disk and log, as F-04). **Accepted: M-4** (refusals leave no audit row; see
+  below) and L-1 (the duplicate answer). L-3 (the twin had no body-limit entry)
+  was fixed in F4a, L-5 (tests) in F2b; L-2 and L-4 need no change.
+- **FastAPI, on F2b (a95424d): approve with fixes; 0 critical, 0 high,
+  3 medium, 9 low.** Fixed in F4c: M1 a client that goes away was a 500 and an
+  ERROR line, M2 a lock-wait timeout logged two ERROR lines, M3 the declared 500
+  and 503 bodies, L1 the two dependencies are `async`, L2 a test without a
+  database that fails if a part rolls to disk (the pin is a backlog row), L4 the
+  20 second read deadline, L5 the form treats "the claim already holds this
+  file" as success, L6 the OpenAPI texts, and the tests it named. **Not
+  changed:** L3 (the worst parse it built takes 94 ms, so four permits stall the
+  loop by 0.4 s at most), L7 (a `root_path` fails closed, and a test pins it),
+  L8 and L9.
+- **Platform boundary, on the branch before F4a (tip not recorded): approve
+  with fixes; 0 critical, 1 high, 6 medium, 3 low.** H-1 (three documents
+  false) is this record's. M-1 (the design promised refusal rows) is corrected
+  here and accepted below. M-2 (an audit row cannot be tied to a file) is
+  accepted and rowed (S085). M-3 (a read path with no caller) is gone: the list
+  has callers since F4a and `file_content` since F4b. M-4 (present tense for
+  what was not built) and M-6 (nothing on the route says "synthetic only") were
+  fixed in F4c. M-5 (the guard the chart did not have) was built in F4b. Of the
+  lows, L-1 (the edge routed a path the app did not serve) ended when F4a
+  built the twin and L-2 (platform prose naming a route) was fixed in F4c.
+- **Security, second, on the download (F4b, cb4ea93): approve with fixes;
+  0 critical, 1 high, 5 medium, 6 low.** It also checked the first review's
+  findings one by one (its H-1, M-1, M-3 and L-3 closed; H-2 open by design,
+  mitigated by the switch and the guard; M-2 open). Fixed in F4d:
+  **H-A** (anonymous GETs could write unlimited audit rows, and the trail's
+  oldest-200 listing would hide every later event of the claim: an app-side
+  limit of 30 a minute, four at once, a HEAD that reads no bytes, and a trail
+  of the newest 200 with the downloads counted on one line); **M-A** (no
+  cross-site check on the download GET: a navigation from another site would
+  save a file and write a row); **M-B** (the byte ceiling filled faster than
+  the file rate: the 8 MiB budget); **M-C** (the chart's guard text claimed a
+  property it does not have: the words in U11); **M-D** (a host name with a
+  newline passed the guard: anchored match, quoted); **L-A** (the string
+  "false" turned uploads on: booleans only); **L-B** (the scope marker set
+  before the response was built); **L-C** (the test of who sets the marker
+  scanned four modules: it scans the package); **L-D** (the file identifier
+  in the spans: out of both spans, the access log still holds it). **Stays as
+  rows:** L-E (the adjuster's page prints the full SHA-256 in a `title`, so a
+  reader can confirm that a claim holds an exact file without uploading it),
+  L-F (the audit row carries no file identifier: S085), and **M-E** (whether
+  the edge's rate-limit buckets are per route or per match; RU1 narrowed it:
+  GET and HEAD of the download share the named rule's bucket, and the uploads'
+  and the downloads' buckets are separate, but the two POST matches of the
+  uploads route were not tried against each other). Its probes P1 to P12 are
+  what RU1 ran in part.
+
+**Result / verification.** Implemented and tested against PostgreSQL, and **run
+once on kind** (below), nothing paid, no evaluation fingerprint moved. The
+gates are the implementers' as their reports print them; the main session
+reads them again.
+
+- **F1:** `make pytest-db` on the migration's test and the migration rules,
+  last line `260 passed in 7.91s`; after F1b, `279 passed in 7.39s`.
+- **F3:** `make helm-lint` `1 chart(s) linted, 0 chart(s) failed`; the chart
+  tests, `515 passed in 25.86s`.
+- **F2:** `make pytest-db` on the workload, `http.py`, OpenAPI, the import
+  contracts and the migration's test, `4114 passed in 94.72s (0:01:34)`.
+- **F5:** `uv run pytest tests/synthetic -n 0`, `275 passed in 1.24s`; the
+  fingerprints' test, `69 passed in 0.36s`; two `make synthetic` runs give the
+  same SHA-256 for all five files.
+- **F2b:** twelve files, `630 passed in 21.93s`.
+- **F4a:** `1156 passed in 36.89s`, and the claims workload with the kind image
+  test, `3892 passed in 82.14s (0:01:22)`.
+- **F4c:** `1081 passed in 35.92s`, and the wider run `4213 passed, 1 warning
+  in 86.66s (0:01:26)`.
+- **F4b:** `1408 passed in 42.55s`, and the wider run `4287 passed in 89.06s
+  (0:01:29)`.
+- **F4d:** the claims workload with `test_http.py`, OpenAPI, both chart files,
+  the migration, roles, import-contract and sample tests, `4421 passed in
+  102.24s (0:01:42)`; `make helm-lint` `1 chart(s) linted, 0 chart(s)
+  failed`. Line counts under `src/` of the files it touched: `adjuster.py` 745,
+  `uploads.py` 797, `file_download.py` 331, `page_security.py` 126,
+  `claim_files.py` 77. Three tests of the trail were reordered because it now
+  selects the newest events (`test_adjuster_pages.py`), and one expects the
+  count line where it expected a row.
+- **Run RU1 on kind**, 2026-10-07, 17:25 to 17:38 UTC, the local cluster (made
+  at 11:08 UTC), commit `9f06436` built and deployed by `make deploy`, with both
+  switches added to kind's values for that run only (a local edit, reverted)
+  and turned off by a second deploy at the end; free, nothing deleted. Two
+  earlier tries changed nothing but the deploy (one stopped on the script's own
+  anchor; one because the adjuster's queue held no claim, and it left the
+  switches on for about six minutes on a `.localhost` name whose port is bound
+  to 127.0.0.1). What the record prints:
+  - **Deploy:** `make deploy` rc 0 in 110 s (the image built, migration 0032
+    applied, the release upgraded); the Claims API's pod Ready with
+    `MERIDIAN_CLAIMS_UPLOADS=on` and `MERIDIAN_CLAIMS_DOWNLOADS=on`.
+  - **Routes and policies:** both HTTPRoutes `Accepted` with resolved
+    references, the uploads route with two rules, the second named
+    `downloads`; three BackendTrafficPolicies, all `Accepted=True`; the
+    downloads policy targets the named rule (`claims-api-uploads/downloads`),
+    and the route's own policy also shows `Overridden=True`: the section's
+    policy replaces it for that rule.
+  - **Which route served what:** a valid 100 KiB PDF to
+    `POST /claims/CLM-0001/files` was 201 (the second route won: the first
+    route's buffer is 64 KiB); 100 KiB of JSON to `/documents` was 413; the
+    form's twin with a same-origin `Origin` was 303; 1.2 MB to the upload path
+    was 413 with the edge's body ("Payload Too Large").
+  - **A download through the edge:** GET 200 with 102,400 bytes equal to what
+    was sent; the nine headers as the tests assert them, among them one
+    `content-security-policy: default-src 'none'; frame-ancestors 'none';
+    sandbox`, `content-disposition: attachment; filename="CLM-0001-<file
+    id>.pdf"`, `nosniff`, `no-store` and the same-origin resource policy; HEAD
+    200 in 0.011 s with the full `content-length` and the same policy.
+  - **The pages:** the adjuster's claim page linked two files with "not
+    scanned" and a line "Downloads of this claim's files: N, the latest at
+    ..."; the claimant's status page held no link to a file and no file id.
+  - **Cross-site:** a GET with `Sec-Fetch-Site: cross-site` was 403, with
+    `same-origin` 200, with `Host: evil.example` the edge's 404; a POST to the
+    twin from another origin was 403.
+  - **The limits at the edge:** seven uploads in a row were 201, 201, then
+    four 409 ("the claim already holds five files"), and the seventh was 429
+    with the edge's body (`local_rate_limited`): six a minute. 32 downloads in a
+    row were 30 times 200, then 429 with the edge's body: 30 a minute on the
+    named rule. A HEAD right after was 429 (the rule's bucket); an upload right
+    after was 409 from the app, not 429: the uploads' and the downloads'
+    buckets are separate.
+  - **The audit count:** the downloads line read 1 after the first GET and 33
+    at the end: one row per 200, 33 of them in the run, none for a HEAD, a 403
+    or a 429.
+  - **Off again:** the values edit reverted; `make deploy` rc 0 in 16 s; the
+    upload path and the download path 404; no variable switched on; smoke 46
+    PASS, 0 FAIL.
+- **Every landing:** `make lint` ended `Contracts: 6 kept, 0 broken.`,
+  `make test` ended `Ran 385 tests` / `OK` (F5's last line read `codex agents:
+  11 twins current`), and `make docs` `docs consistency: 14 checks passed`.
+- **The whole suite on the final tree,** with coverage, merged with `main` at
+  1ef35d8: `21219 passed, 8 skipped, 8 warnings in 347.91s (0:05:47)`, 99.14
+  per cent of 14,384 statements (124 missed).
+
+**Mutations**, each applied, run, seen red and restored (the counts are the
+reports'):
+
+| Landing | Removed | Red |
+|---|---|---|
+| F2 | the sniffing (the declared type is used) | 16 failed |
+| F2 | the global ceiling | 5 failed |
+| F2 | the per-route limit, applied to all routes | 36 failed |
+| F2 | the store's advisory lock | 1 failed |
+| F2 | the spool override | 2 failed |
+| F2b | the semaphore check | 2 failed |
+| F2b | the encoded-path dependency | 4 failed |
+| F2b | the cross-site dependency | 6 failed |
+| F2b | the claim lock alone | 3 failed |
+| F2b | the rate check | 3 failed |
+| F2b | the `QueryCanceled` mapping | 2 failed |
+| F3 | the second policy's target / the route-off guard | 1 failed each |
+| F4a | the twin's cross-site dependency | 6 failed |
+| F4a | the tenant filter of the listing | 1 failed (no page test could) |
+| F4a | the twin's body-limit entry | 4 failed |
+| F4a | `except HTTPException` widened | 1 failed |
+| F4c | `except ClientDisconnect` | 2 failed |
+| F4c | the read deadline | red (first failure only) |
+| F4c | the form's duplicate-as-success | 1 failed |
+| F4c | `RoutePattern`'s `[^/]+` made `[^/]*` | the `/files/` case |
+| F4b | the sandbox from the policy | 5 failed |
+| F4b | the tenant check of `file_content` | 2 failed |
+| F4b | the audit write moved after the response | 2 failed |
+| F4d | the download's limiter | 3 failed |
+| F4d | the download's cross-site check | 6 failed |
+| F4d | the trail's filter (the event argument changed) | 2 failed, among them the 250-downloads test |
+| F4d | the host name's `quote` in the chart | 1 failed |
+
+**Not seen** (what run RU1 did not reach, as its record lists it, and what is
+left of the earlier list; the second run, RU2, settled the encoded path):
+
+- **A browser.** The real file picker, a click that saves the file and does not
+  render it, another origin unable to read it, the 303 to the status page and
+  the refusal pages as a person meets them. RU1 was a script: the cross-site
+  refusals were headers it set, not a browser's.
+- **Slow bodies and slow readers:** the four permits, the 20 second read
+  deadline, and memory under four concurrent uploads and under slow downloads.
+- **The app's own 429s and 503s.** The edge's limits answered first, so the
+  app's rate (30 files a minute), the 8 MiB byte budget and the download's four
+  permits and 30 a minute were not reached behind the edge.
+- **Retries at the edge on a 503.** Whether Envoy retries a busy 503 on a POST
+  and so multiplies the load was not read.
+- **An encoded path with a body over 64 KiB.** RU1 found that **Envoy
+  normalises the path before the app sees it**, which the code's comments did
+  not expect: `POST /claims/CLM-0001/%66iles` was served as an upload (201), a
+  GET with the first character of the file identifier encoded was 200, and
+  `POST //claims/CLM-0001/files` reached the upload route too (409, the file
+  being already on the claim). So behind this edge the app's refusal of a raw
+  path that holds a percent sign never fires: the app receives the normalised
+  path. RU1 could not tell which route matched the normalised request (its
+  bodies were under 64 KiB). **RU2 did**: 100 KiB bodies sent to an encoded
+  and to a double-slashed path reached the app, which the first route's 64 KiB
+  would have refused, and the seventh of seven uploads to the encoded path got
+  the edge's own 429: the uploads route serves the normalised path and its
+  limit counts it. An escaped slash was not probed.
+- **CLM-0001 now holds five files** on that cluster, so a second run needs
+  another claim.
+- **The memory arithmetic** (not measured on the cluster): 16 MiB of 126 MB of
+  room for four uploads, from the review's measurement of about 2 MiB in the
+  parser and three to four through to the database.
+- **The database's size and write-ahead log at the ceiling** (`pg_database_size`
+  and `pg_wal` after filling to 128 MiB, and `SHOW max_wal_size`): the 2 Gi
+  volume is shared with the audit trail and a full disk stops every service
+  that writes it. Nothing here is measured; the database reviewer's arithmetic
+  for 256 MiB was 265 to 270 MiB on disk and about as much again in the log,
+  and the default is half of that ceiling.
+- **The lock-wait bound itself** (10 s; the tests ran it at 300 ms), the
+  connection limit of 50 in normal use, and a **real uvicorn**'s treatment of a
+  client that goes away (the tests drive the app with raw ASGI events; RU1 did
+  show uvicorn's answer to a HEAD behind the edge).
+- **The migration's lock timeout on a cluster.** RU1 applied 0032 (the deploy
+  ended rc 0); the migrate Job's retry of a lock timeout was not checked.
+
+**Accepted, and said:**
+
+- **Refusals write no audit row.** Design U8 said the existing throttled
+  refusal rows would cover them; there are none in this workload, and building
+  one would let an anonymous caller fill the audit table (T-49). The code's
+  comment says so; the design sentence was wrong. A flood of 415s, 409s or
+  507s shows in Envoy's log only.
+- **The audit rows of a stored file and of a download hold the claim and the
+  tenant and cannot be tied to one file.** `AuditEvent` has no field for a
+  file; five files of a claim, and a download of one of them, differ only by
+  time. Backlog row, home S085.
+- **The duplicate answer is an oracle.** A caller who holds the exact bytes
+  learns that the file is on that claim; each wrong guess stores the guess, and
+  a full claim answers before the duplicate check. The JSON 409 hands out no
+  file identifier, and the form's duplicate lands on the status page.
+- **A stored file stays for ever.** The app has no delete and no retention
+  period; `claims_api` cannot delete; the bytes are in the log and in backups.
+  T-111 is **open** for that reason, and the banner is its only guard.
+- **A well-formed PDF or image that exploits the adjuster's viewer is stored
+  and delivered.** Scanning is designed only; "not scanned" is the control.
+- **Anyone who reaches the host can fill the store.** Uploads then stop for
+  everyone until the database is dropped; the byte budget makes it take 16
+  minutes for the default ceiling instead of four.
+- **The `.localhost` guard checks a string and stops a release, nothing
+  more.** Envoy matches the Host header; on kind the boundary is the published
+  port bound to 127.0.0.1. A reachable Gateway, a port-forward, another local
+  user, a container that reaches the loopback port or the node's address, and a
+  variable set by hand outside the chart are not stopped; the app does no Host
+  check; the pages share the exposure (T-69).
+- **The adjuster's page prints each file's full SHA-256 in a `title`.** A
+  reader can confirm that a claim holds an exact file without uploading it (the
+  same family as the duplicate answer); it is read-only. A backlog row.
+
+**For the owner** (none blocks the pull request; the default if unanswered is
+that nothing more is built):
+
+- **Retention and erasure of uploaded files, before any real use.** How long
+  a file stays, who deletes it and whether the schema's owner may; until then
+  the banner is the only guard against a real person's document, and the
+  features stay off for any host that other people reach. The session's
+  recommendation is to decide it with S068's periods, and not to turn either
+  switch on beyond the machine before S021.
+- **The older S070 items stay where they are**, in S070's section: the bound on
+  what a name may replace (c), the cut of a dotted number and a third date
+  guard (d), where the three known phone leaks go (e), `drafted_by` (f) and
+  the claim brief's retention (g).
+- **A thing the session decided and the owner may reverse:** the 128 MiB
+  default for the store's bytes, below the design's 256 MiB, until a run on
+  kind has measured the volume (RU1 did not).
+
+**Rows** (Part B's follow-up backlog, each with its home; the rows are in
+the table): scanning (S080, later half); sign-in closes the open upload and
+download and removes the `.localhost` guard, and an upload counts as the
+document (S021); a second host name for downloads (S021); the audit model has
+no field for a file (S085); retention and a delete path (S068); the file
+identifier in the access log (S021); the hash in the list's `title` (S021);
+the edge's rate-limit buckets, per route or per match (S080, the next run);
+the parser leans on Starlette's internals (S080, later half); Envoy's handling
+of an encoded path, closed for this edge by RU2; small ends (S080, later
+half). Two rows of the first documents are gone: the download's missing bound
+on concurrent reads (F4d gave it four permits and 30 a minute) and
+`adjuster.py` over 800 lines (it is 745). The row "Uploads (T-38)" is closed by
+this step and homed here.
+
+**Follow-ups:**
+
+- The threat model's T-38 is brought to what is built, designed and off, and
+  T-66 says an upload does not count as the document; **T-108 to T-111 are new**
+  (the bound on many uploads, the stored file against the viewer, the open
+  file host, a real document; they were T-103 to T-106 until the merge of
+  `main`, where S020 took T-103 to T-107), which makes 111 threats (the
+  register, the root README and the demo's last page say the count; the demo's
+  page said 101, which was already stale).
+- The data classification's row of uploaded documents, the kind README's
+  section "Files for a claim", the demo's optional part on a file, the root
+  README's rows of the claimant's pages and the adjuster's UI and the synthetic
+  README's name for the step were brought to the code. The chart's comments in
+  `values.yaml` and `route.yaml` were read against the code and F4d's own words
+  about the guard stand. The migrations README names 0032. The first
+  documents said a `.localhost` name resolves to the machine itself and is
+  reached from the machine alone; that is replaced, in the threat model, the
+  kind README, the root README and this section, by what the review
+  says the guard is. **File sizes:** `scripts/check_file_sizes.py` reached `main` after
+  this branch was cut, so once: the entries of `test_http.py` (860 to 1,037
+  lines) and `test_adjuster_pages.py` (3,097 to 3,105) were set to the counts
+  this branch grew them to, and `test_claim_files_migration.py` (824) and
+  `test_claim_uploads.py` (1,340) were listed, as test files written on a
+  branch cut before the check existed; no file under `src/` is over 800.
+
+### S081 — The decision record for the move toward services
+**Status:** doing · **Started:** 2026-10-07 · **Finished:** —
+**Goal:** write down, before anything is built, what the owner decided about
+moving the platform toward services (a database per service on one server, six
+images with independent versions, the tool servers trusting the authenticated
+caller, the audit trail as an outbox, a fresh baseline per database) apart from
+the session's own design, with the ten couplings that stand in the way and the
+eight steps that would cut them. Documents only:
+no code, no chart, no test. Every capability in it is designed.
+
+**Decisions:**
+
+- **Decided by the owner, 2026-10-07 (the answers file, fourth, fifth and sixth
+  rounds):** "A database per service, one server (Recommended)", refined at once
+  to five databases ("Five databases (Recommended)": `claims`, `runtime`,
+  `gateway`, `policy`, `knowledge`; the claims tool server shares the claims
+  database under its own role); "Six images, independent versions"; "Trust the
+  authenticated caller (Recommended)" (the tool servers give up their own read
+  of the run and the claim; the lost double check is an accepted risk, and T-22
+  is rewritten when the code changes); "Map and decision record now, build
+  after (Recommended)". The answers are copied as written, with the question
+  tool's mark of the session's recommendation.
+- **Decided by the owner in the sixth round (about 15:30 UTC; Part D's
+  questions 7 and 8, answered):** "Outbox per service (Recommended)": the audit
+  trail as an outbox, against a shared audit database (the guarantee "no
+  action without its row" is lost) and against the log pipeline; and "Fresh
+  baseline per database (Recommended)": one migration tree and ledger per
+  database from a baseline, with no replay, honest only because no environment
+  holds data, with the 31 files and their 59 test files archived outside the
+  package's path. The record says the fact the map found: the Model Gateway
+  already writes its audit row on a separate connection, so one service of six
+  runs without the guarantee today. The answers do not settle whether the
+  gateway's audit row joins its ledger's transaction, nor where the archive
+  lives: S085's and S087's designs say.
+- **The session's own, not put to the owner (the owner may overturn any):** ADR
+  number 10, taken now and moved if another ADR lands first (Part A: numbers are
+  taken late); status Accepted; no Mermaid diagram, because a table says the
+  before and the after; the new steps in a section of their own in Part B and
+  not among the backlog steps, whose preamble says they add no capability; S087
+  depends on S083 as well as on S084 to S086, because a migration tree per
+  database lives in a package per service; S082's row names S020 and the range
+  S069 to S074 as the owner's "the steps in flight" was read, with the note
+  that of S071 the free half's pull request gates it and the paid run does not;
+  the threat model's rows T-22, T-25 and T-97, the model's files and the root
+  README are not changed (nothing is built); two backlog rows for the documents
+  and the queries that name one image or one database.
+- **Rejected, with the reasons in ADR 10:** schemas kept in one database; a
+  server per service (the designed next step, its price on Azure to be read and
+  not stated); six databases strictly; one image; six images with one version;
+  the double check kept over the network; a shared audit database; audit
+  through the log pipeline; a replay of the 31 files into each database.
+
+**Advisor:** one consultation is recorded in the design, on 2026-10-07 about
+14:35 UTC, at the design, before this record was written. It changed five
+things: the claims tool server's database went to the owner as a choice, not a
+silent reading; the audit outbox stayed the recommendation with the fact about
+the gateway's separate connection added and the relay's cost and failure mode
+(a lagging or dead relay: a stale trail and no retention) named; the signed run
+context was dropped as redundant beside mutual TLS, so the real decision became
+the loss of defence in depth, and the owner's; the baselines were found honest
+and incomplete, so the record says where the 31 files and their tests go and
+that it is a large deletion; and the steps got two named checkpoints, with the
+note that independent release needs a CI that builds and publishes images,
+which does not exist. No second consultation was held for this step: the
+pull request is documents alone.
+**Work log:** 2026-10-07. A read-only map of the code on `main` at d1fd865,
+nothing run: the ownership matrix of tables and roles from the 31 migrations,
+every cross-service read and write with its code, what assumes one database,
+one image or one version, the import contracts and the contracts between
+services; it found ten couplings. A design of eight decisions (V1 to V8) and
+eight steps, with its threat model. Seven questions put to the owner in three
+rounds, three at about 14:15 UTC, two at about 14:45 UTC and two at about 15:30
+UTC, with the answers above (an earlier count said four). This record, ADR 10, written
+through the `architecture-docs` skill; this section, the rows and Part D's two
+questions, answered in the sixth round; the architecture README's index and
+reading paths.
+**Result / verification:** ADR 10 exists and is indexed. The gates are run on
+the branch and their output is in the pull request.
+**Follow-ups:** S082 to S088 (rows above) start when the steps in flight are
+merged; T-22
+(S084), T-25 (S087) and T-97 (S083) are rewritten in the steps that make them
+false; the two backlog rows (documents that say "the one image", S083; queries
+and smoke lines that name one database, S087). Open for those steps and said in
+ADR 10: how the tool servers' trust applies when the caller is another tool
+server and whether the new claims route is a registry tool (an evaluation
+fingerprint), whether the gateway's audit row joins its ledger's transaction,
+what the relay's rows carry so the trail is selected by claim, how the
+adjuster's page reads the central trail, where the archive of the old
+migrations lives, and whether the claims sweep has an identity of its own.
+### S020 — Azure platform
+**Status:** doing · **Started:** 2026-10-07 · **Finished:** — · first half
+written in plan v0.86
+**Goal:** the Azure environment of one demo day as code: the virtual network,
+AKS, the registry, PostgreSQL Flexible Server with pgvector and workload
+identity to Key Vault, created and removed together, beside the persistent
+foundation (S007). This record is the first half, the code half, which the
+owner started on 2026-10-07 at about 12:13 UTC with a yes to "Terraform
+written, validated, scanned; NO apply, NO plan against the account, NO cost".
+**Nothing was applied, no plan ran against an account, no sign-in was used and
+no price was paid.** The module is written and validated, and a policy scan
+finds nothing at HIGH or CRITICAL; that is a capability of code and not a
+deployed one (hard rule 7).
+
+**Two halves.** The first half (this record): the module `infra/terraform/azure/`
+with its README, ADR 11, the deployment view `DeploymentAzure`, five threat
+rows, the Azure platform document brought to it. The second half is the
+owner's: the wrapper and the guard's rules (a later pull request: no door that
+plans, applies or removes the module exists), the upgrade to pay-as-you-go by
+about 2026-10-30, a decision on a firewall for the foundation's vault and
+account, the apply with its cost stated first and a yes, and then the work that
+needs a cluster: the chart on it, the identities' service accounts, the
+database's roles, the egress rule, S022's push. If the owner answers no to the
+apply, this section closes the step as done with its second half not built, and
+says so.
+
+**Decisions** (the main session's unless marked; the owner may overturn any;
+the design was written before the first contract, and where a review or a
+sheet changed one, the entry says which):
+
+- **Where, state, pin (D1 to D3).** `infra/terraform/azure/`, its own state: the
+  foundation is persistent, this is created and removed. The state is the
+  foundation's storage account under the key `platform.tfstate`, Entra
+  authentication only. The foundation is read by data source and by its fixed
+  names, never through its remote state. The subscription comes from
+  `ARM_SUBSCRIPTION_ID`; the module computes the vault name that the foundation
+  would have in that subscription and a plan elsewhere stops at that read.
+  **The advisor's reading corrected D3's carrier of the suffix:** the resource
+  group has none, the vault has it.
+- **Region (D4).** A closed list equal to the foundation's, `swedencentral` or
+  `westeurope`, default Sweden Central, held equal by a test (hard rule 3).
+- **Network and engine (D5), the API server (D6), the administrator's password
+  (D9), the edge (D12) and the tenant: ADR 11** holds the options not taken,
+  the prices and the owner's words.
+- **Nodes (D7).** One system pool of two `Standard_D2s_v5` from a closed list of
+  two sizes, 50 pods a node, the Free tier, no automatic upgrade. The default
+  size came from what the kind cluster runs (32 pods requesting 2.07 vCPU and
+  3.0 GiB; the memory limits sum to 7.0 GiB), **not from a page**; and the
+  facts sheet's reading of AKS's memory reservation made the pod limit 50. The
+  trial's vCPU quota is on no page (a six-year-old community answer says 4, which
+  two such nodes use whole): it is read with one sign-in before the paid stop.
+- **Registry (D8).** Basic, admin off, `AcrPull` for the kubelet identity, and a
+  public endpoint: Basic has no private endpoint (Premium only, ten times the
+  price). The role assignment mode is written (`LegacyRegistryPermissions`)
+  because `AcrPull` is honoured only under it.
+- **Database (D9).** PostgreSQL 17, burstable, private access, 7-day backups,
+  no geo-redundancy (fixed at creation; it copies to the paired region), the
+  `vector` allow-list. Password and Entra authentication both on: the chart's
+  eleven roles log in with passwords. The tension with T-42 is written (ADR 11).
+- **Identities and endpoints (D10, D11).** Two identities, each federated to one
+  service account with one role on one resource; no role on a group, the vault or
+  the subscription. Private endpoints for the vault and the OpenAI account, so
+  that the gateway's egress rule can be a rule to one subnet; **the foundation's
+  public access stays on** (the laptop's live mode and `make azure-smoke` use
+  it), so closing the three resources to the network is not done.
+- **Observability and budget (D13, D14).** One workspace with a daily cap takes
+  the cluster's audit categories, the one thing the cluster cannot keep for
+  itself; managed Redis and Azure Monitor stay designed. A budget alerts and
+  does not stop spend (T-15).
+- **The doors (D15).** `make azure-platform-validate` and `make
+  azure-platform-scan` only, S078's shape. The wrapper and the guard come
+  together after S079 is on `main`, so that no creating command exists that the
+  guard does not read.
+- **The owner's decisions of 2026-10-07 (the question tool).** The edge:
+  **"Envoy + written WAF design (Recommended)"**, after the owner asked for each
+  option "for presentation and for business case". The tenant: first "Move now",
+  then, after the facts that a trial cannot create a tenant, **"Stay in the
+  trial's tenant after all"**; the checklist for the upgrade: "Later, when
+  S020's code is merged" (below). Part D question 5 is answered.
+- **What the first two reviews and the second facts sheet changed.** The
+  workspace is purged at removal (so the log goes with the environment: T-105);
+  a second budget on the node resource group; the subnet's storage endpoint is
+  declared and the server's zone ignored; the registry's mode is written; the
+  two Private Link links redirect an unknown name; the vector allow-list is in
+  the case Microsoft writes it; the administrator's login is letters alone; the
+  workspace takes no shared key. Then the second infrastructure review took the
+  server's logging out again, ordered the security groups before what is made in
+  their subnets, and made the database's group deny from the `VirtualNetwork`
+  tag and not from everything.
+
+**Advisor:** two consultations on the design, both in the design file's dated
+sections; the owner's rounds are above.
+- *2026-10-07, about 12:44 UTC (before the first contract).* It changed: D3
+  named the wrong resource as the carrier of the suffix (corrected); the "no
+  tension found" of the threat note was wrong (T-42 against D9 is one, written,
+  with its row to amend); D7's default had no evidence (the kind cluster was
+  read, and the condition under which the default moves written); D12's "the
+  same code either way" was off (a subnet and an identity differ: reworded, and
+  one question for the cluster's identity); every SKU is checked as offered in
+  the region from a page, with the date; and a facts sheet read from Microsoft's
+  pages goes out beside the first contract.
+- *2026-10-07, about 15:13 UTC (after the first infrastructure review).* It
+  changed: the module's fixes wait for the second facts sheet (several had the
+  wrong shape without it); HIGH-4 is the foundation's firewall, code the owner
+  applies at the paid stop, and the operator's address is a sensitive variable
+  with no default and no example; M1 and M9 go to the wrapper, M8 to the README,
+  the quota to the owner's list.
+
+**Work log** (contracts Z1 to Z6b and Z8; each ran in a worktree of its own
+from the step's branch and was carried by the main session; the commit is the
+step branch's):
+- **Z1, `461ea15`**: the skeleton: versions, the provider with
+  `resource_provider_registrations = "none"`, every variable with its closed
+  list, `main.tf` (the foundation's data sources, the pin, the group),
+  `network.tf`, the lock for two platforms, a README stub and the first tests.
+  `151 passed`.
+- **Z2, `fa991b3`**: `cluster.tf`, `registry.tf` and the workspace; the
+  cluster's identity and its one role. **Z3, `7d6e9d3`**: `database.tf`, with
+  the ephemeral password and the write-only arguments (the schema offered both:
+  no STOP). **Z4, `5a963eb`** (with `da86857`, a test whose premise the facts
+  sheet had settled): `identity.tf`, `endpoints.tf`, `budget.tf`, `outputs.tf`.
+- **Z5, `d5f61c1`**: the two doors, `.trivyignore` with no entry, the Renovate
+  note; `aws.sh validate azure` keeps its provider cache under the home
+  directory so a validate leaves nothing in the module's directory. The scan
+  found eight MEDIUM and LOW findings and none at HIGH.
+- **Z6, `ff7a722`**: the fixes after the first two reviews and the second facts
+  sheet (the list above), a test file of its own (`test_azure_module_fixes.py`),
+  and the list of what `validate` cannot tell.
+- **Z6b, `d3188fb`**: the fixes after the second infrastructure review: what is
+  created in which order, and what the database subnet lets in; the server's
+  logging taken out, with a comment that says what the first sign-in must read.
+- **Z7, the wrapper, the guard and the settings: not built**, by the design's
+  order (after S079 is on `main`); a backlog row.
+- **Z8, this change**: the module's README, ADR 11, the view `DeploymentAzure`,
+  the Azure platform document, five threat rows and T-42 amended, this section,
+  the lines of two READMEs that were false. Three tests of the README stub were
+  replaced by tests of the real README, and the price test now exempts the
+  README, the one place a price may stand.
+- Merges of `main` into the step branch: `742e2d3`, `0ab25a0`.
+
+**Reviews** (three; each read the module and none ran a plan):
+- *Infrastructure review of `d5f61c1`*: approve with fixes. **0 critical, 4
+  high, 11 medium, 11 low.** High: the workspace outlives the removal (fixed:
+  purged); the budget cannot see the cost (fixed: a second budget); a re-apply
+  would remove the PostgreSQL subnet's storage endpoint (fixed: declared); the
+  foundation's vault is public and receives the password (**not fixed: the
+  owner's decision**, T-104). Medium and low: fixed in Z6 and Z6b where the
+  module could, the rest in the wrapper's list (password version, role
+  propagation, redaction) or in the README.
+- *Security review of `d5f61c1`*: **0 critical, 1 high, 8 medium, 7 low.** The
+  high: the workspace's shared keys reach the state (fixed: shared-key sign-in
+  off; whether the keys are still written is not read). Medium: the security
+  groups (built), the vault's audit log (built), the server's logging (built,
+  then taken out again), the lossy audit capture and its death with the
+  environment (the README and T-105; an alert is not built), the guard and the
+  settings for the directory (the wrapper's contract), egress and the standing
+  read of the secrets identity (the second half).
+- *Second infrastructure review of `ff7a722`*: approve with fixes. **0
+  critical, 2 high, 6 medium, 8 low.** High: the associations were not ordered
+  against what is made in their subnets, and the database's deny from every
+  source refused traffic the service may need (both fixed in Z6b). Medium: the
+  server's logging cascades into the database's creation (removed), the throttle
+  could slow the bootstrap Job (removed), two no-op parameters (removed), an
+  anonymous-pull setting that Basic does not have (removed), the amount is per
+  budget and the mail comes twice (the README).
+
+**Result / verification** (the gates as each contract's report printed them;
+the main session's own run is in the pull request):
+- Z6b, on `d3188fb`: `make azure-platform-validate`: `Success! The
+  configuration is valid.` `make azure-platform-scan`: `- '0': Clean (no
+  security findings detected)`. `uv run pytest -n 4 tests/meridian/
+  test_azure_module*.py tests/meridian/test_azure_scan.py
+  tests/meridian/test_aws_script.py`: `1260 passed in 12.06s`. `make lint`:
+  `Contracts: 6 kept, 0 broken.` `make test`: `Ran 385 tests`, `OK`.
+  `make docs`: `docs consistency: 14 checks passed`.
+- Z8, on the documents' branch: `make azure-platform-validate`: `Success! The
+  configuration is valid.` (the README sits in the module's directory).
+  `make azure-platform-scan`: `- '0': Clean (no security findings detected)`;
+  the same image at all severities found the eight findings the README lists
+  (`AZU-0017`, `0019`, `0021`, `0024`, `0040`, `0065`, `0066`, `0067`). `uv run
+  pytest -n 4 tests/meridian/test_azure_module*.py
+  tests/meridian/test_azure_scan.py`: `418 passed in 3.50s`. `make check`: exit
+  0, no ERROR line. `make test`: `Ran 385 tests`, `OK`. `make lint`:
+  `Contracts: 6 kept, 0 broken.` `make docs`: one failure, `ADR numbers must
+  run 1..10 without gaps: [1, 2, 3, 4, 5, 6, 7, 8, 9, 11]`, which the contract
+  causes (ADR 10 is on `main`, not on this branch) and which a merge of `main`
+  ends; no other check failed. The view's PNG was exported and read at full
+  size.
+- At the merge of `main` (2026-10-07, at 757a6a4, with S074's file size check
+  now on it): decision record 11 follows record 10 in the index, and `make
+  docs` passes. This branch was cut before the check reached `main`, so, once
+  and as S074's part says, the entries of two listed files it grew were set to
+  their counts (`infra/terraform/aws.sh` 812 to 878,
+  `tests/meridian/test_aws_script.py` 1,491 to 1,754), and one test file it
+  wrote before the check, `tests/meridian/test_azure_module.py` (1,268
+  lines), was listed with the same reason as the 51 the check started with: a
+  row of S074 homes its split. The overview's table no longer names an
+  Application Gateway at the edge (ADR 11).
+- The whole suite on the final tree, with coverage: `20563 passed, 8 skipped, 8
+  warnings in 247.74s (0:04:07)`, 99.11 per cent of 13,869 statements.
+
+**Not seen** (the whole of it; each is a statement about what has not met
+Azure):
+- Whether `azurerm` 5.8 plans this module at all, and whether a second plan is
+  empty. Whether any precondition refuses (`validate` does not evaluate one).
+- The trial's vCPU quota, whether the `Dsv5` family, PostgreSQL 17 on a
+  burstable size with private access and Kubernetes 1.36 are offered to this
+  subscription in the region, and whether `max_pods = 50` is accepted.
+- That the seven resource providers register, and that the cluster survives its
+  role's propagation (up to 60 minutes on the page).
+- That the security groups admit the database service's own traffic, that
+  overlay pods leave through their node's address, that the private endpoints
+  are approved, that a role at one secret's scope works on a secret made through
+  the data plane, that Azure accepts a budget on the node resource group, and
+  that the diagnostic categories are the names Azure takes.
+- That the removal is clean: the delegated subnet right after the server, the
+  purge, the soft-deleted secret, the vault's diagnostic setting.
+- Every price, which is a list price read on 2026-10-07 through a summarising
+  reader, six of the sheet's twelve lines estimates, and the `FreeTierInfra
+  structureCost` meter, which no page explains. Whether the state holds the
+  workspace's keys. Whether the chart's NetworkPolicies behave under Cilium.
+- That any statement of ADR 11 about Azure's behaviour is true: each is a
+  reading of a page or of the provider's schema.
+
+**Not done, by decision or left open:** the wrapper and the guard's rules; the
+server's logging, the throttle, the cap's alert and the TLS floor as
+parameters (the README says why each is not built); an `anonymous_pull`
+setting; a firewall for the foundation; a private cluster; Defender, Azure
+Policy and Container Insights; the web application firewall (a written design
+in ADR 11); the second half.
+
+**For the owner** (non-blocking; nothing is asked to be paid):
+
+*The upgrade to pay-as-you-go, by about 2026-10-30, in the order of
+Microsoft's page "Upgrade your Azure free account" and the facts read on
+2026-10-07:*
+1. Before it, look at what the trial still holds: the credit is usable for 30
+   days from sign-up (the page's example: a trial that began on November 1 and
+   was upgraded on November 5 kept its credit until November 30; for this one,
+   signed up on 2026-09-30, that reads as 2026-10-30, the arithmetic of the
+   example and not a statement of that date). Upgrading before the end keeps the
+   unused credit.
+2. In the portal: Subscriptions, the subscription, "Upgrade subscription", a
+   payment method, a name, a support plan (the page asks for one; its price is
+   not read), "Upgrade". The page may ask for a phone number.
+3. What changes: the spending limit goes away, so spend beyond the credit bills
+   the card, and the budgets (the foundation's EUR 60 and the module's two)
+   alert and stop nothing. The page also says free services last 12 months
+   after the upgrade.
+4. After it, read the subscription's offer and its identifier, and **check that
+   the identifier is the same**: no page says whether an upgrade changes it, and
+   every global name in the foundation and the module derives from it (the vault,
+   the OpenAI account, the state account, the registry, the server, the pin).
+   If it changed, stop: the foundation would have to be rebuilt.
+5. Then, with one sign-in and before the paid stop, read: the vCPU quota in the
+   region (total regional and the `Dsv5` family; four are used by two
+   `Standard_D2s_v5` nodes, six if an upgrade needs a surge node), which sizes
+   the subscription is offered, PostgreSQL 17 on `B_Standard_B1ms` with private
+   access, and Kubernetes 1.36. The portal's way to each is the owner's to find:
+   no page of it was read.
+6. Register the seven resource providers (`Microsoft.Network`, `Compute`,
+   `ContainerService`, `ContainerRegistry`, `DBforPostgreSQL`,
+   `ManagedIdentity`, `OperationalInsights`): by a command of the owner's, before
+   the apply, never by the provider. Optional after the upgrade: the West Europe
+   OpenAI account (a line of the foundation's `openai_locations`).
+7. Decide the firewall (below), and then ask for the plan.
+- *Not in the checklist, on purpose:* a new tenant. The owner's decision is to
+  stay; a later move recreates the foundation, the cluster and the server (ADR
+  11).
+
+*The firewall for the foundation's vault and account: both sides.* **Write it**
+(default Deny plus the operator's address, as a sensitive variable with no
+default and no example): the password then sits in a vault that a stranger's
+token cannot reach, which the infrastructure review's default demands; the cost
+is a change to the applied foundation that the owner applies at the paid stop,
+and a laptop whose address changes loses the live mode and `make azure-smoke`
+until the variable is changed (the foundation's README gave that as the reason
+it uses no allow list); the module's own write of the secret needs the
+operator's address allowed too, and the cluster has its private path by the two
+endpoints. **Leave it open**: no change to an applied foundation and a laptop
+that works from anywhere, with the password behind a role and nothing else, and
+the audit setting recording each read. The session reads the first as what both
+reviews ask for. The decision is the owner's and comes before any apply.
+
+*The cost of a demo day.* From the sheet's sum of 2026-10-07 (Sweden Central,
+list prices, six of twelve lines estimates): about EUR 0.31 an hour, EUR 3.7
+for twelve hours, up to EUR 6.3 with a gigabyte of logs past the free
+allowance, against QA-07's EUR 10; the unexplained `FreeTierInfrastructureCost`
+meter would add EUR 0.53 for twelve hours. A web application firewall at the
+edge would add EUR 3.6 (Application Gateway for Containers with a policy) or
+EUR 4.9 (WAF v2) for twelve hours before capacity units (ADR 11). **This is not
+a cost statement:** it is made at the paid stop from a fresh read of the price
+list, with the closed lists' ceilings and the amount per budget in front of the
+owner.
+
+**Follow-ups:** the five rows of the backlog (the wrapper and the guard, the
+firewall, the server's logging, the audit log's afterlife, the second half's nine
+items); the Ingress row of `docs/architecture/overview/01-meridian-ai-platform.md`
+still names Application Gateway WAF in the Azure design, which ADR 11 and the
+model no longer do.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -18586,8 +20898,10 @@ real thing):
 | 2 | Terraform state: HCP Terraform, as in the homelab, or an Azure Storage account? **Answered 2026-09-30: Azure Storage** in Sweden Central with Entra ID authentication (S007) | S007 | ~~HCP Terraform, for consistency with the homelab~~ |
 | 3 | A claim whose documents miss the deadline is closed as rejected without a human. Keep that, or route it to the adjuster? **Answered 2026-10-03: route it to an adjuster**, with the reason that its documents are overdue; no claim is rejected without a person | ~~S015~~ ~~S048~~ S052 (moved with the deadline, 2026-10-03) | ~~Keep, recorded as a procedural closure in C-02~~ |
 | 4 | Licence: keep all rights reserved, or publish under MIT or Apache-2.0? **Answered 2026-09-29: Apache-2.0**, copyright Dezoxy; `NOTICE` credits the MIT-licensed ECC material | Before anyone asks to reuse the code | ~~All rights reserved~~ |
-| 5 | Should Meridian live in a dedicated work tenant instead of the trial account's default directory? It decides where S021's sign-in, roles and app registrations are created, and moving later means recreating the foundation | S021, and the upgrade to pay-as-you-go by about 2026-10-30, which is already an account change | Stay in the trial account's tenant; decide at the upgrade |
+| 5 | Should Meridian live in a dedicated work tenant instead of the trial account's default directory? It decides where S021's sign-in, roles and app registrations are created, and moving later means recreating the foundation. **Answered 2026-10-07: stay in the trial's tenant** (the owner first said "Move now"; a trial cannot create a tenant, and after the facts: "Stay in the trial's tenant after all"; S020, ADR 11) | S021, and the upgrade to pay-as-you-go by about 2026-10-30, which is already an account change | ~~Stay in the trial account's tenant; decide at the upgrade~~ |
 | 6 | Should a session be stopped from editing the command guard's own files? The permission rules allow Edit and Write on `.claude/hooks/guard-bash.sh` and `.claude/settings.json`, so a session can weaken the guard that reads its commands (N4 of the third security review). Two ways: deny Edit and Write on `.claude/hooks/**` and `.claude/settings*.json`, or ask before each. The session recommends asking: a deny would also stop a session from fixing the guard when a review finds a hole, as S075 did after each of its three reviews, while an ask puts the edit in front of the owner | S075's pull request, if the owner wants it built there; no step needs it | Neither is built: the guard stays a guard for habits, and the gap is listed in the runbook and in the hook's header |
+| 7 | Should the audit trail become an outbox when the services get a database each? An audit table in each service's database, written in the same transaction as the business write (so "no action without its row" holds for every service that has a database), and a relay that copies the rows into a central audit database, which owns retention and serves the adjuster's trail. **Answered 2026-10-07 (the sixth round, about 15:30 UTC): "Outbox per service (Recommended)"**, the session's recommendation, chosen as written ([ADR 10](architecture/decisions/0010-split-the-platform-into-services-with-a-database-each-and-their-own-releases.md), point 5). The alternatives not taken: one shared audit database (the audit row can no longer commit with the business write: the guarantee weakens or every write becomes a two-step exchange) and audit through the log pipeline (the trail the adjuster reads would rest on a log store). Its costs: a relay to run, a trail that lags by the relay's lag and stops growing if the relay dies, and a sixth database on the server. The Model Gateway already writes its audit row on a separate connection, so under the outbox it either keeps that or joins its ledger's transaction, which S085's design says: the one part of the question the answer does not settle | S085's design | ~~The outbox, as ADR 10 recommends, with the gateway's choice settled in S085's design and shown to the owner~~ |
+| 8 | Should each of the five databases start from a baseline with no replay of the 31 migration files, the old files and their 59 test files archived outside the package's path? **Answered 2026-10-07 (the sixth round, about 15:30 UTC): "Fresh baseline per database (Recommended)"**, the session's recommendation, chosen as written (ADR 10, point 6). Honest only while no environment holds data: the kind cluster is disposable and the Azure database has never been created. A split with data would need expand, copy, switch and contract instead, and a replay would mean rewriting 13 files that mix schemas, which an applied file's rule forbids. The cost: a large deletion from the tree and a change in the plan's count of migrations | S087's design | ~~Baselines with no replay, as ADR 10 recommends, asked again at S087 if any environment then holds data~~ |
 
 ## Part E — Changelog
 
@@ -19365,6 +21679,194 @@ real thing):
   account, asked after the cost is stated. T-102 new (102 threats) and T-36,
   T-37, T-42 and T-100 changed. Five backlog rows closed or closed in part,
   the rest of the rows homed here kept with a verdict, eleven new.
+- **v0.80, 2026-10-07:** S073, the second half so far: the main
+  session's runs R5a, R5b, R7, R8, R9a, R9, R10 and R11 on the local cluster
+  are in the step's section, each with what it saw and did not see, and the
+  step stays `doing`. Seen on kind: the one-hour watch run again with the
+  restarts spread (six restarts 99 or 100 seconds apart, never fewer than five
+  of the six Ready, each service not Ready for 41 to 46 seconds, one replica
+  each); the rate store's
+  two-second liveness rule behaving (no restart of a healthy store at the
+  readings of R5a, one restart per renewal in R7); the history limit holding at
+  three ReplicaSets per Deployment; the paused node ending every call at the
+  clients' own ten-second timeout, so no bound of the wrapper was seen to fire;
+  and main with S072's first part deployed on the warm cluster with smoke at 46
+  PASS, also from the split smoke script; and the ingestion's word on a real
+  503 (R11: the rate store down for 10 seconds, the Job's line ended
+  `kind rate-store-unavailable`, the gateway Ready with no restart and
+  admitting again with the same pod, the gateway's error class `TimeoutError`).
+  Still open: the ingestion's other three words,
+  a call that a bound of the wrapper ends, a first install made to fail and a
+  policy narrowed before the first deploy (the cold timings are seen, in R9, for
+  S072's cluster batch), the rotation of the rate store's password (the
+  owner's) and approver-policy's liveness probe (not built). The certificate
+  runbook gains a second table, its first point and the README's sentence say
+  what is seen now, and T-89's clause on the spread is brought to the run; no
+  new threat; T-45 and T-92 say the 503 is seen, and the rate store's runbook,
+  the knowledge service's README and the kind README say it too. Backlog: the
+  row on every service restarting in the same minute is closed for one replica
+  each; four rows say what R5b, R5a and R7 saw; the rate store's "not seen"
+  row and the row of the 2026-10-06 incident say what R11 saw; two rows are new
+  (the add-ons' restarts, home S072; smoke's sentence for a cluster that does
+  not answer, home S073).
+- **v0.81, 2026-10-07:** S074, the leftovers and the last cut of the smoke
+  script (still `doing`): `test_redaction_hungarian.py` (858 lines) is
+  three test files, the largest 368 lines, and `hungariansupport.py`, cut
+  along the production module each group exercises by a move
+  `scripts/split_proof.py` proves, with 1,716 tests collected before and after;
+  the five loaders of the name-masked injection cases are one helper,
+  `servicesupport.injection_case_claim`, and a missing case fails with its name
+  and its file. The last cut: checks 8 and 10 of `infra/kind/smoke.sh` are
+  parts (`08-network-policy.sh`, `10-certificate-policy.sh`), the entry is
+  88 lines and every file of the script is under 800; the move is proved line
+  by line against 764159b (1,194 old lines, each used once), the definitions
+  the entry and its parts make are unchanged, and smoke from the cut passed on
+  kind with 46 lines equal to the run before it (R12). The step's row, the two
+  rows on the script's size and S067's "left by reviews" row say what is
+  closed; two rows are new (two definitions of the injection cases' path, and
+  `NAME_MASKED` written out in three files). What S074 still holds open: the
+  owner's three questions (coverage in CI, a size check, a pytest-level
+  timeout), the measurement run of the load-sensitive tests, and its small
+  rows. No behaviour change, no new threat.
+- **v0.82, 2026-10-07:** S069, second half (still `doing`: R12 is the
+  owner's at S020): R11, the certificate the health check watches is the one
+  the server serves. The five services that serve TLS start through `python -m
+  meridian.platform.common.tlsstart`, which reads the certificate file's bytes,
+  has uvicorn's own default builder load the context, reads the bytes again
+  and hands `certlife` the certificate parsed from equal bytes; the `Config`
+  and the context equal uvicorn's own, a start that cannot be made safely ends
+  with one `tlsstart:` line and exit status 3, and the Claims API, which
+  serves no TLS, keeps `uvicorn`. Three reviews of the module (security,
+  Python, infrastructure), none critical or high; R11b took the findings worth
+  making now (a narrower catch, a retry only when the bytes changed, a start
+  that would not ask for a client certificate refused, one public reset and
+  one fixture for the tests, the premise's three limits in the docstring, a
+  values-level test).
+  Two runs on kind, free and with nothing deleted: K1 (before R11) saw the 422
+  for a resume that carries a value, one `suppressed` row from each of the five
+  services that keep a throttle and the access log's path for an address
+  encoded twice, smoke 46 PASS; K2 (after) saw the deploy in 94 seconds, the
+  five started through the module with no restart and JSON from the first log
+  line, the served certificates of four of the five equal to the issued ones,
+  a renewal of one service and its restart, smoke 46 PASS twice. Not seen on
+  a cluster: the race itself, the module's refusal line, a renewal that
+  splits OpenSSL's two opens, and, from K1, the withheld completion's four
+  headers, a shed call's row, a takeover past the lease and `not-started`.
+  Backlog: the health row
+  closed, the row for what a kind run would show narrowed and re-homed to
+  S073, four rows judged with what the runs added, six new (the client's
+  context, the Claims API, a values override, the module's small ends, its
+  premise, the evidence for `reset`). Documents brought to the code: the
+  operations README and the certificate-expiry runbook (the `tlsstart:` line),
+  the kind README (three sentences) and T-89 and T-90. The whole suite:
+  The whole suite on the final tree: 20,058 passed, 8 skipped.
+- **v0.83, 2026-10-07:** S073, approver-policy is restarted when it hangs
+  (still `doing`). The chart pinned for approver-policy gives it a readiness
+  probe and no liveness probe, so `make up` now applies one itself, under a
+  field manager of its own (`meridian-kind`): the binary's own health endpoint,
+  a first check after 30 seconds, then every 20, six failures in a row.
+  Run R13 on kind, free and with nothing deleted: the probe present after
+  `make up`, ten quiet minutes without a failed check, a second `make up` a
+  no-op on the same pod, the approver's process frozen from the node and the
+  container restarted by the kubelet 140 seconds later, smoke 46 PASS with 22
+  alert rules loaded. Two rules are new: `MeridianCertificateRenewalOverdue`
+  (a certificate whose renewal time passed more than an hour ago) and, from
+  the review, `MeridianCertificateIssuingRestartLoop` (three restarts in 30
+  minutes of cert-manager's or the approver's container), so the tree holds
+  23; the second is unit-tested and was not loaded on a cluster. An
+  infrastructure review (approve with fixes; no critical, no high, four
+  medium, seven low): the four medium fixed and the low ones answered one by
+  one in the step's section, a startup probe not taken. This fix had no
+  second review. Not seen: either new alert firing, the probe across a newer
+  chart and
+  the two-step remedy for the day the chart brings its own probe, a real hang
+  as against a frozen process, the renewal series while a renewal is pending.
+  Backlog: the row on the approver's probe closed with R13 as its evidence,
+  two rows new. Documents brought to the code: the certificate-expiry
+  runbook, `slo.md` (queries that named two namespaces where the rules name
+  three), the kind README and T-91.
+  The whole suite on the final tree: 20,080 passed, 8 skipped.
+- **v0.84, 2026-10-07:** S081, the decision record for the move toward
+  services (still `doing` until its pull request merges): ADR 10, accepted,
+  designed and not built. It writes the six decisions the owner took on
+  2026-10-07 (a database per service on one PostgreSQL server, five databases
+  with the claims tool server in the claims database under its own role; six
+  images with independent versions; the tool servers trusting the authenticated
+  caller, with the lost double check accepted as a risk; the map and the record
+  now and the building after the steps in flight; the audit trail as an outbox
+  per service, with a relay into a central audit database; a fresh baseline per
+  database, with no replay of the 31 migration files) apart from the session's
+  own design. It holds the ten couplings with the step that replaces each, what
+  stays shared, the consequences and the two checkpoints. The plan gains S081
+  to S088 in a section of Part B of their own (S080 is kept for the uploads
+  step), S081's section in Part C, Part D's questions 7 and 8, answered in the
+  owner's sixth round (about 15:30 UTC), and two backlog rows (the
+  documents that say "the one image", home S083; the queries and smoke lines
+  that name one database, home S087). The threat model's rows, the model's
+  files and the root README are not changed: T-22, T-25 and T-97 are rewritten
+  in S084, S087 and S083.
+- **v0.85, 2026-10-07:** S074, three gates in CI (still `doing`), the owner's
+  answer to "which gates": "Coverage threshold, File size check, Per-test
+  timeout". A file size check in `make lint`: a tracked Python or shell
+  source file over 800 lines fails unless `scripts/file-size-exceptions.txt`
+  lists it with its exact count (51 files today), and the list is a strict
+  ratchet: a listed file that grew fails, and one that shrank fails until its
+  entry is lowered. A limit of 600 seconds for every test, by signal (the
+  slowest test measured: 45 s). A coverage floor of 98 per cent to two
+  decimals, measured 99.11 per cent (13,869 statements, 123 missed), on in
+  CI: with the interpreter's monitoring core it costs 2.0 per cent of the
+  suite's time on this machine, where the trace function cost 37 to 40; the
+  job's limit goes from 15 to 30 minutes, and the same day a job of pull
+  request 126 was cancelled at the old limit with every step green. An
+  infrastructure review (approve with fixes; no critical, no high, one
+  medium, nine low): the list made a real ratchet, the floor made exact, a
+  failed run made to fail once. At the merge of `main` three listed files
+  that had grown there got their entries set once, and a branch cut before
+  the check reached `main` does the same once at its own merge. Not seen:
+  coverage's cost on the hosted runner (this pull request's own python
+  check is its first run there), a test stopped by the limit in CI, the
+  limit against a blocked database call. Backlog: three rows closed, one
+  corrected, six new.
+  The whole suite on the final tree, with coverage: 20,097 passed, 8 skipped.
+- **v0.86, 2026-10-07:** S020 `doing`: the first half, the code half,
+  of the Azure platform: a Terraform module `infra/terraform/azure/` written,
+  validated and scanned without an account and never applied, its README, ADR
+  11 (the network engine, the API server, the administrator's password, the edge
+  and the tenant, with the owner's two decisions of the day), the deployment
+  view `DeploymentAzure` (designed), the threat model's rows T-103 to T-107 and
+  T-42 amended, the Azure platform document brought to it, five backlog rows,
+  and Part D question 5 answered (stay in the trial's tenant). The wrapper and
+  the guard's rules, the upgrade, a firewall decision, the apply and the second
+  half wait. The whole suite: 20,563 passed, 8 skipped.
+- **v0.87, 2026-10-07:** S080, file uploads for a claim before sign-in
+  (new, `doing`; the owner's "Build now" for the uploads and "Build now,
+  local-only switch" for the adjuster's download, both of 2026-10-07, and
+  "Keep both" for the hash check and the refusal of the same file twice):
+  migration 0032 (`claims.claim_files`), a route and a form that store one PDF,
+  JPEG or PNG of at most 1 MiB, five to a claim, told by its first bytes, an
+  upload that is not a document arrival and starts no triage, the app's own
+  brakes (four at once, a rate and a byte budget on the store, a read
+  deadline, ceilings on bytes and files), a second edge route with a buffer and
+  a rate limit, the adjuster's list and, behind a switch of its own and with
+  brakes of its own, download, and a chart that turns either switch on only for
+  a host name that ends in `.localhost` (a check of a string, said so).
+  Implemented and tested against PostgreSQL; **run once on kind** (run RU1,
+  2026-10-07, both switches on for that run only, by script and not in a
+  browser); both switches off by default; scanning designed, not built; no
+  delete and no retention. Five reviews (database 0/0/4/13, security 0/2/4/5,
+  FastAPI 0/0/3/9, platform boundary 0/1/6/3 and the second security review
+  0/1/5/6, by critical, high, medium and low), the second answered by F4d. RU1
+  found that Envoy normalises a raw path before the app sees it, and RU2 that
+  the upload route serves the normalised request and its limit counts it. T-38
+  brought
+  to the code and T-66 corrected; T-108 to T-111 new (111 threats; S020 holds
+  T-103 to T-107); the data classification's row, the kind README, the
+  migrations README, the demo and the root README brought to the code. S070's
+  row, section and backlog row no longer say that uploads wait for the owner.
+  S074's row and its coverage backlog row are closed with the python job of
+  pull request 128 (14 min 0 s). Eleven backlog rows are new or narrowed, each
+  with a home, and the row "Uploads (T-38)" is closed and homed at S080. Size
+  check: two listed test files set to their counts, two listed.
 - **PLAN-VERSION, 2026-10-07:** S071, free half (still `doing`; the paid half
   is open and no paid call was made): the label worksheet and its comparison
   for the judge's 13 recorded verdicts, a ceiling the gateway holds for a paid
@@ -19381,7 +21883,7 @@ real thing):
   flagged, against 26 of 66 and 16 of 28 on the suite's own cases, so the
   earlier figure was tuned to its own set; the set is spent when the patterns
   change. The owner answered that they will sign in to Azure on the virtual
-  machine when the paid run is due, which is not a yes to a paid call. T-103
+  machine when the paid run is due, which is not a yes to a paid call. T-112
   new (103 threats) and T-15, T-26, T-73, T-78, T-79 and T-83 changed. Stale
   figures corrected (55 calls and EUR 0.12; 52 injection cases). Six backlog
   rows added, four rows brought to the code. CLM-0034's `unsure` is written

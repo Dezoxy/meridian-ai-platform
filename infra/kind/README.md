@@ -378,6 +378,48 @@ with its approver on, `make up` turns the approver off first and brings the
 policies seconds later: the certificates already issued are not touched, and
 a request made in between waits and is then decided.
 
+Between the install and the policies `make up` gives approver-policy's
+Deployment a liveness probe (S073). The chart has a readiness probe, no value
+for a liveness probe, and a values schema that refuses a key it does not know,
+so the probe cannot be a chart value:
+[`manifests/approver-policy-liveness.yaml`](manifests/approver-policy-liveness.yaml)
+holds the one field and `up.sh` applies it server-side under the field manager
+`meridian-kind`, without forcing conflicts, then waits for the rollout (five
+minutes at most) before the policies are applied. The binary serves `/readyz` on
+its health port and nothing at `/healthz`, so the probe asks `/readyz` of the
+port the chart names `healthcheck`: every 20 seconds, five seconds to answer, six
+failures in a row (two minutes) before the kubelet restarts the container. It
+catches a frozen process or a dead listener; a reconciler that is stuck while
+HTTP still answers it cannot see, which is
+`MeridianCertificateRenewalOverdue`'s to see, and a hang that comes back and is
+restarted again and again is `MeridianCertificateIssuingRestartLoop`'s. Seen on
+kind on 2026-10-07 (run R13): the probe on the Deployment; a second `make up` of
+the same chart a no-op, the same pod and the field still owned by
+`meridian-kind` alone; ten quiet minutes; a frozen process restarted by the
+kubelet 140 seconds after it stopped. Not seen: an upgrade to a newer chart, the
+probe under real load and a cold install with this step.
+
+What follows from the probe not being the chart's, and is written, not seen:
+- A bare `helm install` after a `helm uninstall` has no probe until the next
+  `make up`; a plain `helm upgrade` and a `helm rollback` leave the field
+  alone (neither rendered manifest holds it, by the review's reading of Helm's
+  apply).
+- The probe names the port `healthcheck`. A chart that renames the port makes
+  the kubelet discard the probe's result and nothing restarts, silently; the
+  guard is `tests/meridian/test_kind_approver_liveness.py`, which pins the chart
+  version, the image tag and the names it was read against and fails when
+  `pins.env` moves, so a Renovate pull request for the chart goes red there.
+- If a newer chart renders its own liveness probe, Helm fails on a conflict on
+  `livenessProbe` owned by `meridian-kind` (inside `make up`'s Helm step on a
+  cluster that has the probe, which names no file; inside the apply, with the
+  remedy in its message, on a cold install). The remedy has two steps, in this
+  order, and was not tried on a cluster: apply once, under the field manager
+  `meridian-kind`, a copy of the manifest without its `livenessProbe` lines,
+  which drops the old owner without a force flag (deleting the manifest and the
+  function alone leaves that owner and Helm conflicts again); then delete the
+  manifest and `apply_approver_liveness_probe` from `up.sh` and set the chart's
+  value.
+
 `make up` also provisions the dashboards in [`dashboards/`](dashboards/), one
 ConfigMap each in `observability`, and applies Meridian's alert rules in
 [`alerts/`](alerts/), one `PrometheusRule` (both below).
@@ -472,8 +514,9 @@ server, whatever its connection string says.
 
 The edge is a Gateway API `Gateway` named `edge` (class `envoy`) with one HTTP
 listener. Only routes from the `meridian` namespace may attach. `make deploy`
-adds one route, for the Claims API only (below); every other host and path
-answers 404.
+adds one route, for the Claims API only (below; a second one for the file
+paths when the uploads switch is on, which it is not on kind); every other
+host and path answers 404.
 
 ## Prerequisites
 
@@ -974,10 +1017,15 @@ node image, Kubernetes components and the platform).
    thing read, and it tells three endings apart. `refused` is the TLS alert for
    an unknown CA (Python's `ssl` reports `TLSV1_ALERT_UNKNOWN_CA`); `reset` is
    a connection that ended with no alert before any request was sent.
-   uvicorn, which the services run
-   under, ends an unknown CA's connection without delivering the alert (a
-   reset under TLS 1.3 and an EOF under 1.2, measured against the test server
-   that has the services' flags), so `reset` is the ending expected of the
+   uvicorn ends an unknown CA's connection without delivering the alert (a
+   reset under TLS 1.3 and an EOF under 1.2, measured on 2026-10-06 against a
+   test server on a plain `uvicorn.Config` with the services' flags). The five
+   services that serve TLS have since started through `python -m
+   meridian.platform.common.tlsstart`, which hands uvicorn its own context
+   (a test holds the two equal); the ending was not measured against the
+   module, and smoke's 46 lines passed after the deploy that brought it, with
+   the ending that line read not in that run's record (S069, run K2). So
+   `reset` is the ending expected of the
    gateway, and the line passes it, in other words than `refused`. On the
    cluster on 2026-10-06 the answer was `reset` on every run (the connection
    ended with no TLS alert, before any request was sent) and `refused`, the
@@ -1171,8 +1219,8 @@ eleven calls and the summary, and a pair of lines for each part it sources. A
 check is a file in `smoke.d/`, `NN-name.sh` (`shared.sh` holds what several
 checks and the trap use), and it holds definitions only: its paragraph from the
 header, its constants and its functions, so that sourcing it runs nothing.
-Checks 8 and 10 are still in the entry, and move when the cluster batch that
-edits them has landed. To add a check:
+All eleven checks are parts now (twelve files with `shared.sh`, each under 800
+lines), and the entry is 88 lines. To add a check:
 
 - write `smoke.d/NN-name.sh` with no execute bit: the first line `# shellcheck
   shell=bash`, the paragraph (its first line `#   N. name:`, as the others),
@@ -1396,8 +1444,81 @@ on the host `claims.meridian.localhost`. A request with any other `Host`
 header, such as `127.0.0.1:8088` or a page that rebinds its DNS name to
 loopback (threat model T-01), matches no route and gets 404 from Envoy.
 Envoy buffers each request to the Claims API and answers 413 above 64 KiB, the
-app's own limit, before the app sees it. The edge speaks plain HTTP, on
-loopback only; TLS there has no step yet.
+app's own limit, before the app sees it, except on the two upload paths when
+the uploads switch is on (next). The edge speaks plain HTTP, on loopback only;
+TLS there has no step yet.
+
+### Files for a claim: two switches, both off
+
+S080 (the commits and code comments call it "S070 uploads") built, behind two
+switches that are **off in kind's values and off in the chart's**, a
+claimant's upload of a file to a claim and the adjuster's download of it.
+Status: implemented and tested, and **run once on kind** (RU1, 2026-10-07,
+with both switches added to kind's values for that run and turned off again by
+a second deploy; smoke passed 46 lines afterwards). That run saw the uploads
+route win over the first route, the three policies `Accepted` (the downloads
+policy on the route's named rule, replacing the route's own policy for it), the
+edge's 413 over the buffer and its 429 at the seventh upload and at the 31st
+download in a minute, the two buckets separate, a download's headers through
+the edge, the cross-site refusals and one audit row for each download served.
+**Not seen:** a browser, slow bodies and readers, the app's own 429 and 503
+(the edge answered first), the byte budget, memory under four uploads, a retry
+at the edge, and the database's size and log at the ceiling.
+
+- **Uploads** (`route.uploads.enabled`). A second HTTPRoute for exactly
+  `POST /claims/CLM-nnnn/files` and the claimant form's post to
+  `/claimant/claims/CLM-nnnn/files`, with a request buffer of 1,126,400 bytes
+  (1 MiB of file and 76 KiB of envelope; the other routes keep 64 KiB) and a
+  local rate limit of six requests a minute for the whole route, in a
+  BackendTrafficPolicy of its own, and `MERIDIAN_CLAIMS_UPLOADS=on` on the
+  Claims API. The chart refuses the switch while `route.enabled` is off. Envoy
+  counts the limit for each of its proxy pods, and on kind there is one.
+- **Downloads** (`route.downloads.enabled`), its own switch, which needs the
+  uploads switch (the chart and the app each refuse downloads without uploads):
+  the adjuster's `GET` and `HEAD` of
+  `/adjuster/claims/CLM-nnnn/files/<file id>`, a second named rule of the
+  uploads route with a limit of 30 requests a minute of its own and no larger
+  buffer, and `MERIDIAN_CLAIMS_DOWNLOADS=on`. A file is sent only as an
+  attachment, under a sandbox policy. The app has brakes of its own for it (a
+  cross-site check, 30 a minute and four at once, a HEAD that reads no
+  bytes), and the adjuster's claim page shows the newest 200 events and counts
+  the downloads on one line.
+- **The guard.** Until sign-in exists (S021) the pages have no identity, so
+  whoever reaches the route stores files on any claim and, with downloads on,
+  reads any claim's files by walking the claim IDs. The chart therefore
+  **refuses either switch unless the route's host name as a whole is a
+  lower-case name that ends in `.localhost`** (the name
+  `claims.meridian.localhost` of kind's values is), and unless the switches are
+  booleans, with a sentence that names S021. **The guard checks a string.**
+  Envoy matches the Host header, which any client can set, so the same release
+  answers anyone who can open a connection to the Gateway; on kind the
+  boundary is the cluster config that binds the published port to 127.0.0.1
+  (`cluster.yaml`), not the chart. The guard stops a release that turns the
+  switches on beside a public name in one values file. It does not stop a
+  Gateway that is reachable from a network (a LoadBalancer, a changed
+  `listenAddress`), a port-forward, other local users or containers that reach
+  the loopback port or the node's address, a `parentRef` to another Gateway, or
+  a variable set by hand outside the chart. So do not turn either switch on for
+  a cluster that other people or machines reach, and S021 removes the guard
+  when sign-in exists.
+- **Turning them on for a local run.** Neither switch has a `make` target or
+  a flag: edit [`values/meridian.yaml`](values/meridian.yaml) under `route:`,
+  uncomment the commented `uploads:` lines (and, to try the download too,
+  add `downloads:` with `enabled: true` beside them), and run `make deploy`.
+  Put the file back afterwards, so the change is not committed. Nothing the
+  services read can be set through an `env` item: the chart refuses one that
+  names either variable.
+- **What the app does as well.** The edge's buffer and rate limit are not the
+  app's only brakes, and the app does not depend on which edge route served a
+  path: it takes at most four uploads at once (503), 30 files and 8 MiB a
+  minute for the whole store (429), a body within 20 seconds (408), a ceiling of
+  128 MiB and 2,000 stored files (507), and five files and 3 MiB to a claim. It
+  also refuses a raw path that holds a percent sign, but RU1 showed that Envoy
+  normalises the path first, so behind this edge that refusal does not fire;
+  RU2 showed that the uploads route serves the normalised request and that
+  its limit counts it. Files go to the one database (2 Gi on kind, shared with
+  the audit trail); `claims_api` has a connection limit of 50 there. Nothing
+  scans a file: malware scanning is designed, not built.
 
 A `ClusterIP` Service means unrouted, not protected. Since S019 the
 namespace's network policies are the protection: the Agent Runtime, the
@@ -1487,9 +1608,10 @@ pinned image with the server stopped by `SIGSTOP`, not `docker pause`, which
 stops `docker exec` too). Seen on kind on 2026-10-07 (run R2): the store's
 new pod held no defunct process at five readings a minute apart and after
 smoke, six minutes in (the old probes had left about 90 by then), Ready with
-no restart. Not seen: the store over the two hours the fault took, a store
-frozen below the protocol on kind, and the probes at `timeoutSeconds: 5`
-(a later change). Its
+no restart. Seen on kind on 2026-10-07 (run R4e): the store's new pod with
+both probes at `timeoutSeconds: 5`, Ready, 0 restarts, and 0 defunct processes
+on the node. Not seen: the store over the two hours the fault took, and a store
+frozen below the protocol on kind. Its
 NetworkPolicy admits the Model Gateway's pods on 6379 and nobody
 else, and gives it no egress; it is the store's only control before
 authentication, so the chart refuses the store with `networkPolicy.enabled`
@@ -1505,8 +1627,11 @@ kind on 2026-10-06 (third run): the store running under this configuration
 with the gateway's calls counted by it, its probes passing, its certificate's
 renewal followed by one restart, and the policy's ingress rule enforced on a
 pod without the gateway's label. Not seen on a cluster: a store frozen by a
-script and restarted by its probe, a TLS 1.2 client or an oversized bulk
-refused, and the 503 of a store that is down.
+script and restarted by its probe, and a TLS 1.2 client or an oversized bulk
+refused. Seen on kind on 2026-10-07 (run R11): the 503 of a store that is down
+(scaled to 0 for 10 seconds): an ingest Job ended on it with the word
+`rate-store-unavailable`, the gateway stayed Ready with no restart, and it
+admitted calls again with the same pod once the store answered.
 
 The namespace denies all traffic by default: the NetworkPolicy
 `default-deny` selects every pod in `meridian`, whatever its labels, and
@@ -1989,15 +2114,25 @@ creates, besides what `make up` made (cert-manager v1.21.2 and the CA above):
 
 The values `identity.trustDomain` (`meridian.kind`) and `identity.issuer` are
 required and have no off switch; a service with `tls: true` in the chart's
-values serves TLS, and the template adds uvicorn's flags, the HTTPS probes and
-the prefix its callers' URIs start with. Nothing else of the five's commands
-is repeated in the values. The chart fails for a service that another workload
-calls (a `serviceUrl` or a `serviceMap` entry, the Jobs' included) and does not
-set `tls: true`; only the Claims API, which nobody inside the chart calls,
-stays plain HTTP.
+values serves TLS, and the template adds the TLS flags (`--ssl-certfile`,
+`--ssl-keyfile`, `--ssl-ca-certs`, `--ssl-cert-reqs 1`, `--http` with the
+protocol class and `--ws none`: the words uvicorn's command line takes), the
+HTTPS probes and the prefix its callers' URIs start with. The five commands in
+the values start `python -m meridian.platform.common.tlsstart --factory <app>
+--host 0.0.0.0 --port 8000` (S069: that module takes the same words, reads the
+certificate once for uvicorn's context and for the health check, and ends a
+start it cannot make safely with one `tlsstart:` line and exit status 3, which
+the operations page lists), and the Claims API's stays `uvicorn --factory ...`.
+Nothing else of the five's commands is repeated in the values. A values
+override that sets `tls: true` on a command that starts `uvicorn` serves TLS
+but reads the certificate twice, and the chart does not refuse it (a comment
+in `values.yaml` says so, and a test holds the default values). The chart
+fails for a service that another workload calls (a `serviceUrl` or a
+`serviceMap` entry, the Jobs' included) and does not set `tls: true`; only the
+Claims API, which nobody inside the chart calls, stays plain HTTP.
 
 **How long a certificate lasts (S062).** Two chart values set the lifetime of
-every one of the seven Certificates; the defaults render what the chart
+every one of the eight Certificates; the defaults render what the chart
 rendered before they existed (`duration: 2160h`, no `renewBefore`, so
 cert-manager renews at a third of the lifetime, 60 days in):
 
@@ -2026,7 +2161,7 @@ certificate:
   renewBefore: 30m
 ```
 
-then run `make deploy`, which reissues the seven certificates and waits for
+then run `make deploy`, which reissues the eight certificates and waits for
 them to be Ready. The services still hold the 90-day certificates they loaded,
 and a service looks at its file again only near the end of the one it loaded,
 so restart the Deployments once (the owner's command, as in the runbook
@@ -2081,8 +2216,14 @@ than before. Two replicas of one service would still restart together, because
 they mount one Secret (not built: each service has one replica on kind). The
 spread is implemented and tested with the chart rendered and the clock
 injected. Seen on kind on 2026-10-07 (run R2): the shares on the six services,
-0, 1/6, 2/6, 3/6, 4/6 and 5/6 in name order, and none on the rate store. Not
-seen: the restarts at a renewal (the watch above, run again, shows them). And
+0, 1/6, 2/6, 3/6, 4/6 and 5/6 in name order, and none on the rate store. Seen
+on kind on 2026-10-07 (run R7, the watch above run again, one replica of each
+service): the six services' containers each stopped once at a renewal, 99 or
+100 seconds apart, in the reverse order of the shares, and in no reading were
+fewer than five of the six Ready. Not seen: two replicas of one service, a
+`renewBefore` shorter than one and five sixths of the margin, and the alert
+`MeridianCertificateNotRenewed` in that run (it was given the values back
+before the alert's hour). And
 while the
 short certificates are in place `make smoke` fails on check 11, because a
 Meridian alert is firing (smoke itself was not run then: the failure follows
@@ -2141,9 +2282,14 @@ renewal, the DNS names `otel-collector.observability.svc` and
   endpoint. A service whose endpoint is `https` and whose variable is unset, or
   names a file that cannot be loaded as a CA certificate, does not start: the
   factory raises a `SettingsError` that names the variable and never the path
-  (the last line of the traceback `uvicorn --factory` logs), and the container
-  restarts, as it does for a certificate it cannot read (not seen on a
-  cluster). That is better than starting with telemetry that fails on every
+  (the last line of the traceback in the pod's log, with exit status 1, for
+  the Claims API under `uvicorn --factory` and for the five under the start
+  module alike, since the module does not catch an app factory's error), and
+  the container restarts (not seen on a cluster). A certificate the five
+  services cannot read or build is not that: the start module ends it before
+  any factory runs with one `tlsstart:` line and exit status 3, no traceback
+  (tested with the real `python -m`, not seen on a cluster; the operations
+  page lists the forms). That is better than starting with telemetry that fails on every
   export. The Jobs set no endpoint and get none of this; the sweep gets it
   (S064; its six findings arrived in Prometheus through this path on kind on
   2026-10-06). Status: tested without a cluster.
@@ -2625,8 +2771,11 @@ and the `exec` bound on their calls (run R2, 2026-10-07, and the runs after
 it), which passed. `make deploy` and `make smoke` also ran under the outer
 bound on `wait`, `rollout status` and Helm on the path where nothing goes wrong
 (run R4e); no bound has fired on kind. A frozen API server (the node paused
-with `docker pause`) was not seen with any of these bounds: only the tests'
-stand-ins and the review's silent listener have met one.
+with `docker pause` for thirty seconds) was met once (run R5b, 2026-10-07):
+every call ended after 10 seconds at the client's own handshake timeout and
+never reached these bounds. A bound of the wrapper ending a call is not seen:
+only the tests' stand-ins and the review's silent listener have met a server
+that accepts and never answers.
 
 ## Memory
 
@@ -2655,6 +2804,9 @@ pod's working set from cAdvisor as the services' were read.
 
 - TLS on the gateway: no step yet (the plan's follow-up backlog). The edge
   listens on loopback only.
+- Malware scanning of an uploaded file, and any delete or retention of one
+  (S080): designed, not built. The two switches that store and serve files
+  are off here (see "Files for a claim" above).
 - `enforce` for Pod Security Admission on the `meridian` namespace, which
   has `warn` and `audit` at `restricted` since S019 (as `cert-manager` has
   since S063, and `observability` at `restricted`): a server-side dry run

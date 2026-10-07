@@ -673,6 +673,8 @@ def save_variant(run, live_path: Path, variant_path: Path, comparison: Path) -> 
     )
 
 
+# No time limit: a recording paces forty live calls over minutes (S074).
+@pytest.mark.timeout(0)
 @OPT_IN
 def test_record_the_golden_set_with_the_live_model(
     fresh_database: DatabaseHandle, tmp_path: Path
@@ -687,6 +689,7 @@ def test_record_the_golden_set_with_the_live_model(
     save_golden_set(run, RECORDING_PATH, LIVE_REPORT_PATH)
 
 
+@pytest.mark.timeout(0)
 @OPT_IN
 def test_record_the_variant_prompt_with_the_live_model(
     fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch, tmp_path: Path

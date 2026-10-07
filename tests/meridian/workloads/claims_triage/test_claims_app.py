@@ -20,10 +20,10 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 )
 from psycopg.types.json import Jsonb
 from servicesupport import (
-    REPO_ROOT,
     assert_spans_hold_no_exception_and_no_canary,
     claim_with_id,
     database_error,
+    injection_case_claim,
     owner_rows,
     synthetic_claims,
 )
@@ -324,20 +324,11 @@ def test_a_description_naming_the_claimant_reaches_the_run_without_the_name(
     assert submission["description"] == description
 
 
-def name_masked_claim(case_id: str) -> dict[str, Any]:
-    """A claim of the injection suite whose claimant's name holds screened words."""
-    path = REPO_ROOT / "data" / "synthetic" / "injection" / "cases.json"
-    (case,) = [
-        c for c in json.loads(path.read_text(encoding="utf-8")) if c["case"] == case_id
-    ]
-    return case["claim"]
-
-
 @pytest.mark.parametrize("case_id", ["CLM-1053", "CLM-1054"])
 def test_a_claim_whose_name_hides_an_instruction_is_sent_with_the_flag_set(
     fresh_database: DatabaseHandle, case_id: str
 ) -> None:
-    claim = name_masked_claim(case_id)
+    claim = injection_case_claim(case_id)
     runtime = Runtime()
     client = make_client(claims_dsn(fresh_database), runtime)
 

@@ -165,6 +165,15 @@ case "${args[0]}" in
   fmt)
     [[ "${STUB_FMT_STATUS:-0}" == 0 ]] || echo "main.tf"
     exit "${STUB_FMT_STATUS:-0}" ;;
+  init)
+    # What the real init does: it downloads the providers into Terraform's data
+    # directory, which is .terraform in the module's directory unless TF_DATA_DIR
+    # names another. Only a test that asks for it (STUB_INIT_WRITES_DATA_DIR=1)
+    # gets the directory made, so that the other tests see what they always saw.
+    if [[ "${STUB_INIT_WRITES_DATA_DIR:-0}" == 1 ]]; then
+      mkdir -p "${TF_DATA_DIR:-${chdir}/.terraform}/providers"
+    fi
+    exit 0 ;;
   plan)
     for argument in "${args[@]}"; do
       case "${argument}" in -out=*) : >"${chdir}/${argument#-out=}" ;; esac

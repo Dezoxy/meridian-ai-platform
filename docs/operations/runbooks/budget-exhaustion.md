@@ -41,7 +41,8 @@ alert watches them: wait. This runbook is about the last two.
 
 A gateway given the address of the shared store keeps the two windows there
 (implemented, tested, and seen working on kind on 2026-10-06: its calls were
-counted there; a failure to reach it, as a 503, was not seen on a cluster).
+counted there; a failure to reach it, as a 503, was not seen then and was seen
+on kind on 2026-10-07, run R11).
 When it cannot reach the store
 it refuses the call: 503 `the rate store is unavailable` with `Retry-After: 5`,
 audit reason `rate-store-unavailable`. That is not a tenant's limit: the store

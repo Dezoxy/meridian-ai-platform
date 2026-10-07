@@ -194,9 +194,17 @@ probes:
 # with what the service serves.
 #
 # `tls: true` says a service serves TLS and asks its callers for a certificate
-# (S055). It is one value and nothing else: the template adds the uvicorn
-# flags, the probes' scheme, the DNS name in the certificate and the prefix the
-# service reads its callers' identity with. The chart fails for a service that
+# (S055). Its command starts through `python -m
+# meridian.platform.common.tlsstart`, which takes uvicorn's own flags and reads
+# the certificate once, for the server and for /healthz (S069); the Claims API
+# keeps `uvicorn`. `tls: true` on a command that starts `uvicorn` serves TLS
+# but reads the certificate twice (the fault S069 closed: /healthz can then
+# watch a newer certificate than the one served); the chart does not refuse it,
+# and test_helm_identity.py pins the five commands in this file. Apart from
+# that command it is one value and nothing else:
+# the template adds the flags, the probes' scheme, the DNS name in the
+# certificate and the prefix the service reads its callers' identity with. The
+# chart fails for a service that
 # another workload calls (a serviceUrl or a serviceMap names it) and does not
 # set it. The Claims API has none: the edge
 # calls it over plain HTTP (TLS at the edge is a backlog row), and it is a
@@ -238,7 +246,9 @@ services:
     replicas: 1
     tls: true
     command:
-      - uvicorn
+      - python
+      - -m
+      - meridian.platform.common.tlsstart
       - --factory
       - meridian.runtime.app:create_app_from_env
       - --host
@@ -267,7 +277,9 @@ services:
     replicas: 1
     tls: true
     command:
-      - uvicorn
+      - python
+      - -m
+      - meridian.platform.common.tlsstart
       - --factory
       - meridian.platform.gateway.app:create_app_from_env
       - --host
@@ -296,7 +308,9 @@ services:
     replicas: 1
     tls: true
     command:
-      - uvicorn
+      - python
+      - -m
+      - meridian.platform.common.tlsstart
       - --factory
       - meridian.platform.policy_mcp.app:create_app_from_env
       - --host
@@ -320,7 +334,9 @@ services:
     replicas: 1
     tls: true
     command:
-      - uvicorn
+      - python
+      - -m
+      - meridian.platform.common.tlsstart
       - --factory
       - meridian.workloads.claims_triage.mcp_server.app:create_app_from_env
       - --host
@@ -344,7 +360,9 @@ services:
     replicas: 1
     tls: true
     command:
-      - uvicorn
+      - python
+      - -m
+      - meridian.platform.common.tlsstart
       - --factory
       - meridian.platform.knowledge_mcp.app:create_app_from_env
       - --host
@@ -378,6 +396,74 @@ route:
   # oversized body never reaches the Claims API. 64Ki is the app's own limit
   # (SMALL_BODY_LIMIT_BYTES); the app still enforces it for chunked bodies.
   requestBufferLimit: 64Ki
+  # The route for a claimant's file (uploads, S070, T-38): a second HTTPRoute for
+  # POST to /claims/{claim_id}/files and the claimant's form's post to
+  # /claimant/claims/{claim_id}/files (both exist in the app, F4a), with a
+  # request buffer and a rate limit of its own, and MERIDIAN_CLAIMS_UPLOADS=on
+  # on the Claims API. Off here and on kind, apart from `route.enabled`: turning
+  # the pages on does not turn uploads on, and the chart refuses uploads while
+  # the route is off. Not to be exposed beyond the machine before sign-in
+  # (S021): the route is as open as the pages, so the chart refuses uploads (and
+  # downloads, below) unless route.hostname is a lower-case name that ends in
+  # .localhost (what that check is and is not: the comment on the download
+  # switch). Both switches must be booleans: `--set-string ...=false` is refused.
+  # To turn it on for one run on kind, see infra/kind/values/meridian.yaml.
+  uploads:
+    enabled: false
+    # The buffer for this route alone, as an exact byte count in a string (a
+    # number of a million or more would render as 1.1264e+06): 1 MiB for the
+    # file and 76 KiB for the multipart envelope and the form's other field,
+    # 1,126,400. It is the app's UPLOAD_BODY_LIMIT_BYTES; a test of the app's
+    # limits holds the two equal. Envoy answers 413 above it, before the Claims
+    # API sees the body.
+    requestBufferLimit: "1126400"
+    # A LOCAL rate limit for the whole route, in Envoy Gateway's
+    # BackendTrafficPolicy (spec.rateLimit.local.rules[].limit): one bucket for
+    # every caller, because there is no caller identity to key on before sign-in.
+    # One busy claimant can use the whole allowance; that is the point, since
+    # what it bounds is how fast the database, the only store, fills with files.
+    # "Local" means each Envoy proxy pod counts for itself: with N proxy pods
+    # the route allows N times this. Whether the counter is per route or per
+    # match (the route has two POST matches, which could count apart and allow
+    # twice this): not seen on a cluster. The app has its own rate and byte
+    # budget behind it. Past it Envoy answers 429. `unit` is one of Second,
+    # Minute, Hour, Day, Week, Month, Year.
+    rateLimit:
+      requests: 6
+      unit: Minute
+  # The adjuster's download of a stored file (S070 F4b, T-38): a second, named
+  # rule on the uploads route for GET and HEAD of
+  # /adjuster/claims/{claim_id}/files/{file_id}, a BackendTrafficPolicy for that
+  # rule alone, and MERIDIAN_CLAIMS_DOWNLOADS=on on the Claims API. It exists
+  # after this change and is off here and on kind. It needs route.uploads.enabled
+  # (there is nothing to download otherwise). The adjuster's pages have no sign-in
+  # before S021, so whoever reaches the host can read every stored file by walking
+  # the claim IDs: so the chart turns this on, and uploads, only when
+  # route.hostname as a whole is a lower-case DNS name that ends in .localhost.
+  # That is a check of a string. It does not check who can reach the edge: Envoy
+  # matches the Host header, which any client can set, so the same release
+  # answers anyone who can open a connection to the Gateway's address. On kind the
+  # boundary is the cluster config that binds the published port to 127.0.0.1
+  # (infra/kind/cluster.yaml), not the chart. It stops a release that turns the
+  # switches on beside a public name; it does not stop a Gateway that is
+  # reachable from a network (a LoadBalancer, a changed listenAddress), a
+  # port-forward, other local users or containers, a parentRef to another
+  # Gateway, or a variable set by hand outside the chart. To try it on kind, see
+  # infra/kind/values/meridian.yaml.
+  downloads:
+    enabled: false
+    # A LOCAL rate limit for the download rule alone, apart from the uploads':
+    # meant as one bucket for every caller (no identity to key on), per Envoy
+    # proxy pod; per route or per match (GET and HEAD) is not seen on a cluster.
+    # 30 a minute is five times the uploads' allowance and about one adjuster
+    # opening the files of several claims; past it Envoy answers 429. The app
+    # has a limit of its own of the same size, per process, that does not depend
+    # on this one (file_download.DOWNLOAD_RATE_PER_MINUTE). The rule
+    # takes the first route's 64Ki request buffer and no larger one (a GET has no
+    # body).
+    rateLimit:
+      requests: 30
+      unit: Minute
 
 # The Jobs run to completion: the migration as the database owner role, the seed
 # and the ingestion each as a role of their own (database.*Secret above).

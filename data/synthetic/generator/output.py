@@ -4,7 +4,14 @@ import hashlib
 import json
 from pathlib import Path
 
-from . import GENERATOR_VERSION, WORKLOAD, catalogue, heldout, injection
+from . import (
+    GENERATOR_VERSION,
+    WORKLOAD,
+    catalogue,
+    heldout,
+    injection,
+    upload_samples,
+)
 from .scenarios import Dataset
 from .wording import render_wording
 
@@ -14,6 +21,7 @@ INJECTION_DIR = "injection"
 # have a folder of their own: the injection set's fingerprint refuses a file of
 # its folder that its manifest does not list.
 HELDOUT_DIR = "injection-heldout"
+UPLOAD_SAMPLES_DIR = upload_samples.FOLDER
 
 
 def render_json(value: object) -> str:
@@ -60,8 +68,9 @@ def build_manifest(dataset: Dataset, seed: int, files: dict[str, bytes]) -> dict
 
 def write_dataset(dataset: Dataset, seed: int, out_dir: Path) -> list[str]:
     """Write every file under ``out_dir``, the manifest last, then the injection
-    case set and its own manifest under ``injection/`` and the held-out cases and
-    theirs under ``injection-heldout/``; return their paths."""
+    case set and its own manifest under ``injection/``, the held-out cases and
+    theirs under ``injection-heldout/`` and the upload samples and theirs under
+    ``upload-samples/``; return their paths."""
     encoded = {
         path: text.encode("utf-8") for path, text in render_files(dataset).items()
     }
@@ -76,6 +85,9 @@ def write_dataset(dataset: Dataset, seed: int, out_dir: Path) -> list[str]:
     for path, data in render_heldout_files(dataset, seed, encoded[MANIFEST]).items():
         encoded[f"{HELDOUT_DIR}/{path}"] = data
         order.append(f"{HELDOUT_DIR}/{path}")
+    for path, data in render_upload_sample_files(dataset, seed).items():
+        encoded[f"{UPLOAD_SAMPLES_DIR}/{path}"] = data
+        order.append(f"{UPLOAD_SAMPLES_DIR}/{path}")
     for path in order:
         target = out_dir / path
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -107,3 +119,11 @@ def render_heldout_files(
         injection.CASES_FILE: cases_bytes,
         MANIFEST: render_json(manifest).encode("utf-8"),
     }
+
+
+def render_upload_sample_files(dataset: Dataset, seed: int) -> dict[str, bytes]:
+    """The upload samples, relative to their folder, the manifest last. Not in the
+    golden manifest: the evaluation fingerprints that one."""
+    files = upload_samples.render_files(dataset, seed)
+    manifest = upload_samples.build_manifest(seed, files)
+    return {**files, MANIFEST: render_json(manifest).encode("utf-8")}

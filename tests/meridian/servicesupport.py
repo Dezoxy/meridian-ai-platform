@@ -19,6 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 TESTS_ROOT = REPO_ROOT / "tests"
 REGISTRY_DIR = REPO_ROOT / "config" / "registry"
 CLAIMS_JSON = REPO_ROOT / "data" / "synthetic" / "claims.json"
+INJECTION_CASES_JSON = REPO_ROOT / "data" / "synthetic" / "injection" / "cases.json"
 
 # What the gateway answers a chat call with, for the tests that stand in for it.
 GATEWAY_REPLY = {
@@ -219,6 +220,21 @@ def claim_with_id(claim_id: str, index: int = 0) -> dict:
     return {**synthetic_claims()[index], "claim_id": claim_id}
 
 
+def injection_case_claim(case_id: str) -> dict:
+    """The claim of one injection case (``CLM-1053``: a name that masks words).
+
+    Read afresh on every call, so a caller may change what it gets. A case that
+    is not in the file fails the test that asked for it: a skip is silent in CI.
+    """
+    cases = json.loads(INJECTION_CASES_JSON.read_text(encoding="utf-8"))
+    found = [case for case in cases if case["case"] == case_id]
+    assert len(found) == 1, (
+        f"{len(found)} injection cases named {case_id!r} in "
+        f"{INJECTION_CASES_JSON.relative_to(REPO_ROOT)}, expected exactly one"
+    )
+    return found[0]["claim"]
+
+
 def owner_rows(db: DatabaseHandle, statement: str, params: tuple = ()) -> list[tuple]:
     """Read as the owner role, which sees every schema."""
     with connect(db.dsn(OWNER), "test-read") as conn:
@@ -274,3 +290,28 @@ def assert_spans_hold_no_exception_and_no_canary(
             *(str(v) for e in span.events for v in e.attributes.values()),
         ]
         assert canary not in " ".join(carried), span.name
+
+
+# One part of a multipart body: its field name, the file name (``None`` for a
+# text field), the part's own Content-Type header (``None`` for none) and bytes.
+type MultipartPart = tuple[str, str | None, str | None, bytes]
+
+
+def multipart_body(
+    parts: list[MultipartPart], boundary: str = "b"
+) -> tuple[bytes, dict[str, str]]:
+    """A multipart/form-data body by hand, with the smallest envelope the
+    format allows, and its Content-Type header: a test that sits at a body limit
+    needs to say how many bytes the envelope takes, which a client library
+    decides for itself."""
+    body = b""
+    for name, filename, content_type, data in parts:
+        disposition = f'form-data; name="{name}"'
+        if filename is not None:
+            disposition += f'; filename="{filename}"'
+        headers = f"Content-Disposition: {disposition}\r\n"
+        if content_type is not None:
+            headers += f"Content-Type: {content_type}\r\n"
+        body += f"--{boundary}\r\n{headers}\r\n".encode() + data + b"\r\n"
+    body += f"--{boundary}--\r\n".encode()
+    return body, {"Content-Type": f"multipart/form-data; boundary={boundary}"}

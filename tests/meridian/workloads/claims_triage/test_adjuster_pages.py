@@ -50,7 +50,7 @@ from workloads.claims_triage.test_claims_app import (
 
 from meridian.platform.common.audit import AuditUnavailable
 from meridian.platform.common.db import connect
-from meridian.workloads.claims_triage import adjuster
+from meridian.workloads.claims_triage import adjuster, page_security
 from meridian.workloads.claims_triage import app as claims_app
 from meridian.workloads.claims_triage.app import (
     BEING_APPLIED_DETAIL,
@@ -795,7 +795,11 @@ def test_the_claim_page_leaves_out_the_claimants_name_and_email(
     assert response.status_code == 200
     assert CLAIMANT_NAME not in response.text
     assert CLAIMANT_EMAIL not in response.text
-    assert "claimant" not in response.text.lower()
+    # The word appears once, in the heading of the list of the files the claimant
+    # sent (S070): a heading the contract names, with no claimant data in it.
+    assert "claimant" not in response.text.lower().replace(
+        "files the claimant sent", ""
+    )
 
 
 def test_the_claim_page_shows_the_trail_of_the_claim_in_order_and_no_other(
@@ -2317,9 +2321,12 @@ def test_late_documents_are_found_however_long_the_trail_is(
 ) -> None:
     db = fresh_database
     put_claim(db, CLAIM, "awaiting_adjuster")
-    # More events before it than the page lists: the listing is oldest first and
-    # cuts the end of the trail, where the referral and the event are.
+    # More events after them than the page lists: the listing shows the newest
+    # rows (S070 F4d), and so cuts the start of the trail, where the referral
+    # and the event are.
     put_trail(db, CLAIM, [])
+    put_sweep_event(db, CLAIM, "claim.awaiting_adjuster", OVERDUE_REASON)
+    put_late_documents(db, CLAIM)
     owner_rows(
         db,
         "INSERT INTO audit.events (service, event, outcome, run_id) "
@@ -2327,8 +2334,6 @@ def test_late_documents_are_found_however_long_the_trail_is(
         "FROM runtime.runs, generate_series(1, %s) RETURNING 1",
         (adjuster.TRAIL_LIMIT + 1,),
     )
-    put_sweep_event(db, CLAIM, "claim.awaiting_adjuster", OVERDUE_REASON)
-    put_late_documents(db, CLAIM)
 
     response = client_for(db).get(url_of(CLAIM))
 
@@ -2580,6 +2585,9 @@ def test_a_clean_up_beyond_the_trail_limit_is_still_explained(
         "RETURNING 1",
         (run_id, uuid.uuid4(), TENANT),
     )
+    # The clean-up first, then 250 rows after it: the page lists the newest 200
+    # (S070 F4d), so the clean-up is beyond what it lists.
+    put_sweep_event(db, "CLM-9301", "run.failed", ABANDONED_REASON, run_id=run_id)
     owner_rows(
         db,
         "INSERT INTO audit.events (service, event, outcome, run_id) "
@@ -2587,7 +2595,6 @@ def test_a_clean_up_beyond_the_trail_limit_is_still_explained(
         "FROM generate_series(1, 250) RETURNING 1",
         (run_id,),
     )
-    put_sweep_event(db, "CLM-9301", "run.failed", ABANDONED_REASON, run_id=run_id)
 
     response = client_for(db).get(url_of("CLM-9301"))
 
@@ -2640,7 +2647,9 @@ def test_a_run_completed_beyond_the_trail_limit_still_counts(
         "RETURNING 1",
         (run_id, uuid.uuid4(), TENANT),
     )
-    # 250 rows, then the completion: it is the 251st of the trail.
+    # The completion, then 250 rows: the page lists the newest 200 (S070 F4d), so
+    # the completion is the 251st from the end of the trail.
+    put_event(db, run_id, "run.completed")
     owner_rows(
         db,
         "INSERT INTO audit.events (service, event, outcome, run_id) "
@@ -2648,7 +2657,6 @@ def test_a_run_completed_beyond_the_trail_limit_still_counts(
         "FROM generate_series(1, 250) RETURNING 1",
         (run_id,),
     )
-    put_event(db, run_id, "run.completed")
 
     response = client_for(db).get(url_of("CLM-9301"))
 
@@ -2842,7 +2850,7 @@ def test_the_origin_is_checked_before_the_decision_word() -> None:
 def test_the_origin_check_refuses_exactly_what_t70_names(
     origin: str | None, host: str | None, fetch_site: str | None, cross_site: bool
 ) -> None:
-    assert adjuster.is_cross_site(origin, host, fetch_site) is cross_site
+    assert page_security.is_cross_site(origin, host, fetch_site) is cross_site
 
 
 # ── the headers and the stylesheet ──────────────────────────────────────────
