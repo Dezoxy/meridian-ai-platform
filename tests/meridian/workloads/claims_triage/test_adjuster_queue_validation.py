@@ -1,13 +1,16 @@
 """S070: the queue marks a proposal only when the claim's page could read it.
 
 The claim's page validates the stored proposal and, when that fails, says it
-"could not be read". The queue uses the same judgment (``adjuster._proposal_of``,
-one function), so a stored proposal that fails validation carries no mark in the
-queue and the short form of the page's words instead. A page of the queue
-validates each shown row once, from the row it already read: no second call to
-the database.
+"could not be read". The queue uses the same judgment
+(``adjuster_queue._proposal_of``, one function), so a stored proposal that fails
+validation carries no mark in the queue and the short form of the page's words
+instead. A page of the queue validates each shown row once, from the row it
+already read: no second call to the database. The claim's page logs a proposal
+it cannot read; the queue logs one line per page with the count, never one per
+row.
 """
 
+import logging
 from datetime import timedelta
 from typing import Any
 
@@ -36,7 +39,7 @@ from meridian.workloads.claims_triage.adjuster_queue import QueueRow
 from meridian.workloads.claims_triage.proposal import TriageProposal
 
 REASON_HEADER = "Reason of the latest proposal"
-UNREADABLE_MARK = adjuster.UNREADABLE_PROPOSAL_MARK
+UNREADABLE_MARK = adjuster_queue.UNREADABLE_PROPOSAL_MARK
 # Each fails the validator (or the model's shape) and keeps the two columns the
 # insert reads, ``route`` and ``reason``. The first two keep a recommendation
 # and an assessment that, read without validating, would be marked "model".
@@ -82,14 +85,14 @@ def test_a_stored_proposal_that_cannot_be_read_has_no_mark_in_the_queue(
     assert cell == UNREADABLE_MARK
     assert cell not in (MODEL_MARK, RULES_MARK)
     # The page says it in the long form and has no sentence of what it rests on.
-    assert adjuster.UNREADABLE_PROPOSAL_TEXT in page.text
+    assert adjuster_queue.UNREADABLE_PROPOSAL_TEXT in page.text
     assert NOTE_LABEL not in Definitions(page.text).labels()
 
 
 def test_the_cell_for_an_unreadable_proposal_is_the_pages_words_short() -> None:
-    long_form = adjuster.UNREADABLE_PROPOSAL_TEXT
+    long_form = adjuster_queue.UNREADABLE_PROPOSAL_TEXT
 
-    short_form = adjuster.UNREADABLE_PROPOSAL_MARK
+    short_form = adjuster_queue.UNREADABLE_PROPOSAL_MARK
 
     assert short_form == "could not be read"
     assert long_form == f"the stored proposal {short_form}"
@@ -114,7 +117,7 @@ def test_the_queue_and_the_page_agree_on_which_stored_proposals_can_be_read(
     for claim_id in stored:
         page = client.get(url_of(claim_id)).text
         assert (marks[claim_id] == UNREADABLE_MARK) == (
-            adjuster.UNREADABLE_PROPOSAL_TEXT in page
+            adjuster_queue.UNREADABLE_PROPOSAL_TEXT in page
         )
     assert marks["CLM-9320"] == MODEL_MARK
     assert marks["CLM-9321"] == RULES_MARK
@@ -186,6 +189,92 @@ def test_a_stored_proposal_that_is_not_an_object_has_no_mark_and_never_raises(
     html = adjuster.render_queue([queue_row("CLM-9401", stored)])
 
     assert marks_of(html) == {"CLM-9401": UNREADABLE_MARK}
+
+
+# ── what a page of the queue logs ───────────────────────────────────────────
+def warnings_of(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_a_page_with_three_unreadable_proposals_logs_one_record_with_the_count_3(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    rows = [queue_row(f"CLM-940{i}", UNREADABLE["a-missing-key"]) for i in range(3)]
+    rows += [queue_row("CLM-9409", RICH_PROPOSAL), queue_row("CLM-9410", None)]
+
+    with caplog.at_level(logging.DEBUG):
+        adjuster.render_queue(rows)
+
+    (record,) = warnings_of(caplog)
+    assert record.name == adjuster.__name__
+    assert record.getMessage() == (
+        "the queue page holds 3 stored proposals that could not be read"
+    )
+    assert record.args == (3,)
+    # No claim, no field and no stored value in the line.
+    assert "CLM-" not in record.getMessage()
+    assert [r for r in caplog.records if r.levelno < logging.WARNING] == []
+
+
+def test_a_page_with_no_unreadable_proposal_logs_nothing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    rows = [queue_row("CLM-9401", RICH_PROPOSAL), queue_row("CLM-9402", None)]
+
+    with caplog.at_level(logging.DEBUG):
+        adjuster.render_queue(rows)
+
+    assert caplog.records == []
+
+
+def test_a_full_page_of_unreadable_proposals_still_logs_one_record(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    rows = [
+        queue_row(f"CLM-{i:05d}", UNREADABLE["a-key-the-model-does-not-have"])
+        for i in range(adjuster_queue.QUEUE_LIMIT)
+    ]
+
+    with caplog.at_level(logging.DEBUG):
+        adjuster.render_queue(rows)
+
+    (record,) = caplog.records
+    assert record.args == (adjuster_queue.QUEUE_LIMIT,)
+
+
+def test_the_claims_own_page_still_logs_the_proposal_it_cannot_read(
+    fresh_database: DatabaseHandle, caplog: pytest.LogCaptureFixture
+) -> None:
+    put_claim(fresh_database, CLAIM)
+    put_proposal(fresh_database, CLAIM, UNREADABLE["a-key-the-model-does-not-have"])
+
+    with caplog.at_level(logging.DEBUG):
+        response = client_for(fresh_database).get(url_of(CLAIM))
+
+    assert response.status_code == 200
+    (record,) = warnings_of(caplog)
+    assert record.getMessage() == (
+        f"the stored proposal of claim {CLAIM} is not valid: "
+        "ValidationError (('*', 'extra_forbidden'),)"
+    )
+    assert "canary_key" not in record.getMessage()
+
+
+def test_a_page_of_the_queue_logs_one_line_however_often_it_is_loaded(
+    fresh_database: DatabaseHandle, caplog: pytest.LogCaptureFixture
+) -> None:
+    db = fresh_database
+    for i, stored in enumerate(UNREADABLE.values()):
+        put_claim(db, f"CLM-930{i}")
+        put_proposal(db, f"CLM-930{i}", stored)
+    client = client_for(db)
+
+    with caplog.at_level(logging.DEBUG):
+        for _ in range(2):
+            assert client.get(QUEUE_URL).status_code == 200
+
+    records = warnings_of(caplog)
+    assert [r.args for r in records] == [(3,), (3,)]
 
 
 # ── pinned, not changed ─────────────────────────────────────────────────────
