@@ -1,0 +1,23 @@
+# Findings of the configuration scan that are accepted for this module (S079):
+# NONE, and that is a decision left open, not a finding of none. The module is
+# implemented as code, checked and never planned or applied, and the first scan of
+# it (every severity, the repository's pinned image, offline) reported one HIGH
+# finding that is not removed and not accepted here: GCP-0031, "Instance has a
+# public IP allocated", on the control plane's one external address, which the
+# owner's one address needs to reach the API server. Accepting it, or changing the
+# design so that it goes (no external address, the API server behind a load balancer
+# or Identity-Aware Proxy), is the owner's decision, in a later change, with the
+# reason written above the entry. Its LOW and MEDIUM findings (flow logs, customer-
+# managed disk keys) are in the README, for the reader; the scan's recipe lists
+# HIGH and CRITICAL only.
+#
+# An entry would be one Trivy check ID per line, exactly `GCP-` and four digits and
+# nothing after it (no expiry, no file name, no wildcard, not the older AVD-
+# spelling), and on the line directly above it the reason: what the check says, why
+# it holds here, and what a production environment would do instead, in a handful
+# of words at least. tests/meridian/test_gcp_kubeadm_scan.py fails on an entry that
+# breaks any of this, on an entry at all that its list does not name, on an inline
+# ignore comment in a .tf file, on a Trivy configuration or YAML ignore file in this
+# directory, and on a second external address or subnet: an entry here applies to
+# EVERY resource of the directory, not to one. A finding fixed in the module is
+# deleted from here.
