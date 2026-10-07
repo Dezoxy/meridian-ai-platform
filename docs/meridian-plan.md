@@ -14028,7 +14028,18 @@ may overturn any):
   `smoke.sh`, because the raw `port-forward` of `open_grafana` is there now (it
   failed first, with the count 0 for the new key).
 
-**Advisor:** one consultation, on the design, at about 09:40 UTC on 2026-10-07,
+**Advisor:** two consultations. The second, before this part's pull request
+(about 11:10 UTC), because the two follow-ups of the review reached the branch
+after it: its reading was that both are the review's prescriptions applied
+(the one step past its wording, a command substitution refused in a
+`readonly` too, was taken after counting that none of today's constants has
+one, and a test pins that count), so the consultation stands in for a second
+read; and that the tree after the follow-up needs no second run on the
+cluster, since its shell changes are comment, blank and directive lines only,
+held three ways (no changed line that is not a comment, the comparison with
+comments removed, and equal definitions before and after), if the pull
+request says which commit ran on kind. The first, on the design, at about
+09:40 UTC on 2026-10-07,
 before any contract. It changed four things. The order against S072: only
 checks 8 and 10 collide, so the other nine parts are cut now and those two last,
 after S072's smoke edits are on `main` and merged into this branch; until then
