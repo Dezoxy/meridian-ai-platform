@@ -596,6 +596,7 @@ else
 fi
 for entry in 'Bash(terraform plan*)' 'Bash(terraform -chdir=*aws* plan*)' 'Bash(make aws-plan*)' 'Bash(make aws-apply*)' \
   'Bash(make aws-kubeadm-plan*)' 'Bash(make aws-kubeadm-apply*)' \
+  'Bash(make eval-record*)' 'Bash(make eval-injection-record*)' 'Bash(make gateway-live*)' \
   'Bash(terraform apply*)' 'Bash(terraform -chdir=* apply*)'; do
   if in_list ask "$entry"; then
     echo "ok   ask holds ${entry}"
@@ -733,4 +734,55 @@ else
   echo "FAIL the directory scan found ${module_count} modules of the AWS family, fewer than 2"
   fail=1
 fi
+
+# The paid model calls (S071, G1). The ask says that the command calls a live
+# model and spends money, and that the owner's yes to a stated cost comes first;
+# the settings keep the free targets out of the ask list, so that the replay of
+# the recording and the smoke check (three calls, under a cent) never ask.
+for command_text in 'make eval-record' 'make eval-injection-record' 'make gateway-live' \
+  'infra/terraform/foundation.sh eval-record' 'MERIDIAN_LIVE_AZURE=1 pytest'; do
+  reason="$(reason_of "$command_text")"
+  case "$reason" in
+    *"live model"*"spend money"*"owner's yes"*"stated cost"*) echo "ok   the ask for ${command_text} says it calls a live model, spends money and needs the owner's yes to a stated cost" ;;
+    *)
+      echo "FAIL the ask for ${command_text} does not say it calls a live model, spends money and needs the owner's yes to a stated cost: $reason"
+      fail=1
+      ;;
+  esac
+done
+for entry in 'Bash(make azure-smoke*)' 'Bash(make eval*)' 'Bash(make eval-baseline*)' 'Bash(make eval-compare*)' 'Bash(make eval)'; do
+  if in_list ask "$entry" || in_list deny "$entry"; then
+    echo "FAIL ask or deny holds ${entry}, a free target"
+    fail=1
+  else
+    echo "ok   neither ask nor deny holds ${entry}, a free target"
+  fi
+done
+# The worst shapes of the new rules under the byte bound: `make ` repeated and
+# then a target that only starts like a paid one (the make rule backtracks over
+# every blank), and an opt-in name repeated (the loop is bounded at sixteen
+# reads and then asks). Both are answered well inside the CPU bound.
+paid_shape="$(for _ in $(seq 1550); do printf 'make '; done)eval-recorder"
+jq -nc --arg c "$paid_shape" '{tool_input:{command:$c}}' > "$big_input"
+cpu="$( { time bash "$hook" < "$big_input" > /dev/null; } 2>&1 )"
+cpu_seconds="$(awk '{ print $1 + $2 }' <<<"$cpu")"
+if awk -v s="$cpu_seconds" -v b="$cpu_bound" 'BEGIN { exit !(s < b) }'; then
+  echo "ok   1550 repetitions of make before a near-miss paid target take ${cpu_seconds} s of CPU, under ${cpu_bound}"
+else
+  echo "FAIL 1550 repetitions of make before a near-miss paid target take ${cpu_seconds} s of CPU, not under ${cpu_bound}"
+  fail=1
+fi
+ask_for "1550 repetitions of make before a paid target ask" ask \
+  "$(for _ in $(seq 1550); do printf 'make '; done)eval-record"
+paid_env_shape="$(for _ in $(seq 360); do printf 'MERIDIAN_EVAL_RECORD=0 '; done)pytest"
+jq -nc --arg c "$paid_env_shape" '{tool_input:{command:$c}}' > "$big_input"
+cpu="$( { time bash "$hook" < "$big_input" > /dev/null; } 2>&1 )"
+cpu_seconds="$(awk '{ print $1 + $2 }' <<<"$cpu")"
+if awk -v s="$cpu_seconds" -v b="$cpu_bound" 'BEGIN { exit !(s < b) }'; then
+  echo "ok   360 opt-in assignments set to 0 take ${cpu_seconds} s of CPU, under ${cpu_bound}"
+else
+  echo "FAIL 360 opt-in assignments set to 0 take ${cpu_seconds} s of CPU, not under ${cpu_bound}"
+  fail=1
+fi
+ask_for "360 opt-in assignments set to 0 ask, the loop reads sixteen" ask "$paid_env_shape"
 exit "$fail"

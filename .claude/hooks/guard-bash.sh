@@ -1007,6 +1007,54 @@ state_re="${runner}${script_path}state\.sh${script_end}"
 foundation_apply_re="${runner}${script_path}foundation\.sh[[:space:]]+[\"${sq}]?apply${script_end}"
 [[ "$cmd" =~ $foundation_apply_re ]] && \
   decide ask "foundation.sh apply creates or changes Azure resources; confirm the plan and subscription first."
+# The asks for a paid model call (S071, G1). `make eval-record`,
+# `make eval-injection-record` and `make gateway-live` run, through
+# infra/terraform/foundation.sh, real calls on the live Azure models and spend
+# money; the settings allow `make *`, so nothing else asks before them. A signed-
+# in session is one command from a paid run, and the owner's yes to a stated
+# cost comes first (the plan's Part A). `make azure-smoke` passes on purpose: it
+# is three calls to prove the deployments answer, well under a cent, and the
+# free replay (`make eval`, `eval-baseline`, `eval-compare`) calls no model. The
+# three rules read cmd, as the Azure rules above do, not hook_cmd as the AWS
+# rules do: quoted text is read as a use, so an echo, a search or a message on
+# the command line that names a target asks (a commit message goes in with
+# -F file: the file is no command line, but a heredoc on -F - stays in the text
+# and asks). They ask and never deny, so the owner can say yes.
+#   - the make rule is azure_make_re with the three targets, `gmake` too, a
+#     quote, a bracket or a backtick after the word make ($(command -v make)
+#     eval-record, ${MAKE} eval-record, 'make' eval-record) and an end that also
+#     takes `<`, `>` and a backtick (make eval-record>run.log). A target that a
+#     variable or a substitution builds, a quote inside a word, a loop over
+#     targets and a script copied under another name are not read (the header's
+#     list of what the guard does not see);
+#   - the script rule has no anchor to a command start (foundation_apply_re
+#     reads one, with an interpreter, its flags and a path): a word that ends in
+#     foundation.sh followed by one of the three sub-commands, so a copy of the
+#     script under another name, bash -o errexit in front, or a quoted path asks;
+#   - the opt-in rule reads the variables the paid tests read, anywhere in the
+#     command, for any value that is not 0 or empty (the tests read 1 and
+#     nothing else; a form of 1 this rule did not foresee still asks): it does
+#     not need the word pytest, because make test hands the environment on.
+paid_end="([[:space:]]|\$|[;&|)<>\"${sq}\`])"
+paid_target="(eval-record|eval-injection-record|gateway-live)"
+paid_make_re="(^|[^[:alnum:]_.-])(g|gnu)?make[\"${sq})}\`]*[[:space:]]+([^;&|${nl}]*[[:space:]])?[\"${sq}]?${paid_target}${paid_end}"
+paid_script_re="foundation\.sh[\"${sq}]?[[:space:]]+[\"${sq}]?${paid_target}${paid_end}"
+if [[ "$cmd" == *record* || "$cmd" == *gateway-live* ]]; then
+  [[ "$cmd" =~ $paid_make_re || "$cmd" =~ $paid_script_re ]] && \
+    decide ask "make eval-record, make eval-injection-record, make gateway-live and the foundation.sh sub-commands behind them call a live model and spend money: the owner's yes to a stated cost comes first (make azure-smoke, three calls under a cent, and make eval, which replays the recording, do not ask)."
+fi
+paid_env_re="(^|[^[:alnum:]_])(MERIDIAN_LIVE_AZURE|MERIDIAN_EVAL_RECORD|MERIDIAN_EVAL_INJECTION_RECORD)[:+]?="
+paid_env_off_re="^(0|\"0\"|${sq}0${sq}|\"\"|${sq}${sq})?([[:space:]]|\$|[;&|)<>])"
+paid_env_ask="MERIDIAN_LIVE_AZURE, MERIDIAN_EVAL_RECORD and MERIDIAN_EVAL_INJECTION_RECORD opt in the tests that call a live model and spend money: the owner's yes to a stated cost comes first (set to 0 or to nothing, they ask no question)."
+if [[ "$cmd" == *MERIDIAN_* ]]; then
+  paid_env_text="$cmd"
+  paid_env_reads=0
+  while [[ "$paid_env_text" =~ $paid_env_re ]]; do
+    [ $(( ++paid_env_reads )) -le 16 ] || decide ask "$paid_env_ask"
+    paid_env_text="${paid_env_text#*"${BASH_REMATCH[0]}"}"
+    [[ "$paid_env_text" =~ $paid_env_off_re ]] || decide ask "$paid_env_ask"
+  done
+fi
 # The asks for the AWS environment (S036); the denies are above, with the
 # reasoning. `make aws-validate` and `make aws-scan` change nothing in AWS and
 # pass, as `make azure-plan` does. They read hook_cmd (a commit message that

@@ -2188,4 +2188,218 @@
 {"expect":"deny","note":"K7 (S079): false alarm by design, measured: a writer verb in a line that holds meridian-aws anywhere is denied, a file of that name outside the state directory included; the repository's scripts, Makefile and documents tell nobody to write such a path","command":"true > /tmp/meridian-aws-notes.log"}
 {"expect":"deny","note":"K7 (S079): false alarm by design, as the line above","command":"mv docs/old.md docs/meridian-aws-notes.md"}
 {"expect":"deny","note":"K7 (S079): false alarm by design, as the line above (git mv is the verb mv)","command":"git mv docs/old.md docs/meridian-aws-notes.md"}
+{"expect":"ask","note":"S071 G1: the make targets that call a live model and spend money","command":"make eval-record"}
+{"expect":"ask","command":"make eval-injection-record"}
+{"expect":"ask","command":"make gateway-live"}
+{"expect":"ask","command":"make -C . eval-record"}
+{"expect":"ask","command":"make -C . eval-injection-record"}
+{"expect":"ask","command":"make -C . gateway-live"}
+{"expect":"ask","command":"make --directory=. eval-record"}
+{"expect":"ask","command":"make --directory . gateway-live"}
+{"expect":"ask","command":"make -j2 eval-injection-record"}
+{"expect":"ask","command":"make eval-record EXTRA=x"}
+{"expect":"ask","command":"make EXTRA=x gateway-live"}
+{"expect":"ask","command":"EXTRA=x make eval-record"}
+{"expect":"ask","command":"EXTRA=\"a b\" make eval-injection-record"}
+{"expect":"ask","command":"env EXTRA=x make eval-injection-record"}
+{"expect":"ask","command":"MAKEFLAGS=-j2 make eval-record"}
+{"expect":"ask","command":"make 'eval-record'"}
+{"expect":"ask","command":"make \"eval-injection-record\""}
+{"expect":"ask","command":"make 'gateway-live'"}
+{"expect":"ask","command":"make \"gateway-live\""}
+{"expect":"ask","command":"make eval-baseline eval-record"}
+{"expect":"ask","command":"make eval-record eval-baseline"}
+{"expect":"ask","command":"make azure-smoke gateway-live"}
+{"expect":"ask","command":"make -- eval-record"}
+{"expect":"ask","command":"make\teval-record"}
+{"expect":"ask","command":"bash -c \"make eval-record\""}
+{"expect":"ask","command":"sh -c 'make eval-injection-record'"}
+{"expect":"ask","command":"bash -c \"make gateway-live\""}
+{"expect":"ask","command":"time make eval-record"}
+{"expect":"ask","command":"nohup make eval-injection-record &"}
+{"expect":"ask","command":"xargs make gateway-live"}
+{"expect":"ask","command":"/usr/bin/make eval-record"}
+{"expect":"ask","command":"gmake gateway-live"}
+{"expect":"ask","command":"cd data/evaluation && make -C ../.. eval-record"}
+{"expect":"ask","command":"make eval-record>run.log 2>&1"}
+{"expect":"ask","command":"make gateway-live;echo done"}
+{"expect":"ask","command":"(make eval-injection-record)"}
+{"expect":"ask","command":"echo $(make eval-record)"}
+{"expect":"ask","command":"echo `make gateway-live`"}
+{"expect":"ask","command":"make eval-baseline && make eval-record"}
+{"expect":"ask","command":"make eval-baseline\nmake eval-injection-record"}
+{"expect":"ask","command":"make eval-baseline | tee x.log; make gateway-live"}
+{"expect":"ask","note":"S071 G1: false alarm by design, as the AWS rules: a dry run names the target and asks","command":"make -n eval-record"}
+{"expect":"ask","note":"S071 G1: the rules read cmd, as the Azure rules do, so quoted text is a use: an echo that names the target asks (a commit message goes in with -F, which is no command line)","command":"echo \"run make eval-record when the owner says yes\""}
+{"expect":"ask","note":"S071 G1: as the line above: a message on the command line that names the target asks","command":"git commit -m \"S071: make gateway-live asks\""}
+{"expect":"none","note":"S071 G1: a message read from a file is no command line","command":"git commit -F msg.txt"}
+{"expect":"ask","note":"S071 G1: false alarm by design, measured: only a heredoc that cat or tee writes to a file is dropped, so the body of one that git commit reads stays in the text (write the message to a file and commit with -F file)","command":"git commit -F - <<'EOF'\nS071: make eval-record asks\nEOF"}
+{"expect":"none","command":"cat > notes.md <<'EOF'\nrun make eval-injection-record\nEOF"}
+{"expect":"none","note":"S071 G1: a target that merely begins or ends with the words","command":"make eval-recorder"}
+{"expect":"none","command":"make eval-records"}
+{"expect":"none","command":"make eval-record-x"}
+{"expect":"none","command":"make eval-record.bak"}
+{"expect":"none","command":"make my-eval-record"}
+{"expect":"none","command":"make xeval-record"}
+{"expect":"none","command":"make eval_record"}
+{"expect":"none","command":"make eval-injection-recorder"}
+{"expect":"none","command":"make eval-injection-record2"}
+{"expect":"none","command":"make eval-injection-record-x"}
+{"expect":"none","command":"make my-eval-injection-record"}
+{"expect":"none","command":"make gateway-live2"}
+{"expect":"none","command":"make gateway-lives"}
+{"expect":"none","command":"make gateway-live-x"}
+{"expect":"none","command":"make gateway-liv"}
+{"expect":"none","command":"make my-gateway-live"}
+{"expect":"none","command":"make xgateway-live"}
+{"expect":"none","command":"make gateway_live"}
+{"expect":"none","command":"make 'eval-recorder'"}
+{"expect":"none","command":"make \"gateway-lives\""}
+{"expect":"none","command":"make eval-baseline gateway-live2"}
+{"expect":"none","command":"my-make eval-record"}
+{"expect":"none","note":"S071 G1: the free targets, pinned so that a later change cannot make the replay ask; make azure-smoke (three calls, well under a cent) passes on purpose","command":"make azure-smoke"}
+{"expect":"none","command":"make -C . azure-smoke"}
+{"expect":"none","command":"make eval"}
+{"expect":"none","command":"make eval-baseline"}
+{"expect":"none","command":"make eval-compare"}
+{"expect":"none","command":"make -C . eval-baseline eval-compare"}
+{"expect":"none","command":"make eval-baseline && make eval-compare"}
+{"expect":"none","command":"make eval-injection"}
+{"expect":"none","command":"make test"}
+{"expect":"none","command":"grep -n eval-record Makefile"}
+{"expect":"none","command":"cat Makefile"}
+{"expect":"ask","note":"S071 G1: the scripts behind the targets: the sub-commands that call a live model","command":"infra/terraform/foundation.sh eval-record"}
+{"expect":"ask","command":"infra/terraform/foundation.sh eval-injection-record"}
+{"expect":"ask","command":"infra/terraform/foundation.sh gateway-live"}
+{"expect":"ask","command":"cd infra/terraform && ./foundation.sh eval-record"}
+{"expect":"ask","command":"cd infra/terraform && ./foundation.sh gateway-live"}
+{"expect":"ask","command":"bash infra/terraform/foundation.sh eval-injection-record"}
+{"expect":"ask","command":"sh infra/terraform/foundation.sh gateway-live"}
+{"expect":"ask","command":"bash -x foundation.sh eval-record"}
+{"expect":"ask","command":"bash -o errexit foundation.sh eval-record"}
+{"expect":"ask","command":"EXTRA=x infra/terraform/foundation.sh eval-record"}
+{"expect":"ask","command":"env EXTRA=x bash foundation.sh gateway-live"}
+{"expect":"ask","command":"sh -c './foundation.sh eval-injection-record'"}
+{"expect":"ask","command":"bash -c \"infra/terraform/foundation.sh eval-record\""}
+{"expect":"ask","command":"\"infra/terraform/foundation.sh\" eval-record"}
+{"expect":"ask","command":"infra/terraform/foundation.sh 'eval-record'"}
+{"expect":"ask","command":"infra/terraform/foundation.sh \"gateway-live\""}
+{"expect":"ask","command":"time infra/terraform/foundation.sh eval-injection-record"}
+{"expect":"ask","command":"/srv/x/infra/terraform/foundation.sh eval-record"}
+{"expect":"ask","command":"infra/terraform/foundation.sh gateway-live 2>&1 | tee run.log"}
+{"expect":"ask","command":"infra/terraform/foundation.sh smoke && infra/terraform/foundation.sh eval-record"}
+{"expect":"ask","note":"S071 G1: false alarm by design: a search for the call, quoted, is read as a use of it","command":"grep -n \"foundation.sh eval-record\" docs/development-environment.md"}
+{"expect":"none","command":"infra/terraform/foundation.sh eval-recorder"}
+{"expect":"none","command":"infra/terraform/foundation.sh eval-record-x"}
+{"expect":"none","command":"infra/terraform/foundation.sh eval-injection-recorder"}
+{"expect":"none","command":"infra/terraform/foundation.sh gateway-lives"}
+{"expect":"none","command":"infra/terraform/foundation.sh xgateway-live"}
+{"expect":"none","command":"infra/terraform/foundation.sh smoke"}
+{"expect":"none","command":"infra/terraform/foundation.sh plan"}
+{"expect":"none","command":"infra/terraform/foundation.sh outputs"}
+{"expect":"none","command":"infra/terraform/foundation.sh init"}
+{"expect":"none","command":"bash infra/terraform/foundation.sh smoke"}
+{"expect":"none","command":"cat infra/terraform/foundation.sh"}
+{"expect":"none","command":"shellcheck infra/terraform/foundation.sh"}
+{"expect":"none","command":"bash -n infra/terraform/foundation.sh"}
+{"expect":"none","command":"grep -n eval-record infra/terraform/foundation.sh"}
+{"expect":"ask","note":"S071 G1: the paid tests' opt-ins, set in front of a command, with env, or by export on the same line","command":"MERIDIAN_LIVE_AZURE=1 pytest tests/meridian/gateway/test_live_azure.py"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=1 uv run pytest tests/meridian/gateway"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=1 python -m pytest tests/meridian/gateway"}
+{"expect":"ask","command":"MERIDIAN_EVAL_RECORD=1 pytest tests/meridian/test_evaluation_stack.py"}
+{"expect":"ask","command":"MERIDIAN_EVAL_RECORD=1 uv run python -m pytest tests/meridian"}
+{"expect":"ask","command":"MERIDIAN_EVAL_INJECTION_RECORD=1 pytest tests/meridian/test_injection_record.py"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=1 MERIDIAN_EVAL_INJECTION_RECORD=1 uv run pytest -x tests/meridian/test_injection_record.py"}
+{"expect":"ask","command":"env MERIDIAN_LIVE_AZURE=1 pytest tests/meridian/gateway"}
+{"expect":"ask","command":"env -i MERIDIAN_EVAL_RECORD=1 uv run pytest tests/meridian"}
+{"expect":"ask","command":"export MERIDIAN_LIVE_AZURE=1; uv run pytest tests/meridian/gateway"}
+{"expect":"ask","command":"export MERIDIAN_EVAL_RECORD=1 && uv run pytest tests/meridian"}
+{"expect":"ask","command":"export MERIDIAN_LIVE_AZURE=1 MERIDIAN_EVAL_INJECTION_RECORD=1; pytest"}
+{"expect":"ask","command":"(export MERIDIAN_LIVE_AZURE=1; pytest tests/meridian/gateway)"}
+{"expect":"ask","command":"cd tests && MERIDIAN_LIVE_AZURE=1 pytest meridian/gateway"}
+{"expect":"ask","command":"time MERIDIAN_LIVE_AZURE=1 pytest tests/meridian/gateway"}
+{"expect":"ask","command":"PYTEST_ADDOPTS=-x MERIDIAN_LIVE_AZURE=1 pytest"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=\"1\" pytest"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE='1' pytest"}
+{"expect":"ask","note":"S071 G1: the paid tests read the value 1 and nothing else; the rule asks for any value that is not 0 or empty, so that a form of 1 it did not think of still asks","command":"MERIDIAN_LIVE_AZURE=true pytest"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=yes pytest"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=$ONE pytest"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=$(echo 1) pytest"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=\"\"1 pytest"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=0x1 pytest"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=01 pytest"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=0 MERIDIAN_LIVE_AZURE=1 pytest"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=1 MERIDIAN_EVAL_RECORD=0 pytest"}
+{"expect":"ask","command":"MERIDIAN_EVAL_RECORD=0 MERIDIAN_LIVE_AZURE=1 pytest"}
+{"expect":"ask","command":"MERIDIAN_EVAL_INJECTION_RECORD=0; MERIDIAN_EVAL_INJECTION_RECORD=1 pytest"}
+{"expect":"ask","command":"bash -c 'MERIDIAN_LIVE_AZURE=1 pytest'"}
+{"expect":"ask","command":"sh -c \"export MERIDIAN_EVAL_RECORD=1; pytest\""}
+{"expect":"ask","command":"echo a\nMERIDIAN_LIVE_AZURE=1 pytest"}
+{"expect":"ask","command":"docker run -e MERIDIAN_LIVE_AZURE=1 img pytest"}
+{"expect":"ask","command":"docker run --env=MERIDIAN_EVAL_RECORD=1 img pytest"}
+{"expect":"ask","note":"S071 G1: the rule reads the variable, not the word pytest: make test passes the environment to pytest","command":"MERIDIAN_LIVE_AZURE=1 make test"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=1 MERIDIAN_EVAL_RECORD=1 make pytest"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=1"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=1\tpytest"}
+{"expect":"ask","note":"S071 G1: quoted text is a use, as for the make targets: an echo that holds the assignment asks","command":"echo \"MERIDIAN_LIVE_AZURE=1 pytest\""}
+{"expect":"ask","command":"git commit -m \"docs: MERIDIAN_EVAL_RECORD=1 opts in\""}
+{"expect":"none","note":"S071 G1: the opt-ins set to 0 or to nothing do not start a paid test","command":"MERIDIAN_LIVE_AZURE=0 pytest tests/meridian/gateway"}
+{"expect":"none","command":"MERIDIAN_LIVE_AZURE= pytest tests/meridian/gateway"}
+{"expect":"none","command":"MERIDIAN_LIVE_AZURE=\"\" pytest tests/meridian/gateway"}
+{"expect":"none","command":"MERIDIAN_LIVE_AZURE='' pytest tests/meridian/gateway"}
+{"expect":"none","command":"MERIDIAN_LIVE_AZURE=\"0\" pytest tests/meridian/gateway"}
+{"expect":"none","command":"MERIDIAN_LIVE_AZURE='0' pytest tests/meridian/gateway"}
+{"expect":"none","command":"MERIDIAN_EVAL_RECORD=0 uv run pytest tests/meridian"}
+{"expect":"none","command":"MERIDIAN_EVAL_INJECTION_RECORD= uv run python -m pytest tests/meridian"}
+{"expect":"none","command":"env MERIDIAN_LIVE_AZURE=0 pytest tests/meridian/gateway"}
+{"expect":"none","command":"export MERIDIAN_LIVE_AZURE=0; pytest tests/meridian/gateway"}
+{"expect":"none","command":"MERIDIAN_LIVE_AZURE=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_INJECTION_RECORD=0 uv run pytest tests/meridian"}
+{"expect":"none","command":"MERIDIAN_LIVE_AZURE=0;MERIDIAN_EVAL_RECORD=0 pytest"}
+{"expect":"none","command":"(MERIDIAN_LIVE_AZURE=0)"}
+{"expect":"none","command":"MERIDIAN_LIVE_AZURE=\tpytest"}
+{"expect":"none","note":"S071 G1: names that only begin or end like an opt-in, and commands that do not set one","command":"MERIDIAN_LIVE_AZURE_X=1 pytest"}
+{"expect":"none","command":"XMERIDIAN_LIVE_AZURE=1 pytest"}
+{"expect":"none","command":"MERIDIAN_EVAL_RECORDING=1 pytest"}
+{"expect":"none","command":"MERIDIAN_EVAL_INJECTION_RECORD_X=1 pytest"}
+{"expect":"none","command":"unset MERIDIAN_LIVE_AZURE; pytest tests/meridian/gateway"}
+{"expect":"none","command":"echo $MERIDIAN_LIVE_AZURE"}
+{"expect":"none","command":"grep -rn MERIDIAN_LIVE_AZURE tests"}
+{"expect":"none","command":"uv run pytest tests/meridian/gateway"}
+{"expect":"none","command":"pytest -x tests/meridian"}
+{"expect":"none","command":"python -m pytest tests/meridian/test_injection_record.py"}
+{"expect":"none","command":"PYTEST_WORKERS=0 make pytest"}
+{"expect":"ask","note":"S071 G1: shapes found by reading the rules against hostile spellings","command":"'make' eval-record"}
+{"expect":"ask","command":"\"make\" gateway-live"}
+{"expect":"ask","command":"sudo make eval-record"}
+{"expect":"ask","command":"exec make eval-injection-record"}
+{"expect":"ask","command":"command make gateway-live"}
+{"expect":"ask","command":"\\make eval-record"}
+{"expect":"ask","command":"{ make eval-record; }"}
+{"expect":"ask","command":"if true; then make eval-injection-record; fi"}
+{"expect":"ask","command":"env -S 'make eval-record'"}
+{"expect":"ask","command":"make -f Makefile eval-record"}
+{"expect":"ask","note":"S071 G1: false alarm by design: a comment on the line is read as text of the command","command":"make eval-baseline # make eval-record"}
+{"expect":"ask","note":"S071 G1: false alarm by design: a search for the literal asks (tests/meridian/test_ci_config.py holds one)","command":"grep -rn 'MERIDIAN_LIVE_AZURE=1' tests"}
+{"expect":"ask","command":"$(command -v make) eval-record"}
+{"expect":"ask","command":"$(which make) gateway-live"}
+{"expect":"ask","command":"`which make` eval-injection-record"}
+{"expect":"ask","command":"MAKE=make; ${MAKE} eval-record"}
+{"expect":"ask","command":"make -s gateway-live"}
+{"expect":"ask","command":"make \\\neval-record"}
+{"expect":"ask","command":"bash <<'EOF'\nmake eval-injection-record\nEOF"}
+{"expect":"ask","command":"bash <<'EOF'\nMERIDIAN_LIVE_AZURE=1 pytest\nEOF"}
+{"expect":"ask","command":": \"${MERIDIAN_LIVE_AZURE:=1}\"; pytest"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE+=1 pytest"}
+{"expect":"ask","command":"declare -x MERIDIAN_LIVE_AZURE=1; pytest"}
+{"expect":"ask","command":"env \"MERIDIAN_LIVE_AZURE=1\" pytest"}
+{"expect":"ask","command":"export \"MERIDIAN_EVAL_INJECTION_RECORD=1\"; pytest"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=1 MERIDIAN_LIVE_AZURE=0 pytest"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=0\\1 pytest"}
+{"expect":"deny","note":"S071 G1: order: a deny elsewhere in the command still wins over the new asks, which stand after every deny","command":"make eval-record && git push --force"}
+{"expect":"deny","command":"make gateway-live; make aws-destroy"}
+{"expect":"deny","command":"infra/terraform/foundation.sh eval-injection-record; terraform destroy"}
+{"expect":"deny","command":"MERIDIAN_LIVE_AZURE=1 pytest; make aws-kubeadm-destroy"}
+{"expect":"ask","command":"make eval-record; make azure-apply"}
+{"expect":"none","note":"S071 G1: the loop reads sixteen assignments, all of them off: sixteen pass","command":"MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 pytest"}
+{"expect":"ask","note":"S071 G1: a seventeenth assignment is not read and asks, though all are off","command":"MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 pytest"}
 {"expect":"ask","command":"gh issue list\nmerge --admin aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
