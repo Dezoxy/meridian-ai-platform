@@ -1171,8 +1171,8 @@ eleven calls and the summary, and a pair of lines for each part it sources. A
 check is a file in `smoke.d/`, `NN-name.sh` (`shared.sh` holds what several
 checks and the trap use), and it holds definitions only: its paragraph from the
 header, its constants and its functions, so that sourcing it runs nothing.
-Checks 8 and 10 are still in the entry, and move when the cluster batch that
-edits them has landed. To add a check:
+All eleven checks are parts now (twelve files with `shared.sh`, each under 800
+lines), and the entry is 88 lines. To add a check:
 
 - write `smoke.d/NN-name.sh` with no execute bit: the first line `# shellcheck
   shell=bash`, the paragraph (its first line `#   N. name:`, as the others),

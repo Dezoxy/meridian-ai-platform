@@ -17,12 +17,12 @@ from graphsupport import (
     compiled,
     facts,
     golden_model,
-    load,
     planted_state,
     resume,
     run_graph,
 )
 from langgraph.checkpoint.memory import MemorySaver
+from servicesupport import injection_case_claim
 
 from meridian.runtime.failures import GraphFailure, failure_reason
 from meridian.runtime.model_client import ModelClient
@@ -205,9 +205,8 @@ def sent_to_run(submission: ClaimSubmission) -> dict[str, Any]:
 
 
 def posted_case(case_id: str) -> dict[str, Any]:
-    cases = load("injection/cases.json")
-    (case,) = [c for c in cases if c["case"] == case_id]
-    return sent_to_run(ClaimSubmission.model_validate(case["claim"]))
+    claim = injection_case_claim(case_id)
+    return sent_to_run(ClaimSubmission.model_validate(claim))
 
 
 @pytest.mark.parametrize("case_id", ["CLM-1053", "CLM-1054"])
