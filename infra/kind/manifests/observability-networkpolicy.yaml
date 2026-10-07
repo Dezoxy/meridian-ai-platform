@@ -69,8 +69,20 @@
 #                    that still sends to Loki's own port loses that path at this
 #                    file's apply, once, when it moves to the gateway
 #   grafana          3000 from Prometheus (its ServiceMonitor scrapes /metrics)
-#   prometheus       9090 from Grafana (queries) and from the collector (the
-#                    native OTLP receiver, /api/v1/otlp)
+#   prometheus-gateway  8443 from the collector (OTLP, with its client certificate)
+#                    and from Grafana (queries, with none): the one TLS listener
+#                    of the nginx in front of Prometheus (S072, contract M4)
+#   prometheus       9090 from the gateway's pods alone (not Grafana, not the
+#                    collector: S072, contract M4). THESE TWO (prometheus-gateway,
+#                    prometheus) AND THE GATEWAY'S EGRESS POLICY AND SMOKE'S
+#                    PROBE'S BELOW ARE NOT IN THIS FILE: they are in
+#                    observability-prometheus-networkpolicy.yaml, which `make up`
+#                    applies right after the stack's release, just before the
+#                    gateway's Deployment, so Prometheus's port is not closed at
+#                    the start of the run. The collector's and Grafana's EGRESS
+#                    rules towards the gateway stay in this file, so a warm cluster
+#                    that still sends to Prometheus's own port loses that path at
+#                    this file's apply, once, when it moves to the gateway
 #   kube-state-      8080 from Prometheus (its ServiceMonitor)
 #   metrics
 #   prometheus-      10250 TCP from Prometheus alone. The one port of the operator
@@ -108,8 +120,8 @@
 #                    it is not seen on kind. If Prometheus's target for the
 #                    operator is down on the Targets page, this rule is wrong
 # Prometheus scrapes itself, on 9090 and on its reloader's 8080 (the chart's
-# self-monitoring ServiceMonitor). The rule above admits Grafana and the
-# collector only, and none is written for the pod itself: a connection from a
+# self-monitoring ServiceMonitor). The rule for Prometheus's port admits its
+# gateway only, and none is written for the pod itself: a connection from a
 # pod to its own address stays inside the pod's network namespace and no
 # policy filters it. The Targets page must show both endpoints up; if one is
 # down, a rule from the Prometheus pods to themselves is the fix.
@@ -150,11 +162,14 @@
 #   Grafana          the API server (its two sidecars watch the ConfigMaps
 #                    labelled for dashboards and datasources in this namespace)
 #                                                                   egress-node
-#                    Prometheus 9090, Tempo 3200, Loki's gateway 8443: its
-#                    datasources                                    egress-grafana
-#   collector        Tempo 4317, Prometheus 9090 (OTLP at /api/v1/otlp) and
-#                    Loki's gateway 8443: its three exporters; no API server (no
-#                    token, no k8sattributes)                 egress-otel-collector
+#                    Prometheus's gateway 8443, Tempo 3200, Loki's gateway 8443:
+#                    its datasources                                egress-grafana
+#   collector        Tempo 4317, Prometheus's gateway 8443 (OTLP at /api/v1/otlp)
+#                    and Loki's gateway 8443: its three exporters; no API server
+#                    (no token, no k8sattributes)            egress-otel-collector
+#   Prometheus's     Prometheus 9090 and DNS: its one upstream
+#   gateway                                                egress-prometheus-gateway
+#                    (in observability-prometheus-networkpolicy.yaml, M4)
 #   Loki's gateway   Loki 3100 and DNS: its one upstream       egress-loki-gateway
 #   Loki             its own pods, 7946 TCP and UDP: the memberlist it joins
 #                    through its Service (the egress half of the ingress rule
@@ -323,30 +338,6 @@ spec:
               operator.prometheus.io/name: kube-prometheus-stack-prometheus
       ports:
         - port: 3000
-          protocol: TCP
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: prometheus
-  namespace: observability
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: prometheus
-      operator.prometheus.io/name: kube-prometheus-stack-prometheus
-  policyTypes: [Ingress]
-  ingress:
-    - from:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: grafana
-              app.kubernetes.io/instance: kube-prometheus-stack
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: opentelemetry-collector
-      ports:
-        - port: 9090
           protocol: TCP
 ---
 apiVersion: networking.k8s.io/v1
@@ -528,14 +519,16 @@ spec:
       app.kubernetes.io/instance: kube-prometheus-stack
   policyTypes: [Egress]
   egress:
-    # The datasources: Prometheus (the chart's own), Tempo and Loki.
+    # The datasources: Prometheus, Tempo and Loki. Prometheus is read through its
+    # gateway (S072, contract M4), not on its own port.
     - to:
         - podSelector:
             matchLabels:
-              app.kubernetes.io/name: prometheus
-              operator.prometheus.io/name: kube-prometheus-stack-prometheus
+              app.kubernetes.io/name: prometheus-gateway
+              app.kubernetes.io/instance: prometheus-gateway
+              app.kubernetes.io/component: gateway
       ports:
-        - port: 9090
+        - port: 8443
           protocol: TCP
     - to:
         - podSelector:
@@ -568,7 +561,7 @@ spec:
   policyTypes: [Egress]
   egress:
     # The three exporters (values/otel-collector.yaml): traces to Tempo, metrics
-    # to Prometheus, logs to Loki.
+    # to Prometheus's gateway, logs to Loki's.
     - to:
         - podSelector:
             matchLabels:
@@ -577,13 +570,16 @@ spec:
       ports:
         - port: 4317
           protocol: TCP
+    # Metrics go to Prometheus's gateway, which asks for the client certificate
+    # (S072, contract M4), not to Prometheus's own port.
     - to:
         - podSelector:
             matchLabels:
-              app.kubernetes.io/name: prometheus
-              operator.prometheus.io/name: kube-prometheus-stack-prometheus
+              app.kubernetes.io/name: prometheus-gateway
+              app.kubernetes.io/instance: prometheus-gateway
+              app.kubernetes.io/component: gateway
       ports:
-        - port: 9090
+        - port: 8443
           protocol: TCP
     # Logs go to Loki's gateway, which asks for the client certificate (S072,
     # contract M3), not to Loki's own port.

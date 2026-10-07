@@ -186,7 +186,7 @@ digests were read from the registries on 2026-10-06 (each is an index with
 | kube-prometheus-stack | `quay.io/prometheus/node-exporter:v1.12.1-distroless` | `prometheus-node-exporter.image.digest` | not pinned: switched off on kind (S063); on again, it needs a pin |
 | tempo | `docker.io/grafana/tempo:3.1.0` | `tempo.tag` as `tag@digest` | yes, through the tag key |
 | loki | `docker.io/grafana/loki:3.7.8` | `loki.image.tag`, `.digest` | yes |
-| loki | `docker.io/nginxinc/nginx-unprivileged:1.31-alpine` | `gateway.image.tag`, `.digest`: the chart's gateway in front of Loki (S072) | yes |
+| loki | `docker.io/nginxinc/nginx-unprivileged:1.31-alpine` | `gateway.image.tag`, `.digest`: the chart's gateway in front of Loki (S072); the same pin, `NGINX_GATEWAY_IMAGE_*`, is also the image of Prometheus's gateway, which `up.sh` writes into that Deployment | yes |
 | otel-collector | `ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector:0.162.0` | `image.repository`, `.tag`, `.digest` (before S063) | yes |
 | log-agent | `ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.162.0` | `image.repository`, `.tag`, `.digest`: the contrib build of the collector's release, which has the receiver that reads files (S064; digest read 2026-10-06) | yes |
 
@@ -1162,16 +1162,22 @@ node image, Kubernetes components and the platform).
     renewal watch's short certificates were in place and the alert fired; a
     firing alert is a FAIL of the third line, so it would have failed (see
     "How long a certificate lasts" below).
-12. **Telemetry stores.** Five lines (S072, contract M3b), run after the other
-    eleven, from one probe Pod in `observability` (the Claims API's image, the
-    collector's name label and smoke's own; a label impersonation, said, not
-    solved: T-84): a push to Loki's gateway with no client certificate is 403
-    and a read is 200; Tempo's receiver ends a connection with none in the TLS
-    alert "certificate required"; Loki's own port times out for the Pod (kind's
-    policy `smoke-telemetry-probe` lets it send there, so the timeout is Loki's
-    ingress rule) and the same Pod with the gateway's labels reaches it; and
-    the gateway and Tempo's receiver each serve the certificate that is in
-    their Secret, which finds a pod that was not rolled after a renewal.
+12. **Telemetry stores.** Eight lines (S072, contracts M3b and M4), run after
+    the other eleven, from one probe Pod in `observability` (the Claims API's
+    image, the collector's name label and smoke's own; a label impersonation,
+    said, not solved: T-84): a push to Loki's gateway with no client certificate
+    is 403 and a read is 200; Tempo's receiver ends a connection with none in
+    the TLS alert "certificate required"; Loki's own port times out for the Pod
+    (kind's policy `smoke-telemetry-probe` lets it send there, so the timeout is
+    Loki's ingress rule) and the same Pod with the gateway's labels reaches it;
+    and the gateway and Tempo's receiver each serve the certificate that is in
+    their Secret, which finds a pod that was not rolled after a renewal. The
+    three of contract M4: Prometheus's gateway answers 403 to the OTLP
+    receiver's path, remote write and `/-/reload` with no client certificate and
+    200 to a query; Prometheus's own port times out for the Pod (the policy
+    `smoke-telemetry-probe-prometheus` is the same arrangement) and is reached
+    by the Pod with the gateway's labels; and the gateway serves the certificate
+    that is in its Secret.
     Skipped, one line, while no Meridian Deployment exists. Tested with
     stand-ins, and the probes' Python run against nginx of the pinned image in
     a container; not yet run on the cluster. The paragraph of the script

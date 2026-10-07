@@ -58,8 +58,10 @@ IMAGES_BY_RELEASE = {
         "GRAFANA_SIDECAR_IMAGE",
     },
     "tempo": {"TEMPO_IMAGE"},
-    # Loki and its gateway, the chart's nginx (S072, contract M3).
-    "loki": {"LOKI_IMAGE", "LOKI_GATEWAY_IMAGE"},
+    # Loki and its gateway, the chart's nginx (S072, contract M3). The nginx pin
+    # also serves Prometheus's gateway, which is no release (contract M4): see
+    # test_telemetry_prometheus_gateway.py for how up.sh writes it there.
+    "loki": {"LOKI_IMAGE", "NGINX_GATEWAY_IMAGE"},
     "otel-collector": {"OTEL_COLLECTOR_IMAGE"},
     # The contrib build of the same collector, as a DaemonSet (S064).
     "log-agent": {"LOG_AGENT_IMAGE"},

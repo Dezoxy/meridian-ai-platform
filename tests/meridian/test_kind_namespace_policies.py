@@ -39,6 +39,7 @@ MANIFESTS = KIND_DIR / "manifests"
 CERT_MANAGER_FILE = MANIFESTS / "cert-manager-networkpolicy.yaml"
 OBSERVABILITY_FILE = MANIFESTS / "observability-networkpolicy.yaml"
 LOKI_POLICY_FILE = MANIFESTS / "observability-loki-networkpolicy.yaml"
+PROMETHEUS_POLICY_FILE = MANIFESTS / "observability-prometheus-networkpolicy.yaml"
 SMOKE_FILE = MANIFESTS / "smoke-networkpolicy.yaml"
 NAMESPACES_FILE = MANIFESTS / "namespaces.yaml"
 VALUES = KIND_DIR / "values"
@@ -50,6 +51,14 @@ VALUES = KIND_DIR / "values"
 PROMETHEUS = {
     "app.kubernetes.io/name": "prometheus",
     "operator.prometheus.io/name": "kube-prometheus-stack-prometheus",
+}
+# Prometheus's gateway, an nginx of this repository's own in front of it (S072,
+# contract M4): the only peer of Prometheus's port. Its name label is neither
+# Prometheus's, Loki's gateway's nor the collector's, so no other rule selects it.
+PROMETHEUS_GATEWAY = {
+    "app.kubernetes.io/name": "prometheus-gateway",
+    "app.kubernetes.io/instance": "prometheus-gateway",
+    "app.kubernetes.io/component": "gateway",
 }
 GRAFANA = {
     "app.kubernetes.io/name": "grafana",
@@ -98,8 +107,13 @@ def policies_of(path: Path) -> dict[str, dict]:
 def observability_policies() -> dict[str, dict]:
     """Every NetworkPolicy of ``observability``: the namespace's file and, since
     S072 (contract M3b), the file of Loki's pods and its gateway's, which ``make up``
-    applies just before Loki's release."""
-    return {**policies_of(OBSERVABILITY_FILE), **policies_of(LOKI_POLICY_FILE)}
+    applies just before Loki's release, and (contract M4) the file of Prometheus's
+    port and its gateway's, which it applies right after the stack's release."""
+    return {
+        **policies_of(OBSERVABILITY_FILE),
+        **policies_of(LOKI_POLICY_FILE),
+        **policies_of(PROMETHEUS_POLICY_FILE),
+    }
 
 
 def header_of(path: Path) -> str:
@@ -400,6 +414,7 @@ def test_observability_denies_ingress_and_egress_and_says_so() -> None:
         "loki-gateway",
         "grafana",
         "prometheus",
+        "prometheus-gateway",
         "prometheus-operator",
         "kube-state-metrics",
     }
@@ -559,9 +574,17 @@ def test_each_pod_of_observability_admits_the_peers_that_call_it() -> None:
             ],
         ),
         "grafana": (GRAFANA, [{"from": [prometheus], "ports": tcp(3000)}]),
+        # Prometheus's gateway takes the collector's writes and Grafana's reads on
+        # its one TLS port, as Loki's does (S072, contract M4).
+        "prometheus-gateway": (
+            PROMETHEUS_GATEWAY,
+            [{"from": [collector, grafana], "ports": tcp(8443)}],
+        ),
+        # Prometheus's own port: its gateway alone, neither Grafana nor the
+        # collector.
         "prometheus": (
             PROMETHEUS,
-            [{"from": [grafana, collector], "ports": tcp(9090)}],
+            [{"from": [pods(PROMETHEUS_GATEWAY)], "ports": tcp(9090)}],
         ),
         # The webhook's port is the one the operator's metrics are served on
         # (the chart's ServiceMonitor scrapes `https`): Prometheus alone.
@@ -591,8 +614,11 @@ def test_the_ports_the_policies_open_are_the_ones_the_values_call() -> None:
     ]["exporters"]
 
     # Grafana's datasources and the collector's exporters, as the values name them.
-    assert sources == {"Tempo": 3200, "Loki": 8443}
+    assert sources == {"Prometheus": 8443, "Tempo": 3200, "Loki": 8443}
     assert sources["Tempo"] in rule_ports(policies["tempo"])
+    # Prometheus is read, and written, through its gateway (S072, contract M4).
+    assert sources["Prometheus"] in rule_ports(policies["prometheus-gateway"])
+    assert rule_ports(policies["prometheus"]) == {9090}
     # Loki is read, and written, through its gateway (S072, contract M3).
     assert sources["Loki"] in rule_ports(policies["loki-gateway"])
     assert rule_ports(policies["loki"]) == {3100, 7946}
@@ -603,7 +629,7 @@ def test_the_ports_the_policies_open_are_the_ones_the_values_call() -> None:
         policies["loki-gateway"]
     )
     assert urlsplit(exporters["otlp_http/prometheus"]["endpoint"]).port in rule_ports(
-        policies["prometheus"]
+        policies["prometheus-gateway"]
     )
     # The collector's own receivers are the two ports of the OTLP protocols, and
     # only the HTTP one is opened.

@@ -102,10 +102,11 @@ k get certificaterequestpolicy
 - The pods of cert-manager and of approver-policy are in the namespace
   `cert-manager`. One that is not Running explains a request nobody
   decides.
-- The eight CertificateRequestPolicies are `meridian-services`,
+- The nine CertificateRequestPolicies are `meridian-services`,
   `meridian-services-ca`, `meridian-deny-unlisted`, `telemetry-ca`,
-  `otel-collector`, `otel-collector-client`, `tempo-receiver` and
-  `loki-gateway` (`infra/kind/manifests/certificate-policy.yaml`); each
+  `otel-collector`, `otel-collector-client`, `tempo-receiver`,
+  `loki-gateway` and `prometheus-gateway`
+  (`infra/kind/manifests/certificate-policy.yaml`); each
   should be Ready. A request for either Meridian ClusterIssuer that no other
   policy permits is denied by `meridian-deny-unlisted`; a request for either
   of the collector's two Issuers in `observability` that its own policy does
@@ -243,38 +244,68 @@ certificate or of its authority, and a cold start.
 | Certificate | Secret | Lasts | Renewed | What reads it |
 |---|---|---|---|---|
 | `otel-collector` | `otel-collector-tls` | 90 days | at 60 days, a new key | the collector, from a mounted directory |
-| `otel-collector-client` | `otel-collector-client-tls` | 90 days | at 60 days, a new key | the collector's exporters to Tempo and to Loki's gateway (its pair, and `ca.crt` to verify them), from a mounted directory |
+| `otel-collector-client` | `otel-collector-client-tls` | 90 days | at 60 days, a new key | the collector's exporters to Tempo and to the two gateways, Loki's and Prometheus's (its pair, and `ca.crt` to verify them), from a mounted directory |
 | `tempo-receiver` | `tempo-receiver-tls` | 90 days | at 60 days, a new key | Tempo's OTLP receiver (its certificate, and `ca.crt` as the client CA), from a mounted directory |
 | `loki-gateway` | `loki-gateway-tls` | 90 days | at 60 days, a new key | Loki's gateway, nginx (its certificate, and `ca.crt` as the client CA), from a mounted directory |
+| `prometheus-gateway` | `prometheus-gateway-tls` | 90 days | at 60 days, a new key | Prometheus's gateway, nginx (S072, contract M4: its certificate, and `ca.crt` as the client CA), from a mounted directory |
 | `telemetry-ca` | `telemetry-ca` | one year | about eight months in, the same key (`rotationPolicy: Never`) | cert-manager; its public certificate is copied by `make up` into the ConfigMap `telemetry-ca` in `meridian`, in `logging` and in `observability` (Grafana's environment reads that one) |
 
-Who re-reads a renewed file, and what to do (S072, contract M3b; the first row
-is from the collector's source, the second and the fourth were SEEN in a
-container of the pinned nginx image with the rendered configuration, the rest
-is reasoned from the files and not seen on the cluster, where no renewal of
-these certificates has happened):
+Who re-reads a renewed file, and what to do (S072, contracts M3b and M4; the
+first row is from the collector's source, the second, the third and the fifth
+were SEEN in a container of the pinned nginx image with the rendered
+configuration (the third with Prometheus behind it), the rest is reasoned from
+the files and not seen on the cluster, where no renewal of these certificates
+has happened):
 
 | Reader | The certificate it serves or presents | The CA it trusts |
 |---|---|---|
 | the collector | re-reads, every 5 minutes at a handshake | re-reads (the same setting) |
 | Loki's gateway (nginx) | re-reads at each handshake: `ssl_certificate` is a variable, and a pair replaced under the mount was served at the next handshake with no reload | does NOT: `ssl_client_certificate` is read at start (a file replaced under it changed nothing until the container restarted) |
+| Prometheus's gateway (nginx) | as Loki's gateway: a pair replaced under the mount was served at the next handshake, with the pinned Prometheus behind it | as Loki's gateway: read at start only |
 | Tempo's receiver | does NOT: no `reload_interval` is set, because Tempo 3.1.0 passing one through is not established | does NOT |
 | Grafana | presents none | does NOT: the CA is an environment variable, read at start |
 
 The step is `make up` after a certificate's `notBefore` moves (at day 60 for
-the three leaf certificates, about month eight for the authority). `make up`
-gives Tempo's pod the fingerprints of its certificate and its CA, the
-gateway's pod the fingerprint of its CA, and Grafana's pod the fingerprint of
-the authority's certificate, as pod annotations: when one changed the pod
-template changes and Kubernetes rolls the pod, so no restart by hand is
-needed. A warm `make up` that rolls Tempo drops the traces of the minute
-before the collector's release, as any `make up` that moves the stores does.
-`make smoke`'s twelfth check ends in two lines that compare the certificate
-Loki's gateway and Tempo's receiver SERVE with the one in their Secret: a
-difference is a pod that was not rolled, and the line says which. If `make up`
-cannot be run, restart the pod by hand (the owner's to run on any cluster but
-the local kind one): `rollout restart deployment/loki-gateway`, `rollout
-restart statefulset/tempo`, `rollout restart deployment/kube-prometheus-stack-grafana`.
+the four leaf certificates, about month eight for the authority). `make up`
+gives Tempo's pod the fingerprints of its certificate and its CA, each
+gateway's pod the fingerprint of its CA (Prometheus's also the digest of its
+own manifest, so a changed configuration rolls it), Grafana's pod the
+fingerprint of the authority's certificate and, since contract M4, the
+collector's pod the fingerprints of its client certificate and of the
+authority's, as pod annotations: when one changed the pod template changes and
+Kubernetes rolls the pod, so no restart by hand is needed. A warm `make up`
+that rolls Tempo drops the traces of the minute before the collector's release,
+as any `make up` that moves the stores does.
+`make smoke`'s twelfth check ends in lines that compare the certificate
+Loki's gateway, Tempo's receiver and Prometheus's gateway SERVE with the one in
+their Secret: a difference is a pod that was not rolled, and the line says
+which. If `make up` cannot be run, restart the pod by hand (the owner's to run
+on any cluster but the local kind one): `rollout restart deployment/loki-gateway`,
+`rollout restart deployment/prometheus-gateway`, `rollout restart
+statefulset/tempo`, `rollout restart deployment/kube-prometheus-stack-grafana`.
+
+What the collector's client certificate does when it changes, which a plain
+renewal does not (run R16, 2026-10-07; the refusal was seen on the cluster, the
+roll by the annotations is tested and not yet seen). Both gateways admit a write
+from ONE subject, `CN=otel-collector-client`, and nothing else.
+- A **renewal that keeps the subject** (day 60: a new key, the same common
+  name) is not refused: the old certificate stays valid until it ends, and the
+  collector presents the new one within about ten minutes (its five-minute
+  reload and the kubelet's refresh of the mounted file). Nothing is lost.
+- A **change of the SUBJECT** (the common name, as contract M3b made one) is
+  refused: cert-manager re-issues the certificate at once, but the collector
+  goes on presenting the old one, which has another subject, until it reloads.
+  Each write in that time is answered 403 and DROPPED (a 403 is not retried):
+  R16 lost the logs of about five minutes. Since contract M4 `make up` gives
+  the collector's pod the fingerprints of its client certificate and of the
+  authority's, so the `make up` that follows the change rolls the pod and the
+  new pod starts with the new pair; the window is then that of the roll. A
+  re-issue that happens WITHOUT a `make up` (cert-manager acting on an edited
+  Certificate) still waits for the reload: run `make up`, or restart the
+  collector by hand.
+- The roll itself drops the telemetry in flight in the collector (its batch and
+  the services' calls during the restart); a plain renewal that `make up`
+  follows rolls the pod too, for the same cost and no gain.
 
 The collector re-reads its pair itself: at a handshake, once five minutes have
 passed since it last read the files (`reload_interval`; the name and the

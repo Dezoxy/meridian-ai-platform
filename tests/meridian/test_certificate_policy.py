@@ -5,7 +5,7 @@ may create a Certificate anywhere had any service's identity issued. On kind the
 built-in approver is off (``disableAutoApproval``) and cert-manager's
 approver-policy decides: three CertificateRequestPolicies in
 ``infra/kind/manifests/certificate-policy.yaml`` for the services' issuer and
-five more for the collector's authority (S063, and S072's three certificates;
+six more for the collector's authority (S063, and S072's four certificates;
 ``test_telemetry_ca.py`` judges those). No cluster is needed. The
 tests read the files, render the chart with kind's values and evaluate each
 Certificate the chart and ``service-ca.yaml`` define against the policies with
@@ -28,6 +28,7 @@ from certpolicysupport import (
     KIND_DIR,
     LOKI_GATEWAY_POLICY,
     POLICY_NAMES,
+    PROMETHEUS_GATEWAY_POLICY,
     SERVICES_POLICY,
     TEMPO_RECEIVER_POLICY,
     allows,
@@ -233,16 +234,16 @@ def test_approver_policy_may_approve_only_for_the_issuers_the_two_cas_define() -
 # ── the policies ─────────────────────────────────────────────────────────────
 
 
-def test_the_policy_file_holds_the_eight_policies_and_their_bindings() -> None:
+def test_the_policy_file_holds_the_nine_policies_and_their_bindings() -> None:
     kinds = sorted(d["kind"] for d in documents(POLICY_FILE))
 
     assert set(policies()) == POLICY_NAMES
-    # Three for the services' issuer (S056), five for the collector's authority
-    # (S063; S072 added the collector's client certificate's, Tempo's receiver's
-    # and Loki's gateway's).
+    # Three for the services' issuer (S056), six for the collector's authority
+    # (S063; S072 added the collector's client certificate's, Tempo's receiver's,
+    # Loki's gateway's and Prometheus's gateway's).
     assert kinds == sorted(
-        ["CertificateRequestPolicy"] * 8
-        + ["Role", "RoleBinding"] * 7
+        ["CertificateRequestPolicy"] * 9
+        + ["Role", "RoleBinding"] * 8
         + ["ClusterRole", "ClusterRoleBinding"]
     )
     for document in documents(POLICY_FILE):
@@ -703,7 +704,7 @@ def test_each_policy_has_a_use_rule_for_cert_managers_account() -> None:
 def test_every_use_rule_names_its_policy_and_grants_nothing_else() -> None:
     roles = [d for d in documents(POLICY_FILE) if d["kind"] in ("Role", "ClusterRole")]
 
-    assert len(roles) == 8
+    assert len(roles) == 9
     for role in roles:
         (rule,) = role["rules"]
         assert rule["apiGroups"] == [POLICY_GROUP]
@@ -723,6 +724,7 @@ def test_every_use_rule_names_its_policy_and_grants_nothing_else() -> None:
         (COLLECTOR_CLIENT_POLICY, "observability", CERT_MANAGER_NAMESPACE),
         (TEMPO_RECEIVER_POLICY, "observability", CERT_MANAGER_NAMESPACE),
         (LOKI_GATEWAY_POLICY, "observability", CERT_MANAGER_NAMESPACE),
+        (PROMETHEUS_GATEWAY_POLICY, "observability", CERT_MANAGER_NAMESPACE),
     ],
 )
 def test_the_policies_that_allow_are_bound_in_their_one_namespace_only(

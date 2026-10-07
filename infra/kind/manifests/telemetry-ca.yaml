@@ -18,7 +18,9 @@
 #   tempo-receiver        the server certificate of Tempo's OTLP receiver (90
 #                         days; S072)
 #   loki-gateway          the server certificate of Loki's gateway (90 days;
-#                         S072, the last document of this file)
+#                         S072)
+#   prometheus-gateway    the server certificate of Prometheus's gateway (90
+#                         days; S072, contract M4, the last document of this file)
 #
 # Why an authority of its own and not the `meridian-services` issuer: S056 made
 # "that issuer signs only for the `meridian` namespace and its URI prefix" the
@@ -128,8 +130,9 @@ spec:
 # present to the telemetry stores that write-protect their ports. It is issued
 # and mounted (values/otel-collector.yaml). Contract M1 changed no behaviour;
 # since contract M2 the exporter to Tempo presents it (Tempo's receiver asks for
-# it, the Certificate below), and since contract M3 the exporter to Loki does, to
-# Loki's gateway; the exporter to Prometheus does not yet.
+# it, the Certificate below), since contract M3 the exporter to Loki does, to
+# Loki's gateway, and since contract M4 the exporter to Prometheus does, to
+# Prometheus's gateway.
 #
 # Its own Certificate and its own policy (otel-collector-client in
 # certificate-policy.yaml), not the usage `client auth` added to the server
@@ -243,6 +246,46 @@ spec:
   dnsNames:
     - loki-gateway.observability.svc
     - loki-gateway.observability.svc.cluster.local
+  issuerRef:
+    name: telemetry-ca
+    kind: Issuer
+    group: cert-manager.io
+---
+# The SERVER certificate of Prometheus's gateway (S072, contract M4): the one TLS
+# listener of the nginx of this repository's own in front of Prometheus
+# (manifests/observability-prometheus-gateway.yaml), which the collector's
+# exporter verifies and which Grafana reads through. As Loki's gateway, it asks a
+# client for a certificate at the handshake, optionally, and answers 403 on the
+# path that writes (the OTLP receiver's) unless the client's certificate verified
+# against this authority and carries the collector's common name (above); remote
+# write, the admin API and the lifecycle endpoints answer 403 whatever the
+# certificate. The Secret is mounted by the gateway's Deployment, which up.sh
+# applies after the stack's release, so up.sh waits for the Certificate before the
+# stack. Its own policy (prometheus-gateway in certificate-policy.yaml): exactly
+# these two names, the two server usages, 90 days. The names are the gateway
+# Service's (prometheus-gateway) and the host the collector's exporter and
+# Grafana's datasource dial (values/otel-collector.yaml,
+# values/kube-prometheus-stack.yaml), in the short and the fully qualified form
+# as its neighbours have both. Lifetime and key as theirs. nginx reads a renewed
+# certificate at each handshake (the variable form, as Loki's gateway does).
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: prometheus-gateway
+  namespace: observability
+spec:
+  secretName: prometheus-gateway-tls
+  duration: 2160h # 90 days, named: the policy caps it and cannot read a missing one
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always # a new key at every renewal
+  usages:
+    - digital signature
+    - server auth
+  dnsNames:
+    - prometheus-gateway.observability.svc
+    - prometheus-gateway.observability.svc.cluster.local
   issuerRef:
     name: telemetry-ca
     kind: Issuer

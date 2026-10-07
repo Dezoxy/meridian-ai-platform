@@ -841,11 +841,13 @@ def test_the_authority_reaches_grafana_as_a_public_certificate_from_a_configmap(
     None
 ):
     env = stack_values()["grafana"]["envValueFrom"]
+    from_the_configmap = {"configMapKeyRef": {"name": "telemetry-ca", "key": "ca.crt"}}
 
+    # Two names for the one public certificate: Loki's datasource reads the first
+    # and, since contract M4, Prometheus's reads the second.
     assert env == {
-        "LOKI_GATEWAY_CA": {
-            "configMapKeyRef": {"name": "telemetry-ca", "key": "ca.crt"}
-        }
+        "LOKI_GATEWAY_CA": from_the_configmap,
+        "PROMETHEUS_GATEWAY_CA": from_the_configmap,
     }
 
 
@@ -890,6 +892,11 @@ def egress_targets_for(port: int) -> dict[str, list[dict]]:
     return found
 
 
+def is_a_loki_pod(entry: dict) -> bool:
+    labels = entry.get("podSelector", {}).get("matchLabels", {})
+    return labels.get("app.kubernetes.io/name") == "loki"
+
+
 def test_a_rule_with_no_port_is_taken_to_admit_every_port() -> None:
     portless = {"from": [pods(LOKI_GATEWAY)]}
 
@@ -922,7 +929,14 @@ def test_no_pod_but_the_gateway_and_smokes_probe_may_send_to_lokis_own_port() ->
 
 
 def test_the_gateway_admits_the_collector_and_grafana_on_its_one_port() -> None:
-    admitted = ingress_peers_for(GATEWAY_PORT)
+    # Port 8443 is Prometheus's gateway's too (contract M4): narrowed to the
+    # policies that select Loki's gateway, not loosened.
+    admitted = {
+        name: peers
+        for name, peers in ingress_peers_for(GATEWAY_PORT).items()
+        if observability_policies()[name]["spec"]["podSelector"]["matchLabels"]
+        == LOKI_GATEWAY
+    }
 
     assert admitted == {"loki-gateway": [pods(collector_labels()), pods(GRAFANA)]}
 
@@ -930,7 +944,12 @@ def test_the_gateway_admits_the_collector_and_grafana_on_its_one_port() -> None:
 def test_the_collector_and_grafana_send_to_the_gateway_and_to_no_other_loki_pod() -> (
     None
 ):
-    senders = egress_targets_for(GATEWAY_PORT)
+    # Prometheus's gateway is on 8443 too (contract M4): only the entries that
+    # name a Loki pod of either kind are looked at here.
+    senders = {
+        name: [e for e in targets if is_a_loki_pod(e)]
+        for name, targets in egress_targets_for(GATEWAY_PORT).items()
+    }
 
     assert senders == {
         "egress-grafana": [pods(LOKI_GATEWAY)],

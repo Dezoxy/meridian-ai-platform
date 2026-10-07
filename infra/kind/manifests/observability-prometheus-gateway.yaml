@@ -1,0 +1,313 @@
+# The gateway in front of Prometheus (S072, contract M4): a small nginx of this
+# repository's own, the same image as Loki's gateway, and the only way in to
+# Prometheus's port. `make up` applies this file right after the kube-prometheus-
+# stack release (and the policies of observability-prometheus-networkpolicy.yaml
+# just before it), so Grafana, which that release points at the gateway, reads
+# Prometheus again as soon as this Deployment is Available.
+#
+# Three placeholders, each held ONCE and filled in by up.sh on every run
+# (prometheus_gateway_manifest): the image's whole reference from the pin
+# NGINX_GATEWAY_IMAGE_* in pins.env, the SHA-256 of this file (so that a changed
+# configuration rolls the pod, as the chart's checksum annotation does for Loki's
+# gateway) and the SHA-256 of the telemetry authority's certificate (nginx reads
+# the client CA when it starts only, so a renewed authority rolls the pod). A test
+# keeps the three here and the pin the script reads.
+#
+# What the gateway does, as Loki's does (values/loki.yaml has the long form): ONE
+# TLS 1.3 listener, a client certificate that is OPTIONAL at the handshake
+# (`ssl_verify_client optional`: the kubelet's probe and Grafana hold none), and a
+# decision by PATH, never by method (Grafana's datasource posts its queries):
+#   r  a READ, needs no certificate: an anchored list of the query, metadata,
+#      rules, alerts, targets and status paths of Prometheus's HTTP API
+#      (v3.15.0, each seen to exist on the pinned image) and `/`, which nginx
+#      answers itself and does not proxy.
+#   w  the one WRITE, the OTLP receiver's /api/v1/otlp/v1/metrics: needs a verified
+#      certificate whose subject is exactly `CN=otel-collector-client`.
+#   x  everything else: remote write, the admin API, /-/reload, /-/quit,
+#      federation, remote read, the pprof pages, the UI, and every path nobody
+#      listed. 403 WHATEVER the certificate, and whether or not Prometheus
+#      enables the endpoint today: on the pinned image remote write, the OTLP
+#      receiver and the admin API answer 404 or 500 without their flags and the
+#      lifecycle endpoints 403, and each opens when a value flips (seen).
+# A path is a read or a write only when the raw request URI (`$request_uri`) AND
+# the normalised `$uri` both land in the same class; the raw path holds no `%` and
+# no `//` because the anchored patterns match it literally. Prometheus receives the
+# URI the client sent (`proxy_pass` with no URI part), never the decoded one.
+# `location ^~ /api/v1/` is the one location that proxies, `location = /` answers
+# 200 itself, and `location /` answers 403: nothing unclassified is proxied.
+#
+# Not proxied, and so not reachable here: /-/healthy and /-/ready (the kubelet
+# probes Prometheus's pod directly, by its named port), /metrics (Prometheus
+# scrapes itself from its own pod, which no policy filters), the reloader (it
+# reloads at localhost:9090 inside the pod). Do not repoint those at this gateway.
+#
+# The upstream is static: nginx resolves the Service name once, when it starts,
+# so a request needs no resolver and no DNS egress at run time. The price: a
+# recreated Service (a new cluster address) needs the pod restarted, which `make up`
+# does when this file or a certificate changes and nothing else does.
+#
+# The certificate is read at each handshake (`ssl_certificate` through a variable
+# of a map with one constant default: seen on the pinned image), so a renewal needs
+# nothing. The body limit fits an OTLP batch (10M); the read timeout is longer than
+# Prometheus's own query timeout (2m), so a slow query ends with Prometheus's
+# answer and not nginx's 504. Request bodies are streamed and response bodies are
+# not spilled to disk (`proxy_request_buffering off`, `proxy_max_temp_file_size
+# 0`), so /tmp, an emptyDir with a size limit, holds only nginx's pid file.
+#
+# Pod security as Loki's gateway has it, written out because no chart does it
+# here: the `restricted` level (non-root 101, read-only root file system, no
+# capabilities, RuntimeDefault, no privilege escalation), no service-account
+# token and no Service links. The image's entrypoint scripts write under /etc/nginx
+# and /docker-entrypoint.d, which the read-only root forbids, so the second is an
+# emptyDir that hides them and the first is this ConfigMap.
+# Memory: 2 workers of a few MiB each; 32Mi requested and 64Mi limited (the
+# namespace's limits already add up to about 4.5 GiB against 7.65 GiB for Docker,
+# infra/kind/README.md Memory); the use is read on the cluster from cAdvisor's
+# series (container_memory_working_set_bytes) and is not known yet.
+#
+# Labels: neither Loki's gateway's three nor the collector's name label, so no
+# other policy's selector matches this pod; its own policies are in
+# observability-prometheus-networkpolicy.yaml.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus-gateway
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: prometheus-gateway
+    app.kubernetes.io/instance: prometheus-gateway
+    app.kubernetes.io/part-of: meridian
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-gateway
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: prometheus-gateway
+    app.kubernetes.io/instance: prometheus-gateway
+    app.kubernetes.io/part-of: meridian
+data:
+  nginx.conf: |
+    worker_processes  2;
+    error_log  /dev/stderr warn;
+    pid        /tmp/nginx.pid;
+
+    events {
+      worker_connections  1024;
+    }
+
+    http {
+      client_body_temp_path /tmp/client_temp;
+      proxy_temp_path       /tmp/proxy_temp_path;
+      fastcgi_temp_path     /tmp/fastcgi_temp;
+      uwsgi_temp_path       /tmp/uwsgi_temp;
+      scgi_temp_path        /tmp/scgi_temp;
+
+      default_type text/plain;
+      server_tokens off;
+      client_max_body_size 10M;
+      log_format main '$remote_addr [$time_local] $status "$request" $body_bytes_sent '
+                      'verify=$ssl_client_verify subject="$ssl_client_s_dn" class=$prometheus_class';
+      access_log /dev/stderr main;
+
+      map $host $prometheus_gateway_cert { default /etc/prometheus-gateway/tls/tls.crt; }
+      map $host $prometheus_gateway_key { default /etc/prometheus-gateway/tls/tls.key; }
+
+      map $request_uri $prometheus_class_raw {
+        default x;
+        ~^/(\?.*)?$ r;
+        ~^/api/v1/(query|query_range|query_exemplars|format_query|parse_query|series|labels|metadata|targets|rules|alerts|status/buildinfo|status/runtimeinfo|status/flags|status/config|status/tsdb)(\?.*)?$ r;
+        ~^/api/v1/label/[A-Za-z_][A-Za-z0-9_]*/values(\?.*)?$ r;
+        ~^/api/v1/otlp/v1/metrics(\?.*)?$ w;
+      }
+      map $uri $prometheus_class_uri {
+        default x;
+        ~^/(\?.*)?$ r;
+        ~^/api/v1/(query|query_range|query_exemplars|format_query|parse_query|series|labels|metadata|targets|rules|alerts|status/buildinfo|status/runtimeinfo|status/flags|status/config|status/tsdb)(\?.*)?$ r;
+        ~^/api/v1/label/[A-Za-z_][A-Za-z0-9_]*/values(\?.*)?$ r;
+        ~^/api/v1/otlp/v1/metrics(\?.*)?$ w;
+      }
+      map "$prometheus_class_raw:$prometheus_class_uri" $prometheus_class {
+        default x;
+        "r:r" r;
+        "w:w" w;
+      }
+      map "$prometheus_class:$ssl_client_verify:$ssl_client_s_dn" $prometheus_denied {
+        default 1;
+        "w:SUCCESS:CN=otel-collector-client" 0;
+        ~^r: 0;
+      }
+
+      server {
+        listen 8443 ssl;
+        ssl_certificate         $prometheus_gateway_cert;
+        ssl_certificate_key     $prometheus_gateway_key;
+        ssl_client_certificate  /etc/prometheus-gateway/tls/ca.crt;
+        ssl_verify_client       optional;
+        ssl_protocols           TLSv1.3;
+
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 150s;
+        proxy_request_buffering off;
+        proxy_max_temp_file_size 0;
+
+        # The probes' path and the one answer nginx gives itself.
+        location = / {
+          return 200 'OK';
+        }
+
+        # The one location that proxies: the class decides, and Prometheus gets
+        # the URI the client sent.
+        location ^~ /api/v1/ {
+          if ($prometheus_denied) { return 403; }
+          proxy_pass http://kube-prometheus-stack-prometheus.observability.svc.cluster.local:9090;
+        }
+
+        # Nothing unclassified is proxied. The prefix location above would answer
+        # `/api/v1` with a redirect to `/api/v1/`; this answers it with the same
+        # 403 as every other path that is not a read or the write.
+        location = /api/v1 {
+          return 403;
+        }
+        location / {
+          return 403;
+        }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus-gateway
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: prometheus-gateway
+    app.kubernetes.io/instance: prometheus-gateway
+    app.kubernetes.io/component: gateway
+    app.kubernetes.io/part-of: meridian
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  # A new pod comes up before the old one goes (one replica, one surge), so a
+  # roll leaves no gap: the cluster has one node and no anti-affinity here.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus-gateway
+      app.kubernetes.io/instance: prometheus-gateway
+      app.kubernetes.io/component: gateway
+  template:
+    metadata:
+      annotations:
+        meridian-manifest-sha256: "MANIFEST-SHA256-PLACEHOLDER"
+        meridian-ca-sha256: "CA-SHA256-PLACEHOLDER"
+      labels:
+        app.kubernetes.io/name: prometheus-gateway
+        app.kubernetes.io/instance: prometheus-gateway
+        app.kubernetes.io/component: gateway
+        app.kubernetes.io/part-of: meridian
+    spec:
+      serviceAccountName: prometheus-gateway
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: nginx
+          image: IMAGE-PLACEHOLDER
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: https
+              containerPort: 8443
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 2
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/nginx
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            - name: docker-entrypoint-d-override
+              mountPath: /docker-entrypoint.d
+            - name: tls
+              mountPath: /etc/prometheus-gateway/tls
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-gateway
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
+        - name: docker-entrypoint-d-override
+          emptyDir:
+            sizeLimit: 1Mi
+        - name: tls
+          secret:
+            secretName: prometheus-gateway-tls
+            defaultMode: 288 # 0440
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus-gateway
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: prometheus-gateway
+    app.kubernetes.io/instance: prometheus-gateway
+    app.kubernetes.io/component: gateway
+    app.kubernetes.io/part-of: meridian
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: prometheus-gateway
+    app.kubernetes.io/instance: prometheus-gateway
+    app.kubernetes.io/component: gateway
+  ports:
+    - name: https
+      port: 8443
+      targetPort: https
+      protocol: TCP

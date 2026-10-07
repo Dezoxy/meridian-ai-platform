@@ -3,7 +3,7 @@
 # cert-manager's own approver is off (values/cert-manager.yaml) and
 # approver-policy runs in its place (values/approver-policy.yaml); up.sh applies
 # this file after the add-on and before manifests/service-ca.yaml and
-# manifests/telemetry-ca.yaml, and waits for the eight policies to be Ready.
+# manifests/telemetry-ca.yaml, and waits for the nine policies to be Ready.
 #
 # How approver-policy decides: a policy is appropriate for a request when its
 # selector matches and the requester may `use` the policy (RBAC, checked in the
@@ -132,6 +132,13 @@
 #                           check, the subject `CN=otel-collector-client`, is what
 #                           stops it from writing (a certificate with these names
 #                           has no such common name: the policy allows none)
+#   prometheus-gateway      the server certificate of Prometheus's gateway (S072,
+#                           contract M4, manifests/telemetry-ca.yaml): the same as
+#                           the policy above for the names
+#                           prometheus-gateway.observability.svc and
+#                           prometheus-gateway.observability.svc.cluster.local.
+#                           Its gateway has the same second check (the subject
+#                           `CN=otel-collector-client`), for the same reason
 #
 # The policies of S063 select one namespaced Issuer each, in `observability`
 # only, and that is also what denies: a request for either Issuer that its policy
@@ -435,6 +442,31 @@ spec:
   constraints:
     maxDuration: 2160h
 ---
+apiVersion: policy.cert-manager.io/v1alpha1
+kind: CertificateRequestPolicy
+metadata:
+  name: prometheus-gateway
+spec:
+  selector:
+    issuerRef:
+      name: telemetry-ca
+      kind: Issuer
+      group: cert-manager.io
+    namespace:
+      matchNames:
+        - observability
+  allowed:
+    dnsNames:
+      values:
+        - prometheus-gateway.observability.svc
+        - prometheus-gateway.observability.svc.cluster.local
+      required: true
+    usages:
+      - digital signature
+      - server auth
+  constraints:
+    maxDuration: 2160h
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -555,6 +587,31 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: loki-gateway-use-policy
+subjects:
+  - kind: ServiceAccount
+    name: cert-manager
+    namespace: cert-manager
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: prometheus-gateway-use-policy
+  namespace: observability
+rules:
+  - apiGroups: ["policy.cert-manager.io"]
+    resources: ["certificaterequestpolicies"]
+    verbs: ["use"]
+    resourceNames: ["prometheus-gateway"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: prometheus-gateway-use-policy
+  namespace: observability
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: prometheus-gateway-use-policy
 subjects:
   - kind: ServiceAccount
     name: cert-manager

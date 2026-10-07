@@ -119,10 +119,17 @@ grafana:
   testFramework:
     enabled: false
   # The telemetry authority's public certificate, for the Loki datasource below
-  # (S072, contract M3): one environment variable from the ConfigMap telemetry-ca
-  # in this namespace (key ca.crt), which up.sh publishes before this release.
+  # (S072, contract M3) and the Prometheus one (contract M4): one environment
+  # variable for each, both from the ConfigMap telemetry-ca in this namespace (key
+  # ca.crt), which up.sh publishes before this release. Two names for one
+  # certificate, so that neither datasource reads a variable that names the other
+  # store's gateway.
   envValueFrom:
     LOKI_GATEWAY_CA:
+      configMapKeyRef:
+        name: telemetry-ca
+        key: ca.crt
+    PROMETHEUS_GATEWAY_CA:
       configMapKeyRef:
         name: telemetry-ca
         key: ca.crt
@@ -161,13 +168,40 @@ grafana:
     datasources:
       searchNamespace: observability
       resource: configmap
-      # Prometheus keeps the chart's default datasource, uid "prometheus".
-      # Alertmanager is off, so its datasource would point nowhere.
+      # The chart's default datasource for Prometheus is off (S072, contract M4):
+      # its template (templates/grafana/configmaps-datasources.yaml) has no field
+      # for secureJsonData, so it cannot hold the certificate of the authority
+      # that the gateway's TLS needs, and the Prometheus datasource is declared in
+      # additionalDataSources below with the chart's own uid, name, default flag,
+      # method and interval. Alertmanager is off, so its datasource would point
+      # nowhere.
+      defaultDatasourceEnabled: false
       alertmanager:
         enabled: false
   # Provisioned datasources with fixed uids; smoke.sh and future dashboards
   # refer to them by uid. In Grafana provisioning "$$" writes a literal "$".
   additionalDataSources:
+    # Prometheus is read through its gateway (S072, contract M4), over TLS and with
+    # NO client certificate, as Loki is below: the gateway serves the reads to a
+    # client that presents none and answers 403 on the OTLP path, so Grafana holds
+    # nothing that writes. What the chart's own datasource had, kept because smoke
+    # (checks 5, 7 and 11 read `uid/prometheus` through Grafana's proxy) and the
+    # chart's dashboards bind to them: the name, the uid `prometheus`, the default
+    # flag (the only one), POST for the queries (so the gateway decides by path,
+    # never by method) and the interval of the chart's default (30s, the scrape
+    # interval of the Prometheus resource, which this file leaves unset).
+    - name: Prometheus
+      uid: prometheus
+      type: prometheus
+      access: proxy
+      isDefault: true
+      url: https://prometheus-gateway.observability.svc.cluster.local:8443
+      secureJsonData:
+        tlsCACert: $PROMETHEUS_GATEWAY_CA
+      jsonData:
+        httpMethod: POST
+        timeInterval: 30s
+        tlsAuthWithCACert: true
     - name: Tempo
       uid: tempo
       type: tempo

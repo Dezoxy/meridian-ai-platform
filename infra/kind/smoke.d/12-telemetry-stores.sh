@@ -1,9 +1,14 @@
 # shellcheck shell=bash
-#  12. telemetry stores: five lines (S072, contract M3b), run after the other
-#                 eleven. They prove, from a Pod that is inside the namespace as
-#                 the collector is, what the gateway and Tempo's receiver refuse,
-#                 and that the pods SERVE the certificate that is in their Secret
-#                 now. The check starts one probe Pod in `observability`, of the
+#  12. telemetry stores: eight lines (S072, contracts M3b and M4), run after the
+#                 other eleven. They prove, from a Pod that is inside the
+#                 namespace as the collector is, what the two gateways and Tempo's
+#                 receiver refuse, and that the pods SERVE the certificate that is
+#                 in their Secret now. The first five are Loki's gateway, Tempo's
+#                 receiver and Loki's own port, then the certificates of the Loki
+#                 gateway and of Tempo; the last three, added by contract M4, are
+#                 Prometheus's gateway, Prometheus's own port and the certificate
+#                 of Prometheus's gateway (below, after the first five).
+#                 The check starts one probe Pod in `observability`, of the
 #                 Claims API's own image and securityContext (nothing is pulled;
 #                 it has no curl, so Python does the work), labelled
 #                 app.kubernetes.io/name=opentelemetry-collector, which the
@@ -56,7 +61,26 @@
 #                   Tempo does not, so after a renewal the second pair differs
 #                   until `make up` has rolled the pod. A difference is a FAIL
 #                   that says which pod and what to do (make up).
-#                 Skipped, one line instead of five, while no Meridian Deployment
+#                 - Prometheus's gateway (the sixth line, contract M4): from the
+#                   same Pod with no client certificate, a POST of the OTLP
+#                   receiver's path, /api/v1/otlp/v1/metrics, of remote write,
+#                   /api/v1/write, and of /-/reload to
+#                   prometheus-gateway.observability.svc.cluster.local:8443 are each
+#                   answered 403, and a GET of /api/v1/query?query=1 is answered
+#                   200. The gateway refuses those paths whatever the certificate
+#                   and whether or not Prometheus enables them; this line sees
+#                   the refusal without a certificate only.
+#                 - Prometheus's own port (the seventh line): the same as the third
+#                   line for kube-prometheus-stack-prometheus's 9090, with its
+#                   own egress policy for the Pod (smoke-telemetry-probe-
+#                   prometheus: the collector's egress rule for that port went
+#                   with contract M4) and the same control, the gateway's three
+#                   labels.
+#                 - the certificate Prometheus's gateway serves (the eighth line):
+#                   as the fourth, for prometheus-gateway-tls. nginx re-reads the
+#                   certificate at each handshake, so a difference after a renewal
+#                   is a fault.
+#                 Skipped, one line instead of eight, while no Meridian Deployment
 #                 exists (the probe Pod borrows the Claims API's image: `make
 #                 deploy`). A FAIL line that a missing gateway Deployment or
 #                 Tempo's StatefulSet gives says make up. A probe Pod that a lost
@@ -87,6 +111,12 @@ readonly TELEMETRY_STORES_NAME_LABEL=opentelemetry-collector
 readonly TELEMETRY_STORES_SMOKE_LABEL=meridian-smoke=telemetry-probe
 # The three labels of the gateway's pods, which Loki's ingress rule names.
 readonly TELEMETRY_STORES_GATEWAY_LABELS='app.kubernetes.io/name=loki app.kubernetes.io/instance=loki app.kubernetes.io/component=gateway'
+# Prometheus's gateway, Prometheus's own port (the Service the stack makes) and the
+# gateway's Secret and three labels (contract M4).
+readonly TELEMETRY_STORES_PROMETHEUS_GATEWAY=prometheus-gateway.observability.svc.cluster.local:8443
+readonly TELEMETRY_STORES_PROMETHEUS=kube-prometheus-stack-prometheus.observability.svc.cluster.local:9090
+readonly TELEMETRY_STORES_PROMETHEUS_GATEWAY_SECRET=prometheus-gateway-tls
+readonly TELEMETRY_STORES_PROMETHEUS_GATEWAY_LABELS='app.kubernetes.io/name=prometheus-gateway app.kubernetes.io/instance=prometheus-gateway app.kubernetes.io/component=gateway'
 readonly TELEMETRY_STORES_LEFTOVER_AGE=300
 readonly TELEMETRY_STORES_POD_LIFETIME=300
 readonly TELEMETRY_STORES_POD_READY_TIMEOUT=60s
@@ -276,17 +306,20 @@ telemetry_stores_tempo_line() {
   esac
 }
 
-# telemetry_stores_loki_line: the third line. Loki's own port times out for the
-# Pod, and the Pod relabelled with the gateway's labels reaches it.
-telemetry_stores_loki_line() {
+# telemetry_stores_port_line STORE TARGET GATEWAY_LABELS: the third line (STORE is
+# Loki) and the seventh (Prometheus). The store's own port TARGET times out for the
+# Pod, and the Pod relabelled with the gateway's labels GATEWAY_LABELS (three
+# key=value words) reaches it.
+telemetry_stores_port_line() {
+  local store=$1 target=$2 gateway_labels=$3
   local blocked control="" attempt err_file labels_kv
-  telemetry_probe "${TELEMETRY_STORES_TCP}" "${TELEMETRY_STORES_LOKI}"
+  telemetry_probe "${TELEMETRY_STORES_TCP}" "${target}"
   blocked="${stores_answer}"
   if [[ "${blocked}" == reached ]]; then
-    fail "telemetry stores: a pod that is not the gateway reached Loki's own port (${TELEMETRY_STORES_LOKI}), which only the gateway's pods may reach: Loki's ingress rule is missing or too wide"
+    fail "telemetry stores: a pod that is not the gateway reached ${store}'s own port (${target}), which only the gateway's pods may reach: ${store}'s ingress rule is missing or too wide"
     return
   elif [[ "${blocked}" != blocked ]]; then
-    fail "telemetry stores: the probe to Loki's own port (${TELEMETRY_STORES_LOKI}) gave no answer of reached or blocked: ${blocked}"
+    fail "telemetry stores: the probe to ${store}'s own port (${target}) gave no answer of reached or blocked: ${blocked}"
     return
   fi
   # The control: the same Pod with the gateway's labels. While it carries them it
@@ -295,9 +328,9 @@ telemetry_stores_loki_line() {
   err_file="$(mktemp)"
   # shellcheck disable=SC2086  # the labels are separate arguments
   if kctl -n "${TELEMETRY_STORES_NAMESPACE}" label pod "${telemetry_probe_pod}" \
-    ${TELEMETRY_STORES_GATEWAY_LABELS} --overwrite >/dev/null 2>"${err_file}"; then
+    ${gateway_labels} --overwrite >/dev/null 2>"${err_file}"; then
     for ((attempt = 1; attempt <= TELEMETRY_STORES_CONTROL_ATTEMPTS; attempt++)); do
-      telemetry_probe "${TELEMETRY_STORES_TCP}" "${TELEMETRY_STORES_LOKI}"
+      telemetry_probe "${TELEMETRY_STORES_TCP}" "${target}"
       control="${stores_answer}"
       [[ "${control}" == reached ]] && break
       sleep "${TELEMETRY_STORES_CONTROL_INTERVAL}"
@@ -312,10 +345,45 @@ telemetry_stores_loki_line() {
   fi
   rm -f "${err_file}"
   if [[ "${control}" == reached ]]; then
-    pass "telemetry stores: Loki's own port (${TELEMETRY_STORES_LOKI}) times out for a pod that is not the gateway, which can send to it, and the same pod with the gateway's labels reaches it: Loki's ingress rule is what refuses"
+    pass "telemetry stores: ${store}'s own port (${target}) times out for a pod that is not the gateway, which can send to it, and the same pod with the gateway's labels reaches it: ${store}'s ingress rule is what refuses"
   else
-    fail "telemetry stores: the control did not reach Loki's own port with the gateway's labels (${control}), so the timeout shows nothing"
+    fail "telemetry stores: the control did not reach ${store}'s own port with the gateway's labels (${control}), so the timeout shows nothing"
   fi
+}
+
+# telemetry_stores_loki_line: the third line. Loki's own port times out for the
+# Pod, and the Pod relabelled with the gateway's labels reaches it.
+telemetry_stores_loki_line() {
+  telemetry_stores_port_line Loki "${TELEMETRY_STORES_LOKI}" "${TELEMETRY_STORES_GATEWAY_LABELS}"
+}
+
+# telemetry_stores_prometheus_gateway_line: the sixth line (contract M4). With no
+# client certificate the OTLP receiver's path, remote write and /-/reload are each
+# 403, and a query is 200. The three closed paths are asked in one go so that the
+# line names every one that answered otherwise.
+telemetry_stores_prometheus_gateway_line() {
+  local gateway=${TELEMETRY_STORES_PROMETHEUS_GATEWAY} path wrong="" query
+  for path in /api/v1/otlp/v1/metrics /api/v1/write /-/reload; do
+    telemetry_probe "${TELEMETRY_STORES_REQUEST}" "${gateway}" POST "${path}"
+    [[ "${stores_answer}" == 403 ]] || wrong+="${wrong:+, }POST ${path} gave ${stores_answer}"
+  done
+  telemetry_probe "${TELEMETRY_STORES_REQUEST}" "${gateway}" GET '/api/v1/query?query=1'
+  query="${stores_answer}"
+  if [[ -n "${wrong}" ]]; then
+    fail "telemetry stores: Prometheus's gateway (${gateway}) did not refuse with 403 what it should refuse a pod with no client certificate (${wrong}): it would take a write, or change Prometheus's state, from a pod that holds none (a query gave ${query})"
+  elif [[ "${query}" == 200 ]]; then
+    pass "telemetry stores: a pod with the collector's label and no client certificate gets 403 for the OTLP receiver's path, remote write and /-/reload on Prometheus's gateway (${gateway}) and 200 for a query: the gateway, not the label, decides who writes"
+  else
+    fail "telemetry stores: Prometheus's gateway refused the three paths with 403, but a query of /api/v1/query?query=1 was answered ${query}, not 200 (is Prometheus ready? kubectl -n observability get pods)"
+  fi
+}
+
+# telemetry_stores_prometheus_line: the seventh line. Prometheus's own port times
+# out for the Pod, and the Pod relabelled with Prometheus's gateway's labels
+# reaches it.
+telemetry_stores_prometheus_line() {
+  telemetry_stores_port_line Prometheus "${TELEMETRY_STORES_PROMETHEUS}" \
+    "${TELEMETRY_STORES_PROMETHEUS_GATEWAY_LABELS}"
 }
 
 # telemetry_stores_served_line TARGET SECRET WHO RESTART: the fourth and fifth
@@ -350,6 +418,10 @@ check_telemetry_stores() {
     fail "telemetry stores: Loki's gateway (deployment/loki-gateway in observability) is not there: make up"
     return
   fi
+  if ! kctl -n "${TELEMETRY_STORES_NAMESPACE}" get deployment prometheus-gateway >/dev/null 2>&1; then
+    fail "telemetry stores: Prometheus's gateway (deployment/prometheus-gateway in observability) is not there: make up"
+    return
+  fi
   telemetry_stores_start_pod || return 0
   telemetry_stores_gateway_line
   telemetry_stores_tempo_line
@@ -358,5 +430,9 @@ check_telemetry_stores() {
     "Loki's gateway" "run make up, which rolls the pod when its client CA changed, or restart deployment/loki-gateway"
   telemetry_stores_served_line "${TELEMETRY_STORES_TEMPO}" "${TELEMETRY_STORES_TEMPO_SECRET}" \
     "Tempo's receiver" "run make up, which rolls the pod when its certificate changed, or restart statefulset/tempo"
+  telemetry_stores_prometheus_gateway_line
+  telemetry_stores_prometheus_line
+  telemetry_stores_served_line "${TELEMETRY_STORES_PROMETHEUS_GATEWAY}" "${TELEMETRY_STORES_PROMETHEUS_GATEWAY_SECRET}" \
+    "Prometheus's gateway" "run make up, which rolls the pod when its client CA changed, or restart deployment/prometheus-gateway"
   telemetry_stores_delete_pod || echo "smoke: could not delete the probe Pod ${telemetry_probe_pod} in ${TELEMETRY_STORES_NAMESPACE}; delete it by hand" >&2
 }

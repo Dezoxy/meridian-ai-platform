@@ -638,7 +638,7 @@ def test_the_comments_say_what_two_lines_of_the_identity_check_do_not_prove() ->
         line.removeprefix("#").strip()
         for line in DEPLOY_SH.split("set -euo pipefail")[0].splitlines()
     )
-    assert "eight CertificateRequestPolicies" in deploy_header
+    assert "nine CertificateRequestPolicies" in deploy_header
     assert "approver-policy running" in deploy_header
 
 

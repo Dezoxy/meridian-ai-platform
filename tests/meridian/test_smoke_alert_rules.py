@@ -70,8 +70,10 @@ RULE_COUNT = 21
 # certificate policy check (the database's own certificates are not close to
 # their end): 46. S072 (M3b) added check 12, the telemetry stores': five lines,
 # the refusals of Loki's gateway, Tempo's receiver and Loki's own port and the
-# certificates the gateway and the receiver serve: 51.
-SMOKE_LINES_AFTER_DEPLOY = 51
+# certificates the gateway and the receiver serve: 51. S072 (M4) added three to it
+# (Prometheus's gateway, Prometheus's own port and the certificate its gateway
+# serves): 54.
+SMOKE_LINES_AFTER_DEPLOY = 54
 # Counted from the checks' own skip lines, not measured: edge 1, database 3 and
 # one SKIP for its stores, tools 1 SKIP, telemetry 7, cost panel 3 and one SKIP
 # for the series, adjuster pages 1 SKIP, sweep 2 SKIP (the Job's line and the
