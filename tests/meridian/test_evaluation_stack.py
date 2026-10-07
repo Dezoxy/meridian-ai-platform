@@ -15,6 +15,7 @@ read them fail with the instruction to record, not with an error from a parser.
 import json
 import os
 import re
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,7 @@ from evalsupport import (
     BASELINE_PATH,
     COMPARISON_PATH,
     LIVE,
+    LIVE_AZURE_ENV,
     LIVE_REPORT_PATH,
     RECORD_COMMAND,
     RECORDED,
@@ -32,6 +34,7 @@ from evalsupport import (
     another_database,
     call_lines,
     chat_tokens,
+    golden_run_enabled,
     live_recording_gateway,
     measure_claims,
     record_run,
@@ -44,10 +47,12 @@ from evalsupport import (
     totals_line,
 )
 from runceilingsupport import (
+    GOLDEN_RUN_CEILING,
     GOLDEN_RUN_CEILING_EUR,
     GOLDEN_RUN_TENANTS,
     INJECTION_RUN_CEILING_EUR,
     INJECTION_RUN_TENANTS,
+    golden_run_registry,
     registry_with_ceilings,
 )
 from servicesupport import REGISTRY_DIR, FakeClock, owner_rows
@@ -60,11 +65,21 @@ from stacksupport import (
     golden_answer,
     stored_proposals,
 )
+from writehygienesupport import (
+    UnsafeFile,
+    refuse_identifier_shapes,
+    refuse_unsafe_recording,
+)
 
 from meridian.platform.evaluation.compare import compare
 from meridian.platform.evaluation.diff import diff_reports, render_markdown
 from meridian.platform.evaluation.judge import JUDGE_PROMPT_VERSION
-from meridian.platform.evaluation.report import ReportError, load_report, write_report
+from meridian.platform.evaluation.report import (
+    ReportError,
+    dump_report,
+    load_report,
+    write_report,
+)
 from meridian.platform.gateway.models import ChatRequest
 from meridian.platform.gateway.providers.base import (
     EmbeddingReply,
@@ -75,6 +90,7 @@ from meridian.platform.gateway.providers.recorded import (
     RecordedProvider,
     Recording,
     RecordingError,
+    dump_recording,
     load_recording,
     write_recording,
 )
@@ -90,20 +106,12 @@ FAKE_INPUT_TOKENS = 700
 FAKE_OUTPUT_TOKENS = 90
 RECORD_ENV = "MERIDIAN_EVAL_RECORD"
 OPT_IN = pytest.mark.skipif(
-    os.environ.get(RECORD_ENV) != "1",
-    reason=f"opt-in: set {RECORD_ENV}=1 (make eval-record)",
+    not golden_run_enabled(os.environ),
+    reason=(
+        f"opt-in, and it spends money: set {RECORD_ENV}=1 and {LIVE_AZURE_ENV}=1 "
+        "(make eval-record)"
+    ),
 )
-
-
-def golden_run_registry(directory: Path) -> Path:
-    """The registry the golden run's gateway loads: the committed one with the
-    run's ceiling as the budget of the tenants it charges, written under
-    ``directory`` (never into the repository)."""
-    return registry_with_ceilings(
-        REGISTRY_DIR,
-        directory / "registry",
-        {tenant: GOLDEN_RUN_CEILING_EUR for tenant in GOLDEN_RUN_TENANTS},
-    )
 
 
 def committed_recording() -> Recording:
@@ -354,6 +362,7 @@ def test_a_fake_model_records_and_replays_the_whole_golden_set(
         r"total: \d+ chat calls, \d+ tokens in, \d+ out, EUR 0\.\d+", total
     )
     path, live_path = tmp_path / "recording.json", tmp_path / "live.json"
+    refuses_a_poisoned_recording(run, tmp_path / "poisoned")
     save_golden_set(run, path, live_path)
     live = load_report(live_path)
 
@@ -416,6 +425,36 @@ def test_a_fake_model_records_and_replays_the_whole_golden_set(
         variant.fingerprints.prompt == variant_run.recording.recorded_for[PROMPT_LABEL]
     )
     assert live.fingerprints.prompt == run.recording.recorded_for[PROMPT_LABEL]
+
+
+def refuses_a_poisoned_recording(run, directory: Path) -> None:
+    """The golden writer's own check (S071, L3): one answer of the run holding a
+    GUID shape, or one over the size cap, and neither file is written; the
+    refusal names the file and the kind and never the text."""
+    entries = dict(run.recording.entries)
+    key = next(iter(entries))
+    for text, wanted in (
+        ("see 123e4567-e89b-12d3-a456-426614174000", "a GUID shape"),
+        ("x" * 4001, "entries over 4000 characters"),
+    ):
+        poisoned = replace(
+            run,
+            recording=run.recording.model_copy(
+                update={
+                    "entries": {
+                        **entries,
+                        key: entries[key].model_copy(update={"text": text}),
+                    }
+                }
+            ),
+        )
+        with pytest.raises(UnsafeFile, match=r"recording\.json") as raised:
+            save_golden_set(
+                poisoned, directory / "recording.json", directory / "live.json"
+            )
+        assert wanted in str(raised.value)
+        assert text not in str(raised.value)
+        assert not directory.exists()
 
 
 def withheld(claim_id: str) -> bool:
@@ -597,11 +636,17 @@ def refuse_to_write(run) -> None:
 def save_golden_set(run, recording_path: Path, live_report_path: Path) -> None:
     """The recording and the live report, only if the run may be written."""
     refuse_to_write(run)
-    recording_path.parent.mkdir(parents=True, exist_ok=True)
-    write_recording(run.recording, recording_path)
     live = report_of(
         run.evaluation, run.registry, answered_by=LIVE, recording_fingerprint=None
     )
+    # A recording or a report that holds a shape only a leak puts there, or an
+    # entry over the size cap, is refused before either file is written.
+    refuse_unsafe_recording(
+        recording_path.name, run.recording, dump_recording(run.recording)
+    )
+    refuse_identifier_shapes(live_report_path.name, dump_report(live))
+    recording_path.parent.mkdir(parents=True, exist_ok=True)
+    write_recording(run.recording, recording_path)
     write_report(live, live_report_path)
 
 
@@ -620,6 +665,7 @@ def save_variant(run, live_path: Path, variant_path: Path, comparison: Path) -> 
     variant = report_of(
         run.evaluation, run.registry, answered_by=LIVE, recording_fingerprint=None
     )
+    refuse_identifier_shapes(variant_path.name, dump_report(variant))
     write_report(variant, variant_path)
     comparison.write_text(
         render_markdown(diff_reports(load_report(live_path), variant)),
@@ -631,7 +677,11 @@ def save_variant(run, live_path: Path, variant_path: Path, comparison: Path) -> 
 def test_record_the_golden_set_with_the_live_model(
     fresh_database: DatabaseHandle, tmp_path: Path
 ) -> None:
-    run = record_run(fresh_database, registry_dir=golden_run_registry(tmp_path))
+    run = record_run(
+        fresh_database,
+        registry_dir=golden_run_registry(tmp_path),
+        ceiling=GOLDEN_RUN_CEILING,
+    )
 
     print_run(fresh_database, run)
     save_golden_set(run, RECORDING_PATH, LIVE_REPORT_PATH)
@@ -644,7 +694,10 @@ def test_record_the_variant_prompt_with_the_live_model(
     if not LIVE_REPORT_PATH.is_file():
         pytest.fail(f"no {LIVE_REPORT_PATH.name} to compare with: {RECORD_COMMAND}")
     run = record_variant(
-        fresh_database, monkeypatch, registry_dir=golden_run_registry(tmp_path)
+        fresh_database,
+        monkeypatch,
+        registry_dir=golden_run_registry(tmp_path),
+        ceiling=GOLDEN_RUN_CEILING,
     )
 
     print_run(fresh_database, run)

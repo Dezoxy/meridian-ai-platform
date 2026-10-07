@@ -23,12 +23,14 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+import writehygienesupport
 from dbsupport import DatabaseHandle
 from evalsupport import (
     LIVE_PACE_SECONDS,
     ToolCapture,
     another_database,
     call_lines,
+    golden_run_enabled,
     recorded_gateway,
     totals_line,
 )
@@ -69,6 +71,7 @@ from stacksupport import (
     model_answer,
     stored_proposals,
 )
+from writehygienesupport import SAMPLES, UnsafeFile
 
 from meridian.platform.gateway.budget import estimate_input_tokens
 from meridian.platform.gateway.models import MAX_OUTPUT_TOKENS, ChatRequest
@@ -93,6 +96,10 @@ OPT_IN = pytest.mark.skipif(
     ),
 )
 TODAY = date(2026, 10, 8)
+ORDINARY_ANSWER = (
+    "The description says the damage came from wear and tear, so the exclusion "
+    "applies. The bearer of the policy is the insured; contact the adjuster."
+)
 FAKE_INPUT_TOKENS = 700
 FAKE_OUTPUT_TOKENS = 90
 FEW_CENTS = "0.05"
@@ -151,7 +158,8 @@ class InjectionFake:
     - ``refuse``: a refusal before the model ran, the 400 Azure's content filter
       gives a prompt (``ProviderError`` ``filtered``, status 400);
     - ``withhold``: a completion the filter withheld, or the model's own refusal
-      of a structured request: ``ProviderError`` ``filtered`` with no status.
+      of a structured request: ``ProviderError`` ``filtered`` with no status;
+    - ``raw:TEXT``: TEXT as the answer, whatever it is.
 
     With ``large`` it reports the largest counts the gateway accepts."""
 
@@ -191,7 +199,9 @@ class InjectionFake:
             raise ProviderError("filtered", REFUSED_PROMPT)
         if behaviour == "withhold":
             raise ProviderError("filtered")
-        if behaviour == "obey":
+        if behaviour.startswith("raw:"):
+            text = behaviour.removeprefix("raw:")
+        elif behaviour == "obey":
             text = model_answer(
                 "none", None, "The description states no excluded fact."
             )
@@ -710,6 +720,114 @@ def test_setting_the_paid_runs_variables_does_not_start_the_golden_recording() -
     assert "make eval-record" in output
 
 
+# ── what a run may write, and how (S071, L3) ────────────────────────────────
+def small_run(db: DatabaseHandle, behaviour: str):
+    """A complete run of the first two asked cases, the first answered by
+    ``behaviour``: cheap enough to run once for each thing a file must not hold."""
+    every = load_cases(INJECTION_CASES)
+    asked = asked_cases(every)[:2]
+    fake = InjectionFake(asked, {asked[0].case: behaviour})
+    clock = FakeClock()
+    run = record_injection_run(
+        db, inner=fake, pace=clock.advance, clock=clock, cases=asked
+    )
+    assert injection_problems(run) == []
+    return run, every
+
+
+LEAKS = [*SAMPLES.items(), ("entries over 4000 characters", "x" * 4001)]
+
+
+@pytest.mark.parametrize(("kind", "text"), LEAKS, ids=[k for k, _ in LEAKS])
+def test_a_run_whose_answer_holds_a_shape_only_a_leak_puts_there_writes_nothing(
+    fresh_database: DatabaseHandle, tmp_path: Path, kind: str, text: str
+) -> None:
+    run, every = small_run(fresh_database, f"raw:{text}")
+    out = tmp_path / "out"
+
+    with pytest.raises(UnsafeFile) as raised:
+        write_injection_run(run, out, today=TODAY, all_cases=every)
+
+    message = str(raised.value)
+    # The file and the kind, never the text.
+    assert message.startswith(
+        "nothing was written: claims-triage-injection.json holds "
+    )
+    assert kind in message
+    assert text not in message
+    assert not out.exists()
+
+
+def test_an_ordinary_answer_passes_the_checks_and_the_files_are_written(
+    fresh_database: DatabaseHandle, tmp_path: Path
+) -> None:
+    run, every = small_run(fresh_database, f"raw:{ORDINARY_ANSWER}")
+
+    paths = write_injection_run(run, tmp_path / "out", today=TODAY, all_cases=every)
+
+    assert [p.name for p in paths] == [
+        "claims-triage-injection.json",
+        "claims-triage-injection-live.json",
+        "injection-live-summary.md",
+    ]
+    assert all(path.is_file() for path in paths)
+    # Nothing is left beside them: the staging directory is gone.
+    assert sorted(p.name for p in (tmp_path / "out").iterdir()) == [
+        "claims-triage-injection-live.json",
+        "injection-live-summary.md",
+        "recordings",
+    ]
+
+
+def test_a_writer_killed_between_two_files_leaves_none_of_the_three_in_place(
+    fresh_database: DatabaseHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run, every = small_run(fresh_database, "oracle")
+    real = writehygienesupport._write_text
+    writes: list[str] = []
+
+    def second_write_raises(path: Path, text: str) -> None:
+        if writes:
+            raise OSError("the writer was killed")
+        writes.append(path.name)
+        real(path, text)
+
+    monkeypatch.setattr(writehygienesupport, "_write_text", second_write_raises)
+    out = tmp_path / "out"
+
+    with pytest.raises(OSError, match="writer was killed"):
+        write_injection_run(run, out, today=TODAY, all_cases=every)
+
+    assert len(writes) == 1  # one file was written, to the staging directory
+    assert list(out.iterdir()) == []  # none in place, and no staging left
+
+
+def test_the_golden_recording_needs_both_variables_as_the_injection_run_does() -> None:
+    assert not golden_run_enabled({})
+    assert not golden_run_enabled({"MERIDIAN_EVAL_RECORD": "1"})
+    assert not golden_run_enabled({LIVE_ENV: "1"})
+    assert not golden_run_enabled({LIVE_ENV: "1", "MERIDIAN_EVAL_RECORD": "0"})
+    assert not golden_run_enabled({LIVE_ENV: "0", "MERIDIAN_EVAL_RECORD": "1"})
+    assert golden_run_enabled({LIVE_ENV: "1", "MERIDIAN_EVAL_RECORD": "1"})
+
+
+@pytest.mark.parametrize(
+    "variables",
+    [{"MERIDIAN_EVAL_RECORD": "1"}, {"MERIDIAN_LIVE_AZURE": "1"}],
+    ids=["its own variable alone", "the live variable alone"],
+)
+def test_one_variable_alone_does_not_start_the_golden_recording(
+    variables: dict[str, str],
+) -> None:
+    output = _pytest_in_a_clean_environment(
+        "tests/meridian/test_evaluation_stack.py", "test_record_the", **variables
+    )
+
+    assert "2 skipped" in output, output[-400:]
+    assert "make eval-record" in output
+    assert "spends money" in output
+
+
 # ── the paid run ────────────────────────────────────────────────────────────
 @OPT_IN
 def test_record_the_injection_cases_with_the_live_model(
@@ -724,5 +842,5 @@ def test_record_the_injection_cases_with_the_live_model(
     print(totals_line(fresh_database, shown))
     try:
         write_injection_run(run)
-    except IncompleteRun as stopped:
+    except (IncompleteRun, UnsafeFile) as stopped:
         pytest.fail(f"{stopped}; {RECORD_COMMAND}")

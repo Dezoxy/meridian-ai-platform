@@ -325,13 +325,26 @@ a laptop with an Azure login and Docker, after a yes to the amount. About EUR
 0.12 is expected (52 calls at the golden run's measured EUR 0.0020 to 0.0023),
 EUR 0.31 if every answer ran to its cap. The ceiling is the gateway's, not the
 session's: the run's gateway loads a copy of the registry in which the tenant
-it charges, `claims-triage`, has a monthly budget of EUR 1.00, so a call that
-would pass it is refused (429) and the run is incomplete. The committed
-registry is not changed. The ceiling is per tenant and bounds one run: the
-ledger lives in a database dropped afterwards, so no sum across runs is held by
-any code. The target is opt-in by its own variable beside
-`MERIDIAN_LIVE_AZURE=1`; setting `MERIDIAN_EVAL_RECORD=1` does not start it and
-its own variable does not start the golden recording.
+it charges, `claims-triage`, has a monthly budget of EUR 0.50, so a call that
+would pass it is refused (429) and the run is incomplete. EUR 0.50 is about four
+times the expected cost and clears the EUR 0.31 at the cap; the gateway can pass
+a ceiling by one call's excess over its reservation, about EUR 0.015 at most.
+The committed registry is not changed, and a paid run without the ceiling cannot
+start: with the real provider the harness refuses, before it reads an
+environment variable, unless it is given a registry that is not the committed
+one and in which every tenant it charges holds a budget at or below the named
+ceiling. The ceiling is per tenant and bounds one run: the ledger lives in a
+database dropped afterwards, so no sum across runs is held by any code. The
+target is opt-in by its own variable beside `MERIDIAN_LIVE_AZURE=1`, and the
+golden recording's now needs both of its two as well: neither variable alone
+starts either run, and the golden recording's own does not start this one.
+Before any file is written the run refuses a recording or a report that holds a
+GUID shape, an Azure OpenAI host name, the account name's prefix, an e-mail
+address, a bearer-token marker, a JWT's opening or a URL scheme, or a recording
+entry over 4,000 characters (the wire's output cap is about that), naming the
+file and the kind and never the text; the three files are written to a staging
+directory beside the target and moved into place together, so a failure between
+two leaves none of them.
 
 The three files, written together and only by a complete run:
 

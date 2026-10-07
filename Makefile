@@ -257,7 +257,7 @@ eval-baseline:
 eval-record:
 	infra/terraform/foundation.sh eval-record
 
-## eval-injection-record  SPENDS MONEY: the injection cases the baseline says reach the model (52 on 2026-10-07, about EUR 0.12 expected; the gateway refuses the run past EUR 1.00), answered by the live Azure model with no judge, to write their recording, live report and summary under data/evaluation/ (needs az login, Docker; the owner runs it)
+## eval-injection-record  SPENDS MONEY: the injection cases the baseline says reach the model (52 on 2026-10-07, about EUR 0.12 expected; the gateway refuses the run past EUR 0.50), answered by the live Azure model with no judge, to write their recording, live report and summary under data/evaluation/ (needs az login, Docker; the owner runs it)
 eval-injection-record:
 	infra/terraform/foundation.sh eval-injection-record
 

@@ -255,7 +255,8 @@ def test_make_eval_injection_record_runs_the_script_and_says_what_it_spends() ->
     assert help_line.endswith("(needs az login, Docker; the owner runs it)")
     assert "52 on 2026-10-07" in help_line
     assert "about EUR 0.12 expected" in help_line
-    assert "EUR 1.00" in help_line
+    assert "the gateway refuses the run past EUR 0.50" in help_line
+    assert "EUR 1.00" not in help_line
     assert "no judge" in help_line
     assert "data/evaluation" in help_line
 
@@ -305,8 +306,32 @@ def test_the_injection_recording_says_what_it_spends_in_the_scripts_words() -> N
     # the day is only the fallback for a baseline jq cannot read.
     assert "model_asked == 1" in recording
     assert "52 on 2026-10-07" in recording
-    assert "about EUR 0.12 expected" in line
-    assert "refuses the run past EUR 1.00" in line
+    assert "refuses the run past EUR 0.50" in line
+    assert "EUR 1.00" not in FOUNDATION
+    # The expected cost is the case count read from the baseline times a named,
+    # dated per-case figure, not a constant beside a count that moves (S071, L3).
+    assert "about EUR ${expected} expected" in line
+    assert "measured 2026-10-03" in line
+    assert "n * c" in recording
+    assert '-v c="${EVAL_INJECTION_EUR_PER_CASE}"' in recording
+    assert "about EUR 0.12 expected" not in line
+
+
+def test_the_per_case_figure_of_the_script_gives_the_expected_cost_of_52_cases() -> (
+    None
+):
+    (figure,) = re.findall(
+        r"^readonly EVAL_INJECTION_EUR_PER_CASE=(\d\.\d+)$", FOUNDATION, re.MULTILINE
+    )
+    comment = FOUNDATION.split("readonly EVAL_INJECTION_EUR_PER_CASE=", 1)[0]
+
+    # The figure is dated where it is named, and it is the README's measured
+    # maximum per claim.
+    assert "2026-10-03" in comment[-400:]
+    assert "0.0023" in (REPO_ROOT / "data/evaluation/README.md").read_text("utf-8")
+    assert f"{52 * float(figure):.2f}" == "0.12"
+    # The fallback, for a baseline jq cannot read, says the same figure.
+    assert "expected=0.12" in function_body("cmd_eval_injection_record")
 
 
 def test_the_figures_of_the_golden_recording_are_the_measured_ones() -> None:
@@ -355,6 +380,36 @@ def test_the_python_workflow_never_enables_a_live_or_recording_run() -> None:
     # Nor the injection run's: its own variable, its own target (S071).
     assert "MERIDIAN_EVAL_INJECTION_RECORD" not in WORKFLOW_TEXT
     assert "eval-injection-record" not in WORKFLOW_TEXT
+
+
+PAID_NAMES = (
+    "eval-record",
+    "eval-injection-record",
+    "gateway-live",
+    "azure-smoke",
+    "MERIDIAN_EVAL_RECORD",
+    "MERIDIAN_EVAL_INJECTION_RECORD",
+    "MERIDIAN_LIVE_AZURE",
+)
+
+
+def test_no_workflow_file_names_a_paid_target_or_sets_an_opt_in_variable() -> None:
+    """All of them, not only the python workflow (the security review, section
+    8): a paid target or an opt-in variable anywhere under ``.github/workflows``
+    would let CI spend money. ``azure-smoke`` is held out with the paid ones
+    though it is cheap: no workflow signs in to Azure."""
+    workflows = sorted(
+        path
+        for pattern in ("*.yml", "*.yaml")
+        for path in (REPO_ROOT / ".github" / "workflows").glob(pattern)
+    )
+
+    assert len(workflows) >= 3
+    assert any(path.name == "python.yml" for path in workflows)
+    for path in workflows:
+        text = path.read_text(encoding="utf-8")
+        found = [name for name in PAID_NAMES if name in text]
+        assert found == [], f"{path.name} names {found}"
 
 
 # ── what the job costs can be read from a run (S057) ────────────────────────

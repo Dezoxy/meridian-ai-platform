@@ -29,7 +29,7 @@
 #          output cap (T-45).
 #   eval-injection-record  SPENDS MONEY (the cases the committed baseline says
 #          reach the model, 52 on 2026-10-07, about EUR 0.12 expected; the
-#          gateway refuses the run past EUR 1.00): the injection cases answered
+#          gateway refuses the run past EUR 0.50): the injection cases answered
 #          by the live model, no judge, through the Model Gateway on this
 #          laptop; writes the recording, the live report and its summary under
 #          data/evaluation/ (S071). Same login, throwaway PostgreSQL and Redis
@@ -396,10 +396,15 @@ cmd_eval_record() {
 # start it and it does not start eval-record. One process (PYTEST_WORKERS=0).
 readonly EVAL_INJECTION_RECORD_TESTS='tests/meridian/test_injection_record.py::test_record_the_injection_cases_with_the_live_model'
 readonly EVAL_INJECTION_BASELINE=data/evaluation/claims-triage-injection-baseline.json
+# What one triage call cost at most in the golden run measured on 2026-10-03, in
+# EUR (the README's "at most EUR 0.0023 per claim"). The expected cost of the run
+# is this times the number of cases read from the baseline, so the figure stays
+# true when the baseline is made again and the count moves.
+readonly EVAL_INJECTION_EUR_PER_CASE=0.0023
 
 cmd_eval_injection_record() {
   tf_init
-  local deployments endpoints cases
+  local deployments endpoints cases expected
   deployments="$(tf output -json openai_deployments 2>/dev/null)" ||
     die "Terraform has no openai_deployments output; run 'make azure-apply' first"
   endpoints="$(jq -ce 'with_entries(.key |= split("/")[0] | .value |= .endpoint) | select(length > 0)' \
@@ -409,9 +414,12 @@ cmd_eval_injection_record() {
   # after the baseline is made again; the figure of the day is the fallback.
   if cases="$(jq -e '[.cases[] | select(.observed.model_asked == 1)] | length' \
     "${TF_DIR}/../../${EVAL_INJECTION_BASELINE}" 2>/dev/null)" && [[ "${cases}" =~ ^[0-9]+$ ]]; then
+    expected="$(awk -v n="${cases}" -v c="${EVAL_INJECTION_EUR_PER_CASE}" \
+      'BEGIN { printf "%.2f", n * c }')"
     cases="${cases} cases"
   else
     cases="the cases the baseline says reach the model, 52 on 2026-10-07"
+    expected=0.12
   fi
   # A caller who must not collide with another run names its own container and port.
   local -a overrides=()
@@ -419,7 +427,7 @@ cmd_eval_injection_record() {
   [[ -z "${PYTEST_DB_PORT:-}" ]] || overrides+=("PYTEST_DB_PORT=${PYTEST_DB_PORT}")
   [[ -z "${PYTEST_REDIS_CONTAINER:-}" ]] || overrides+=("PYTEST_REDIS_CONTAINER=${PYTEST_REDIS_CONTAINER}")
   [[ -z "${PYTEST_REDIS_PORT:-}" ]] || overrides+=("PYTEST_REDIS_PORT=${PYTEST_REDIS_PORT}")
-  log "${cases} answered by the live model, about EUR 0.12 expected; the gateway refuses the run past EUR 1.00; writes files under data/evaluation/ (synthetic text only)"
+  log "${cases} answered by the live model, about EUR ${expected} expected (EUR ${EVAL_INJECTION_EUR_PER_CASE} a case at most, measured 2026-10-03); the gateway refuses the run past EUR 0.50; writes files under data/evaluation/ (synthetic text only)"
   MERIDIAN_LIVE_AZURE=1 \
     MERIDIAN_EVAL_INJECTION_RECORD=1 \
     MERIDIAN_AZURE_OPENAI_ENDPOINTS="${endpoints}" \

@@ -17,10 +17,11 @@ value from the file.
 import re
 import shutil
 from collections.abc import Mapping
+from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 
-from servicesupport import REPO_ROOT
+from servicesupport import REGISTRY_DIR, REPO_ROOT
 
 from meridian.platform.registry import load_registry
 from meridian.platform.registry.loader import RegistryError
@@ -42,15 +43,76 @@ LEDGER_PLACES = 6
 GOLDEN_RUN_CEILING_EUR = Decimal("0.50")
 GOLDEN_RUN_TENANTS = ("claims-triage", "evaluation")
 # The injection run (``injectionrecordsupport``) answers 52 cases with no judge,
-# so it charges ``claims-triage`` alone: an estimate of EUR 0.12 to 0.31 (the
-# cost statement), under a ceiling the gateway holds.
-INJECTION_RUN_CEILING_EUR = Decimal("1.00")
+# so it charges ``claims-triage`` alone. Expected: 52 calls at the measured EUR
+# 0.0023 at most per claim, about EUR 0.12; if every answer ran to its cap of 400
+# output tokens, EUR 0.31 (the cost statement). EUR 0.50 clears the second with
+# room and is about four times the first, so it stops a runaway and not a drift;
+# the gateway can pass a ceiling by one call's excess over its reservation, about
+# EUR 0.015 at most (the security review's arithmetic from ``budget.py``).
+INJECTION_RUN_CEILING_EUR = Decimal("0.50")
 INJECTION_RUN_TENANTS = ("claims-triage",)
 
 
 class CeilingError(ValueError):
     """A ceiling or a target ``registry_with_ceilings`` refuses. The message
     names a tenant or a path, never a value from the registry."""
+
+
+@dataclass(frozen=True, slots=True)
+class RunCeiling:
+    """What a paid run is held to: the tenants it charges and the most each may
+    have for a monthly budget. A paid run passes one to the gateway it builds
+    (``require_run_ceiling`` refuses a real provider without it)."""
+
+    eur: Decimal
+    tenants: tuple[str, ...]
+
+
+GOLDEN_RUN_CEILING = RunCeiling(GOLDEN_RUN_CEILING_EUR, GOLDEN_RUN_TENANTS)
+INJECTION_RUN_CEILING = RunCeiling(INJECTION_RUN_CEILING_EUR, INJECTION_RUN_TENANTS)
+
+
+def golden_run_registry(directory: Path) -> Path:
+    """The registry the golden run's gateway loads: the committed one with the
+    run's ceiling as the budget of the tenants it charges, written under
+    ``directory`` (never into the repository)."""
+    return registry_with_ceilings(
+        REGISTRY_DIR,
+        directory / "registry",
+        {tenant: GOLDEN_RUN_CEILING_EUR for tenant in GOLDEN_RUN_TENANTS},
+    )
+
+
+THE_ARGUMENT = (
+    "a paid run needs its ceiling: pass ceiling= (a RunCeiling) and a registry_dir "
+    "made by registry_with_ceilings for it"
+)
+
+
+def require_run_ceiling(registry_dir: Path, ceiling: RunCeiling | None) -> None:
+    """``CeilingError`` unless ``registry_dir`` is not the committed registry and
+    every tenant ``ceiling`` names holds a monthly budget at or below its amount.
+    Called before anything else a paid run does, so a ceiling is never one omitted
+    argument away. Messages name the argument or a tenant, never a value."""
+    if ceiling is None:
+        raise CeilingError(THE_ARGUMENT)
+    if not ceiling.tenants or ceiling.eur <= 0:
+        raise CeilingError("the ceiling names no tenant or no amount above zero")
+    if registry_dir.resolve() == REGISTRY_DIR.resolve():
+        raise CeilingError(f"{THE_ARGUMENT}: registry_dir is the committed registry")
+    try:
+        registry = load_registry(registry_dir)
+    except RegistryError:
+        raise CeilingError("the registry_dir of the run does not load") from None
+    budgets = {t.id: t.limits.cost_per_month_eur for t in registry.tenants}
+    for tenant in ceiling.tenants:
+        if tenant not in budgets:
+            raise CeilingError(f"tenant {tenant!r} is not in the run's registry")
+        if budgets[tenant] > ceiling.eur:
+            raise CeilingError(
+                f"tenant {tenant!r} has a budget above the run's ceiling in "
+                "registry_dir"
+            )
 
 
 def registry_with_ceilings(
@@ -71,6 +133,10 @@ def registry_with_ceilings(
     for tenant, ceiling in ceilings.items():
         _check_ceiling(tenant, ceiling, committed)
     _check_target(source, target)
+    if (source / TENANTS_FILE).is_symlink():
+        # The copy keeps links as links, and the edit below would write through
+        # one into whatever it points at.
+        raise CeilingError(f"{TENANTS_FILE} of the source is a link")
     shutil.copytree(source, target, symlinks=True, dirs_exist_ok=True)
     path = target / TENANTS_FILE
     text = path.read_bytes().decode("utf-8")

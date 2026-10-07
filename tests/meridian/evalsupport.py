@@ -37,6 +37,7 @@ from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
+from runceilingsupport import RunCeiling, require_run_ceiling
 from servicesupport import REGISTRY_DIR, REPO_ROOT, FakeClock, owner_rows
 from stacksupport import (
     CLAIMS,
@@ -92,6 +93,15 @@ LIVE_REPORT_PATH = EVALUATION_DIR / "claims-triage-live.json"
 VARIANT_REPORT_PATH = EVALUATION_DIR / "claims-triage-live-variant.json"
 COMPARISON_PATH = EVALUATION_DIR / "prompt-comparison.md"
 RECORD_COMMAND = "run make eval-record (needs an Azure login)"
+GOLDEN_RECORD_ENV = "MERIDIAN_EVAL_RECORD"
+LIVE_AZURE_ENV = "MERIDIAN_LIVE_AZURE"
+
+
+def golden_run_enabled(environ: Mapping[str, str]) -> bool:
+    """Whether the golden recording's paid tests may start: BOTH its own variable
+    and the live one, as the injection run's opt-in needs both (S071, L3)."""
+    return environ.get(GOLDEN_RECORD_ENV) == "1" and environ.get(LIVE_AZURE_ENV) == "1"
+
 
 RECORDED = AnsweredBy(kind="recorded", label="real")
 LIVE = AnsweredBy(kind="live", label="real")
@@ -175,6 +185,7 @@ def live_recording_gateway(
     inner: ModelProvider | None = None,
     clock: Callable[[], float] = time.monotonic,
     registry_dir: Path = REGISTRY_DIR,
+    ceiling: RunCeiling | None = None,
 ) -> LiveGateway:
     """A gateway in live mode (environment ``local``) over ``db`` whose one
     provider, under the Azure kind, is a ``RecordingProvider``. Without ``inner``
@@ -187,7 +198,16 @@ def live_recording_gateway(
     ``registry_dir`` is the registry the gateway loads: the committed one by
     default, and for a paid run a copy whose tenants' monthly budgets are the
     run's ceiling (``runceilingsupport.registry_with_ceilings``), which the
-    gateway then enforces."""
+    gateway then enforces.
+
+    With the real provider (no ``inner``) the gateway REFUSES, before it reads an
+    environment variable or builds anything, unless ``registry_dir`` is not the
+    committed registry and every tenant ``ceiling`` names holds a budget at or
+    below its amount (``runceilingsupport.require_run_ceiling``): a paid run is
+    never one omitted argument away from running without its ceiling. With a fake
+    ``inner`` the default stays as it was."""
+    if inner is None:
+        require_run_ceiling(registry_dir, ceiling)
     endpoints = {} if inner is not None else json.loads(os.environ[ENDPOINTS_ENV])
     tenant_id = None if inner is not None else os.environ[TENANT_ID_ENV]
     settings = GatewaySettings(
@@ -561,13 +581,15 @@ def record_run(
     pace: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
     registry_dir: Path = REGISTRY_DIR,
+    ceiling: RunCeiling | None = None,
 ) -> RecordedRun:
     """Run the evaluation through a live-mode gateway that records its answers,
     pacing in real seconds (a test brings a fake ``inner`` and a ``clock`` that
     ``pace`` moves). ``registry_dir`` is the registry that gateway loads (see
-    ``live_recording_gateway``)."""
+    ``live_recording_gateway``), and ``ceiling`` the ceiling a real provider
+    requires there."""
     gateway = live_recording_gateway(
-        db, inner=inner, clock=clock, registry_dir=registry_dir
+        db, inner=inner, clock=clock, registry_dir=registry_dir, ceiling=ceiling
     )
     try:
         stack = build_stack(db, runtime_http=gateway.http)

@@ -28,7 +28,6 @@ answers as they were given, as the golden one does, because a replay needs them.
 """
 
 import json
-import os
 import tempfile
 import time
 from collections import defaultdict
@@ -62,12 +61,18 @@ from injectionsupport import (
     stored_bodies,
 )
 from runceilingsupport import (
+    INJECTION_RUN_CEILING,
     INJECTION_RUN_CEILING_EUR,
     INJECTION_RUN_TENANTS,
     registry_with_ceilings,
 )
 from servicesupport import REGISTRY_DIR, owner_rows
 from stacksupport import CLAIMS, EXPECTED, MANIFEST, build_stack
+from writehygienesupport import (
+    refuse_identifier_shapes,
+    refuse_unsafe_recording,
+    write_all_or_none,
+)
 
 from meridian.platform.evaluation.report import Report, load_report
 from meridian.platform.gateway.app import (
@@ -81,7 +86,7 @@ from meridian.platform.gateway.app import (
 from meridian.platform.gateway.providers.base import ModelProvider
 from meridian.platform.gateway.providers.recorded import (
     Recording,
-    write_recording,
+    dump_recording,
 )
 from meridian.platform.gateway.refusals import TENANT_BUDGET_USED_UP
 from meridian.platform.registry import Registry
@@ -370,7 +375,11 @@ def record_injection_run(
     asked = asked_cases(None, baseline_path) if cases is None else tuple(cases)
     with _run_registry(registry_dir) as directory:
         gateway = live_recording_gateway(
-            db, inner=inner, clock=clock, registry_dir=directory
+            db,
+            inner=inner,
+            clock=clock,
+            registry_dir=directory,
+            ceiling=INJECTION_RUN_CEILING,
         )
         try:
             mark = ObedientModel()
@@ -683,19 +692,6 @@ def check_no_case_text(text: str, cases: Iterable[InjectionCase]) -> None:
         )
 
 
-def _write_text(path: Path, text: str) -> None:
-    descriptor, temporary = tempfile.mkstemp(
-        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
-            stream.write(text)
-        os.replace(temporary, path)
-    except BaseException:
-        Path(temporary).unlink(missing_ok=True)
-        raise
-
-
 def write_injection_run(
     run: InjectionRun,
     directory: Path = EVALUATION_DIR,
@@ -707,9 +703,11 @@ def write_injection_run(
     (the paid run: ``data/evaluation``; a test: ``tmp_path``), and return their
     paths. An incomplete run writes nothing (``IncompleteRun`` says which cases
     and why), and neither does a report or summary that would hold a sentence a
-    case adds: both are checked before any file is written. ``all_cases`` is
-    every case of the set (default the committed file): the scan covers the
-    cases that were not asked as well."""
+    case adds, nor a file that holds a shape only a leak puts there or an entry
+    over the size cap (``UnsafeFile``): all are checked before any file is
+    written, and the three are put in place together or not at all
+    (``write_all_or_none``). ``all_cases`` is every case of the set (default the
+    committed file): the scan covers the cases that were not asked as well."""
     problems = injection_problems(run)
     if problems:
         raise IncompleteRun(f"nothing was written: {'; '.join(problems)}")
@@ -720,13 +718,20 @@ def write_injection_run(
     scanned = load_cases(INJECTION_CASES) if all_cases is None else all_cases
     check_no_case_text(report_text, scanned)
     check_no_case_text(summary_text, scanned)
-    recording_path = directory / "recordings" / RECORDING_PATH.name
-    report_path = directory / LIVE_REPORT_PATH.name
-    summary_path = directory / LIVE_SUMMARY_PATH.name
-    recording_path.parent.mkdir(parents=True, exist_ok=True)
-    write_recording(run.recording, recording_path)
-    _write_text(report_path, report_text)
-    _write_text(summary_path, summary_text)
+    recording_text = dump_recording(run.recording)
+    # A shape only a leak puts in a file, or an entry too large to read in a
+    # diff: refused before any file is written, naming the file and the kind.
+    refuse_unsafe_recording(RECORDING_PATH.name, run.recording, recording_text)
+    refuse_identifier_shapes(LIVE_REPORT_PATH.name, report_text)
+    refuse_identifier_shapes(LIVE_SUMMARY_PATH.name, summary_text)
+    recording_path, report_path, summary_path = write_all_or_none(
+        directory,
+        {
+            f"recordings/{RECORDING_PATH.name}": recording_text,
+            LIVE_REPORT_PATH.name: report_text,
+            LIVE_SUMMARY_PATH.name: summary_text,
+        },
+    )
     return recording_path, report_path, summary_path
 
 
