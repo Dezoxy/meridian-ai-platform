@@ -407,6 +407,9 @@ class ToolClient:
             )
             if self._worker is not None:
                 set_span_attributes(span, {"meridian.worker": self._worker})
+            if step is not None:
+                # Checked against STEP_PATTERN above: the graph's own word.
+                set_span_attributes(span, {"meridian.step": step})
             try:
                 outcome = self._attempt(span, spec, target, arguments, key)
             except ToolUnavailable:

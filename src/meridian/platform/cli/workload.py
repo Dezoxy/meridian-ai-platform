@@ -11,6 +11,7 @@ from meridian.platform.cli.scaffold import (
     plan_workload,
     write_plan,
 )
+from meridian.platform.registry.models import Agent
 
 EXIT_FAILED = 1  # a write that failed: the plan was sound
 EXIT_REFUSED = 2  # a name, a tree or a registry the scaffold will not write into
@@ -32,6 +33,16 @@ BY_HAND = (
 )
 
 app = typer.Typer(no_args_is_help=True, help="Start a new workload.")
+
+
+def _host_line() -> str:
+    """The host the scaffold's graph is written for: the registry's default for an
+    agent's ``host``, read when the command runs and not copied here."""
+    host = Agent.model_fields["host"].default
+    return (
+        f"host: the new agent runs on the {host} host, the registry's default "
+        "for an agent's host, and its graph is written for that host"
+    )
 
 
 def _stop(error: ScaffoldError, code: int) -> NoReturn:
@@ -80,6 +91,7 @@ def new(
         typer.echo(f"changed {path}")
     typer.echo("workload new: done")
     typer.echo(GENERATED)
+    typer.echo(_host_line())
     typer.echo(BY_HAND)
     typer.echo("first run, from the checkout's root:")
     typer.echo("  uv run meridian registry validate")

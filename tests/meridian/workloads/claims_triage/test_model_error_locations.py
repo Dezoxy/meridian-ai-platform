@@ -1,4 +1,4 @@
-"""A guard for ``triaging.invalid_fields`` (S060).
+"""A guard for ``models.invalid_fields`` (S060; moved from ``triaging``, S069).
 
 A log line that lists a validation error's fields is safe only while every
 location in it is a name the model declares. A field typed as a mapping with free
@@ -11,18 +11,22 @@ neither, and this walks them, and what they nest, to say so.
 import typing
 from collections.abc import Mapping
 from enum import Enum
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
+from uuid import UUID
 
 import pytest
 from pydantic import BaseModel, Discriminator, Field
 from pydantic.fields import FieldInfo
 
+from meridian.runtime.models import RunResponse
+from meridian.workloads.claims_triage.briefs import BriefOutput
 from meridian.workloads.claims_triage.models import ClaimFacts, ClaimSubmission
 from meridian.workloads.claims_triage.proposal import TriageProposal
 
 # The models whose ``ValidationError`` reaches ``invalid_fields``: the stored
-# submission, the facts the graph is sent and the proposal the run returns.
-LOGGED_MODELS = (ClaimSubmission, ClaimFacts, TriageProposal)
+# submission, the facts the graph is sent, the proposal the run returns and, since
+# S069, the run's response and the brief's output (the runtime's two answers).
+LOGGED_MODELS = (ClaimSubmission, ClaimFacts, TriageProposal, RunResponse, BriefOutput)
 
 
 def key_is_declared(key: object) -> bool:
@@ -53,7 +57,14 @@ def annotation_problems(annotation: object, where: str, seen: set[type]) -> list
         return []
     if annotation is dict or (isinstance(origin, type) and issubclass(origin, Mapping)):
         args = typing.get_args(annotation)
-        found = [] if args and key_is_declared(args[0]) else [f"{where}: a free key"]
+        # Free keys name a location only when something validates what they hold:
+        # nothing validates ``Any``, so ``dict[str, Any]`` has no error below it.
+        # A key that is not a string can itself fail to validate (a UUID or an
+        # int that does not parse), and its error puts the key in the location.
+        keys_are_safe = bool(args) and (
+            key_is_declared(args[0]) or (args[0] is str and args[1:] == (Any,))
+        )
+        found = [] if keys_are_safe else [f"{where}: a free key"]
         return found + [
             p for a in args[1:] for p in annotation_problems(a, where, seen)
         ]
@@ -111,6 +122,23 @@ class FreeKeysBelow(BaseModel):
     inner: FreeKeys | None
 
 
+class FreeKeysOfModels(BaseModel):
+    pets: dict[str, Cat]
+
+
+class FreeKeysOfAnything(BaseModel):
+    free: dict[str, Any] | None
+    mapping: Mapping[str, Any]
+
+
+class UuidKeysOfAnything(BaseModel):
+    by_id: dict[UUID, Any]
+
+
+class IntKeysOfAnything(BaseModel):
+    by_number: Mapping[int, Any]
+
+
 class TaggedByField(BaseModel):
     pet: Cat | Dog = Field(discriminator="kind")
 
@@ -137,6 +165,19 @@ class DeclaredKeys(BaseModel):
         ),
         pytest.param(FreeKeysBelow, "FreeKeys.labels: a free key", id="a-nested-model"),
         pytest.param(
+            FreeKeysOfModels, "FreeKeysOfModels.pets: a free key", id="models-below"
+        ),
+        pytest.param(
+            UuidKeysOfAnything,
+            "UuidKeysOfAnything.by_id: a free key",
+            id="uuid-keys-over-any",
+        ),
+        pytest.param(
+            IntKeysOfAnything,
+            "IntKeysOfAnything.by_number: a free key",
+            id="int-keys-over-any",
+        ),
+        pytest.param(
             TaggedByField, "TaggedByField.pet: a discriminated union", id="a-field"
         ),
         pytest.param(
@@ -159,3 +200,9 @@ def test_the_guard_finds_a_free_key_or_a_tag_however_it_is_declared(
 
 def test_the_guard_leaves_declared_keys_and_a_plain_union_alone() -> None:
     assert model_problems(DeclaredKeys) == []
+
+
+def test_the_guard_leaves_free_keys_alone_where_nothing_below_them_is_validated() -> (
+    None
+):
+    assert model_problems(FreeKeysOfAnything) == []

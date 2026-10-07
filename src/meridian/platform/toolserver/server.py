@@ -223,21 +223,24 @@ class _CallRunner:
 
     async def _shed(self, call: Call, name: str, meta: Mapping[str, Any]) -> Finished:
         """A call that got no slot in time: ended without running, and audited
-        through the throttle (the row has the tool when it is ours, and no run:
-        the ID in ``_meta`` is not verified here)."""
+        through the throttle (the row has the tool when it is ours; it has the
+        run only when the row's own thread found the ID in ``_meta`` to be a run
+        that exists, and then the call, so the span, names it too)."""
         call.tool = name if name in self.pipeline.entries else None
+        run_id = run_id_of(meta)
         # The run's ID only when it is one, the tool only when it is ours: the
         # rest of the request is the caller's text.
         logger.warning(
             "tool call shed, no free slot within its budget (run %s, tool %s)",
-            run_id_of(meta) or "-",
+            run_id or "-",
             call.tool or "-",
         )
         # The throttle decides here, on the loop, so a flood does not queue a
         # thread for each shed call; only a row that is due is written, in a
         # thread of the default pool (no slot: it is no handler, and the slots
-        # are all held, which is why the call is shed).
-        if (write := self.pipeline.timed_out_row(call)) is not None:
+        # are all held, which is why the call is shed). The run is read there
+        # too, never on the loop.
+        if (write := self.pipeline.timed_out_row(call, run_id)) is not None:
             await anyio.to_thread.run_sync(write)
         return Finished(call, "failed", TIMED_OUT)
 
@@ -303,17 +306,24 @@ def create_tool_app(
         parent = _caller_context(meta)
         token = context.attach(parent) if parent is not None else None
         finished: Finished | None = None
+        no_result = CANCELLED
         try:
             with start_span(tracer, SPAN_NAME) as span:
                 finished = await runner.run(call, params, meta, deadline)
                 set_span_attributes(span, _span_attributes(finished))
                 return _answer(finished)
+        except anyio.get_cancelled_exc_class():
+            raise
+        except BaseException:
+            no_result = "unexpected"
+            raise
         finally:
             # Once for every call that reached here. A call cancelled while it
             # waited for a slot has no ``finished``: its caller gave up before
             # the kit ran it, and it is counted as that (a call cancelled while
             # its thread runs is ended by the thread, which no cancel stops).
-            meters.call_ended(finished or Finished(call, "failed", CANCELLED))
+            # Any other exit with no result is the kit's own failure word.
+            meters.call_ended(finished or Finished(call, "failed", no_result))
             if token is not None:
                 context.detach(token)
 
@@ -390,11 +400,21 @@ def create_tool_app(
         finally:
             try:
                 try:
-                    if tracer_provider is None:  # one this function made is its own
-                        provider.shutdown()
+                    # The counts of refusal floods that no row carries (T-49):
+                    # a database write, so in a thread, not on this loop; it
+                    # never raises an ``Exception``, and a shutdown that is
+                    # cancelled still writes.
+                    with anyio.CancelScope(shield=True):
+                        await anyio.to_thread.run_sync(
+                            partial(pipeline.write_ended, everything=True)
+                        )
                 finally:
-                    if meter_provider is None:
-                        meters_provider.shutdown()
+                    try:
+                        if tracer_provider is None:  # one this function made is its own
+                            provider.shutdown()
+                    finally:
+                        if meter_provider is None:
+                            meters_provider.shutdown()
             finally:
                 if on_close is not None:
                     on_close()

@@ -359,7 +359,7 @@ def test_a_summary_that_fails_at_shutdown_does_not_stop_the_shutdown(
     assert EXCEPTION_TEXT not in caplog.text
 
 
-def test_a_caller_check_refusal_is_not_summarised_and_keeps_its_row_per_window(
+def test_a_caller_check_flood_that_goes_on_keeps_its_row_per_window_no_summary(
     gateway_with: Callable[..., Gateway],
 ) -> None:
     gateway = gateway_with(caller=NOT_ALLOWED_CALLER)
@@ -371,6 +371,7 @@ def test_a_caller_check_refusal_is_not_summarised_and_keeps_its_row_per_window(
         assert gateway.post().status_code == HTTP_FORBIDDEN
 
     # The caller check has a throttle of its own: one row per window, and the
-    # next window's row carries what the first suppressed.
+    # next window's row carries what the first suppressed, so nothing is left
+    # for a summary (a flood that ends is summarised: test_gateway_caller_summary).
     assert gateway.refusals() == [(CALLER_REASON, 0), (CALLER_REASON, 2)]
     assert gateway.summaries() == []

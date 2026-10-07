@@ -288,7 +288,7 @@ def paused_run(dsn: str, run_id: uuid.UUID) -> RunStatus:
 
 def no_database_down(monkeypatch: pytest.MonkeyPatch) -> None:
     """The runtime's writes all succeed, on no database."""
-    monkeypatch.setattr(runs, "start_run", lambda dsn, identity: None)
+    monkeypatch.setattr(runs, "start_run", lambda dsn, identity: identity)
     monkeypatch.setattr(runs, "finish_run", lambda dsn, identity, status, **why: True)
 
 

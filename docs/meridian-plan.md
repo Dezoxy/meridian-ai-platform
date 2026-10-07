@@ -291,7 +291,11 @@ request's body says so:
   chart's appVersion differ, and their tags still arrive as updates.
 - `base images`: `make deploy` on the branch, by that session. No job
   builds the image.
-- `terraform`: `make azure-plan`, and the plan read.
+- `terraform`: `make azure-plan`, and the plan read; for the AWS module
+  `make aws-validate` and `make aws-scan`, which need no account (S036).
+- The Trivy image of `make aws-scan` (`TRIVY_IMAGE` in the `Makefile`, no
+  group of its own): `make aws-scan` on the branch, since CI does not run it
+  and a newer image carries newer checks that can turn it red.
 - `tooling`: the result of `Docs / Architecture PDF`, the one job that
   runs Pandoc and Mermaid. It is not a required check.
 - `agent framework`: never merged on green checks alone. Read the note on
@@ -539,7 +543,7 @@ both readings the same hour ("yes both are right, go on").
 | S066 | Gateway ledger upkeep | A command of the gateway's own, under a role of its own and with an audit row, credits a tenant, closes a reservation a dead process left `reserved` and expires old ledger rows; the budget runbook names it; the rate windows are shared between gateway processes, so two pods in a rolling update do not each allow the full limits (T-45), the store chosen with the owner when the step opens | done | S058, S065 |
 | S067 | Triage rules and screening | The one step of these that changes the triage graph's rules: claims of one policy that are open at the same time count for `frequent_claims` (T-76); the injection screen reads the description as posted, before the claimant's name is replaced; the redaction knows Hungarian forms of names and identifiers; the stored wording is compared with the manifest after ingestion (T-27, T-57); a wording version missing from `wording.EXCLUSION_CLAUSES` fails with a message that names it (moved here from S060, which may not change how the triage routes a claim); golden-set cases on the fraud indicators' boundaries and for an unknown policy number; `make eval` passes, and a change that needs `make eval-record` waits for the owner's yes, since it costs money. Built as (2026-10-06; implemented and tested, none of it run on a cluster): the Claims API screens the description as posted and hands the run one boolean, `posted_text_addresses_the_model`, which the assessor reads as a hit of its own screen (CLM-1053 and CLM-1054 are stopped, 26 of 66 attacks); the redaction finds the Hungarian national phone, tax number, domestic account number and personal identification number on their own and the social security and tax identification numbers after their word, and the claimant's name is replaced with Hungarian endings after a capital letter; a wording pair the table has no count for fails the run with the fixed code `wording-version-unknown` where the rules would read it (the log line names the product and version only when both pass a closed check), not with a message that names it, and a claim that is not valid facts fails with `claim-not-valid` after a log of its fields; the golden set holds 47 claims, seven of them new, from a second random stream, and the model is not asked about them; claims that are still open count for `frequent_claims` by the strict date rule of a decided one, and a withdrawn claim never does (migration 0025, the owner's decision of 2026-10-06); `meridian knowledge verify` compares the stored clauses with the manifest-verified wordings and the ingestion Job runs it after its write (migration 0026). The free replay passed after each landing that could move a recorded answer, and no paid recording was made | done | S060, S061, S064 |
 | S068 | Database upkeep and retention | The owner names the retention periods for `audit.events` and `gateway.usage` first (open since S011; without them the step builds the mechanism and schedules nothing); an insert-only audit table has a way to expire rows; migration 0017's rewrite of a large audit table has a way through that is written down and tested; the static check on migrations says what it cannot see or sees it; `expire_ledger` works in batches; a holder of the upkeep credential cannot stall the gateway with an open transaction; a login that is a member of `claims_sweep` is confined or refused where the database is made; no role creates temporary tables it does not need. Built as (2026-10-07; implemented and tested against PostgreSQL, none of it run on a cluster; no number of days and no schedule is set anywhere): audit rows expire through one function of the owner's that only a session logged in as the upkeep role reaches, `meridian gateway expire-audit` with a dry run that counts, in batches of at most 10,000, each with an audit row, and the rows the upkeep role wrote itself are never removed by it (migrations 0027, 0028); the ledger expires in batches of 100 to 10,000 usage rows on one connection, with a closing call for the counters and credits (0029, 0030); 0017's way through is written down in the migrations' README as needed by no database that exists, a test shows that it fails closed at its first heavy statement and the two ways out are designed, not built; the static check on migrations sees more statements and the README lists what it does not see, each entry pinned by a test; a database default ends a transaction left idle after 60 s (0031), which stops a forgotten transaction and not a deliberate one, so a holder of the upkeep credential can still stall a counter for the statement timeout; a member of `claims_sweep`, or of `gateway_upkeep`, is refused at every `meridian db migrate` after the files are applied, which detects at the next deploy and does not prevent; `pg_temp` is last in the path of every trigger and definer function, with a test over the whole catalog, and the right to make temporary tables stays with PUBLIC (decided, not built). Not built: the periods and a schedule (the owner's, four questions in the section), the briefs' expiry (waits for the owner), a parser for the static check | done (the periods are the owner's and are not set, nothing is scheduled; not built: the briefs' expiry and the removal of PUBLIC's right to make temporary tables, see the Done-when cell and the section) | S066 |
-| S069 | Runtime and gateway edges | Without a change to a prompt or a rule: a validation error in the triage's two answers logs the field; the tool-call limits can differ by agent, or the plan says why not; a failed resumed leg does not leave the first leg's value to be read as the answer; `drafted_by` is right for a completion the filter withheld and the provider billed; the runtime's client of the gateway is bounded per call; a resumed leg that outlived its lease cannot write over the leg that took the run; `service_url_problem` refuses what the HTTP client refuses; a shed tool call's audit row names its run where that can be checked; the refusal flood's count covers the caller check and the throttles; an embedding input is bounded in tokens; the health check watches the certificate the server loaded; the ingestion's data class has a tenant of its own (T-60, the owner's decision when the step opens) | todo | S064, S037 |
+| S069 | Runtime and gateway edges | Without a change to a prompt or a rule: a validation error in the triage's two answers logs the field; the tool-call limits can differ by agent, or the plan says why not; a failed resumed leg does not leave the first leg's value to be read as the answer; `drafted_by` is right for a completion the filter withheld and the provider billed; the runtime's client of the gateway is bounded per call; a resumed leg that outlived its lease cannot write over the leg that took the run; `service_url_problem` refuses what the HTTP client refuses; a shed tool call's audit row names its run where that can be checked; the refusal flood's count covers the caller check and the throttles; an embedding input is bounded in tokens; the health check watches the certificate the server loaded; the ingestion's data class has a tenant of its own (T-60, the owner's decision when the step opens). Cut in two on 2026-10-06 (the design in Part C): a first half with no lane, and a second half on the cluster, the server's certificate and the health check (R11) and the ingestion's tenant (R12, which the owner decides at S020). Built as, first half (2026-10-07; implemented and tested, none of it run on a cluster, no real provider called): the Claims API logs the failed fields of the runtime's answer, of the triage proposal and of the brief's output, and counts a stored proposal as stored; a leg ends its run only over the `updated_at` its own start or claim wrote, with no new column, and a late leg answers the stored status with no output; a resume that carries a value is refused with a 422; the runtime's call to the gateway has a deadline of 30 s as a whole, a timeout per phase, a reply cap of 1 MiB and `Accept-Encoding: identity`; a refused prompt and a withheld completion are told apart on the wire (`X-Meridian-Completion: withheld` and three headers naming the deployment) and the withheld one has its drafter on record; `service_url_problem` also asks the HTTP client; a shed tool call's row names its run where the run's own row can be read; every service writes the summary of a refusal flood's last window through one writer; a module that exits at import is a failed load; the access log's path is unquoted to a fixed point and loses a userinfo part; the scaffold names the host; the tool span names its step. Not built, each as a decision with its reason in the section: limits per agent (R2), an embedding bound in tokens (R10), a ceiling on the rate limits (B13), a breaker shared between processes (B14), one word for the two limits (B18), a holder column and the second host's scaffold | doing: the first half is done (2026-10-07); R11 waits for the cluster lane and R12 for the owner's decision at S020 | S064, S037 |
 | S070 | Claims intake and what the adjuster is told | The owner decides first whether uploads are built or stay out (T-38: the largest item here; if built it is a step of its own, split off when this one opens); a report dated as a recent loss is seen for what it is, or T-66 says why it cannot be; the adjuster's page marks a recommendation that rests on the model's answer, so a steered model's `approve` does not read as the rules' | todo | S067 |
 | S071 | Measurements that need a live model | Costs money (about fifty chat calls and some embedding calls; the owner says yes before any, and the amount is stated first): a real model's answers to the injection cases the screen lets through, recorded beside the golden recording; a model's refusal of a structured request seen from a real provider; retrieval measured with a real embedding, in the evaluation and in S038's one failing check; the judge compared with labels a person wrote for a sample; a held-out set for the injection screen, and a decision on what a false alarm may cost; CLM-0034's `unsure` settled by a prompt or recorded as the right answer; retrieval over a graph measured again only if the synthetic data gains something relational to find | todo | S067 |
 | S072 | The cluster outside `meridian`, second round | On kind: the Prometheus and CloudNativePG operators' reach into Secrets and ConfigMaps of every namespace is narrowed or recorded as accepted with its reason; DNS and the collector cannot carry data out unseen (T-84), or the residual is stated; writes to Prometheus and Loki pass a policy, and the three hops behind the collector are encrypted or the plan says why not; egress from `observability` and the admission webhooks' port are bounded; `cnpg-system` and `envoy-gateway-system` have Pod Security labels and a policy; the owner decides whether node-exporter stays off; Tempo mounts no API token | todo | S064, S066 |
@@ -574,7 +578,7 @@ Kubernetes" above).
 
 | ID | Step | Done when | Status | Depends |
 |---|---|---|---|---|
-| S036 | AWS Terraform, applied once | ~~The module passes `terraform validate` and a policy scan; it is never applied~~ Changed by the owner on 2026-10-06 ("add the aws template too and we will test it in a real aws enviroment"). Two halves. Without an account and without cost: the module for what S025 maps (network, cluster, registry, database with pgvector, workload identity to a secret store) in an EU region passes `terraform validate` and a policy scan, and one command each creates and removes it. With the owner, in the owner's AWS account, after the cost of an hour of it is stated and the owner says yes: it is applied once, what came up is recorded, it is removed, and the run's cost is logged. ADR 1 ("design AWS") gets a dated successor or note that says so. Since the owner's decision on managed and self-managed Kubernetes the same day, the apply of this managed cluster is asked at the paid stop of S079 and may be answered no; the first half is unchanged | todo | S025 |
+| S036 | AWS Terraform, applied once | ~~The module passes `terraform validate` and a policy scan; it is never applied~~ Changed by the owner on 2026-10-06 ("add the aws template too and we will test it in a real aws enviroment"). Two halves. Without an account and without cost: the module for what S025 maps (network, cluster, registry, database with pgvector, workload identity to a secret store) in an EU region passes `terraform validate` and a policy scan, and one command each creates and removes it. With the owner, in the owner's AWS account, after the cost of an hour of it is stated and the owner says yes: it is applied once, what came up is recorded, it is removed, and the run's cost is logged. ADR 1 ("design AWS") gets a dated successor or note that says so. Since the owner's decision on managed and self-managed Kubernetes the same day, the apply of this managed cluster is asked at the paid stop of S079 and may be answered no; the first half is unchanged. First half built as (2026-10-07; implemented as code, checked without an account, never applied; nothing ran in AWS): `infra/terraform/aws/` is a module for a VPC of two public subnets with no NAT gateway, an EKS cluster at Kubernetes 1.36 with one managed node group of two `t3.large` and the Pod Identity and EBS CSI add-ons, one ECR repository, an RDS for PostgreSQL 17 instance on `db.t4g.small` whose password RDS keeps in Secrets Manager, one empty secret with a role that one named service account may assume, and a USD 25 monthly budget, in an EU Region (a validated variable, `eu-central-1` by default) with a local state under the owner's home and the provider pinned to one account; `infra/terraform/aws.sh` and five `make aws-*` targets validate, scan, plan, apply a saved plan and remove, and the scan is Trivy's from an image pinned by digest with three accepted findings, each with its reason; the command guard and the settings know the commands (T-100), and ADR 1 has a dated note. Not built in the first half: the `vector` extension (it needs a connection to the database), the Meridian chart and its controllers on the cluster, and the module in CI (S022) | doing: the first half is done (2026-10-07); the second half, one apply in the owner's account, waits for the owner's yes at S079's paid stop and may be answered no | S025 |
 | S078 | GCP Terraform, ~~applied once~~ a scaffold only | As S036, for Google Cloud (the owner, 2026-10-06: "like aws too"). ~~Two halves.~~ Without a project and without cost: the module for what S077 maps (network, cluster, registry, database with pgvector, workload identity to a secret store) in an EU region passes `terraform validate` and a policy scan, and one command each creates and removes it. ~~With the owner, in the owner's Google Cloud project, after the cost of an hour of it is stated and the owner says yes: it is applied once, what came up is recorded, it is removed, and the run's cost is logged.~~ Changed by the owner on 2026-10-06 ("gcp just scafold"): the module is never applied; whether a scaffold carries commands that create and remove it at all, or a README that says how the owner would, is its design's to say. The successor or note to ADR 1 that S036 writes names this cloud too | todo | S077 |
 | S079 | Self-managed Kubernetes: applied once on AWS, a scaffold on Google Cloud | The owner, 2026-10-06 ("we will build it on aws, gcp just scafold"). A cluster whose control plane the owner's account runs itself, on the cloud's virtual machines, beside the managed cluster of S036 and S078. Two halves. Without an account and without cost: a Terraform module for AWS beside S036's, with a small network of its own, that reuses S036's wrapper script, scan and the lessons of its reviews, and brings up the control plane and the workers with an installer the step's design chooses and says why (its threat note first: the cluster's certificates, its join token and its etcd are then the owner's to keep); its twin for Google Cloud; both pass `terraform validate` and a policy scan, and for AWS one command each creates and removes it. ADR 6, ADR 7 and the Azure platform document each gain the comparison of a managed and a self-managed cluster on that cloud: who runs and upgrades the control plane, where etcd and its backup live, how a pod gets a cloud identity, how a load balancer and a volume are made, what an hour costs, and why the platform's default stays managed. With the owner, in the owner's AWS account, after the cost of an hour of it is stated and the owner says yes: the owner applies it once from where no agent session holds credentials, what came up is recorded, it is removed, and the run's cost is logged; whether S036's managed cluster is applied as well is asked then. The Google Cloud twin is never applied | todo | S036, S078 |
 | S037 | Second-framework workload | A small workload in Microsoft Agent Framework on the same platform contract. Built as: a second host behind the Agent Runtime's `Host` protocol, picked for each agent by the registry's `host` field, with a PostgreSQL checkpoint store of its own, and a second workload, `claim-brief`, that calls tools, pauses for an adjuster and is started by the Claims API; implemented, tested, and seen on kind once under replay (ADR 9, the second applied service acceptance) | done | S005, S018 |
@@ -627,18 +631,18 @@ that day; the rest stand as their step recorded them.
 | The chart sets `MERIDIAN_SWEEP_DOCUMENTS_DEADLINE_DAYS` on the sweep's CronJob alone; the Claims API reads the same variable for the day its status page names, so a deployment that changes it has to set it on both, and no manifest test holds them equal | S060 | closed by S062: one value for both workloads, held to the code's range at render, and a test holds the two rendered values equal | S062 |
 | The adjuster's queue looks up a waiting claim's referral in `audit.claim_trail` for each row: the claim's ID reaches an index in both branches of the view, the tenant and the event are filters, so a page costs 2 ms at 5 events a claim and 100 to 330 ms at 200 | S060 | open; measured, nothing changed. Not taken by S065 (not in its "done when"); its PostgreSQL review measured 105 ms at 200,000 audit rows, the same with `seq` in the order | S027 |
 | A claim that is not valid facts fails its run in the graph as `unexpected` with the class alone; the Claims API now logs the fields before the run starts, the graph still does not | S060 | closed by S067: the graph reads the claim through one function that logs the fields' locations and the error's kinds, never a value or the claim, and fails the run with the fixed code `claim-not-valid` (it was `unexpected`). Implemented and tested, not run on a cluster | S067 |
-| Two more `except ValidationError` in `triaging.py` (the proposal a run answers with, the run's answer itself) log no field | S060 | open | S069 |
-| The tool-call limits are the same for every agent | S014 | open; S031 looked and left it: the limits stay per run and per leg, shared by an agent's workers, and neither an agent nor a worker has one of its own | S069 |
+| Two more `except ValidationError` in `triaging.py` (the proposal a run answers with, the run's answer itself) log no field | S060 | closed by S069 (E5): the runtime's answer, the triage proposal and the brief's output each log the failed fields' locations and error types and the exception's class, never a message, an input or an extra field's key, and a guard test reads the five logged models (T-03); implemented and tested, not run on a cluster | S069 |
+| The tool-call limits are the same for every agent | S014 | open; S031 looked and left it: the limits stay per run and per leg, shared by an agent's workers, and neither an agent nor a worker has one of its own | closed by S069 as a decision, not built: one agent runs under the limits (the triage), the second (the claim brief) makes one model call and five tool calls, far under them; a registry field would have to be left out at its default to keep the `tools` fingerprint still; and the lease test bounds the product of the limits and the timeouts for every agent at once | S069 |
 | Pydantic's error for a claim that is not valid facts quotes the claim; only its class name is logged | S014 | closed by S060 for the Claims API (a stored submission, a stored proposal and the facts a run gets are logged as location and error type); the graph's own validation is S067's row below | S060 |
 | A migration that adds columns locks `claims.claims` for its backfill | S015 | closed by S065 (the rule is written in the migrations' README, column in one file and backfill in the next, and a test refuses a new file that adds a column to a table and updates it; no column was added in the step) | S065 |
-| After a failed resumed leg LangGraph keeps the first leg's value | S015 | open; S031 changed nothing here: the triage still ignores the resume value, and a workload that read it would read the first leg's. Measured beside it (ADR 5): a worker invoked from the pause node continues, after a failure, at the node that failed, with the state its first leg checkpointed | S069 |
+| After a failed resumed leg LangGraph keeps the first leg's value | S015 | open; S031 changed nothing here: the triage still ignores the resume value, and a workload that read it would read the first leg's. Measured beside it (ADR 5): a worker invoked from the pause node continues, after a failure, at the node that failed, with the state its first leg checkpointed | closed by S069 (E3): the runtime refuses a resume that carries a value (a 422, `input` must be `{}`), so no value is replayed and neither host is handed one; ADR 9 has a dated note; implemented and tested, not run on a cluster | S069 |
 | Reads of a claim's page are not audited | S016 | open | S021 |
 | The adjuster's queue shows at most 100 claims with no next page | S016 | closed by S060 (a keyset on the queue's own order and index, 100 to a page) | S060 |
 | `make eval-compare` alone reads whatever report `.eval/` holds, which may be stale | S017 | closed by S050 (it refuses a report older than a tracked file it is made from) | S050 |
 | A file in the golden set's directory that the manifest does not list is not noticed | S017 | closed by S050 (refused when the report is built and before `eval run` sends anything) | S050 |
 | Hungarian forms of names and identifiers in the screening | S047 | closed by S067 for the redaction and the name: national phone numbers, tax numbers, domestic account numbers and personal identification numbers are replaced on their own, social security and tax identification numbers after a word of a closed list, each only where a check digit or the numbering plan holds, and the claimant's name with a Hungarian ending after a capital letter; tested without a cluster. Not found (rows below, S069 and S070, and T-73): identity card, passport and licence numbers and vehicle plates, which have no check digit, an account number without separators, and the forms the closed lists lack. The injection screen is not changed: the injection summary shows none of the 9 cases written in Hungarian or German stopped, as S032 measured | S067 |
-| The ingestion's class (`internal`) needs a tenant of its own, not a header (T-60, the owner's decision) | S047 | open | S069 |
-| `drafted_by` on a completion the filter withheld but the provider billed | S047 | open; left by S050, with its reason there | S069 |
+| The ingestion's class (`internal`) needs a tenant of its own, not a header (T-60, the owner's decision) | S047 | open; the second half of S069, not built in the first: the three tenants' limits add up to exactly the deployments' quota (20 requests per 10 s, 20,000 tokens a minute) and one ingestion reserves about 7,700 tokens in a minute, so a tenant of its own must take that share from the others or wait for more quota; the session's recommendation is to decide at S020, when the quota is Azure's real one and not a simulated provider's, and until then the ingestion stays under `claims-triage` and T-60 keeps its residual | S069 |
+| `drafted_by` on a completion the filter withheld but the provider billed | S047 | closed by S069 (E6, E6b): a withheld completion's 400 also carries `X-Meridian-Completion: withheld` and three headers naming the deployment, the refusal header keeps `content-filter`, and the assessment records the drafter for the withheld one only (T-67); implemented and tested against a scripted provider and a mocked transport, not run on a cluster, and no real withheld completion has been seen (a row below) | S069 |
 | Audit rows of one transaction share a time, so the trail cannot order them | S048 | closed by S065 (`audit.events.seq`, stamped by the database, migrations 0017 and 0019; the adjuster's queries break a tie by it) | S065 |
 | `database_failure` without the claim's ID | S048 | closed by S060 (a wrapper of the workload's logs the ID at twelve call sites; the queue has no claim) | S060 |
 | A per-phase httpx timeout | S048 | closed by S060 (3 s to connect, 5 s to write, 3 s for the pool, 60 s to read) | S060 |
@@ -778,21 +782,21 @@ that day; the rest stand as their step recorded them.
 | `make deploy` on a cluster made before S055 runs the migration and seed Jobs and then fails in the upgrade, because the Certificate kind is unknown; a check for the `meridian-services` issuer belongs with its other preconditions. The first upgrade to TLS also replaces plain-HTTP pods with TLS-only ones in one rollout, an outage for that window on a cluster with traffic | S055 | partly closed by S056 (`make deploy` requires the issuer, the three certificate policies and approver-policy before it builds). Open: the first upgrade's outage | S020 |
 | Three of S055's five implementer runs changed source files through shell rewrites and not the Edit tool, so the edit gate and the advisory hooks never saw them; the main session read every changed file and ran lint | S055 | closed by S075: the `implementer` agent is told to change tracked files with Edit or Write and to report a shell rewrite as a deviation (the owner's "Go with your suggestion", read as the sentence and the hook), and `check-shell-edits.sh` names the files a shell command rewrote; the hook prints nothing until the owner sets `bashEditDiffEnabled` in the user settings, which Claude Code 2.1.289 does not read from the project's | S075 |
 | `test_a_server_slower_than_the_timeout_is_unavailable` in `tests/meridian/runtime/test_tool_client.py` limits the wall clock to 5 s (the sixth such limit; S057 changed the other five and left this file to the step that works in it) | S057 | closed by S059 (the stand-in waits until it is cancelled, and the test reads that) | S059 |
-| The gateway's client of the runtime has a timeout per phase (30 s each), not per call, so "a live leg is bounded near 280 s" (four model calls, sixteen tool calls) understates what a slow, trickling gateway can take; a test holds 280 s under the 600 s lease, and no constant bounds a whole model call | S059 | open | S069 |
-| A resumed leg that outlives its lease while another resume takes the run over can still write its end over the other leg's `Running` (the guard is the status alone, not who holds the run); it needs a leg hung past 600 s | S059 | open; not taken by S065 (not in its "done when"): the guard needs to know who holds the run, a column on `runtime.runs` and a design of its own | S069 |
+| The gateway's client of the runtime has a timeout per phase (30 s each), not per call, so "a live leg is bounded near 280 s" (four model calls, sixteen tool calls) understates what a slow, trickling gateway can take; a test holds 280 s under the 600 s lease, and no constant bounds a whole model call | S059 | closed in part by S069 (E4, F1): a model call has a deadline of 30 s as a whole, read after every chunk, and the gateway client has a timeout per phase (5 s for the pool, 5 s to connect, 10 s to write, 30 s to read), so a call ends within 55 s before the headers and 60 s after them, and the lease test holds 400 s (four model calls, sixteen tool calls) under the 600 s lease; headers that trickle are bounded by nothing, and that is a row below | S069 |
+| A resumed leg that outlives its lease while another resume takes the run over can still write its end over the other leg's `Running` (the guard is the status alone, not who holds the run); it needs a leg hung past 600 s | S059 | open; not taken by S065 (not in its "done when"): the guard needs to know who holds the run, a column on `runtime.runs` and a design of its own | closed by S069 (E3, F1) without a column: a leg ends its run only over the `updated_at` its own start or claim wrote, so a late leg's write matches nothing and it answers the stored status with no output; the tool servers still bind by status alone, so a late leg's tool calls bind until it ends, and that is a row below (T-10); implemented and tested against PostgreSQL, not run on a cluster | S069 |
 | `httpx2` logs each request's URL at INFO; the services' loggers stay at WARNING and the settings refuse an address with a query or a password, but nothing sets that logger's level as `quiet_sdk_logging` does for the SDK | S059 | closed by S064: `httpx` and `httpx2` are held at WARNING by the log configuration every service and the sweep install | S064 |
 | S059 set a request's query aside before the middleware stack; where a middleware forwards a copy of the scope (the caller's identity check), the server's access log no longer has the query, and where none does (the Claims API) it still has | S059 | closed by S064, and corrected: on the cluster every deployed service's access line kept the query (the certificate wrapper copies the scope first); the line is now rebuilt from fields and no longer depends on where the scope is copied | S064 |
-| `service_url_problem` still accepts some addresses the HTTP client refuses (an address of four numbers over 255, a host with a combining mark or an emoji); the second net, the client's own refusal at start, catches them | S059 | open | S069 |
+| `service_url_problem` still accepts some addresses the HTTP client refuses (an address of four numbers over 255, a host with a combining mark or an emoji); the second net, the client's own refusal at start, catches them | S059 | closed by S069 (E1, F1): `service_url_problem` also reads the host with `httpx.URL` and answers its fixed sentence for what the client refuses, an address of IDNA form (`http://xn--/`) included; the client's own refusal at start stays as a second net, with a test of its own; the error's text is never shown; implemented and tested | S069 |
 | `test_after_the_threshold_the_next_call_skips_the_first_candidate` (`tests/meridian/gateway/test_gateway_fallback.py`) failed in a whole run on a machine at a load over 60 and passes alone, and in the whole run on a quiet machine that closed S059; S057 made five timing tests hold by construction and this one was not among them | S059 | open | S074 |
-| A shed call's audit row and span have no run: the run's ID in `_meta` is not verified on that path, so only the server's warning line names it | S059 | open; by design until a tool server can check a run without a worker | S069 |
+| A shed call's audit row and span have no run: the run's ID in `_meta` is not verified on that path, so only the server's warning line names it | S059 | closed by S069 (E2): the row's own thread reads the run's row, on a connection of its own and never on the event loop, and the row names the run, tenant, agent and reference when the run exists and the row stands for no other call; the check is of the run's existence, not of the caller's tenant (T-49, T-14); implemented and tested, not run on a cluster | S069 |
 | On macOS `unused_port()` still releases its port before the test connects: a bound socket that does not listen drops a connect there, which then waits out its timeout, so a kept port cannot refuse | S057 | open; an observation: the required check runs on Linux, where the port is kept | S074 |
 | `tests/meridian/guardrails/test_redaction.py` has its own copy of the CPU-time measurement that is now `tests/meridian/cputime.py` | S057 | open | S074 |
 | The advisory hook reports `ubuntu-26.04` as an unknown runner label on every edit of a workflow: the laptop's actionlint is older than the label the runs use | S057 | closed by S075: `.github/actionlint.yaml` lists `ubuntu-26.04` with a comment that says when to remove it, and a test fails on a runner label that neither actionlint nor the file knows | S075 |
 | `test_misses_and_hits_are_counted_exactly_under_threads` in `tests/meridian/gateway/test_recorded.py` takes 33 s of one worker in CI, the third slowest test of the job (read from pull request 79, the first run that printed durations) | S057 | open; an observation with its number: S058 works in the gateway's tests while S057 runs | S074 |
-| The count of a refusal flood's last window is written for the gateway's own refusals only: the caller check's refusals (`common/identity.py`, in every service; their rows carry no purpose either) and the throttles of the tool servers and the runtime still lose it | S058 | open | S069 |
-| The gateway bounds an embedding input in bytes because it has no tokenizer, so it refuses non-Latin inputs the provider would take (Cyrillic past 4,095 characters, CJK past 2,730); a tokenizer that needs no download at start could count closer | S058 | open | S069 |
+| The count of a refusal flood's last window is written for the gateway's own refusals only: the caller check's refusals (`common/identity.py`, in every service; their rows carry no purpose either) and the throttles of the tool servers and the runtime still lose it | S058 | closed by S069 (E2): one writer, `common/refusal_summary.py`, serves the gateway (its caller check has a throttle of its own, summarised under `model.call`), the runtime (two throttles: the caller check and name refusals, and tool refusals) and each tool server; a summary is written with the next request, call or run and at close, at least once; the caller check's rows still carry no purpose (T-49); implemented and tested, not run on a cluster | S069 |
+| The gateway bounds an embedding input in bytes because it has no tokenizer, so it refuses non-Latin inputs the provider would take (Cyrillic past 4,095 characters, CJK past 2,730); a tokenizer that needs no download at start could count closer | S058 | closed by S069 as a decision, not built: a tokenizer in the gateway's image needs an encoding file that the image cannot fetch (it has no egress) or a vendored one, for a bound whose cost today is a refused long non-Latin input, and the byte bound is the safe side | S069 |
 | A reply's output count is held to the wire's cap of 1,024 tokens and not to the request's own `max_output_tokens`, because the replay provider ignores that cap; a model that bills reasoning tokens as completion tokens would be refused by the bound, as a bad response | S058 | open | S030 |
-| The health check reads the certificate file a moment after the server did: uvicorn builds its TLS context before it builds the application, so a renewal that lands between the two reads leaves `/healthz` watching a newer certificate than the one served, and green for the two months that one has left. The window is the time the application takes to import. The security review's way out: one read for both, through uvicorn's `ssl_context_factory` | S056 | open | S069 |
+| The health check reads the certificate file a moment after the server did: uvicorn builds its TLS context before it builds the application, so a renewal that lands between the two reads leaves `/healthz` watching a newer certificate than the one served, and green for the two months that one has left. The window is the time the application takes to import. The security review's way out: one read for both, through uvicorn's `ssl_context_factory` | S056 | open; the second half of S069, on the cluster, not built in the first: a start module that builds the TLS context itself and hands the app the certificate it loaded (the security review's first option; six commands in the chart change, to be seen on kind with a renewal) | S069 |
 | A service that restarts itself near its certificate's end was not seen on the cluster: every certificate lasts 90 days, and the chart has no value for another lifetime. With one (an hour is cert-manager's shortest) a run on kind could watch a renewal, the 503 and the restart | S056 | closed by S062: watched on kind on 2026-10-06 with one-hour certificates: renewed thirty minutes in, 503 ten minutes before the end of the certificate each process had loaded, each container restarted once by the kubelet | S062 |
 | The pods of one deploy hold certificates that end in the same minute, so they turn unhealthy and restart together: about a minute without an answer from a service with one replica (readiness fails after 10 to 15 seconds, liveness after 60). With one replica each that is the shortest total; with more, the pods of one service should not go together, which needs a margin that differs per pod | S056 | open | S020 |
 | `make smoke` makes no request that the issuer must refuse (a Certificate in another namespace, read for its Denied condition and removed; done by hand in S056), so a change in how approver-policy reads a policy shows only at a renewal; its audit line accepts a row of the last two minutes, so a second run inside the gateway's minute passes on the first run's row; and `refused` is any TLS error or reset after the server's certificate verified, not the unknown-CA alert alone | S056 | closed by S062: check 10 asks for a certificate from another namespace on every run and passes only on a denial by the deny policy; the audit line is this run's own row or a skip; a reset is told from the unknown-CA alert, and a connection that ends after the request was sent is a failure | S062 |
@@ -818,13 +822,13 @@ that day; the rest stand as their step recorded them.
 | `tests/meridian/db/test_gateway_upkeep_credit_expire.py` (about 975 lines) and `test_gateway_upkeep_migration.py` (about 840) are over the 800-line ceiling; their shared helpers would have to move first | S066 | open | S074 |
 | The certificate policy admits any `*.meridian.svc` name and any service account's URI for a request in the namespace, so whoever can create a Certificate and a pod there can answer as another service, the rate store included, and capture the gateway's password for it (T-92) | S066 (security review; as it was since S056) | open | S072 |
 | No image is scanned for known vulnerabilities in CI: the Redis image, like the others, is pinned by digest and read by Renovate, and nothing reports what is in it | S066 (infra review) | open | S022 |
-| A tenant's two rate limits are capped in the registry at a billion (S066), which keeps the script's arithmetic exact and binds nothing real; the rate store's memory is bounded by the request limit (about six entries per allowed request and tenant), and no ceiling tied to that memory exists | S066 (security review) | open | S069 |
+| A tenant's two rate limits are capped in the registry at a billion (S066), which keeps the script's arithmetic exact and binds nothing real; the rate store's memory is bounded by the request limit (about six entries per allowed request and tenant), and no ceiling tied to that memory exists | S066 (security review) | closed by S069 as a decision, not built: the registry already refuses tenants' limits that sum above a deployment's own (`check_tenant_limits`), a figure far below what the store's memory holds, for every candidate that states `rate_limits`; on a route of replay deployments alone only the billion applies, and the registry's README now says so | S069 |
 | A rotation of the rate store's password has no overlap: the store and the gateway restart one after the other, and model calls are refused with a 503 for the seconds between (the runbook says so) | S066 | open | S073 |
 | The rate store's own metrics are scraped by nothing (memory, connections, a slow script), and its own output is not in the platform's JSON format, is not redacted by it and is not shipped to Loki: it stays in the pod's output on the node | S066 | open | S072 |
 | The rate store's liveness script compares the certificate's time with the server's start, so a step of the node's clock can delay or repeat a restart (measured over 25 containers: never early) | S066 (infra review) | open | S073 |
 | A cold `make up` depends on the chart hosts answering in time: on 2026-10-06 the Tempo chart's download from GitHub timed out after 296 s and `make up` had to be run again; no chart is cached or mirrored | S066 (third cluster run) | open | S073 |
 | Not seen on a cluster for the rate store: a 503 from the gateway while the store is down, `MeridianRateStoreRefusing` firing, two gateway replicas sharing a window, a store frozen by a script and restarted by its probe, and `make deploy` refusing a Secret older than the ACL | S066 | open | S073 |
-| The circuit breaker and the refusal throttles are per process: two gateway replicas each count failures on their own and may each write a throttled refusal row | S066 (design) | open | S069 |
+| The circuit breaker and the refusal throttles are per process: two gateway replicas each count failures on their own and may each write a throttled refusal row | S066 (design) | closed by S069 as accepted, as ADR 8 records, until a second replica of anything but the gateway exists; no code | S069 |
 | The rate store in Azure is designed only: a managed Redis in the same EU region, its cost and SKU, and whether Valkey replaces Redis 8 (run under its AGPLv3 option, unmodified) are open | S066 | open | S020 |
 | No rule reads the rate store's restarts: a store that restarts in a loop while few calls come (256 held connection slots do it every 70 to 90 seconds) resets every tenant's windows each time and stays under the refusal alert's two conditions | S066 (fourth security pass) | open | S072 |
 | `make smoke` compares the loaded alert rules with the file by group and rule name, not by expression, and `make deploy` does not apply the rules: after a rule's expression changed, the old one stays loaded and smoke passes until `make up` is run (seen on kind, 2026-10-06) | S066 (fourth cluster run) | open | S073 |
@@ -842,16 +846,16 @@ that day; the rest stand as their step recorded them.
 | node-exporter is off on kind, so a node's CPU, memory and disk are not observed; it alone would hold `observability` at Pod Security `privileged` | S063 | open; the owner's to overturn | S072 |
 | Renovate proposes a chart a week after its release and an image at once (the docker datasource gives no dependable release date for quay.io and ghcr.io), so an image's tag can be proposed before the chart that installs it; a note on the pull request says to leave it | S063 (infra review) | closed by S075: one rule switches off Renovate's tag updates for the 17 images a chart installs by default and keeps digest updates, so an image is not proposed before its chart (the collector's two images are outside it until their pin and the chart's appVersion agree); the chart's pull request moves the tags by hand | S075 |
 | A renewal has not been seen for the collector's certificate (90 days), its authority (a year) or the database's three certificates (90 days), and nothing alerts on the database's: cert-manager's series do not cover CloudNativePG's | S063 | open | S073 |
-| Every role of the database may create temporary tables (PUBLIC's right on the database); nothing a role can shadow with one was found | S063 (database review) | closed by S068 as decided: the right stays with PUBLIC, because taking it away is a database-level privilege that the tests' copies of the template do not carry and two tests use the right as their control; the defence is completed instead: the four older trigger functions pin `pg_temp` last in their search path (0031) and a test over the migrated catalog fails for any trigger or definer function of the owner's schemas that does not (T-100). Tested against PostgreSQL, not run on a cluster | S068 |
+| Every role of the database may create temporary tables (PUBLIC's right on the database); nothing a role can shadow with one was found | S063 (database review) | closed by S068 as decided: the right stays with PUBLIC, because taking it away is a database-level privilege that the tests' copies of the template do not carry and two tests use the right as their control; the defence is completed instead: the four older trigger functions pin `pg_temp` last in their search path (0031) and a test over the migrated catalog fails for any trigger or definer function of the owner's schemas that does not (T-101). Tested against PostgreSQL, not run on a cluster | S068 |
 | `infra/kind/smoke.sh` is near 2,900 lines; a new check would be better as a file of its own, which needs the script split first. Tempo's pod mounts an API token it does not use | S063 | open | S074 |
 | No rule and no dashboard panel reads the values of S064's series: a jump in an assessment reason (`special-data`, `injection-suspected`, `filtered`), triages that fail by reason, a sweep finding that stays above zero, the tool servers' refusals, a runtime that cannot reach the gateway; and no rule reads a log line (kind's Loki runs no ruler) | S064 | open; thresholds need a measurement | S027 |
 | The log agent's own counters (its exporter's failures, the memory limiter's refusals) are scraped by nothing; a DaemonSet that does not exist leaves no series, so only smoke says the agent is gone; the kubelet's rotation can outrun the agent, and one flooding pod may stall the others' lines (not measured). The agent mounts the node's pod-log directory, so `logging` cannot be `restricted` and a compromised agent reads every pod's output on its node | S064 (infra review) | open; the second half is a stated residual | S072 |
 | Not seen on a cluster after S064: any of the four telemetry alerts firing, a renewal of the telemetry authority with the log agent and the sweep as its readers, a line with an `exception` field, a run counted `not-saved` or `not-started`, a triage counted `failed`, a tool call counted `cancelled` | S064 | open; tests hold each | S073 |
 | `platform/common/telemetry.py` loads the web framework, so the sweep imports its meters late to stay a job with no web stack; `runtime/app.py` and `claims_triage/triaging.py` stand at 799 lines and `test_toolserver_meters.py` at 832 | S064 | open | S074 |
-| A log line's `exception` field holds frames and class names and no message, so an operator does not read what the exception said; its source lines are redacted by pattern only; a username in an absolute-form request target and an address encoded twice stay in the path | S064 (security review, second review) | open; the first is the owner's to overturn | S069 |
-| Counting, from S064's second review, all low: a leg is counted nowhere if settling it raises something other than a database error; a resume that cannot read its run is not counted; the tool server counts any exit without a result as `cancelled`; a response that fails validation after the proposal is stored counts a failed triage; the line that says metrics are not exported is asserted for two services of four; smoke's line for the sweep's findings can be met by an earlier pass; a record's `stack_info` is dropped without a sign | S064 (second review) | open | S069 |
+| A log line's `exception` field holds frames and class names and no message, so an operator does not read what the exception said; its source lines are redacted by pattern only; a username in an absolute-form request target and an address encoded twice stay in the path | S064 (security review, second review) | closed in part by S069 (E1, E1b, F1): the path is unquoted until it stops changing (three rounds at most, else the word `[encoded]`) and loses a userinfo part from any `//` or `\\`, so an address encoded twice and a user name in an absolute-form target are gone (T-03; its residuals are listed there). Open: an exception's message stays out of the line, as the owner may overturn (an allowlist by exception class is the shape if so); the access log's path is not the route template (a row below) | S069 |
+| Counting, from S064's second review, all low: a leg is counted nowhere if settling it raises something other than a database error; a resume that cannot read its run is not counted; the tool server counts any exit without a result as `cancelled`; a response that fails validation after the proposal is stored counts a failed triage; the line that says metrics are not exported is asserted for two services of four; smoke's line for the sweep's findings can be met by an earlier pass; a record's `stack_info` is dropped without a sign | S064 (second review) | closed in part by S069 (E2, E3, E5): a leg is counted whatever ends its settling (`failed`, `unexpected`), a resume that cannot read its run is counted `not-started` (under its tenant when the registry holds it, with no agent label), a tool server's exit with no result is `unexpected` unless it was a cancellation, and a stored proposal is counted `stored` once. Open: the "not exported" line is asserted for two services of four, `stack_info` is dropped without a sign, and smoke's line for the sweep's findings can be met by an earlier pass (the last needs the cluster, so it is the second half of this step's) | S069 |
 | The registry derives a deployment's residency label from Azure SKU names, its provider kind is a closed list and its region check knows Azure's names: on Bedrock the label would come from the model ID's prefix and the Region called, on Google Cloud from the model and the location together. Designed in the two mapping ADRs, changed nowhere | S025, S077 | open; a second provider kind is the first to need it | S023 |
-| The threat model's rows on the edge's firewall, residency, egress and provider-side retention (T-02, T-12, T-19, T-20, T-43) speak of Azure alone; the mapping ADR says what each would mean on AWS, where the chosen edge has no managed firewall in front | S025 | open; they are corrected when a module is applied, not from documentation | S036 |
+| The threat model's rows on the edge's firewall, residency, egress and provider-side retention (T-02, T-12, T-19, T-20, T-43) speak of Azure alone; the mapping ADR says what each would mean on AWS, where the chosen edge has no managed firewall in front | S025 | open; they are corrected when a module is applied, not from documentation. S036's first half applied nothing, so none is corrected: it added T-100 and gave T-12, T-15, T-36, T-37 and T-42 an AWS clause, each as code and not applied, and the edge's firewall has still no AWS counterpart (the module makes no edge) | S036 |
 | The Ingress container's technology string in the model names Azure's Application Gateway WAF for the Azure design, while the AWS and Google Cloud mappings keep Envoy Gateway behind the cloud's load balancer; the Azure edge is not decided against that | S025 | open | S020 |
 | The threat model's rows on the edge's firewall, the budget, egress and provider-side retention (T-02, T-15, T-19, T-20) speak of Azure alone; the mapping ADR says what each would mean on Google Cloud, where a budget pauses model spend at most, the chosen edge has no managed firewall in front, and flagged prompts may be logged for up to 90 days on the online terms | S077 | open; ~~they are corrected when a module is applied, not from documentation~~ no module is applied on Google Cloud (the owner, 2026-10-06), so S078 closes this row by saying in each threat row that its Google Cloud reading is from documentation alone | S078 |
 | The second host's checkpoint rows carry no release stamp: a release that changes the claim brief's steps, edges or state fields ends every brief that waits (`workflow-changed`, `checkpoint-refused`), and in a rolling update an old pod reads rows a new pod wrote and ends the run for good; two tests pin the shapes (T-98); neither case was seen on a cluster | S037 (security review, third pass) | open | S069 (the nearest: it holds the runtime's edges) |
@@ -860,8 +864,8 @@ that day; the rest stand as their step recorded them.
 | Renovate has no rule for `agent-framework-core`: a bump arrives in the monthly `python` group and can change the graph's signature and strand paused briefs; `python-dotenv` 1.2.4 was locked five days after its release, under the seven-day rule; the guard today is `test_brief_stored_shapes.py` | S037 (security review) | closed by S075 for the missing rule: the framework's packages (`agent-framework` and `agent-framework-*`) leave the monthly `python` group for an `agent framework` pull request of their own, with a label and a note that names the tests and says it is not merged on green checks alone (Part A). A package locked while it is younger than a week, as `python-dotenv` 1.2.4 was, is what uv's `exclude-newer` would refuse (the row for S074) | S075 |
 | No runbook names a failure of the claim brief that an operator can act on: a brief that waits for ever, a release that strands paused briefs, a migration (0023, 0024) not applied | S037 (service acceptance, SA-20) | open; no step writes a runbook, so the nearest is the game day that exercises them | S028 |
 | The claim brief has no grader, no baseline and no cases (its golden set is empty and its evaluation raises `NO_GRADERS`), so nothing in CI grades a brief or fingerprints its prompt; the tenant `evaluation` does not list the agent | S037 (service acceptance, SA-15) | open; no step grades a workload, so the nearest is the one that measures with a model | S071 |
-| The scaffold writes a LangGraph workload only; the claim brief's host line, state types, workflow, store and routes were written by hand, and the Agent Runtime's docstring (`runtime/__init__.py`) still says it hosts LangGraph graphs | S037 (service acceptance, SA-30) | closed in part by S076: the docstring now names both hosts (ADR 9). Open: the scaffold for the second host, and the command's output does not say which host the agent is on (the default, `langgraph`). No step is for it; S069 is the nearest, because the scaffold has to write what the runtime's second host checks at start (`host_wiring`) and S069 is the step in the runtime's edges | S069 |
-| `ToolClient.call` sets no step attribute on its span, so the design's "the tool span carries the step's name" is not true; the second host's step limit is `step-limit` and LangGraph's is `unexpected`, two words for one limit | S037 (reports of R4a, W1a, R1) | open | S069 |
+| The scaffold writes a LangGraph workload only; the claim brief's host line, state types, workflow, store and routes were written by hand, and the Agent Runtime's docstring (`runtime/__init__.py`) still says it hosts LangGraph graphs | S037 (service acceptance, SA-30) | closed in part by S076: the docstring now names both hosts (ADR 9). Open: the scaffold for the second host, and the command's output does not say which host the agent is on (the default, `langgraph`). No step is for it; S069 is the nearest, because the scaffold has to write what the runtime's second host checks at start (`host_wiring`) and S069 is the step in the runtime's edges | closed in part by S069 (E1), after S076's docstring: one line of the command's output now names the host (read from the registry's default for an agent's host, so a changed default shows). Open: a second template set for the other host, which S069 did not build because one workload uses that host (ADR 9) | S069 |
+| `ToolClient.call` sets no step attribute on its span, so the design's "the tool span carries the step's name" is not true; the second host's step limit is `step-limit` and LangGraph's is `unexpected`, two words for one limit | S037 (reports of R4a, W1a, R1) | closed by S069 (E4): the span carries the step's name under `meridian.step` (on a write tool only, after the step's pattern check; a read tool's span has none), and the two words stay two on purpose, because `step-limit` and `unexpected` are in audit reasons and in a metric label that the alerts' tests pin, and renaming one changes records for no behaviour; implemented and tested | S069 |
 | The three brief routes have no sign-in (T-69, T-94): whoever reaches the Claims API starts, decides and reads a brief | S037 | open | S021 |
 | A migration that is not applied fails one statement of the sweep (0023: the leftover walk; 0024: the abandoned-run list), so the LangGraph cleanup or the triage's run end goes down with it; how the chart orders the migrate Job against the sweep and the pods was not read | S037 (database review) | open | S073 |
 | `test_runtime_hosts.py` (779 lines) and `test_import_contracts.py` (773) stand near the 800-line ceiling; the next tests go in new files | S037 | open | S074 |
@@ -870,13 +874,13 @@ that day; the rest stand as their step recorded them.
 | The scaffold's undo has windows that only a lock would close, and it names more than it touched: a save between a file's own check and its replacement, and a save between the undo's read and its replacement, is lost to the replacement (no lock is built: the person's editor would have to honour it); the "check by hand" list can name a path the command never touched and a temporary that is already gone; an interrupt that lands after the undo returned and before the first line is written leaves no line, and a kill the process cannot catch says nothing; an error the undo raises after an interrupt ends the command as a write error (exit 1), not as the interrupt; `_replace` leaks a descriptor if an interrupt lands inside `os.fdopen`, before it takes the descriptor over | S076 (fifth review; reports of C8, F3, F4, F5) | open; low. No step owns the command-line tool; S074 (the suite and its files, without the cluster) is the nearest that is still open | S074 |
 | The scaffold's smaller ends: header-shaped lines inside one multi-line string of `pyproject.toml` still cost one failed parse each (the review measured 2.3 s for 20,000 of them); `one_line` in `services_edit` compares the parser's lines, so a flow list with a U+2028 inside is refused as not on one line; `line_of` at the end of a text that ends with a newline names the line after the last; `yaml.compose` in `_runtime_agents` has no `RecursionError` catch, which the registry's loader makes unreachable from the command; a path left behind quotes the workload's name, which is the person's own argument | S076 (reports of C8, F3 and F4) | open; low; S074 for the reason in the row above | S074 |
 | `meridian registry schemas`: the write follows a link that is the `schemas` directory itself (`mkdir(exist_ok=True)` succeeds and the writes go through it; only a schema file that is a link is refused); `--check` on a linked file tells the person to run the command, which then refuses with `SchemaPathIsALink`; the write is not all-or-nothing | S076 (reports of C7 and F2) | open; low; S074 for the reason above | S074 |
-| The loaders: `load_trusted_entry_point` catches `Exception`, not `BaseException`, so a `sys.exit()` or an interrupt raised at import by a module under the trusted root reaches the caller with its own message; `_loaded_in` and `_in_trusted_root` read `__file__`, which such a module can set, so they are sanity checks and not a boundary; a directory that calls itself `meridian` can still choose up to ten ID-shaped names and a count for a "known" list, and a class under the trusted root a name of up to 64 identifier characters for a cause (both need a write to the Python path or to the trusted package, T-40) | S076 (security review 2; reports of F1 and F2) | open; low; S069 is the nearest, the step of the runtime's edges, where the graphs' loader is | S069 |
+| The loaders: `load_trusted_entry_point` catches `Exception`, not `BaseException`, so a `sys.exit()` or an interrupt raised at import by a module under the trusted root reaches the caller with its own message; `_loaded_in` and `_in_trusted_root` read `__file__`, which such a module can set, so they are sanity checks and not a boundary; a directory that calls itself `meridian` can still choose up to ten ID-shaped names and a count for a "known" list, and a class under the trusted root a name of up to 64 identifier characters for a cause (both need a write to the Python path or to the trusted package, T-40) | S076 (security review 2; reports of F1 and F2) | closed in part by S069 (E1): a module that exits at import, or while a parent package is located, is a failed load and an interrupt passes through (T-40). Accepted as T-40's residuals, which need a write to the Python path or the trusted package and so a compromise T-36 already names: the `__file__` checks are sanity checks and not a boundary, and the ten ID-shaped names and the 64-character class name a planted module can choose; low | S069 |
 | The claims workload's reports: `Report.workload` is not tied to the golden set's manifest by a validator, and both builders accept a hand-built `Report` workload apart from the manifest's; the golden manifest is read three or four times in one build, and a file that changes between two reads is not noticed | S076 (reports of C6 and F1) | open; low; S074 is the nearest that is still open and costs nothing (S071, which works with the reports, is the paid step) | S074 |
 | The injection import test's walker cannot see what its docstring lists (a non-literal argument of `import_module`, `__import__` or `getattr`, `builtins.__import__`, `sys.modules[...]`, an alias made by unpacking or stored on an object, a name reached by a string through `vars()`, `__dict__` or `setattr`, `global`, `nonlocal`, `eval`, `exec`), and it reports a few names that are not private uses (an alias rebound at module level, a `match` capture, a walrus inside a comprehension); it is a tripwire, not a proof | S076 (report of F2; second review) | open; low | S074 |
 | A merge of `main` into a step's branch was pushed after the cheap gates only and left `test_workload_new_note.py` red (S076, 842b977: S037's `claim-brief` changed a list the test pinned); Part A says the later session runs the gates again and not which, so a contract's gate does not yet say that the directories its change reaches are run after a merge | S076 (C10) | closed by S075: Part A now says that after a merge of `main` the whole suite runs on the merged tree before the branch is pushed, and that a contract's gates name every directory its change reaches | S075 |
 | On 2026-10-06 `make deploy` failed twice, a minute apart, at the ingest Job on a cluster that had been up for hours (the Model Gateway answered 503 to the embedding call: "the model gateway refused the embedding call (model gateway answered 503)"); the session's script then deleted the cluster before anyone had read the audit row's reason or the gateway's log, and a fresh cluster deployed the same commit (`make up` 299 s, `make deploy` 97 s, the Job passed). Two failures a minute apart and a pass on a fresh cluster point at the cluster's state, not at load. Candidates, none shown: the rate store not answering inside its 0.25 s read timeout or 1 s connect timeout, with no retry (`gateway/rate_store.py`; the gateway refuses, by design); the ledger's close failing (`gateway/walk.py`: a failed close answers 503; the database's pod had restarted that evening); and the ingestion not retrying a 503 (`knowledge_mcp/ingest.py` waits out a 429 and ends on any other status). The three logs of the commands are the only evidence left | S075 (the incident) | open; not explained | S073 |
-| The guard's local reader list and what its last review left: a mounted Secret or an `.env` read by `grep`, `awk`, `jq`, `cp`, `docker cp` or a glob is read by no rule (`reader_pre` and the pod's reader list name the plain readers); the pod rule for `env`, `printenv` and `set` tests only the last ` -- `; a fourth level of nested `sh -c`; secret-shaped variable names the `printenv` list does not match (`REDIS_PW`); a heredoc read by quote parity and a list of interpreters, not parsed; a hook file overwritten by a redirect; `-v=8` and `crictl inspect` read from documentation, run against no cluster. The hook's header and the runbook's section list each; S036's contract for the cloud rules edits the guard next, so it is the nearest step | S075 (third security review; F3b's and F4g's reports) | open; listed, not built | S036 |
-| The next rule to the command guard goes into the development base first: the base's copy is level with Meridian's since its pull request 51 (merged 2026-10-06, the guard's rounds two and three), and S036's guard rules for the AWS wrapper are the next ones | S075 | open | S036 |
+| The guard's local reader list and what its last review left: a mounted Secret or an `.env` read by `grep`, `awk`, `jq`, `cp`, `docker cp` or a glob is read by no rule (`reader_pre` and the pod's reader list name the plain readers); the pod rule for `env`, `printenv` and `set` tests only the last ` -- `; a fourth level of nested `sh -c`; secret-shaped variable names the `printenv` list does not match (`REDIS_PW`); a heredoc read by quote parity and a list of interpreters, not parsed; a hook file overwritten by a redirect; `-v=8` and `crictl inspect` read from documentation, run against no cluster. The hook's header and the runbook's section list each; S036's cloud rules edited the guard (2026-10-07) and closed none of these (they read the AWS module's names and add no reader for a mounted Secret), and S079, which reuses the wrapper and brings a second AWS module, edits it next, so it is the nearest step | S075 (third security review; F3b's and F4g's reports) | open; listed, not built; re-homed from S036, whose rules did not touch them | S079 |
+| The next rule to the command guard goes into the development base first: the base's copy is level with Meridian's since its pull request 51 (merged 2026-10-06, the guard's rounds two and three), and S036's guard rules for the AWS wrapper are the next ones, so they are now owed to the base (built here first, 2026-10-07; not yet sent). The neutral ones: the `aws` CLI's deny and ask rules with their read list, the ask for `boto3`, `botocore` and `awscli` and for `-auto-approve`, the deny of `TF_*` and `AWS_ENDPOINT_URL*` assignments before a tool, the readers of a state, a plan, `.tfvars.json`, `~/.aws`, `~/.terraformrc` and `~/.terraform.d`, the writers of `~/.terraformrc`, `~/.gitconfig`, `~/.config/git` and `~/.aws`, and the deny of tracing and start-up variables, with the fixes of the two later rounds (`-cm`, a quoted token, the backtick, the cut-out of `workspace select default`). Meridian's own stay out: whatever names `aws.sh`, a `make aws-*` target, `local.env`, `meridian-aws`, `TRIVY_IMAGE` or `PROMTOOL_IMAGE` | S075 | open; owed to the base before S079 changes the guard | S036 |
 | Not seen on a cluster after S075: `TAKE_CLUSTER=1`, a record left `changing` by a run that failed (the refusal that names it), `make up` on an existing cluster, and `make down` refused for a record at `changing`; tests with stand-in binaries hold each. Seen: the record through a deploy, a deploy refused while another runs, and `make down` refused with the record at `ok` (S075's section) | S075 | open | S073 |
 | Limits of S075's three small checks and two unverified Renovate rules. The split-table check misses rows in block quotes and rows without a closing pipe, and flags a row inside an HTML comment, a four-space-indented row and a lone header-like line; the lane check counts `--` and `n/a` in "Out now" as running, and a session in a fresh worktree has no board; the shell-edit hook is inert until the owner sets `bashEditDiffEnabled` in `~/.claude/settings.json` and may name files that `make` targets regenerate (baselines, Mermaid blocks) once it is on; Renovate has not run the new rules, so whether Docker Hub gives the Envoy chart a push date (else the chart waits indefinitely), whether the `terraform` block's `description` key is accepted and whether the `agent-framework` label is made are unseen | S075 | open | S074 |
 | A claimant can choose a name made of the words an exclusion turns on, and every such word in the description becomes `[name]` before the model reads it (since S047, for any name part of three letters or more); the posted-text boolean covers screened phrases and not this, so it is one more way to the automatic approval of a small claim, which the injection suite already measures as open (QA-09). A bound on how much of a description a name may replace, and what the adjuster is told when it is hit, is a decision of its own (T-26) | S067 (security review) | open | S070 |
@@ -893,6 +897,34 @@ that day; the rest stand as their step recorded them.
 | `meridian knowledge verify` writes its counts into `audit.events.reason`, a column documented as the reason a call was refused, because it is the one free-text column; its audit row has no tenant | S067 (C4v) | open; the owner may prefer a column of its own. S068 decided to build nothing: the data classification now says that the column holds a refusal's reason and, for this command, the counts it made. The console's audit search (S033) will read the column, so that step is where a column of its own would show | S033 |
 | Tests that failed under load in S067's runs and passed alone: `test_a_scripted_model_gives_the_oracle_s_proposals` (a `wording_search` call timed out), `test_the_decisions_trace_fails_too_when_one_of_its_services_has_no_span`, and, in one final run, three that were not read (`test_sweep.py::test_importing_the_sweep_loads_no_web_stack_no_langgraph_and_no_claims_api`, `test_claims_mcp.py::test_eight_threads_sending_one_key_leave_one_row_and_all_get_its_id[add_claim_note]` and `test_evaluation_http.py::test_loading_the_claims_evaluation_brings_in_no_agent_framework`); and a first database run of C4v's with 1,338 fixture errors that nobody explained | S067 | open | S074 |
 | Left by S067's reviews, all low: `redact` is 76 lines with its docstring and `redaction.py` 792, eight under the ceiling, so any growth needs a split (the Hungarian part, in a module of its own); `test_redaction_hungarian.py` is 858 lines and `test_claims_graph.py` about 2,300; five tests load the two name-masked cases each on its own (one helper in `servicesupport` would do); `VOWEL_FORMS` and `ARCHAIC_SOUNDS` are plain dicts; no test names `re._compiler`; `test_assessment.py` asserts the `["CLM-0012", "CLM-0044"]` literal beside a derived check; four docstrings and comments say what was true before: `claimant_name.py` ("one word", where two golden descriptions hold "Leon"), the first lines of `triaging.py` ("the run's facts"), and `evalsupport.py` and `test_evaluation_stack.py` ("the 40 golden claims") | S067 (reviews) | open | S074 |
+| A gateway that sends its response headers a few bytes at a time, each wait under the 30 s read timeout, is bounded by no timeout (httpx has none for a whole request, and the call's deadline is first read once the headers have come), so a leg is not provably under the 600 s lease; the security review's probe, with the deadline at 2 s and the read timeout at 1 s, ran 80.7 s against a server that sent a header every 0.4 s. The gateway is first-party and sends its headers in one write (T-10) | S069 (security and boundary reviews) | open | S069 |
+| A late leg's tool calls still bind by the run's status alone, so a leg that outlived its lease can call tools until it ends; closing it needs the holder of the run at the tool servers, a column on `runtime.runs` with its grants and a migration, which the first half of S069 left out on purpose (design, decision 1; T-10) | S069 (design) | open; the database lane, so S068 is the nearest step that holds it | S068 |
+| The runtime's and the gateway's close writes of the refusal summaries still run on the event loop (the tool servers' do not), a synchronous write at shutdown | S069 (E2, F1, boundary review) | open | S069 |
+| A flood of shed tool calls on a tool server is summarised only with the next served call or at close, because a shed call never reaches the code that writes the summary (T-49) | S069 (E2) | open | S069 |
+| The key of a summary row has two shapes in the one `reason` column under the event `model.call` (`service/word` for the caller check, `tenant-reason` for a refusal); a prefix by throttle would tell them apart | S069 (security review, F1) | open | S069 |
+| A non-2xx answer of the gateway is left unread so that the call can end, which closes the pooled connection, and the next call pays a new mutual-TLS handshake; reading and discarding a few KiB would keep it | S069 (security and python reviews, F1) | open; low | S069 |
+| An unknown top-level key in a request body is echoed in the `loc` of a 422 (`{"jane.doe@example.com": 1}` gave `loc: ["jane.doe@example.com"]`); it goes to the caller only and is not logged; the fix is to drop the entries after `body` for an `extra_forbidden` error | S069 (security review; older than the step) | open; low | S069 |
+| The access log's path is the request's, not the route's template: a name written as a plain path segment is logged. uvicorn's access record holds five positional arguments only; Starlette sets `scope["route"]` after matching, and its `path` is the template, so logging it needs a middleware in each app that reads the matched route after the response and either sets a context variable the formatter reads or writes the app's own access line with uvicorn's silenced (T-03) | S069 (F1, security review) | open | S069 |
+| The runtime's client counts a reply of the gateway that fails validation as `failed` with `error` and logs nothing, so an operator sees a status and no field, where the Claims API now names the field of its own answers (T-03) | S069 (E5, boundary review) | open; low | S069 |
+| A leg's `_Written.raised` cannot tell a write that committed before the connection dropped from one that failed before it committed: if a clean no-match then follows an equal status written by another leg, the leg answers its own output for that other leg's write; it needs a hung leg, a database fault and an identical ending | S069 (boundary review, low) | open; low | S069 |
+| A stored `drafted_by` is a well-formed ID, three modes at most, and not checked against the registry the runtime already loads, so a compromised gateway could make the triage store an ID that names no deployment (it cannot store free text: the prompt version is the runtime's own); and the claimant's response shows a drafter for a withheld completion and none for a refused prompt, a small oracle for which filter fired (T-67) | S069 (boundary review) | open; low | S070 |
+| A `ClaimResponse` that cannot be built after the proposal is stored ends as a 500 with no second count and no second triage; the state is consistent and a retry of `POST /claims` answers 409, but on the documents route (`moves.py`, `add_documents`) the exception escapes the `except HTTPException`, so the documents and the proposal are stored and the caller sees a 500; theoretical, since the response is built from parts already validated | S069 (boundary review, low) | open; low | S070 |
+| S069's tests that stop short: the takeover tests call the real claim from inside leg A's node and end leg B with a direct `finish_run`, so the guard is proven against PostgreSQL and no aged `updated_at` goes through two requests to `/resume`; the four throttle tests, the `SystemExit` test of `run_leg` and the guard's relaxation over `Any` were not red first, because they pin behaviour that already held (F1 mutated nothing to prove they can fail); the guard over the logged models passes a `TypedDict` field of any kind, whose key pydantic puts into an error's location (none of the five logged models has one today: flag `is_typeddict` as a free key), and a `dict[str, Any]` validated from a Python mapping with a key that is not a string logs that key (the wire is JSON, so not reachable from a request); under a load of about 150 `test_the_runtime_does_not_import_the_gateway_package` passed its 60 s bound around `uv run` and failed with nothing wrong (the re-read of F2, 2026-10-07) | S069 (python review, F1, E5, the re-read of F2) | open | S074 |
+| S069's small ends, all low: `ModelCallFilteredError.withheld` is read by nothing in `src`; `except (Exception, SystemExit)` stands twice in `common/entry_points.py` where a named tuple would keep them equal; the userinfo cut takes the `y` out of a plain path with an empty segment (`/files/x//y@z` gives `//z`, logs only); `ResumeRequest.input` is a required field that must be `{}`; a `GeneratorExit` from a coroutine closed by the garbage collector is counted `unexpected`, where `cancelled` is arguable; the sweep's import tests deny named prefixes only, so a web stack arriving through `uvicorn`, `mcp` or `anyio` alone would pass; `test_tool_client.py` is 1,091 lines, `test_runtime_app.py` 3,143 and `test_tool_server.py` 2,433, and `test_claims_meters.py` about 790; the helpers `State`, `Clock`, `make_client`, `summaries` and `summary_write_fails` are copied across the new test files, and `make_client` of `test_runtime_leg_counts.py` hard-codes `raise_server_exceptions=False`; the comment in `workers.py` that the graph module must not pull in the web framework is false as written, since `claims_triage.models` already loads `fastapi`, `starlette` and `psycopg` through `common.http` and `runtime.models`, before F2 as after it; repeated `Content-Encoding: identity` lines and an empty value are refused by the runtime's client (fail closed, no gateway sends either) | S069 (python and boundary reviews, E4, E5) | open | S074 |
+| The knowledge service's embedding client (`knowledge_mcp/embedding_client.py`) posts with a buffered call, so the whole reply of the gateway, 2xx or not, is held in memory before the client reads it, and nothing caps its size (the timeout is per read); the runtime's client got a streamed read with a cap in this step, and the same change is owed here | S073 (its contract K6 stopped on it, 2026-10-07) | open; low: the gateway is a peer behind mutual TLS | S069 |
+| No real withheld completion and no real refusal of a structured request has been seen from a real provider, so `drafted_by` for a withheld completion rests on a mocked transport and a scripted provider, and the evaluation baseline's `model_asked` has not moved (no recorded or scripted case is one); the measurement costs money and the owner says yes first (T-67) | S069 (E6, boundary review) | open; S071's done-when already names the refusal of a structured request, and this adds the withheld completion | S071 |
+| Not seen on a cluster after S069's first half: any of its code. A kind run would show the 400's four headers on a withheld completion, the 422 for a resume that carries a value, one `suppressed` row from each service after a flood and from a tool server after a shed call with its run named, a takeover of a run left `Running` past the lease (`stale-running`) with the late leg's end matching nothing, the access log's path of a request with an encoded address, and the metric `not-started` of a resume that could not read its run | S069 (the step's evidence) | open; the second half of S069 holds the cluster and deploys this code | S069 |
+| What an apply of the AWS module would settle, none of it seen: whether `db.t4g.small` and a PostgreSQL 17 minor are offered in the Region (ADR 6, not verified); whether `CREATE EXTENSION vector` works on the instance; whether the secret RDS manages waits out a recovery window and keeps its name (ADR 6, not verified); whether ECR removes a repository that holds an image without the module's `force_delete` (ADR 6, not verified); whether a budget can be written in EUR (the module uses USD); the CPU-credit charges of burstable nodes (ADR 6, not verified); whether the Free plan withholds EKS, RDS or `t3.large`, and the quotas; the add-on defaults for Kubernetes 1.36; whether the Pod Identity trust conditions, the `eks-cluster-name` one in particular, let the EBS CSI driver and the workload get credentials, and whether the nodes join; whether an Identity Center principal is accepted as the access entry; how `allowed_account_ids` fed from a sensitive variable and the lookups of managed policies by name behave at plan; the real times of an apply and a removal; and what the whole costs against the sketch (about USD 0.35 an hour from ADR 6's prices, not from a bill). The module's README holds the list as its checklist | S036 (reports of T1, T2b and T2d; the infrastructure review) | open; only an apply settles them, and the apply is asked at S079's paid stop | S079 |
+| `aws.sh` never ran against a real `aws` CLI or a real Terraform with credentials, and its tests use stand-in programs: what a real plan prints for a sensitive variable (`(sensitive value)` is the documentation's word), whether the redaction meets a shape it does not know (a VPC, subnet or instance identifier, an IPv6 address, a host written with dashes, a `db-` identifier, the cluster's CA, the sign-in's start URL are not covered, and a four-part version number is hidden as an address), the plan file's real mode, `stat -f` and bash 3.2 on macOS, and a differently cased variable file on a case-insensitive file system; the last words of the removal's prompt show only after the answer is typed, because the filter holds a partial line and `sed -u` is GNU-only | S036 (reports of T2, T2c and T2d; the second and third reviews) | open | S079 |
+| What `aws.sh` does not close, each stated in the module's README and none built: `terraform`, `aws`, `git` and `sha256sum` come from the caller's `PATH`; `~/.terraformrc` (a credentials helper, `dev_overrides`), `~/.terraform.d`, a `credential_process` or sign-in helper in the AWS configuration, a shell start-up variable, an exported function and `LD_PRELOAD`; a clean filter in the repository's own `.git/config` runs during the status call; a changed `HOME` in the same checkout plans against an empty state without a stop (a count of the state's resources logged by `plan` is not built); a link at the plan's or the record's path is followed; a stray `terraform.tfstate` in the module's directory is not refused; a 777 parent directory of the local file is accepted; inherited file descriptors stay open | S036 (reviews 2 and 3; T2e) | open; listed, not built | S079 |
+| Small ends of the AWS script and module, all low: a "no" at the removal's question is reported as a failed removal; the empty-state sentence prints the state's path under home; `make aws-scan` without Docker prints the shell's error and no sentence; a sentence of `aws.sh`'s header is broken across two lines; `identity.tf`'s comments still say each role trusts one service account, which the README says is not observed until an apply; the comment above the EBS CSI add-on says more of a removal order than the module holds | S036 (reports of T2b, T2c and T2d) | open; low | S079 |
+| What the AWS module leaves to production, each named beside its test value in its README and none built: private subnets behind a NAT gateway, deletion protection and a final snapshot, retained backups, a second zone, customer-managed keys, control-plane logging, flow logs and RDS IAM authentication (the scan's nine MEDIUM and three LOW findings), a separate role for the VPC CNI, a launch template that pins the node metadata service, an ECR lifecycle policy, `rds.force_ssl` pinned in a parameter group, a network-level limit on which pods reach the database (its security group admits the whole cluster), lock hashes for `linux_arm64` and `windows_amd64`, a remote state bucket with locking, and a role per team in place of one cluster administrator. S079 reuses the module's script, scan and the lessons of its reviews, so it is the step that decides which of these its own module takes | S036 (reviews; README) | open; not built, by design | S079 |
+| The Meridian chart on the AWS cluster is not built: the controllers it needs (an edge, cert-manager), the eleven database roles and Secrets that CloudNativePG makes on kind and nothing makes on RDS, the chart's `automountServiceAccountToken: false` against the token volume Pod Identity injects, and a service that reads Secrets Manager (none does); a removal also gains an order once anything is installed (Kubernetes objects, then the cluster, then the network). The module is infrastructure only on purpose, and whether it is applied at all is asked at S079's stop | S036 (design; README) | open; no step runs the platform on a managed AWS cluster | S079 |
+| Where the AWS apply is run is the owner's choice and nothing checks it: a machine or an operating-system user where no session runs and no credential is readable by one (no `~/.aws` a session can read), with a sign-in of about an hour that is removed afterwards (`aws sso logout`); on a machine where a session runs and credentials exist, neither the script nor the guard stops a session that means to apply or remove (T-100). The cost, from fresh prices, and this are said to the owner before the yes | S036 (security reviews) | open; the owner's to choose | S079 |
+| The AWS rules of the command guard read text and list what they do not see, once in the secret-rotation runbook and once in the module's README: the two generic rules for the removal verb read the whole command, so a commit message or pull request body that names it is denied for `terraform` and `tofu` (write it to a file); the second tool's bare `state rm`, `import` and `force-unlock` are not asked; `gh … -b`, `-t` and `--subject` are not blanked as `--body` is; a working directory that reaches the module only through `..` or a link is not seen; wrappers before `aws` (`timeout`, `nice`, `watch`, `env -i`, `xargs`, `find -exec`, a brace group, a path prefix), the `hashicorp/terraform` image, `terragrunt` and `state replace-provider`; readers after a `cd` into a credentials directory or through `find`, a redirect or a glob; `git config --global` with a key that runs a program and `git add -f` of the local file; `printenv` of a credential; and S075's asks that stay asks (`sts get-session-token`, `assume-role`, `ecr get-login-password`, `eks get-token`, `configure export-credentials`), with `kms schedule-key-deletion` and `organizations close-account` asking and not denied. A try at emptying a search's quoted pattern, to spare a session's false alarms, was taken out because it hid a command (a quoted word is read as a use of what it names: search with the Grep tool) | S036 (T3b, T3d; the reviews of T3 and T3b) | open; listed, not built | S079 |
+| What the guard and the settings of S036 rest on was not verified in a live session: whether the harness's working directory follows a `cd` of an earlier call, whether an `ask` in the settings beats an `allow` (`Bash(terraform -chdir=*aws* plan*)` against `Bash(terraform -chdir=* plan*)`), whether the settings' `./` denies match a file reached by an absolute path from another checkout, and whether the bare `Grep` and `Glob` tools are held by the `Read` denies; Codex reads no settings file, so it has the hook's rules alone | S036 (reviews of T3 and T3b) | open; each needs a probe in a live session | S079 |
+| Nothing in CI runs `make aws-validate`, `make aws-scan` or a plan, and no pipeline identity exists for AWS: a bump of the provider or of the Trivy pin, or a change to the module, is checked by whoever merges it, by hand (Part A says so); S022 owns Terraform and the scan in the pipeline, for Azure first | S036 (README; the infrastructure review) | open | S022 |
+| What a Google Cloud scaffold should copy from S036 and what it should avoid. Copy: the provider's own pin of the account or project beside the script's (`allowed_account_ids` is the one pin that holds for a hand-typed command: find the counterpart in the provider's documentation); a local file that is read and never run, owner's and mode 600, with a name the guard's reader rule covers; an environment the script chose; a saved plan bound to its commit, its age and its hash; sensitive variables for an address and an e-mail; closed lists of instance types as a cost ceiling; managed policies and roles read by name, since two AWS pages disagreed on one ARN's path; trust conditions on the workload identity's tokens; a state outside the checkout, a default-workspace check and a removal that refuses over an empty state; a scan ignore file whose entries are one check ID with a reason above, held by tests (an inline `trivy:ignore` or `tfsec:ignore` and a YAML configuration refused); the scan offline from an image pinned by digest; a test that holds the script's exports to the module's variables; and a redaction written for Google Cloud's identifiers before a plan is read. Avoid: sourcing the local file; a variable that is not marked sensitive; `cidrhost` on an IPv6 range; a README sentence that says a control holds before a test has tried to break it (the second review found seven, the third one more); and a test parameter built from the clock | S036 (all six reviews) | open; for the scaffold's design | S078 |
 | Not seen on a cluster after S068: the migrate Job applying 0027 to 0031 (and refusing, by a file's guard, a missing role, or by the check after the files, a membership of `claims_sweep` or of `gateway_upkeep`), the upkeep Job's refusals and a dry run of `expire-audit` through the Job (a date only passes its word check), the database default of 60 s on the cluster's database (`ALTER DATABASE` needs the owner to own it; read in the kind values, not checked), a connected session picking up an altered function's path, and dead index entries slowing a long run until vacuum | S068 | open; tests hold each against PostgreSQL | S073 |
 | The upkeep Job's deadline of 120 s bounds one run to a number of rows that nobody measured on a disk: at the rate F2 measured (8 to 12 ms for a batch of 10,000 usage rows; one machine, data in memory, not a cold disk) it is about a hundred million, and U4's figure of about twelve million was the rate before the index changed; a larger backlog is several runs or a terminal, and a Job that is stopped prints nothing of what it removed | S068 (U4) | open | S073 |
 | `infra/kind/upkeep.sh` and the Makefile: the comment above `READ_BEFORE_RERUN` speaks only of credits (a failed `expire` or `expire-audit` may have removed batches); the `gateway-upkeep` help line and its test say four subcommands where there are five; a `helm get` that times out reads as "the release is not installed" | S068 (U3b, F2) | open; low; S073's contracts edit those files next | S073 |
@@ -904,6 +936,7 @@ that day; the rest stand as their step recorded them.
 | The audit table's trigger can still be switched off by the owner, a superuser or a managed database's administrator, and nothing records it (T-25); a check that the owner role has no members and that the upkeep role owns no object is not built (on a managed database the administrator is a member of the owner role by necessity); what the Azure administrator may do (`session_replication_role`, creating and granting roles) is read, not assumed, and `pgaudit` on the managed database is the enterprise-grade option | S068 (security review) | open | S020 |
 | Every figure of S068's expiry was measured on one machine with the data in memory: the builds of 0027 and 0029 (each blocks writers of its table while it runs), a batch of 10,000 rows, the closing call (measured with no counters planted), the cost of an insert into the new indexes (argued, not timed), the write-ahead log of a batch (estimated, not measured) and a dry run's count over tens of millions of rows | S068 (reviews, F2) | open; the first database that is not in memory is the Azure one | S020 |
 | Rows the upkeep role wrote (every `audit.expire` and `ledger.expired` row, a credit's and a close's) are never removed by the audit expiry, so they stay for ever: a few rows for each operator action, with slugs and tenant IDs and no personal data; a period for them needs a function of their own and the owner's answer | S068 (F1) | open | S020 |
+| Migration 0031 sets a default on the database, which only the database's owner may do: on kind the migrations' role is that owner; on a managed server where it owns the schemas and not the database the file fails and the migrate Job with it (not tried on Azure). A restore without the database's own settings, or a copy made from a template, loses the default while the ledger of migrations still says 0031 is applied, and nothing looks for that drift. The upkeep command's one connection uses psycopg's server-side prepared statements from the sixth call, which a pooler in transaction mode would break (none is used) | S068 (the database re-read of U5, U5b and F2) | open; low | S020 |
 
 ## Part C — Step details
 
@@ -12273,6 +12306,813 @@ backlog (S070); nothing else changed.
   verify audit row's use of `reason`, and the flag's place before the clause
   screen. The reversal of S053's undecided half is the owner's (18:02 UTC).
 
+### S069 — Runtime and gateway edges
+**Status:** doing · **Started:** 2026-10-06 · **Finished:** —
+**Goal:** the edges of the Agent Runtime, the Model Gateway and the tool
+servers lose what S059, S058, S064 and S067's reviews left with this step,
+without a change to a prompt or a rule: a late leg writes nothing over the leg
+that took the run, a resume delivers no value, the runtime's call to the
+gateway is bounded per call, a withheld completion has its drafter on record,
+and every service writes the summary of a refusal flood. The step is cut in
+two. The first half is this pull request and holds no lane (no migration, no
+cluster, no fingerprint of the evaluation). The second half needs the cluster
+and is not done here: R11, the server's certificate that the health check
+reads once (the cluster lane), and R12, the ingestion's own tenant (T-60),
+which the owner decides at S020. The row's status says so, as S066's did
+for its second half. What was built is implemented and tested; none of it has
+run on a cluster and no real provider was called. What was not built is named
+as such below.
+
+**Decisions** (the main session's, from `design.md`, unless marked; the owner
+may overturn any). The item numbers R1 to R12 and B13 to B19 are those of the
+read-only map that came before the design.
+
+- **R6, a leg that outlived its lease: no new column.** The leg remembers
+  the `updated_at` that its own start or claim wrote, and its end
+  (`finish_run`, `pause_after_failed_resume`) matches on the status and on
+  that value, as the Claims API's own write does with `state_changed_at`. A
+  late leg's write matches nothing and it answers the stored status.
+  Rejected: a holder column (a migration, two column grants and the database
+  lane, for the same guarantee). It rests on `updated_at` being written only
+  by status writes, and a test reads every SQL string under `src/meridian`
+  for it. Residual, not built: the tool servers' binding reads the status
+  alone, so a late leg's tool calls bind until it ends.
+- **R3, the stale resume value: the protocol delivers none.** Both workloads
+  send `{}` and read the recorded decision through a tool (T-31). The
+  runtime's `ResumeRequest` refuses a non-empty `input` with a 422 of fixed
+  text, so no workload can come to depend on a value that LangGraph replays
+  from a failed leg (the map measured it: the first resume's value is read
+  again). Rejected: clearing LangGraph's pending writes (reaching into a
+  library's checkpoint) and leaving it (a trap for the next workload). A
+  test that pinned "verbatim whatever its keys" changed on purpose. ADR 9
+  has a dated note, not an edit.
+- **R5, the runtime's client of the gateway is bounded per call.** A
+  constant for a whole model call, enforced by a streamed read with a clock
+  check after every chunk, and the lease test multiplies it. Rejected: a
+  thread with a join timeout (a thread cannot be cancelled, so the call would
+  go on spending). The Claims API's `runtime_timeout` is out of scope; its
+  row says per phase on purpose.
+- **R2, limits per agent: not built.** One agent runs under the limits
+  today; the second, the claim brief, makes one model call and five tool
+  calls, far under them. A registry field would have to be left out at its
+  default to keep the `tools` fingerprint still, and the lease test bounds
+  the product of the limits and the timeouts for every agent at once.
+- **R1 and B16 part 4, the Claims API's edge, after S067 merged.**
+  `invalid_fields` moved beside the models so that both answers can log a
+  field, a body that is not JSON and one that does not validate are told
+  apart, and a response that fails after the proposal is stored is not
+  counted as a failed triage.
+- **R4, `drafted_by` for a withheld completion, after S067 merged.** The
+  gateway tells a refused prompt from a withheld completion on the wire, the
+  runtime's error carries what the gateway said of the deployment, and the
+  assessment records a drafter for the billed one only. No recorded request
+  is filtered, so the replay stays still. The first wire gave the withheld
+  completion a second value of the refusal header (E6); its limit was that a
+  runtime built before it would read the new value as a plain 400, and E6b
+  replaced it: the refusal header keeps `content-filter` on every filtered
+  answer, and a withheld completion also carries `X-Meridian-Completion:
+  withheld` and three provenance headers. Where the two reports differ, the
+  second stands.
+- **R9, R8 and B16 part 3, the refusal audit, as one contract.** The
+  gateway's summary writer became the shared one; the runtime and the tool
+  servers call it at their next request or call and at close, never on a
+  tool server's event loop. The summary row's `reason` holds the key cut to
+  the column's 128 characters. A shed tool call's row names its run after a
+  check in the row's own thread that the run exists. The design said "bound
+  to the caller's tenant"; the contract dropped the tenant check, because the
+  caller is a service with no tenant at that point, and both reviews called
+  the design loose, so the code checks existence and this record says so.
+  The tool server counts an exit with no result as what it was, not always
+  `cancelled`. Choices of the contract: the runtime has two throttles (one
+  for `run.refused`, one for `tool.call`), because one throttle cannot tell
+  two events apart from a key, and the tool servers' close write runs in a
+  shielded thread because `on_close` itself runs on the loop.
+- **R7, the settings check asks the HTTP client.** `service_url_problem`
+  also parses with `httpx.URL` and answers its fixed sentence; the error's
+  own text quotes the address and is never shown. Rejected: hand-written IPv4
+  and IDNA rules (the map found five forms the hand rules miss, and the list
+  is open-ended). The security review found that `httpx.URL` raises for
+  `http://xn--/` only when its host is read, so F1 reads `.host` and catches
+  `UnicodeError` too.
+- **R10, an embedding input bounded in tokens: not built.** A tokenizer in
+  the gateway's image needs an encoding file that the image cannot fetch (it
+  has no egress) or a vendored one, for a bound whose cost today is a
+  refused long non-Latin input (Cyrillic past 4,095 characters, CJK past
+  2,730, the two measured thresholds); the byte bound is the safe side.
+  **B13, the rate limit capped at a billion, is closed the same way**: the
+  registry already refuses tenants' limits that sum above a deployment's
+  (`check_tenant_limits`), far below what the store's memory holds. The
+  design asked for one sentence in the registry's README and no contract
+  wrote it; this record's own change added it, and it says that the check
+  binds only for candidates that state `rate_limits`, so a route of replay
+  deployments alone has the billion as its only ceiling (a decision of the
+  documents contract, which the owner may reverse).
+- **B14, the breaker and the throttles are per process: accepted, as ADR 8
+  records**, until a second replica of anything but the gateway exists.
+- **B15, the path field.** The access line's path is unquoted until it stops
+  changing (three rounds at most, else the fixed word `[encoded]`) and loses a
+  userinfo part; the exception's message stays out of every line (T-03 is
+  the reason: a message can quote claim text). The owner may overturn the
+  second; an allowlist by exception class is the shape if so.
+- **B16 parts 1 and 2 with R6's contract.** A leg is counted whatever ends
+  its settling (`failed`, `unexpected`, no new label value), and a resume
+  that cannot read its run is counted `not-started`, under its tenant when
+  the registry holds it and with no agent label. Parts 5 to 7 (two more
+  services' "not exported" tests, `stack_info`, smoke's line for the sweep)
+  were left to the contracts that would touch those files, and none did, so
+  they stay open (the backlog row).
+- **B17.** One line of the scaffold's output names the host that the new
+  agent runs on, read from the registry's default for an agent's host. A
+  second template set for the other host is not built (ADR 9: one workload
+  uses it).
+- **B18.** The tool span gains the step's name under `meridian.step`, on a
+  write tool only and after the step's pattern check; the two failure words
+  stay two (`step-limit` and `unexpected` are in audit reasons and a metric
+  label that the alerts' tests pin, so renaming one changes records for no
+  behaviour).
+- **B19.** The loader also refuses on `SystemExit` raised at import (and in
+  the `find_spec` guard) and lets an interrupt pass. The `__file__` parts
+  stay T-40's residual.
+- **Second half.** R11 by a start module that builds the TLS context itself
+  and hands the app the certificate it loaded (the security review's first
+  option; six commands in the chart change, to be seen on kind with a
+  renewal). R12 is the owner's: the three tenants' limits add up to exactly
+  the deployments' quota (20 requests per 10 s, 20,000 tokens a minute) and
+  one ingestion reserves about 7,700 tokens in a minute; the session's
+  recommendation is to decide at S020, when the quota is Azure's real one,
+  and until then the ingestion stays under `claims-triage` and T-60 keeps its
+  residual.
+- **Choices the contracts made and the step kept.**
+  - E3: a leg with no claim cannot write its end (`ValueError`), because
+    falling back to the status alone would reopen the hole; the resume's
+    empty-value check replaces the old size check, and the body limit
+    (64 KiB) refuses a large body before it is read; a settle error counts
+    as `failed` with `unexpected`, not `not-saved`, since the write's state
+    is unknown.
+  - E4: the deadline is 30.0 s, above the gateway's own 25 s so that an
+    answer the gateway gives in time, its 504 included, is never cut here;
+    only a 2xx body is read, so a refusal's body is not.
+  - E5: `triaging` still offers `invalid_fields` and `DATA_KEY`, re-exported
+    from `models`, so six importing files stay unchanged; the guard of the
+    logged models allows a mapping with free keys only over `Any` (since F2:
+    and only when the key is a string); the lines are WARNING, the brief's
+    included.
+  - E6: the three provenance values are checked against the registry's ID
+    pattern and the three modes, and one failure drops all three.
+  - F1: a per-call bound is the larger of the two paths, not their sum.
+
+**What the reviews changed.** Three reviews read the diff (below); this is
+what each fix contract took from them.
+
+- **F1, seven items from the security and python reviews of E1 to E4.**
+  1. A reply of the gateway is capped at 1 MiB, counted after decoding, and
+  the request asks for `Accept-Encoding: identity` (the security review's
+  probe: a 0.4 MB gzip body became 400 MB and the runtime's resident memory
+  rose by 818 MB). The largest reply in the recording is 421 bytes.
+  2. The gateway client has a timeout per phase (5 s for the pool, 5 s to
+  connect, applied twice over TLS, 10 s to write, 30 s to read), so a call
+  ends within 55 s before the headers and 60 s after them, and the lease test
+  multiplies the larger: 4 x 60 + 16 x 10 = 400 s, under the lease of 600 s.
+  E4's claim that the deadline plus one read was a ceiling was wrong: both
+  reviews showed that a call slow in every phase could spend about 120 s
+  before the first clock check, and headers that trickle stay unbounded, which
+  the comments and T-10 now say.
+  3. A late leg answers its own output only when one of its own write
+  attempts raised and may have committed; after a clean no-match it answers
+  the stored status with no output, even when the statuses are equal (E3
+  had answered its own output, and the Claims API could have stored it). The
+  checkpoints are forgotten only when the end was recorded and is `Completed`
+  or `Failed`; E3's guard had skipped only the stored-status path and not the
+  double fault.
+  4. The userinfo cut covers any `//` or `\\` up to the last `@` before the
+  next separator, where E1's covered a target that began with `scheme://`.
+  5. `service_url_problem` reads the host (above).
+  6. Five tests the reviews asked for: four threaded tests of the throttle
+  and one of `run_leg` with `SystemExit`; the 32 KiB resume test is renamed
+  for what it now says.
+  7. A summary is written at least once (the docstring says so), and a tool
+  call with less than the 5 s connect wait left skips the write and keeps the
+  count.
+- **E1b**, from the first read of E1: the second net of the knowledge CLI
+  and server keeps a test of its own (the shared check refuses what the old
+  test used); the path's over-encoded word is its own constant; the userinfo
+  cut runs again after every round.
+- **E3b**, from E3's report: `import httpx` moved inside `service_url_problem`
+  because E1's top-level import made the scheduled sweep load a web stack (two
+  tests caught it), and `slo.md` says that a resume that cannot read its run
+  is counted.
+- **E6b**, from E6's report: the wire design above.
+- **F2**, from the boundary review: see the contracts.
+
+**Advisor:** one consultation is recorded in this step's folder: on
+2026-10-06, 19:38 UTC, at the design, before the first contract went out. It
+asked for two checks before E1 and E2 and the design held. The session ran
+both on `main` at d78ff0f: S067's branch shares no file with E1's or E2's
+(B15 stays in E1), and no file under `api/`, no kind script and no demo
+document sends a resume body, so E3 changes no contract file and no script.
+It changed no decision.
+
+**Work log:** a read-only map, a design, then the contracts below, each to the
+`implementer` in a worktree of its own and carried to the step's branch by the
+session, in the order of the branch's history. E1 and E2 went out at 19:46 UTC
+on 2026-10-06 side by side; E3 waited for E2 (both edit the runtime's
+`app.py`), E4 for E3; E5 and E6 waited for S067 to merge.
+
+- **E1 and E1b** (commit 0fc2131): R7, B19, B15's path and B17's line, and the
+  three small repairs above.
+- **E2** (350af5c): the shared summary writer, the gateway's caller check
+  summarised, the runtime's and the tool servers' summaries, R8, and the tool
+  server's no-result count.
+- **E3 and E3b** (dfcb158): the run's claim (R6) with no column, a resume that
+  delivers no value (R3), the counting of B16 parts 1 and 2, the lazy import
+  and the `slo.md` sentence.
+- **E4** (364ee06): the deadline of a model call (R5) and `meridian.step`
+  (B18).
+- **The merge of `main` (564fd03)** and the first two reviews of E1 to E4
+  (security and python), which came out before F1.
+- **F1** (f804dc5): the seven items above.
+- **E5** (bb8a80a): R1 and B16 part 4 in the Claims API.
+- **E6 and E6b** (e204db5): R4, the withheld completion's wire and drafter.
+- **F2** (cc5b8ea): the boundary review's three medium findings and four of
+  its low ones. (1) The guard's relaxation holds for string keys only (a
+  `dict[UUID, Any]` puts the key in an error's location). (2) A reply the
+  gateway compressed is refused as too large before any chunk is decoded
+  (the review's probe decoded 64 MB in one chunk before the cap was checked),
+  and the comment that said the header closes the spike is corrected. (3) The
+  runbook labels "billed either way" and "was not billed" as the gateway's
+  accounting rule, tested with a scripted provider and not seen against a real
+  one. (4) A success names its deployment in bounded words too. (5) A
+  provenance header that fails its pattern is said once, with no value. (6)
+  `proposal.py`'s comment, the OpenAPI mode enum built from `GatewayMode`, and
+  `workers.py` importing `invalid_fields` from `models`. (7) The
+  near-tautological client test names the gateway test that carries the
+  proof. Its result is under Evidence.
+
+**Result / verification:**
+
+- **What "tested" means, and what ran.** Everything here is code and tests:
+  the runtime, the gateway and the tool servers ran through the test suite
+  against PostgreSQL, with fake transports, a scripted provider and a stub
+  model. Nothing of this step ran on a cluster and no real provider was
+  called. The late leg is proven against PostgreSQL with a leg that claims the
+  run from inside another leg's node; a second request through `/resume` is
+  not part of it (a backlog row).
+- **Each contract's own run** (from its report; the paths are what the
+  contract named, so the numbers are not additive):
+
+  | Contract | Scope | Last line |
+  |---|---|---|
+  | E1 | `common`, `cli`, no database | 1146 passed, 2 skipped |
+  | E1b | `common`, `cli`, `knowledge_mcp`, no database | 1482 passed, 181 skipped |
+  | E2 | `common`, `gateway`, `runtime`, `toolserver`, `db/test_privileges.py`, with a database | 4154 passed, 6 skipped |
+  | E3 | `runtime`, `workloads`, three stack tests, with a database | 2 failed, 3732 passed |
+  | E3b | `runtime`, `workloads`, `common`, with a database | 4460 passed |
+  | E4 | the contract's paths, with a database | 1886 passed |
+  | F1 | runtime, common, toolserver, gateway and the stacks, with a database | 4072 passed, 6 skipped |
+  | E5 | `workloads` and four stack tests, with a database | 3478 passed |
+  | E6b | the contract's paths, with a database | 6261 passed, 6 skipped |
+
+  Each also ran `ruff check`, `ruff format --check`, `lint-imports` (six
+  contracts kept) and `make test`, and read each last line. E2's last
+  database run was piped through `tail`, so its report has the summary line
+  and not the exit code; the reports of E4, E5, E6 and F1 say the same of
+  one of their runs. E3's two failures were E1's top-level `import httpx` reaching the
+  sweep (the import tests of the sweep), fixed by E3b. E6's first run failed
+  one test, the structured-refusal test whose header assertion E6 changed
+  (E6b put the original assertion back with the new header's added).
+  `make docs` ran in E3, E3b, E6 and E6b and passed; it was not run in E1,
+  E2, E4 or F1, which changed no Markdown, and E5's report lists no run of
+  it. No whole-suite run is any contract's.
+- **Red first.** The reports say which tests failed before each change. What
+  was not red first is named: E1b's two net tests (one passes because the net
+  fires), E2's writer tests (written after a pure move), the gateway tests of
+  E6 and E6b, the four throttle tests and the `SystemExit` test of F1, E5's two
+  guard tests, and one E4 group that pinned behaviour that did not change.
+- **The whole suite on the final tree:** `15860 passed, 8 skipped, 8 warnings
+  in 265.52s` at four workers beside the cluster, on 2c94f48, 2026-10-07 04:54
+  to 05:00 UTC, with `make test`, `make docs` and `make lint` ending 0 before
+  it; the one commit after it fills these lines. A first run, at six workers
+  from 04:28 UTC, was stopped by the session and is no result: the machine
+  ran out of memory under it (the session's fault, ten agents beside it).
+- **The evaluation's free replay on the final tree:** the two stack files
+  whole, `24 passed, 2 skipped in 34.85s`; `make eval` ended 0 with "eval
+  compare: passed" twice (the golden set and the injection cases). No
+  baseline changed in this branch.
+- **F2, the last fix contract:** its own run of the gateway's, the runtime's
+  and the workload's tests with a database printed `6300 passed, 6 skipped in
+  145.24s`; lint, `make docs` and `make test` ended 0 (its report). Red
+  first: the two key-type cases, the seven coded replies, the eight replies
+  whose IDs do not fit and the canary test; the mode-enum test could not be
+  seen to fail (it guards a fourth mode). No recorded reply carries a
+  deployment or a provider, so the replay did not move.
+- **The pull request's checks, and one change beside the step:** the first
+  two runs of the `docs consistency` job failed on S075's guard test, not on
+  this step: the hook's worst shape took 1.746 and 1.745 s of CPU on the
+  hosted runner against a bound of 1.5 s (0.777 s on the development machine;
+  1.736 s once on pull request 108). The bound is 3 s in this branch, with
+  its reason beside it; the guard's cases ran 1521 ok, 0 FAIL after the
+  change. S036's branch rewrites the same lines and wins the conflict.
+- **A kind run would show** the withheld completion's four headers on the
+  400, the 422 text "a resume delivers no value: send {}", one `suppressed`
+  row from each service after a flood and a shed tool call's row with its run
+  named, a run left `Running` past the lease taken over (`stale-running`)
+  while the late leg's end matches nothing, an access line's path with an
+  address encoded twice cut to its fixed point, and a `not-started` count
+  with no agent label. None of it was seen.
+- **Not seen:** any of this on a cluster; a real withheld completion or a
+  real refusal of a structured request; a gateway that trickles its headers;
+  a leg hung past its lease in a deployed runtime.
+- **Reviews** (three, each read the code and ran its own probes).
+  - *Security review of E1 to E4 (at 364ee06):* no critical finding; one
+    high (the reply of the gateway had no size bound, and compression
+    multiplied it) and two mediums (the "400 s ceiling" was not one, and the
+    userinfo cut covered only a target that began with `scheme://`), seven
+    lows; it said that E1 to E4 may go on to E5 and E6, and F1 took the high
+    and both mediums.
+  - *Python review of E1 to E4:* no critical or high finding; six mediums
+    (the deadline's bound overclaimed, no reply cap, the unsaved path still
+    forgot checkpoints, no concurrency test of the throttle, the tool
+    server's summary write could eat a call's budget, weak assertions in the
+    leg-count tests) and nine lows; it approved with the mediums fixed or
+    accepted, and F1 took all six.
+  - *Boundary review of the whole branch (platform-boundary):* **pass**; no
+    critical or high finding, no hard rule crossed (no agent framework under
+    the platform, no provider SDK outside the gateway, six import contracts
+    kept, the sweep imports no web stack); three mediums (the guard's
+    relaxation, the compressed reply, the runbook's label) and twelve lows;
+    F2 takes the three mediums and six lows, and the rest are in the backlog.
+
+**Not done, by decision or left open:**
+
+- **Not built, each as a decision above:** limits per agent (R2); an
+  embedding bound in tokens (R10); a ceiling on the rate limits (B13); a
+  breaker and throttles shared between processes (B14); one word for the two
+  step-limit failures (B18); a holder column for the run; a second template
+  set for the second host; an exception's message in the log (the owner may
+  overturn it).
+- **Second half, open:** R11 and R12 (above), and smoke's line for the sweep's
+  findings, which needs the cluster.
+- **A summary is written at least once, not exactly once**, and a summary's
+  tenant is the one the caller named; both are in T-49.
+- **A leg is not provably under the lease** while headers can trickle; a late
+  leg's tool calls bind until it ends (T-10).
+- **The Claims API's answer to a late leg.** F1's report said that a late
+  resumed leg with no output fails `BriefOutput.model_validate`. That is the
+  triage's path (`triage_outcome` raises `bad-output` and nothing is stored).
+  For a brief, `_state_to_close_with` looks first: a Completed or Failed
+  answer with no output closes the brief by the recorded decision (Completed)
+  or as `failed`, before `_output_of` runs. That is consistent, since a
+  stored `Completed` means another leg filed the note.
+- **Parts 5 to 7 of B16**, the row's residuals and the boundary review's low
+  findings are backlog rows, each with a step (below).
+- **The redaction's residuals (the S067 row homed here) were not touched**;
+  S069 holds the gateway's edges, which is why it was the nearest home, and
+  the row stays where it is.
+
+**Follow-ups:**
+
+- In the backlog, each with its step: the access log's route template, the
+  trickling headers, the close writes on the loop, the shed flood's summary,
+  the two key shapes, the unread error body, the 422's echoed key, the
+  runtime client's silent reply check, and the late-leg `raised` ambiguity
+  (S069, the step of the runtime's and the gateway's edges, which stays open
+  for its second half; none of these needs a lane); the holder of the run at
+  the tool servers, which needs a column and so the database lane (S068); the
+  unchecked `drafted_by`, the claimant's oracle and a response that cannot be
+  built after a stored proposal (S070, the step for the claims intake and the
+  assessment); a real withheld completion (S071, the paid measurements); the
+  tests that stop short and the small ends (S074, which takes the small ends
+  of S064, S067 and S076 too); what a cluster run would show (the second half
+  of S069, which holds the cluster).
+- Rows closed by the step: the Claims API's two logs, the per-agent limits
+  (as a decision), the stale resume value, `drafted_by`, the model call's
+  bound (in part), the late leg's write (without a column), the settings
+  check, the shed call's row, the refusal flood's count, the embedding bound
+  and the rate limit's cap (as decisions), the per-process throttles (as
+  accepted), the tool span's step, and, in part, the access log, the
+  counting, the scaffold and the loaders. Still open there: R11, R12 and
+  the redaction row.
+- For the session: `design.md` said a shed call's row is checked against the
+  caller's tenant, and E2 checks the run's existence only; E3's report said a
+  failed resumed leg's late twin answers its own output on equal status, and
+  F1 removed it; E4 named a ceiling that was not one. The contract of B13's
+  README sentence was nobody's, and the documents contract wrote it.
+- For the owner: each decision above, and in particular the exception's
+  message left out of the log, no holder column and no limits per agent, the
+  refusal header's wire (the withheld completion marked by a header of its
+  own), a model's own refusal of a structured request marked withheld like a
+  withheld completion (the provider adapter raises the same error for both),
+  R12's timing at S020, and the homes chosen for the rows that no step fits.
+### S036 — AWS Terraform
+**Status:** doing · **Started:** 2026-10-06 · **Finished:** —
+**Goal:** an AWS Terraform module for what S025 maps (a network, a managed
+cluster, an image repository, a database with pgvector, workload identity to
+a secret store) in an EU region, with one command each to check, plan, apply
+and remove it, written and checked without an account; and, with the owner,
+one apply in the owner's account once the cost is stated. This record is the
+first half, the pull request that carries it: the module, its script, the
+policy scan and the command guard's rules, implemented as code, checked
+without an account and never applied.
+
+**Decisions** (the main session's unless marked; the owner may overturn any;
+the design, with its threat note, was written before the first contract):
+
+- **Two halves; this pull request is the first, and the row says `doing`**
+  (S066's convention for a step with a half open). The owner changed the row
+  on 2026-10-06 ("add the aws template too and we will test it in a real aws
+  enviroment"), and the owner's decision on managed and self-managed
+  Kubernetes the same day moved the apply of this managed cluster to the
+  paid stop of S079, where it may be answered no. So the step does not close
+  with this pull request. If the owner answers no, this section closes the
+  step as done with its second half not built, and says so, as S075's row
+  does for what it left. Nothing here ran in AWS: no account exists for the
+  session and no credential is on the machine. Every capability below is
+  implemented as code, checked without an account, or designed.
+- **The module holds infrastructure only.** A root module under
+  `infra/terraform/aws/`: a VPC, an EKS cluster with one managed node group,
+  one ECR repository, one RDS for PostgreSQL instance, one Secrets Manager
+  secret with a role that one named service account may assume, and a
+  budget. It installs nothing into the cluster, no Helm release and no
+  Kubernetes provider: what a controller creates is what makes a removal
+  fragile (ADR 6), and the row does not ask for the chart on EKS.
+- **Two zones, public subnets, no NAT gateway.** The cheapest shape ADR 6
+  lists, and the one that leaves nothing that bills by the hour behind when
+  a removal stops half way. The nodes have public addresses and the security
+  groups admit nothing from the internet to them. The cluster's API endpoint
+  has the private and the public access both on, and only the public side is
+  limited, to one /32 the owner gives (a sensitive variable with no
+  default). Production uses private subnets behind a NAT gateway.
+- **EKS 1.36 and two `t3.large`, from closed lists.** The Kubernetes version
+  is a variable that accepts only versions in standard support (extended
+  support costs six times as much), and the cluster's support type is
+  `STANDARD`; 1.36 and not 1.37, which was five days old with add-on
+  defaults nobody had read. The node and database sizes come from closed
+  lists, a cost ceiling that a stray variable cannot raise. The Pod Identity
+  Agent and the EBS CSI driver are add-ons, the applying principal has an
+  access entry, and the creator is not made administrator implicitly.
+- **RDS for PostgreSQL 17 on `db.t4g.small`, one zone, reachable from the
+  cluster's security group alone,** with encrypted storage and no public
+  address. Deletion protection is off and there is no final snapshot,
+  because the environment is made to be removed; each sits beside its
+  production value in the README. RDS makes and keeps the master password in
+  Secrets Manager, so none is in a variable or in the repository. The
+  `vector` extension is created by a role once the instance is up, which the
+  module cannot do without a connection: the second half records whether it
+  works.
+- **One empty secret and a role for one service account.** The secret has no
+  value and a recovery window of zero. Each Pod Identity role has a trust
+  policy of its own with three conditions on the session tags (namespace,
+  service account, cluster name); the cluster-name condition is this
+  module's addition to AWS's example and the first line to take out if the
+  driver gets no credentials.
+- **The Region is a variable, `eu-central-1` by default,** validated against
+  the Regions of the EU member states ADR 6 lists (hard rule 3), with the
+  two opt-in ones named in the error text. IAM and Budgets are global, and
+  the README says that their metadata is homed outside the Region.
+- **The state is local, by design, and not in a checkout.** A module that is
+  applied once and removed needs no bucket (rejected: an S3 backend, a
+  bucket that must exist first and one more thing left behind). The first
+  review moved the file out of the worktree, because this repository's
+  sessions work in worktrees that are deleted and a state lost with its
+  checkout leaves a cluster billing: it is a file under the owner's home, in
+  a directory of mode 700, which the script gives to `init`. It is
+  unencrypted and has one copy (T-37). The README names a remote bucket as
+  the production value.
+- **A budget in the module:** USD 25 a month by default (a variable, above 0
+  and at most 500; USD because the provider's page does not settle EUR),
+  with alerts at 50, 80 and 100 percent of actual spend to the address in the
+  local file. It covers the whole account, it detects spend and does not
+  stop it, and AWS updates it up to three times a day.
+- **One wrapper script and five `make aws-*` targets.** `aws-validate` and
+  `aws-scan` need no account and are the session's; `aws-plan`, `aws-apply`
+  and `aws-destroy` need the owner's sign-in. `infra/terraform/aws.sh` pins
+  the account twice (the provider carries `allowed_account_ids`, and the
+  script checks the caller's account before Terraform starts; neither number
+  is printed), reads the git-ignored local file as data and never runs it
+  (`infra/terraform/local.env-aws`, with a hyphen on purpose, so that the
+  guard's reader rule covers it), gives Terraform and the `aws` CLI an
+  environment of its own, refuses a variable or an override file and any
+  workspace but the default, applies only a saved plan whose SHA-256, commit
+  and age match its record and that was made from an unchanged directory, and
+  removes only from a terminal and only over a state that holds something.
+  Its output passes through a redaction that knows AWS's shapes. The row asks
+  that one command each creates and removes the environment, and the
+  foundation's rule is that the owner runs a removal by hand: `make
+  aws-destroy` exists and is the owner's, in a terminal.
+- **The guard's rules: removal and by-hand state changes denied, plan and
+  apply asked, and the settings' ask list.** The hook denies `make
+  aws-destroy` and the wrapper's `destroy` in the runner forms the Azure
+  rules read, a pseudo-terminal tool or a trace beside the wrapper, `TF_*`
+  and `AWS_ENDPOINT_URL*` assignments before a tool, `terraform` and `tofu`
+  by hand against the module (`apply`, `plan -out`, `import`, `state` writes,
+  `workspace` changes), the `aws` CLI's deletes and credential printers, the
+  readers of the local file, the state, the plan and `~/.aws`, and the
+  writers of the files that steer a tool. It asks before `make aws-plan` and
+  `make aws-apply` (the text says the apply costs money), before `terraform`
+  or `tofu` `plan`, `show`, `output`, `console` and `state` reads against the
+  module, and before any `aws` call that is not a read. The settings deny
+  Read, Edit and Write on the same files, deny the removal to Bash a second
+  time, and move the bare `terraform plan` from the allow list to the ask
+  list. These rules are a habit-stopper and not the barrier (the guard's own
+  header says so, T-87, T-100): the barrier is where the credentials are,
+  and the owner runs the apply from a machine or an operating-system user
+  where no session runs and no credential is readable by one.
+- **The policy scan is Trivy's configuration scan,** from an image pinned by
+  tag and digest in the `Makefile` (Renovate reads it). It runs with no
+  network, against the checks compiled into the pinned image
+  (`--skip-check-update`; with the network off and no flag Trivy tries a
+  newer bundle, logs that it falls back, and scans anyway), so a check
+  changes only with the pin. It fails on HIGH and CRITICAL. Three findings
+  are accepted, each with its reason on the line above it in `.trivyignore`:
+  the public endpoint (`AWS-0040`, limited to one address, and `kubectl`
+  needs it), no customer-managed key for secret encryption (`AWS-0039`; EKS
+  encrypts with an AWS-owned key by default) and public addresses on the
+  subnets (`AWS-0164`; no NAT gateway on purpose). They are the session's
+  decisions of 2026-10-06, which the owner may overturn. Tests hold the
+  file's form: an entry is one `AWS-` and four digits, no expiry, no
+  wildcard, a reason of five words above it, no inline `trivy:ignore` or
+  `tfsec:ignore`, no Trivy configuration file, and one cluster and one subnet
+  block (an entry covers every resource of the directory).
+- **No Terraform in CI.** S022 owns the pipeline's Terraform and scan; the
+  gates are local, and the Renovate note on the `terraform` group names
+  `make aws-validate` and `make aws-scan`.
+- **ADR 1 keeps its note of 2026-10-06 and gets no new one.** Nothing was
+  applied, and its sentence that the module will be applied, not only
+  validated, rests on the owner's yes, which the second half asks for. Its
+  successor or second note comes with the second half, with C-05 and the
+  scope document, which stay true until then. ADR 6 has no row the module
+  falsified: the node role's third policy (`AmazonEKS_CNI_Policy`), the
+  missing load balancer and NAT gateway and the two secrets are choices the
+  ADR lists as cheaper ways, and the cost it sketched is restated in the
+  README as about USD 0.35 an hour from its prices.
+
+**Advisor:** two consultations are recorded in the handoff files.
+
+- **2026-10-06, about 14:38 UTC, before the first contract (the design).** It
+  changed four things. Decision 2 as written would have kept the nodes from
+  joining: with the private endpoint off and the public one open to the
+  owner's address alone, nodes in public subnets reach the API server through
+  the public endpoint and are refused, so both accesses are on and only the
+  public side is limited (`validate` cannot see this). Trivy without a
+  network was unverified, so T2's first item found out from the pinned
+  image's own help and a run with the network off (above). Two facts the
+  second half would meet were to be pinned from the provider's documentation
+  now: whether RDS removes the secret it manages with the instance (it does,
+  the RDS page says; whether a recovery window applies it does not say) and
+  how ECR is removed (the provider page says only what `force_delete` does,
+  so it is on, with the reason in the file). And ADR 1's note went to T2,
+  which tests its script against a stand-in module directory with stub
+  programs, as the kind scripts are tested, while the main session runs
+  `make aws-validate` on the two contracts together.
+- **2026-10-07, before T3d, at a result that contradicted what was expected
+  (a second security pass found that T3b had opened new holes).** It
+  decided that the code that emptied a quoted search pattern was TAKEN OUT,
+  not repaired: the false alarms it relieved hit a session's shell searches
+  only, never the owner in a terminal, and a session searches with the Grep
+  tool; a text guard that fails closed on a quoted word is honest, and one
+  that a quoted `grep` can talk past is not. It also asked for a check that
+  stands in for a third review: the whole cases file was run against the
+  hooks of the two earlier commits (bd83bf2 and 5127633) and the new one, and
+  104 rows differ, each for a named reason from a closed list and none for
+  another. It changed the contract from "repair" to "remove", and added the
+  differential to its gates.
+
+No other consultation is recorded.
+
+**Work log:**
+
+- **A read-only map of the repository and ADR 6** (`mapping.md`), which found
+  that the guard knew nothing of AWS (`make aws-apply`, the wrapper's
+  removal and every `aws` call passed unasked), that `terraform validate`
+  needs the provider, which `init` downloads, that no policy scanner was
+  installed or pinned, that the redaction knew Azure's shapes only, and that
+  the foundation's rule "the owner runs the removal by hand" meets the row's
+  "one command removes it".
+- **Ten contracts to the `implementer`**, each in a worktree of its own,
+  carried onto the step's branch with git:
+  - **T1, the module** (b09e6de): all the `.tf` files and the lock file,
+    with the provider's hashes for two platforms; `fmt`, `init`, `validate`.
+  - **T2, the commands** (4bb5b6f), beside T1: `aws.sh`, the `make aws-*`
+    targets, the redaction's AWS shapes with tests, the ignore rule for the
+    local file, the Trivy pin and the ignore file's tests, the README and
+    ADR 1's note, tested against a stand-in module with stub programs.
+  - **T2b, the two meeting** (d2e6610): T1 and T2 had been written beside
+    each other, and the script exported `TF_VAR_api_allowed_cidr` where the
+    module declared `api_access_cidr`. Only the joint `make aws-validate`
+    could show it; a test now holds the script's exports to the module's
+    variables. The three accepted findings and their reasons; the README
+    rewritten against the `.tf` files, with three false sentences corrected.
+  - **T2c, the first two reviews' findings** (022a92e): sixteen items. Managed
+    policies read by name, the provider pins the account, sensitive variables,
+    closed lists of sizes, a trust policy of its own per Pod Identity role, the
+    local file parsed and not run, an environment allowlist, a record of the
+    saved plan, the state under home with a removal that refuses over an empty
+    state, the scan's skip list and the ignore file's tests.
+  - **T2d, the second review's findings** (bb724b2): twelve items. A hidden or
+    differently cased variable file, `tfsec` inline ignores, the pinned set of
+    accepted findings, a workspace made by hand, `-reconfigure`, the plan
+    bound to its file by hash, the record's time read in base ten, `git`
+    without a program-running configuration, a validated Region and a length
+    bound, a failed removal that says so, a leading zero in the address, and
+    seven README sentences made true.
+  - **T3, the guard's rules and the settings** (bd83bf2), after S075 merged:
+    eight deny families, the asks, the settings' denies and ask list, 326
+    new cases and the runbook's section.
+  - **T3b, the first guard review's findings** (5127633): `plan` asks and the
+    hook reads its input's working directory, the `-cm` regression, a quoted
+    token in the call parser, a search pattern's emptying and the
+    pseudo-terminal words' anchoring (both later taken out), `workspace
+    select default`, a settings deny for the removal, and one absolute CPU
+    bound of 3 seconds.
+  - **T3c, a test's parameter from the clock** (3f6d910), one commit: the
+    lesson below.
+  - **T3d, the emptying comes out** (ff34984): T3b's emptying and the
+    pseudo-terminal re-anchoring taken out; quoted forms of two S075 rules
+    ask; `workspace select default` is cut out only when `default` ends the
+    word; a backtick ends a target; the differential above.
+  - **T2e, the third review's script items** (37689ca): seven items, two
+    medium and five low. An
+    ignore file of the caller's cannot hide a `.tf`; the script refuses a git
+    older than 2.32 and the README says what its git settings do not cover; the
+    plan is checked after the sign-in; the hash is read from standard input;
+    the workspace file is compared whole; the scan's tests read a bare block
+    label; the README's list of what the script does not close is completed.
+- **Six reviews,** each read by the main session and answered by a contract
+  (below).
+- **This section and the documents** (D1): the plan's rows and section, the
+  threat model's T-100 and five rows with an AWS clause, the root README, and
+  the sentences the branch made false elsewhere.
+
+**Reviews:**
+
+1. **The infrastructure review of the module (a narrow BLOCK).** One
+   attachment would probably stop an apply with the cluster and the database
+   already billing: the EBS CSI policy's ARN, whose path two AWS pages give
+   differently. Also the script cleared `TF_CLI_ARGS*` before it read the
+   local file, "none is printed" was false for a plan, "a session cannot run
+   it" overclaimed (any pseudo-terminal passes the terminal check), the state
+   sat in a worktree, a size had no cost ceiling, the pin lived only in the
+   script, and the Pod Identity trust had no conditions. Closed by T2b and
+   T2c.
+2. **The first security review (three critical findings, once credentials
+   exist).** Apply needs no owner step, the terminal check is not a barrier,
+   and the `aws` CLI is open; seven high findings (the file was sourced as
+   code, tracing printed all four values, the state and the plan were
+   readable, the umask, and others). Its verdict for the owner: today nothing
+   here can spend money, and the barrier for the second half is where the
+   credentials are. The three critical findings stay open, as stated (T-100):
+   no rule or script closes them for a machine where credentials exist. The
+   high findings were closed in the script and the module by T2c, and the
+   guard and the settings gained their rules in T3.
+3. **The second review of the script (no critical finding, two high).** A
+   hidden `.auto.tfvars` reached a plan unseen, and the scan's test did not
+   catch `tfsec:ignore`; seven medium findings. Closed by T2d.
+4. **The security review of T3 (not yet, two high).** `plan` had no ask where
+   the module is named, and the hook ignored the working directory its input
+   carries. **T3 introduced a hole here:** the trigger words it added made
+   the hook's blanking of a message reach `bash -cm '…'`, so a deny that
+   had held became none. Closed by T3b.
+5. **The review of T3b (not as it is).** T3b closed six of the seven
+   findings and **opened others:** the emptying of a quoted search pattern
+   hid a command substitution and a real command behind a fake `grep` inside
+   a literal, ate a file operand after `-e` or `-f`, and the new anchoring of
+   the pseudo-terminal words missed a wrapper with an option; two smaller
+   regressions and an older gap rode with them. **T3d took them out** rather
+   than repairing them (the second consultation), and closed the three small
+   ones.
+6. **The third review of the script (no critical or high finding, two
+   medium).** A caller's own ignore file hid an untracked `.tf` from the
+   clean-tree check, and **a README sentence was false:** it said a line in
+   the repository's own git configuration cannot run a program for the
+   script, and a clean filter configured there does run during the status
+   call. T2e narrows that sentence and adds the filter to the list of what
+   the script does not close; the hole itself stays open and is a backlog
+   row.
+
+**Result / verification:**
+
+- **Nothing was planned or applied.** No account exists for the session, no
+  credential is on the machine, and no `aws` command, plan, apply, removal or
+  import ran. The only real Terraform calls were `fmt`, `init`, `validate`,
+  `providers lock`, `console` on a scratch copy of the variables, and `state
+  list` on a scratch module with no provider. The module is **implemented as
+  code and checked without an account**; the policy scan is **implemented and
+  run offline**; the guard's rules are **implemented and tested against a
+  case file**; the apply is **designed**.
+- **T4, beside the reviews (bee6b57):** the documents check read a threat ID
+  of two digits only, so no citation of T-100, the row this step adds, was
+  checked by anything; it reads two or three digits now (a test failed first
+  on a three-digit ID that no row defines), and `make docs` finds every
+  three-digit citation defined. The script's canonical copy is the development
+  base's: the same line is owed there, with the guard's neutral rules.
+- **The whole suite on the final tree, with `main` merged in, run by the main
+  session:** `16514 passed, 8 skipped, 8 warnings in 195.87s` at six workers
+  beside the cluster and nothing else, on 01d56d6 (`main` with S069 merged
+  in), 2026-10-07 05:44 to 05:47 UTC. A run of the same tree twenty minutes
+  earlier, with another step's loop of stack tests beside it, ended with 15
+  failures on a machine that was swapping (load 190) and is no result: the
+  session's fault.
+- **T2e's gates, run by the main session on the tree that carries its items:**
+  on 01d56d6, `make test` (`Ran 343 tests`, OK), `make docs` (14 checks) and
+  `make lint` ended 0; the AWS script's, the scan's, the redaction's and the
+  documents check's tests printed `772 passed, 47 subtests passed in 10.22s`.
+  `make aws-validate` and `make aws-scan` were run by T2e's implementer and
+  not again by the main session.
+- **The guard's case file on the final tree, run by the main session:**
+  `tests/test_guard_bash.sh` ended 0 with 2,074 ok and 0 FAIL on 01d56d6; the
+  worst shape under the byte bound took 0.747 s of CPU against the bound of 3.
+- **What the implementers reported (claims, not the main session's runs):**
+  the guard's runner ended at 2,074 ok and 0 FAIL on T3d's tree, and the
+  three AWS test files with the Renovate test passed 567 tests (T3d);
+  `make aws-validate` printed "Success! The configuration is valid." and
+  `make aws-scan` found 0 misconfigurations in six targets with the three
+  accepted identifiers (T2d); the redaction's tests and the Azure ones
+  passed (T2c).
+- **What an apply would show that nothing here does.** The module is written
+  from documentation and validated offline, so an apply may fail on what
+  `validate` cannot see. ADR 6 marks these "not verified", and only an apply
+  settles them: whether `db.t4g.small` and a PostgreSQL 17 minor are offered
+  in the Region (ADR 6, the PostgreSQL row), the CPU-credit charges of
+  burstable nodes (the cost sketch), whether the secret RDS manages waits out
+  a recovery window and keeps its name (the removal list), and whether ECR
+  removes a repository that holds an image without a force flag (the same
+  list). The module's own README lists the rest: `CREATE EXTENSION vector`,
+  the quotas and the Free plan's limits, the add-on defaults for 1.36,
+  whether the three trust conditions let the EBS CSI driver and the
+  workload get credentials, whether the nodes join, an Identity Center
+  principal as the access entry, how `allowed_account_ids` fed from a
+  sensitive variable and the lookups by name behave at plan, the real times
+  of an apply and a removal, and the cost against a bill. They are one
+  backlog row for S079.
+- **The cost,** about USD 0.35 an hour (2.79 for eight hours) in
+  `eu-central-1`, is summed from ADR 6's prices of 2026-10-06, not from a
+  bill, and is read again from the price files before any apply.
+
+**Lesson, for Part A's readers.** A parameter of a test built from the
+clock when the file is imported (an octal form of the current time, in T2d's
+test) made pytest-xdist's workers collect different test IDs whenever they
+imported the file in different seconds, and the whole suite stopped at
+collection after the merge of `main` (2026-10-07, 03:34 UTC). The whole run
+that had passed on 2026-10-06 (14,496 tests) passed because the workers
+happened to import the file in the same second: that was luck, not a pass.
+No parameter or ID of a test comes from the clock, a random source, the
+process or a path; the value is built inside the test (T3c).
+
+**Not done, by decision or left open:**
+
+- **The second half:** one apply in the owner's account, what came up
+  recorded, a removal, and the run's cost logged. It is asked at S079's paid
+  stop and may be answered no.
+- **Not built:** the `vector` extension, the Meridian chart and its
+  controllers on the cluster, the module in CI (S022), and everything the
+  backlog rows below list as left to production.
+- **The guard and the script leave gaps,** listed once in the runbook's
+  section and in the module's README, and in two backlog rows: the guard is
+  a habit-stopper, and a session that holds credentials is not stopped by
+  either.
+
+**What the owner should know** (the pull request body repeats it):
+
+- **`.claude/settings.json` and the guard's hook change in this pull
+  request.** The settings now ask before a bare `terraform plan` and one with
+  `-chdir` into the AWS module (the bare plan was allowed), ask before `make
+  aws-plan` and `make aws-apply`, deny `make aws-destroy` and the wrapper's
+  `destroy` as a second layer, and deny Read, Edit and Write on the local
+  file, the state, the plan, variable and override files, `~/.aws` and
+  `~/.terraformrc`. The hook gains the rules above. A plan with `-chdir` into
+  any other module still passes. The settings hold in Claude Code only: Codex
+  runs the same hook and reads no settings file.
+- **Three decisions to overturn, if the owner wants:** the scan's three
+  accepted findings (above), the budget's USD 25 limit, and the Region
+  (`eu-central-1`, as ADR 6 chose).
+- **For the paid stop,** said with the cost and before the yes: the apply is
+  run by the owner from a machine or an operating-system user where no session
+  runs and no credential is readable by one, with a sign-in of about an hour;
+  the owner checks which plan the AWS account is on, since whether EKS, RDS
+  and `t3.large` are available on a Free plan is not verified; and S079 asks
+  whether this cluster is applied at all.
+- **One edit beside the contract:** the Trivy image's entry in
+  `tests/test_renovate_config.py`'s list of images that have no chart
+  (T3), because that test failed when the pin met S075's.
+- **A dependency to decide:** S079's row depends on S036, which stays `doing`
+  until the owner answers at the paid stop; what S079 takes from S036 (the
+  script, the scan and the reviews' lessons) is in this pull request.
+
+**Follow-ups:**
+
+- In the backlog, each with its step: what an apply would settle, what the
+  script never ran against, what it does not close, its small ends, what the
+  module leaves to production, the chart on the cluster, where the apply is
+  run, the guard's listed gaps and what the settings rest on without a probe
+  (S079); CI for the module (S022); what a Google Cloud scaffold copies and
+  avoids (S078); the neutral guard rules owed to the development base
+  (S036).
+- Rows changed: the guard's reader list is re-homed from S036 to S079, whose
+  module edits the guard next; the base's copy stays with S036 and says its
+  rules are the next ones owed; the threat model's Azure-only rows stay open
+  at S036, with nothing applied.
+- For the owner: the decisions above, and the three accepted findings.
+
 ### S068 — Database upkeep and retention
 **Status:** done · **Started:** 2026-10-06 · **Finished:** 2026-10-07
 **Goal:** rows of the platform's insert-only audit table and of the Model
@@ -12424,7 +13264,7 @@ follows is what the decisions ended as, not as they began):
   relation or type, so this is defence in depth for a later edit and not the
   fix of a live path. A test over the whole migrated catalog fails for any
   trigger or definer function of the owner's schemas whose path does not end in
-  `pg_temp`, so the next one has to carry the pin (T-100). **Decided and not
+  `pg_temp`, so the next one has to carry the pin (T-101). **Decided and not
   built:** taking the right to make temporary tables from PUBLIC (a
   database-level privilege is not copied to the tests' databases, and two tests
   use the right as their control, so one would skip silently).
@@ -12607,8 +13447,20 @@ contract for the documents. The commits, from `git log` of the step's branch:
   the format check and `lint-imports` (six contracts kept) were clean in each
   report.
 - **The whole suite on the final tree:** FINAL-SUITE-RESULT
-- **A review of F2's commit** (`3ca4a9e`, the last contract, which no reviewer
-  had read when this section was written): REVIEW-F2-RESULT
+- **A database re-read of the last three commits** (U5, U5b and F2, up to
+  `3ca4a9e`): no critical or high finding; the fixes do what the two reviews
+  of U4 asked. Two medium, both tests that were missing (the two places
+  above, and more than five calls on one connection), built in F3; seven low:
+  three sentences corrected in F3 (the line after a failure, the header's
+  word for the row lock), the rest in the follow-ups (0031 needs the
+  migrations' role to own the database, and a restore without the database's
+  settings loses the default while the ledger of migrations says it is
+  applied; a pooler in transaction mode against prepared statements; tests
+  that pass without the thing beside them). F3's own run: `4032 passed, 6
+  skipped in 85.99s` with a database; under a forced generic plan the batch
+  is `Limit` over `LockRows` over an index scan of `usage_month_idx` and the
+  question is an index-only scan, no sequential scan and no sort (its
+  report). Nobody reviewed F3 (tests, one printed line, a header).
 - **Seen on a cluster: nothing of this step.** A run on kind would show the
   migrate Job applying 0027 to 0031 (each guard refusing a missing role, and
   the check after the files refusing a membership of `claims_sweep` or of
@@ -12618,13 +13470,18 @@ contract for the documents. The commits, from `git log` of the step's branch:
   dry run of `expire-audit` through the Job with a date; and a Job stopped by
   its deadline that printed nothing of what it removed.
 
+**Reached after the re-read (F3, the step's last contract):** the section's
+first draft said two places could not be reached without a hook. The
+database re-read showed how: a second session holds the usage table in SHARE
+mode, inserts a reserved row of a past month and commits while the batch
+waits. With no closed row beside it the call is refused with GU303 from
+inside "rows are left"; with one closed row the batch removes that row and
+not the reserved one, and with the state filter taken out of the function
+that test fails (`[(2, 0, 0)]` against `[(1, 0, 0)]`), so the filter decides
+in a test now. The function's body did not change.
+
 **Not tested, or not reached:**
 
-- The GU303 branch inside "rows are left": a reserved row would have to commit
-  between two statements of one call, and nothing short of a hook can pause
-  PL/pgSQL there; no hook was added.
-- The state filter of the ledger's batch never decides in a test: a reserved
-  row of a past month is refused before the delete.
 - The lock timeout of 0029 firing (the order of the text and the contents of
   `pg_locks` are tested, not the timeout).
 - Batch times and build times on a cold disk, and the cost of an insert into
@@ -12634,8 +13491,12 @@ contract for the documents. The commits, from `git log` of the step's branch:
 - A connected session picking up an altered function's path at its next call.
 - A cancel of 0017 during `CLUSTER` or the rewrite (only its first statement).
 - The lock-order inversion with a reserve at a month's first seconds (a script
-  of two sessions), a reserve and a close that do not wait for an expiry, and
-  the batch's plan from the fifth call of a connection (a generic plan).
+  of two sessions), and a reserve and a close that do not wait for an expiry.
+  The reserved count's statement under a generic plan (F3 forces a generic
+  plan for the batch and for the question whether a row is left, and runs
+  seven batches on one connection; the count is not among them).
+- A commit whose outcome is unknown (a connection lost inside the commit): the
+  line after a failure says "at least" for it, and no test loses a commit.
 - A row that is reserved when a batch's snapshot is taken and closed before the
   "any row left" question (GU306's other arm).
 - The write-ahead log per batch (estimated at one to three MB for 10,000 rows
@@ -13234,7 +14095,44 @@ period is set and nothing is scheduled):
   test's gaps in the backlog (S070); T-73 and T-76 corrected, T-66, T-57,
   T-27, T-30, T-25 and T-13 brought to the code. Seven backlog rows closed
   (one in part) and fourteen new.
-- **vPLAN-VERSION, 2026-10-07:** S068 done, as a mechanism: audit rows can
+- **v0.67, 2026-10-07:** S069, first half: the edges of the Agent
+  Runtime, the Model Gateway and the tool servers, with no lane and no
+  migration. A late leg writes nothing over the leg that took the run (its
+  end matches the `updated_at` of its own claim, no new column) and a resume
+  delivers no value (ADR 9 has a dated note); the runtime's call to the
+  gateway has a deadline as a whole, a timeout per phase and a reply cap of
+  1 MiB; a withheld completion is told from a refused prompt on the wire and
+  has its drafter on record; every service writes the summary of a refusal
+  flood, and a shed tool call names its run; the Claims API logs the failed
+  field of the runtime's answer; a module that exits at import is a failed
+  load. Three reviews, the last a pass; the fix contracts took their
+  findings. Not built, with the reasons in the section: limits per agent, an
+  embedding bound in tokens, a ceiling on the rate limits, a holder column.
+  Nothing ran on a cluster and no real provider was called. The step stays
+  open for its second half, the server's certificate read once (the cluster
+  lane) and the ingestion's tenant (the owner, at S020). T-03, T-10, T-14,
+  T-31, T-40, T-49, T-67, T-93 and T-98 changed, no new threat; ADR 9 gains a
+  note. Twelve backlog rows closed, five closed in part, seventeen new.
+- **v0.68, 2026-10-07:** S036, first half: an AWS Terraform module
+  (a VPC of two public subnets, an EKS cluster with one node group, one ECR
+  repository, an RDS for PostgreSQL 17 instance whose password RDS keeps in
+  Secrets Manager, one secret with a Pod Identity role and a budget, in an
+  EU Region, with a local state under the owner's home), a wrapper script
+  with five `make aws-*` targets that pins the account, applies only a saved
+  plan and removes only from a terminal, Trivy's configuration scan from a
+  pinned image, and rules for the command guard and the settings that deny
+  the removal and by-hand state changes and ask before a plan or an apply.
+  Implemented as code and checked without an account; nothing was planned or
+  applied, and no account or credential exists for a session. Six reviews: T3
+  introduced a hole that T3b closed, and T3b opened others that T3d took out
+  rather than repaired; the third pass of the script showed a README sentence
+  to be false. The step stays open for its second half, one apply in the
+  owner's account, asked at S079's paid stop and possibly answered no. T-100
+  new (100 threats) and T-12, T-15, T-36, T-37 and T-42 each gain an AWS
+  clause; Part A's Renovate list gains the AWS commands and the Trivy pin.
+  Eleven backlog rows new, three changed (the guard's reader list re-homed to
+  S079, the base's copy owed, the Azure-only threat rows still open).
+- **v0.70, 2026-10-07:** S068 done, as a mechanism: audit rows can
   expire through one function of the owner's that only a session logged in as
   the upkeep role reaches (`meridian gateway expire-audit`, migrations 0027
   and 0028; rows the upkeep role wrote never go), the ledger expires in
@@ -13245,6 +14143,6 @@ period is set and nothing is scheduled):
   applied, and the static check on migrations sees more statements and lists
   what it does not. No retention period is set, nothing is scheduled and
   nothing ran on a cluster; the section puts four questions to the owner.
-  T-100 new (100 threats); T-14, T-25, T-49 and T-77 brought to the code. Five
+  T-101 new (101 threats); T-14, T-25, T-49 and T-77 brought to the code. Five
   backlog rows closed, one closed in part, five re-homed and eleven new; the
   briefs' expiry is not built.

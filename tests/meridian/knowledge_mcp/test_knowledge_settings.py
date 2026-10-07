@@ -12,6 +12,7 @@ from starlette.testclient import TestClient
 
 from meridian.platform.common.env import SettingsError
 from meridian.platform.knowledge_mcp import app as knowledge_app
+from meridian.platform.knowledge_mcp import settings as settings_module
 from meridian.platform.knowledge_mcp.settings import (
     GATEWAY_URL_ENV,
     KnowledgeServerSettings,
@@ -206,16 +207,28 @@ def test_an_injected_client_is_not_closed_by_the_app() -> None:
         assert http.is_closed is False
 
 
-def test_an_address_the_client_cannot_take_stops_the_start_without_the_value() -> None:
-    # A printable character no host name may hold: the shared check takes it
-    # (it refuses a control character itself, which this test used to use), and
-    # httpx does not.
+def test_an_emoji_host_is_refused_by_the_check_itself_now() -> None:
     value = f"http://{SECRET}\U0001f600.invalid:8080"
-    assert gateway_url_problem(value) is None
+
+    problem = gateway_url_problem(value)
+
+    assert problem
+    assert SECRET not in problem
+
+
+def test_the_net_behind_the_check_stops_the_start_for_an_address_the_client_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The check refuses this address first (the row above), so it is replaced
+    # for this test: the address then reaches the client, whose refusal is the
+    # second line if the check and the client ever drift apart.
+    value = f"http://{SECRET}\U0001f600.invalid:8080"
+    monkeypatch.setattr(settings_module, "gateway_url_problem", lambda _value: None)
 
     with pytest.raises(SettingsError, match=GATEWAY_URL_ENV) as raised:
         knowledge_app.create_app(settings(value))
 
+    assert str(raised.value) == f"{GATEWAY_URL_ENV} is not a URL this server can use"
     assert SECRET not in str(raised.value)
 
 

@@ -37,7 +37,7 @@ from meridian.runtime.settings import RuntimeSettings
 from meridian.runtime.tool_client import ToolClient
 
 CHECKPOINT_TABLES = ("checkpoints", "checkpoint_blobs", "checkpoint_writes")
-APPROVAL = {"approved": True}
+APPROVAL: dict[str, Any] = {}  # a resume delivers no value (S069)
 
 
 class Shared(TypedDict, total=False):

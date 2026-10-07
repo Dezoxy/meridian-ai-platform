@@ -10,7 +10,8 @@ placeholders only (T-07).
 """
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
+from datetime import datetime
 from typing import Any
 
 from meridian.platform.common.audit import AuditEvent, record_event
@@ -70,11 +71,25 @@ class RunOutcome:
 
 @dataclass(frozen=True, slots=True)
 class RunIdentity:
+    """A run's identifiers and, for the leg that holds the run, its claim.
+
+    ``claimed_at`` is the ``updated_at`` that the statement which took the run
+    for this leg wrote (``start_run``, ``claim_paused_run``). The leg's end
+    (``finish_run``, ``pause_after_failed_resume``) matches on it as well as on
+    the status, so a leg that outlived its lease, whose run another leg has
+    claimed since, writes nothing: the claim moved ``updated_at`` on. It is
+    leg state, not part of the run's identity, so it is left out of equality.
+
+    Not built: the tool servers bind a call to a run by its status alone, so a
+    leg that outlived its lease still has its tool calls bound until it ends.
+    """
+
     run_id: uuid.UUID
     thread_id: uuid.UUID
     agent: str
     tenant: str
     reference: str
+    claimed_at: datetime | None = field(default=None, compare=False)
 
 
 def _audit(
@@ -97,13 +112,25 @@ def _audit(
     )
 
 
-def start_run(dsn: str, identity: RunIdentity) -> None:
-    """Insert the ``Running`` row and its ``run.started`` event, atomically."""
+def _claim_of(identity: RunIdentity) -> datetime:
+    """The claim a leg's end matches on. A leg with none (an identity that
+    ``start_run`` or ``claim_paused_run`` did not return) is a mistake in the
+    caller, and writing its end on the status alone would be the hole the claim
+    closes, so it raises."""
+    if identity.claimed_at is None:
+        raise ValueError("the leg has no claim on its run: use the identity returned")
+    return identity.claimed_at
+
+
+def start_run(dsn: str, identity: RunIdentity) -> RunIdentity:
+    """Insert the ``Running`` row and its ``run.started`` event, atomically, and
+    return the identity of the first leg: the one given, with the ``updated_at``
+    the insert wrote as its claim."""
     with connect(dsn, SERVICE_NAME) as conn:
-        conn.execute(
+        row = conn.execute(
             "INSERT INTO runtime.runs "
             "(run_id, thread_id, agent, tenant, reference, status) "
-            "VALUES (%s, %s, %s, %s, %s, 'Running')",
+            "VALUES (%s, %s, %s, %s, %s, 'Running') RETURNING updated_at",
             (
                 identity.run_id,
                 identity.thread_id,
@@ -111,8 +138,11 @@ def start_run(dsn: str, identity: RunIdentity) -> None:
                 identity.tenant,
                 identity.reference,
             ),
-        )
+        ).fetchone()
         record_event(conn, _audit(identity, "run.started", "started"))
+    if row is None:
+        raise RuntimeError("the insert of a run returned no row")
+    return replace(identity, claimed_at=row[0])
 
 
 def finish_run(
@@ -125,21 +155,25 @@ def finish_run(
     """Move a ``Running`` row to its new status and write the matching event,
     atomically; return whether it moved.
 
-    A run that is not ``Running`` is left as it is and no event is written: the
-    sweep, or another leg, ended it first, and a late leg must not overwrite
-    that. A retry of a write that did commit adds nothing either.
+    A run that is not ``Running``, or whose ``updated_at`` is not the one the
+    leg's own claim wrote (``identity.claimed_at``), is left as it is and no
+    event is written: the sweep, or another leg that took the run over, moved
+    it first, and a late leg must not overwrite that. A retry of a write that
+    did commit adds nothing either.
 
     ``reason`` (a ``failure_reason`` word) and ``tool`` (a registry ID) go into
     the event of a ``Failed`` run, and of no other state.
     """
     if status != "Failed" and (reason is not None or tool is not None):
         raise ValueError("only a Failed run has a reason or a tool")
+    claim = _claim_of(identity)
     event, outcome = AUDIT_FOR_STATE[status]
     with connect(dsn, SERVICE_NAME) as conn:
         row = conn.execute(
             "UPDATE runtime.runs SET status = %s, updated_at = now() "
-            "WHERE run_id = %s AND status = 'Running' RETURNING run_id",
-            (status, identity.run_id),
+            "WHERE run_id = %s AND status = 'Running' AND updated_at = %s "
+            "RETURNING run_id",
+            (status, identity.run_id, claim),
         ).fetchone()
         if row is None:
             return False
@@ -157,13 +191,17 @@ def pause_after_failed_resume(
     ``AwaitingApproval`` and write ``run.resume_failed`` with the failure's
     ``reason`` word and ``tool``, atomically; return whether it moved. The pause
     is still pending in the thread's checkpoints, so the run can be resumed
-    again. A run that is not ``Running`` is left as it is and no event is
-    written, so a retry of a write that did commit adds nothing."""
+    again. A run that is not ``Running``, or whose ``updated_at`` is not the one
+    the leg's own claim wrote, is left as it is and no event is written, so a
+    leg that another leg took the run from, and a retry of a write that did
+    commit, add nothing."""
+    claim = _claim_of(identity)
     with connect(dsn, SERVICE_NAME) as conn:
         row = conn.execute(
             "UPDATE runtime.runs SET status = 'AwaitingApproval', updated_at = now() "
-            "WHERE run_id = %s AND status = 'Running' RETURNING run_id",
-            (identity.run_id,),
+            "WHERE run_id = %s AND status = 'Running' AND updated_at = %s "
+            "RETURNING run_id",
+            (identity.run_id, claim),
         ).fetchone()
         if row is None:
             return False
@@ -181,7 +219,12 @@ def claim_paused_run(
     caller whose tenant or reference is not the run's, or whose run is neither
     ``AwaitingApproval`` nor ``Running`` and idle for longer than
     ``RUNNING_LEASE_SECONDS``. The takeover of such a ``Running`` run has the
-    reason ``stale-running`` in its event."""
+    reason ``stale-running`` in its event.
+
+    The identity carries the ``updated_at`` this update wrote (``claimed_at``),
+    which the leg's end matches on. A takeover is later than the value it
+    replaces by more than the lease, so it is never the value of the leg it
+    takes the run from."""
     with connect(dsn, SERVICE_NAME) as conn:
         # The row lock makes the status read below the one the update sees
         # (a concurrent claim waits here, then finds the run fresh).
@@ -194,12 +237,12 @@ def claim_paused_run(
             "WHERE run_id = %s AND tenant = %s AND reference = %s "
             "AND (status = 'AwaitingApproval' OR (status = 'Running' "
             "AND updated_at < now() - make_interval(secs => %s))) "
-            "RETURNING thread_id, agent",
+            "RETURNING thread_id, agent, updated_at",
             (run_id, tenant, reference, float(RUNNING_LEASE_SECONDS)),
         ).fetchone()
         if row is None:
             return None
-        thread_id, agent = row
+        thread_id, agent, claimed_at = row
         stale = before is not None and before[0] == "Running"
         identity = RunIdentity(
             run_id=run_id,
@@ -207,6 +250,7 @@ def claim_paused_run(
             agent=agent,
             tenant=tenant,
             reference=reference,
+            claimed_at=claimed_at,
         )
         record_event(
             conn,

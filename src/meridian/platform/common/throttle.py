@@ -1,8 +1,9 @@
-"""The audit throttle of refusals (T-49), shared by the gateway and the tool
-servers (S013).
+"""The audit throttle of refusals (T-49), shared by the gateway, the Agent
+Runtime, the tool servers and the caller check of each (S013, S069).
 
 A refusal flood must leave one audit row per window, not one per request. The
 state lives and dies with the process, which is right for one replica (C-01).
+The counts of a flood's last window are written by ``refusal_summary``.
 """
 
 import threading
@@ -43,14 +44,15 @@ class RefusalAuditThrottle:
     the row and calls ``release`` if the write fails.
 
     The refusals suppressed in a flood's last window are carried by no row. A
-    caller that wants them written calls ``take_ended`` now and then (with
-    ``everything`` at shutdown), writes one row per ``(tenant, reason, count)``
-    it gets back, and calls ``restore`` with that count if a write fails. A
-    count waits two windows after the key's last row, its last release or its
-    last restore, so the next refusal of a flood still carries it in its own
-    row, and a summary that cannot be written is tried again after two windows,
-    not with every request. A caller that
-    never calls ``take_ended`` sees no change.
+    caller that wants them written (every service does, through
+    ``refusal_summary.write_ended_summaries``) calls ``take_ended`` now and
+    then (with ``everything`` at shutdown), writes one row per
+    ``(tenant, reason, count)`` it gets back, and calls ``restore`` with that
+    count if a write fails. A count waits two windows after the key's last row,
+    its last release or its last restore, so the next refusal of a flood still
+    carries it in its own row, and a summary that cannot be written is tried
+    again after two windows, not with every request. A caller that never calls
+    ``take_ended`` sees no change.
     """
 
     def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:

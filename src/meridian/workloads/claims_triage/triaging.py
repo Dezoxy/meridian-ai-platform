@@ -21,7 +21,6 @@ from fastapi.responses import JSONResponse
 from opentelemetry.trace import Span
 from psycopg.types.json import Jsonb
 from pydantic import ValidationError
-from pydantic_core import ErrorDetails
 
 from meridian.platform.common.db import connect
 from meridian.platform.common.http import database_failure, error_answer
@@ -50,6 +49,13 @@ from meridian.workloads.claims_triage.lifecycle import (
     RUNTIME_TIMEOUT_SECONDS as RUNTIME_TIMEOUT_SECONDS,
 )
 from meridian.workloads.claims_triage.meters import ClaimsMeters
+
+# ``invalid_fields`` and ``DATA_KEY`` moved to ``models`` (S069) so that
+# ``runtime_calls``, which this module imports, can log with them; this module
+# still offers ``DATA_KEY``, as it offered it before.
+from meridian.workloads.claims_triage.models import (
+    DATA_KEY as DATA_KEY,
+)
 from meridian.workloads.claims_triage.models import (
     ClaimFacts,
     ClaimResponse,
@@ -57,6 +63,7 @@ from meridian.workloads.claims_triage.models import (
     DecisionFailure,
     ProposalSummary,
     Route,
+    invalid_fields,
 )
 from meridian.workloads.claims_triage.posted_text import input_for_run
 from meridian.workloads.claims_triage.proposal import TriageProposal
@@ -114,11 +121,6 @@ RUN_OUTCOMES: Mapping[tuple[RunState, Route], Transition] = {
 
 logger = logging.getLogger(__name__)
 
-# What stands for a key of the data in a location: ``extra="forbid"`` puts the
-# key an unknown field was sent under in the error's location, and the key is
-# the caller's (or the stored row's), not the model's.
-DATA_KEY = "*"
-
 
 def claim_database_failure(exc: psycopg.Error, claim_id: str) -> tuple[int, str]:
     """``database_failure`` for a failure that has a claim: the same answer, and
@@ -131,23 +133,6 @@ def claim_database_failure(exc: psycopg.Error, claim_id: str) -> tuple[int, str]
         exc.sqlstate or "none",
     )
     return database_failure(exc)
-
-
-def invalid_fields(exc: ValidationError) -> tuple[tuple[str, str], ...]:
-    """What failed to validate, as ``(dotted location, error type)`` pairs and
-    nothing else: never the message, the input or the context, which quote the
-    claimant's values. A list index is kept (``documents.3``); a key of the data
-    is replaced (``DATA_KEY``). No model of the workload has a free-keyed
-    mapping, so the keys of the data come only from an undeclared field."""
-    errors = exc.errors(include_url=False, include_input=False, include_context=False)
-    return tuple((_dotted(error), error["type"]) for error in errors)
-
-
-def _dotted(error: ErrorDetails) -> str:
-    parts = [str(part) for part in error["loc"]]
-    if error["type"] == "extra_forbidden" and parts:
-        parts[-1] = DATA_KEY
-    return ".".join(parts)
 
 
 def facts_for_run(
@@ -211,7 +196,15 @@ def triage_outcome(run: RunResponse) -> tuple[TriageProposal, Transition]:
     runtime answered is outside the contract."""
     try:
         proposal = TriageProposal.model_validate(run.output)
-    except ValidationError:
+    except ValidationError as exc:
+        # The fields and their error types, never a value: the output carries
+        # the model's rationale and a clause's text.
+        logger.warning(
+            "the runtime's output of run %s is not a triage proposal: %s %s",
+            run.run_id,
+            type(exc).__name__,
+            invalid_fields(exc),
+        )
         raise RuntimeCallError(
             "the runtime's output is not a triage proposal",
             run_id=run.run_id,
@@ -521,15 +514,38 @@ def run_taken_triage(
     span; the run's ID is set on it. Every triage passes here, whichever route
     took it, so this is where ``meters`` counts it, once, by how it ended (the
     words are in ``meters.py``); a failure no branch expected is counted
-    ``unexpected`` and raised, the 409 excepted: it is counted where it is raised."""
+    ``unexpected`` and raised, the 409 excepted: it is counted where it is raised.
+    A proposal is counted ``stored`` when it is stored (``_run_triage``); the
+    answer is built after that and outside the count, so an answer that cannot
+    be built is raised (a 500) and is not a second count for a triage that
+    stored its proposal."""
     try:
-        return _run_triage(
+        outcome = _run_triage(
             dsn, tenant, http, span, claim_id, run_input, taken_at, meters
         )
     except Exception as exc:
         if meters is not None and not isinstance(exc, HTTPException):
             meters.triage_failed("unexpected")
         raise
+    if isinstance(outcome, DecisionFailure):
+        return outcome
+    run, proposal, transition = outcome
+    return ClaimResponse(
+        claim_id=claim_id,
+        state=transition.target,
+        run_id=run.run_id,
+        run_status=run.status,
+        proposal=ProposalSummary(route=proposal.route, drafted_by=proposal.drafted_by),
+    )
+
+
+class _Stored(NamedTuple):
+    """A triage that stored its proposal, already counted: what the answer is
+    built from."""
+
+    run: RunResponse
+    proposal: TriageProposal
+    transition: Transition
 
 
 def _run_triage(
@@ -541,7 +557,7 @@ def _run_triage(
     run_input: dict[str, Any],
     taken_at: datetime,
     meters: ClaimsMeters | None,
-) -> ClaimResponse | DecisionFailure:
+) -> _Stored | DecisionFailure:
     try:
         run = start_run(http, tenant, claim_id, run_input)
         proposal, transition = triage_outcome(run)
@@ -591,13 +607,6 @@ def _run_triage(
         if meters is not None:
             meters.triage_taken_over()
         raise HTTPException(409, TAKEN_OVER_DETAIL)
-    response = ClaimResponse(
-        claim_id=claim_id,
-        state=transition.target,
-        run_id=run.run_id,
-        run_status=run.status,
-        proposal=ProposalSummary(route=proposal.route, drafted_by=proposal.drafted_by),
-    )
     if meters is not None:
         meters.proposal_stored(proposal)
-    return response
+    return _Stored(run, proposal, transition)
