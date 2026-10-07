@@ -1,0 +1,75 @@
+# The liveness probe of approver-policy's Deployment (S073). The chart
+# (cert-manager-approver-policy v0.28.0, the newest release) renders a readiness
+# probe and no liveness probe, has no value for one, and its values schema
+# refuses a key it does not know, so the probe cannot go in
+# values/approver-policy.yaml. up.sh applies this file after the release is
+# installed, server-side, under the field manager `meridian-kind` and WITHOUT
+# forcing conflicts: it owns the one field below and nothing else of the
+# Deployment (no image, no replicas, no resources). If a later chart takes the
+# field, the apply fails on the conflict (on a cold install, in up.sh; on a
+# cluster that already has the probe, inside Helm's upgrade, which names no
+# file: a conflict on livenessProbe owned by meridian-kind means the chart now
+# has the probe). The remedy has TWO steps, in this order. First release the
+# field: deleting this file and the apply from up.sh leaves `meridian-kind`
+# owning the probe on the live Deployment, and Helm's next upgrade conflicts
+# again. Apply a copy of this file without the livenessProbe lines, once,
+# server-side under the field manager meridian-kind: an apply that omits a field
+# its manager owned drops it, and no force flag is needed (the other way, one
+# Helm upgrade with --force-conflicts, also works on paper and takes every
+# conflicting field of the release, so it was not chosen). Neither was tried on
+# a cluster. Then delete this file, remove the apply from up.sh and set the
+# chart's value instead. A "Required value" error from the apply, instead of a
+# conflict, means the Deployment is absent or its container was renamed: this
+# file then no longer updates an object that exists.
+#
+# Why /readyz and not /healthz: the binary serves /readyz on its health port
+# and nothing at /healthz or /livez (both answer 404, read on the running pod
+# on 2026-10-07). A probe on /healthz would fail from the first try and the
+# kubelet would restart the pod for ever. The port is named, as the chart names
+# it (`healthcheck`, 6060 by app.readinessProbe.port), so a changed port in the
+# values moves the probe with it.
+#
+# Why these numbers: S073's first half recorded probes timing out under load on
+# this machine, and the readiness probe's own timeout is one second. Thirty
+# seconds before the first try, a try every twenty seconds, five seconds to
+# answer and six failures in a row (two minutes with no answer) before the
+# kubelet restarts the container: a pod that is only slow is left alone.
+#
+# What it catches: a frozen process, or a listener that is dead. /readyz has
+# one check, that the webhook server has started. What it does NOT catch: a
+# reconciler that is stuck while HTTP still answers (certificates stay Ready,
+# requests stay undecided). No target this binary offers can see that;
+# MeridianCertificateRenewalOverdue (infra/kind/alerts/meridian.yaml) is the
+# sight of it, and MeridianCertificateIssuingRestartLoop the sight of a hang
+# that recurs and is restarted again and again.
+#
+# Seen on kind on 2026-10-07 (run R13): the probe on the Deployment with these
+# numbers; a second `make up` of the same chart a no-op (the same pod, no
+# rollout, the field still owned by meridian-kind alone); ten quiet minutes (0
+# restarts, no "Liveness probe failed"); and a frozen process (the node's STOP
+# signal) restarted by the kubelet 140 seconds after it stopped. Not seen: an
+# upgrade to a NEWER chart, the apply's refusal when a chart takes the field,
+# the probe under real load (the machine's load was under 3), and a cold
+# install with this file.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cert-manager-approver-policy
+  namespace: cert-manager
+spec:
+  template:
+    spec:
+      containers:
+        # The container's name is the chart's name helper, the same as the
+        # Deployment's (read in templates/deployment.yaml of v0.28.0 and in a
+        # local `helm template` with this repository's values). The list is
+        # merged by name: the other fields of the container are not touched.
+        - name: cert-manager-approver-policy
+          livenessProbe:
+            httpGet:
+              path: /readyz
+              port: healthcheck
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
