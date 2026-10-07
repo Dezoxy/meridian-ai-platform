@@ -39,6 +39,21 @@ ROLLBACK_RUNBOOK = (
 ).read_text(encoding="utf-8")
 SCRIPTS = ("common.sh", "pins.env", "up.sh", "deploy.sh", "down.sh", "holder.sh")
 
+
+def smoke_parts() -> list[Path]:
+    """Every file under ``smoke.d/``, the parts ``smoke.sh`` sources (S074). A part
+    is not run on its own, but it is the text of a script that is: a rule about
+    what a script says, or never says, holds for it as it held for ``smoke.sh``
+    before the split. A rule about what a script does when it runs (``SCRIPTS``,
+    the ``need_tools`` line) is about the scripts alone."""
+    return sorted(path for path in (KIND_DIR / "smoke.d").rglob("*") if path.is_file())
+
+
+def scripts_and_parts() -> list[Path]:
+    """Every ``*.sh`` of infra/kind/ and every part of ``smoke.sh``."""
+    return [*sorted(KIND_DIR.glob("*.sh")), *smoke_parts()]
+
+
 ME = "s075-m2"
 OTHER = "s075-f1"
 TIME = "2026-10-06T12:00:00Z"
@@ -466,9 +481,10 @@ def test_the_four_places_that_speak_of_changing_share_one_wording(
     assert CHANGING_MEANS in taken.stdout
     assert CHANGING_MEANS in holder.stdout
     # Defined once, in common.sh; the other scripts use it and do not restate it.
-    for script in sorted(KIND_DIR.glob("*.sh")):
+    for script in scripts_and_parts():
+        name = script.relative_to(KIND_DIR).as_posix()
         count = script.read_text(encoding="utf-8").count("or the last one did not end")
-        assert count == (1 if script.name == "common.sh" else 0), script.name
+        assert count == (1 if name == "common.sh" else 0), name
 
 
 def test_a_holder_whose_last_run_ended_well_is_not_said_to_have_failed(
@@ -1122,14 +1138,14 @@ def test_the_record_is_named_in_common_sh_alone_and_its_functions_are_there_once
         "read_cluster_holder",
     ):
         assert COMMON_SH.count(f"\n{name}() {{") == 1
-    for script in sorted(KIND_DIR.glob("*.sh")):
+    for script in scripts_and_parts():
         code = [
             line
             for line in script.read_text(encoding="utf-8").splitlines()
             if not line.lstrip().startswith("#")
         ]
         reads = any(CONFIGMAP in line for line in code)
-        assert not reads or script.name == "common.sh"
+        assert not reads or script.relative_to(KIND_DIR).as_posix() == "common.sh"
 
 
 # ── the documents ────────────────────────────────────────────────────────────

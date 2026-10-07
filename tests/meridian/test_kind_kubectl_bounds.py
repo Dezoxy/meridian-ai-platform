@@ -33,7 +33,7 @@ from pathlib import Path
 import pytest
 from certscriptsupport import KIND_DIR, SECONDS
 from test_certificate_deploy import run_deploy, write_stub
-from test_kind_cluster_holder import run_script
+from test_kind_cluster_holder import run_script, scripts_and_parts, smoke_parts
 from test_kind_upkeep_script import calls_of, run_upkeep
 from test_smoke_trap import start_smoke
 
@@ -72,8 +72,10 @@ KNOWN_VERBS = {
 }
 # The three calls that stay a raw ``kubectl``: a port-forward is started in the
 # background, and ``kctl ... &`` would background a subshell, whose process id
-# is not kubectl's, so the script's ``kill`` would leave kubectl running.
-RAW_PORT_FORWARDS = {"grafana.sh": 1, "demo.sh": 1, "smoke.sh": 1}
+# is not kubectl's, so the script's ``kill`` would leave kubectl running. A file
+# is counted by its path under infra/kind/: a part of smoke.sh is
+# ``smoke.d/<file>``, so the key moves with the call when a cut moves it.
+RAW_PORT_FORWARDS = {"grafana.sh": 1, "demo.sh": 1, "smoke.d/shared.sh": 1}
 SCRIPTS = (
     "up.sh",
     "deploy.sh",
@@ -772,7 +774,11 @@ def words_after(line: str, start: int) -> list[str]:
 def kctl_calls() -> list[tuple[str, list[str]]]:
     """Every ``kctl`` call in the scripts under test, as (script, arguments)."""
     found = []
-    for name in (*SCRIPTS, "down.sh", "holder.sh", "grafana.sh", "common.sh"):
+    # The parts smoke.sh sources (S074) are read as smoke.sh was, named by their
+    # path under KIND_DIR: the entry file alone holds fewer than the hundred
+    # sites the first test below reads.
+    parts = [path.relative_to(KIND_DIR).as_posix() for path in smoke_parts()]
+    for name in (*SCRIPTS, "down.sh", "holder.sh", "grafana.sh", "common.sh", *parts):
         text = (KIND_DIR / name).read_text(encoding="utf-8")
         for line in logical_lines(text):
             for match in re.finditer(r"(?<![\w-])kctl\s", line):
@@ -784,11 +790,11 @@ def raw_calls() -> list[tuple[str, str]]:
     """Every ``kubectl`` or ``helm`` the scripts run at a command's place and not
     inside a quoted message, as (script, the line's first words)."""
     found = []
-    for path in sorted(KIND_DIR.glob("*.sh")):
+    for path in scripts_and_parts():  # a part is named by its path: smoke.d/<file>
         for line in logical_lines(path.read_text(encoding="utf-8")):
             bare = re.sub(r"\"(?:[^\"\\]|\\.)*\"|'[^']*'", "", line)
             if re.search(r"(?:^\s*|[;&|(]\s*|\bexec\s+|\$\(\s*)(kubectl|helm)\s", bare):
-                found.append((path.name, line.strip()))
+                found.append((path.relative_to(KIND_DIR).as_posix(), line.strip()))
     return found
 
 
