@@ -51,12 +51,12 @@ from workloads.claims_triage.test_claim_uploads import (
     nothing_stored,
     owner_execute,
     put_claim,
+    short_lock_wait,
     stored_files,
 )
 
-from meridian.platform.common import db as db_module
 from meridian.platform.common.db import connect
-from meridian.workloads.claims_triage import claimant
+from meridian.workloads.claims_triage import claimant, uploads
 from meridian.workloads.claims_triage.claim_files import FileSummary
 from meridian.workloads.claims_triage.lifecycle import LifecycleState
 from meridian.workloads.claims_triage.uploads import (
@@ -499,16 +499,67 @@ def test_a_claim_past_3_mib_gets_the_409_page(fresh_database: DatabaseHandle) ->
     assert refusal_of(response) == (409, CLAIM_BYTES_DETAIL)
 
 
-def test_the_same_file_twice_gets_the_409_page(fresh_database: DatabaseHandle) -> None:
+def test_the_same_file_again_is_the_forms_success_not_a_refusal(
+    fresh_database: DatabaseHandle,
+) -> None:
+    """A retry after an answer that was lost: the first post stored the file, so
+    the second is a 303 to the status page, which lists it once. Nothing more is
+    stored and no second audit row is written."""
     db = fresh_database
     put_claim(db)
     client = make_client(db)
     assert post_file(client, PDF).status_code == 303
+    audit_before = audit_rows(db)
 
     response = post_file(client, PDF, kind="other")
 
-    assert refusal_of(response) == (409, DUPLICATE_DETAIL)
+    assert response.status_code == 303
+    assert response.headers["location"] == STATUS_URL
     assert file_count(db) == 1
+    assert audit_rows(db) == audit_before
+    assert len(rows_of(client.get(STATUS_URL).text)) == 1
+
+
+# mutation: the duplicate taken as success removed
+def test_the_json_route_keeps_its_409_for_the_same_file_and_hands_out_no_identifier(
+    fresh_database: DatabaseHandle,
+) -> None:
+    db = fresh_database
+    put_claim(db)
+    client = make_client(db)
+    first = client.post(
+        f"/claims/{CLAIM}/files", data={"kind": "photos"}, files={"file": ("a", PDF)}
+    )
+
+    again = client.post(
+        f"/claims/{CLAIM}/files", data={"kind": "photos"}, files={"file": ("a", PDF)}
+    )
+
+    assert (first.status_code, again.status_code) == (201, 409)
+    assert again.json() == {"detail": DUPLICATE_DETAIL}
+    assert first.json()["file_id"] not in again.text
+
+
+@pytest.mark.parametrize("size", [30, MAX_FILE_BYTES])
+def test_the_form_tells_the_conflicts_apart_by_type_and_not_by_their_sentence(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch, size: int
+) -> None:
+    """A claim that is full (five small files, or 3 MiB) refuses a new file with a
+    409 page even when the sentence it is given is the duplicate's: the form reads
+    the conflict's typed reason, never its text."""
+    db = fresh_database
+    put_claim(db)
+    monkeypatch.setattr(uploads, "CLAIM_FULL_DETAIL", DUPLICATE_DETAIL)
+    monkeypatch.setattr(uploads, "CLAIM_BYTES_DETAIL", DUPLICATE_DETAIL)
+    client = make_client(db)
+    stored = 5 if size == 30 else 3
+    for salt in range(stored):
+        assert post_file(client, blob(size, salt)).status_code == 303
+
+    response = post_file(client, blob(30, 99))
+
+    assert refusal_of(response) == (409, DUPLICATE_DETAIL)
+    assert file_count(db) == stored
 
 
 def test_a_full_store_gets_the_507_page_for_everyone(
@@ -566,7 +617,7 @@ def test_a_lock_that_does_not_come_in_time_gets_the_503_page_with_a_wait(
             holder.execute(
                 "SELECT pg_advisory_xact_lock(%s::int, 0)", (STORE_LOCK_CLASS,)
             )
-        monkeypatch.setattr(db_module, "STATEMENT_TIMEOUT_MS", 300)
+        short_lock_wait(monkeypatch)
         response = post_file(make_client(db), blob(20, 5))
         holder.commit()
     finally:

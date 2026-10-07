@@ -1,5 +1,6 @@
 """The shared app setup: error answers, the body limit, health and lifecycle."""
 
+import asyncio
 import logging
 from collections.abc import Callable, Iterator, Mapping
 from datetime import UTC, datetime, timedelta
@@ -23,6 +24,7 @@ from opentelemetry.sdk.trace.sampling import ALWAYS_ON, Sampler, SamplingResult
 from opentelemetry.trace import ProxyTracerProvider
 from psycopg import errors
 from servicesupport import REGISTRY_DIR
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from tlsserver import serve_tls
 from tlssupport import (
     CertificateAuthority,
@@ -917,7 +919,9 @@ def test_a_route_with_a_limit_of_its_own_takes_it_declared_or_streamed() -> None
         pytest.param("POST", "/files", id="a segment short"),
         pytest.param("POST", "/files/7/more", id="a segment more"),
         pytest.param("POST", "/files/7/", id="a trailing slash"),
-        pytest.param("POST", "/files//", id="an empty segment"),
+        pytest.param("POST", "/files/", id="an empty segment"),
+        pytest.param("GET", "/files/7", id="GET on the route's path"),
+        pytest.param("HEAD", "/files/7", id="HEAD on the route's path"),
         pytest.param("POST", "/Files/7", id="another case"),
         pytest.param("POST", "/axb/7", id="a dot in the pattern is only a dot"),
     ],
@@ -927,7 +931,11 @@ def test_a_request_that_is_not_exactly_the_route_keeps_the_apps_limit(
 ) -> None:
     client = build_with_route_limit()
 
-    response = client.request(method, path, content=b"x" * (LIMIT + 1))
+    # No redirect is followed: ``/files/`` is redirected (307) to ``/files``, which
+    # keeps the apps limit and would answer 413 on its own account.
+    response = client.request(
+        method, path, content=b"x" * (LIMIT + 1), follow_redirects=False
+    )
 
     assert response.status_code == 413
 
@@ -945,7 +953,69 @@ def test_the_limit_of_a_route_may_also_be_lower_than_the_apps() -> None:
 
     assert client.post("/other", content=b"x" * 11).status_code == 413
     assert client.post("/other", content=b"x" * 10).status_code == 200
+    assert client.post("/other", content=chunks([6, 5])).status_code == 413
+    assert client.post("/other", content=chunks([5, 5])).status_code == 200
     assert client.post("/files/7", content=b"x" * LIMIT).status_code == 200
+
+
+async def drive(scope: dict[str, Any], body: bytes) -> list[str]:
+    """Run the middleware, configured with a route limit, over a bare ASGI app
+    that reads the body once; the list says what happened: ``reached`` the app,
+    ``refused`` (the 413 sent) or ``413 raised`` where the body was read."""
+    events: list[str] = []
+
+    async def app(scope: Any, receive: Any, send: Any) -> None:
+        events.append("reached")
+        await receive()
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    async def send(message: dict[str, Any]) -> None:
+        if message["type"] == "http.response.start":
+            events.append(f"refused {message['status']}")
+
+    middleware = http.BodyLimitMiddleware(
+        app, LIMIT, route_limits={("POST", "/files/{id}"): BIG}
+    )
+    try:
+        await middleware(scope, receive, send)
+    except StarletteHTTPException as exc:  # the middleware's, not FastAPI's
+        events.append(f"{exc.status_code} raised")
+    return events
+
+
+def http_scope(path: str, root_path: str = "") -> dict[str, Any]:
+    return {
+        "type": "http",
+        "method": "POST",
+        "path": path,
+        "root_path": root_path,
+        "headers": [],
+    }
+
+
+@pytest.mark.parametrize("kind", ["websocket", "lifespan"])
+def test_a_scope_that_is_not_http_passes_untouched_with_a_route_limit_set(
+    kind: str,
+) -> None:
+    # The early return on the scope's type: nothing of a websocket or the
+    # lifespan is counted or refused, even with the limits configured.
+    scope = http_scope("/files/7") | {"type": kind}
+
+    assert asyncio.run(drive(scope, b"x" * (BIG + 1))) == ["reached"]
+
+
+def test_a_path_under_a_root_path_keeps_the_apps_limit_it_fails_closed() -> None:
+    # The middleware matches ``scope["path"]``. Behind a server started with a
+    # root path the path carries the prefix, the pattern misses, and the app's
+    # limit applies: an upload would be refused at 64 KiB, never admitted at the
+    # larger one. No service sets a root path today (the review's L7); this pins
+    # the direction of the failure, so a change to strip it is a decision.
+    scope = http_scope("/api/files/7", root_path="/api")
+
+    assert asyncio.run(drive(scope, b"x" * (LIMIT + 1))) == ["reached", "413 raised"]
+    assert asyncio.run(drive(http_scope("/files/7"), b"x" * (LIMIT + 1))) == ["reached"]
 
 
 def test_no_route_limit_is_every_route_at_the_apps_limit() -> None:

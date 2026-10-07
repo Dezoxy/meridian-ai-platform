@@ -15,7 +15,9 @@ import tempfile
 import time
 import uuid
 import zlib
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from typing import Any
 
 import psycopg
@@ -33,7 +35,6 @@ from servicesupport import (
     owner_rows,
 )
 
-from meridian.platform.common import db as db_module
 from meridian.platform.common.db import connect
 from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.workloads.claims_triage import uploads
@@ -1030,6 +1031,37 @@ def test_an_upload_to_a_claim_waits_for_the_one_before_it_on_that_claim(
 
 
 # ── a lock wait that times out is "busy", not a database that is down ───────
+class ShortLockWait:
+    """A connection whose advisory-lock statements, and only those, have a short
+    statement timeout (``SET LOCAL``, in the transaction the statement is in): the
+    waiting statement is cancelled as the real 10 s bound cancels it, and the
+    cheap statements around it keep the real bound, so that a slow machine cannot
+    cancel one of them into the same answer. The production code is unchanged."""
+
+    def __init__(self, conn: Any) -> None:
+        self._conn = conn
+
+    def execute(self, query: Any, params: Any = None) -> Any:
+        if "pg_advisory_xact_lock" in str(query):
+            self._conn.execute("SET LOCAL statement_timeout = 300")
+        return self._conn.execute(query, params)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._conn, name)
+
+
+def short_lock_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give the upload's lock waits a 300 ms bound (see ``ShortLockWait``)."""
+    real = uploads.connect
+
+    @contextmanager
+    def connect_with_short_wait(dsn: str, name: str) -> Iterator[ShortLockWait]:
+        with real(dsn, name) as conn:
+            yield ShortLockWait(conn)
+
+    monkeypatch.setattr(uploads, "connect", connect_with_short_wait)
+
+
 @pytest.mark.parametrize("which", ["the claim's lock", "the store's lock"])
 def test_a_lock_wait_that_times_out_is_503_busy_with_a_wait_and_stores_nothing(
     fresh_database: DatabaseHandle,
@@ -1050,9 +1082,7 @@ def test_a_lock_wait_that_times_out_is_503_busy_with_a_wait_and_stores_nothing(
             holder.execute(
                 "SELECT pg_advisory_xact_lock(%s::int, 0)", (STORE_LOCK_CLASS,)
             )
-        # The statement timeout the app's connections carry, made short: the
-        # waiting statement is cancelled by it, as it is by the real 10 s.
-        monkeypatch.setattr(db_module, "STATEMENT_TIMEOUT_MS", 300)
+        short_lock_wait(monkeypatch)
         client = make_client(db)
 
         with caplog.at_level(logging.DEBUG):
@@ -1064,8 +1094,12 @@ def test_a_lock_wait_that_times_out_is_503_busy_with_a_wait_and_stores_nothing(
     assert response.status_code == 503
     assert response.json() == {"detail": uploads.LOCK_BUSY_DETAIL, "claim_id": CLAIM}
     assert response.headers["Retry-After"] == "5"
-    assert "QueryCanceled" in caplog.text
-    assert "57014" in caplog.text
+    # Contention is normal, not a database fault: one WARNING with the class and
+    # the SQLSTATE, and no ERROR line at all.
+    assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
+    (line,) = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert "QueryCanceled" in line.getMessage()
+    assert "57014" in line.getMessage()
     assert CANARY_NAME not in caplog.text + response.text
     assert file_count(db) == 0
     assert audit_rows(db) == []

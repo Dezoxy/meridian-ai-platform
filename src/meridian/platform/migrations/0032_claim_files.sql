@@ -11,8 +11,12 @@
 -- claim_id); nothing deletes a claim and nothing changes a claim_id, so they
 -- never fire.
 --
--- What it is for. A claimant may attach a file to a claim and the adjuster may
--- download it. Nothing reads the file: no text is taken out of it, no model
+-- What it is for. A claimant may attach a file to a claim, with the upload
+-- route switched on (it is off by default), and the adjuster's page lists the
+-- claim's files (F4a). A download of the bytes is NOT built: F4b will build it,
+-- behind a switch of its own, and until then nothing selects the content. This
+-- file has not been applied anywhere outside disposable test databases, which
+-- is why its comments can still be corrected. Nothing reads the file: no text is taken out of it, no model
 -- sees it and no rule changes, so a file is not a document arrival and moves
 -- no claim (claims.claim_documents, which holds the names of the documents that
 -- arrived, is unchanged and stays names only). The bytes are stored in this
@@ -79,8 +83,8 @@
 -- set and nothing deletes a file; claims_api cannot, and a stored file stays
 -- until the database is dropped. The table also grows the database that holds
 -- the audit trail (2 Gi on kind), which is why the app keeps a global ceiling.
--- No scanning either: a file is stored as it came, and the pages say it was not
--- scanned (designed, not built).
+-- No scanning either: a file is stored as it came, and the adjuster's list says
+-- "not scanned" on every row (a scanner is designed, not built).
 --
 -- Lock. CREATE TABLE ... REFERENCES takes SHARE ROW EXCLUSIVE on claims.claims.
 -- It blocks the writers of claims.claims (ROW EXCLUSIVE: insert, update, delete),

@@ -557,9 +557,38 @@ def test_the_upload_route_answers_201_with_a_stored_file_and_names_its_errors() 
     assert schema_ref(spec, UPLOAD, "post", "201").endswith("/StoredFile")
     for status in ("403", "404", "409", "413", "415", "429", "507"):
         assert schema_ref(spec, UPLOAD, "post", status).endswith("/ErrorBody")
-    for status in ("500", "503"):
-        assert schema_ref(spec, UPLOAD, "post", status).endswith("/ClaimErrorBody")
+    for status in ("408", "500", "503"):
+        assert schema_ref(spec, UPLOAD, "post", status).endswith("/UploadErrorBody")
     assert spec["paths"][UPLOAD]["post"]["tags"] == ["claims"]
+
+
+def test_the_upload_routes_error_body_has_an_optional_claim_and_no_run() -> None:
+    # The route's own answers carry the claim; the middleware's 500 and the audit
+    # log's 503 carry only ``detail``, so the claim cannot be required, and an
+    # upload starts no run, so there is no ``run_id`` as in ``ClaimErrorBody``.
+    body = SPECS["claims-uploads"]["components"]["schemas"]["UploadErrorBody"]
+
+    assert set(body["properties"]) == {"detail", "claim_id"}
+    assert body["required"] == ["detail"]
+
+
+def test_the_upload_route_says_what_its_415_and_busy_503_mean() -> None:
+    responses = SPECS["claims-uploads"]["paths"][UPLOAD]["post"]["responses"]
+
+    assert "PDF, a JPEG or a PNG" in responses["415"]["description"]
+    assert "busy" in responses["503"]["description"].lower()
+    assert "deadline" in responses["408"]["description"]
+    # Not the shared sentence every route's 415 would get.
+    assert "not of a type this route takes" not in responses["415"]["description"]
+
+
+def test_the_upload_route_says_synthetic_files_only() -> None:
+    post = SPECS["claims-uploads"]["paths"][UPLOAD]["post"]
+    form = post["requestBody"]["content"]["multipart/form-data"]["schema"]
+
+    assert "Synthetic files only" in post["summary"]
+    assert "never a real person's document" in post["summary"]
+    assert "Synthetic files only" in form["properties"]["file"]["description"]
 
 
 def test_the_upload_routes_429_and_busy_503_say_how_long_to_wait() -> None:
@@ -612,3 +641,8 @@ def test_a_stored_file_is_its_identifier_kind_type_size_and_hash_and_nothing_els
         "image/jpeg",
         "image/png",
     ]
+    # The hash is lower-case hex of 32 bytes and the size is the file's: 1 byte to
+    # 1 MiB, so a generated client can check what it is given.
+    assert stored["properties"]["sha256"]["pattern"] == "^[0-9a-f]{64}$"
+    assert stored["properties"]["size_bytes"]["minimum"] == 1
+    assert stored["properties"]["size_bytes"]["maximum"] == 1024 * 1024

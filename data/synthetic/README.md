@@ -32,7 +32,7 @@ test regenerates the data and compares it with the committed files.
 | `manifest.json` | Seed, counts and a SHA-256 of every other file | 1 |
 | `injection/cases.json` | Injection cases: golden claims that carry an attack or a look-alike text | 94 |
 | `injection/manifest.json` | Seed, counts and a SHA-256 of the case file, and of the golden manifest it was built from | 1 |
-| `upload-samples/` | Four tiny files for the upload demo and their own manifest, outside the golden set (see Upload samples) | 5 |
+| `upload-samples/` | Four tiny files for the upload tests and their own manifest, outside the golden set (see Upload samples) | 5 |
 | `generator/` | The generator; run it with `make synthetic` | code |
 
 Money is whole euros as JSON integers. There are no floats anywhere, and the
@@ -336,12 +336,14 @@ read the diff of `data/evaluation/injection-summary.md`.
 
 ## Upload samples
 
-`upload-samples/` holds the files the upload demo posts to
-`POST /claims/{claim_id}/files` (S070). Status: implemented. They are made in
+`upload-samples/` holds the files the upload tests post to
+`POST /claims/{claim_id}/files` and the claimant's form (S070), the route that
+exists only with the upload switch on (it is off by default). Status: the files
+are implemented; no demo of them has been run on a cluster yet. They are made in
 code, by the same seeded generator and with the standard library only, so no
 file is a real person's document and none is copied from elsewhere:
 
-| File | Is | The upload route |
+| File | Is | The upload route, with the switch on |
 |---|---|---|
 | `synthetic-document.pdf` | A one-page PDF of four lines of text that name a golden claim waiting for documents (drawn from the seed) | accepts (201) |
 | `synthetic-photo.jpg` | A baseline grayscale JPEG of the word SYNTHETIC, 440 by 72 | accepts (201) |
@@ -351,8 +353,8 @@ file is a real person's document and none is copied from elsewhere:
 Each says SYNTHETIC, and that it belongs to Meridian's demo, in its visible
 content or its metadata (the PDF's text and information dictionary, the JPEG's
 comment, the PNG's text chunks). Each is under 20 KiB. The route knows a file by
-its first bytes alone, never by its name, so the fourth file is the demo's
-refusal. `upload-samples/manifest.json` lists each file's name, media type,
+its first bytes alone, never by its name, so the fourth file is the refusal
+case. `upload-samples/manifest.json` lists each file's name, media type,
 size, SHA-256 and what the route does with it.
 
 They are outside the golden set on purpose. The evaluation gate fingerprints the

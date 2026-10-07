@@ -17,7 +17,6 @@ from meridian.workloads.claims_triage.app import create_app
 from meridian.workloads.claims_triage.settings import ClaimsSettings
 from meridian.workloads.claims_triage.uploads import (
     DEFAULT_RATE_PER_MINUTE,
-    MAX_CONCURRENT_UPLOADS,
     MAX_RATE_PER_MINUTE,
     MIN_RATE_PER_MINUTE,
     UPLOADS_RATE_ENV,
@@ -150,21 +149,26 @@ def test_the_plain_path_is_not_refused() -> None:
 
 
 # ── a bound on concurrent uploads ───────────────────────────────────────────
-def test_the_bound_is_a_handful_of_uploads() -> None:
-    assert 1 <= MAX_CONCURRENT_UPLOADS <= 8
-
-
-async def stalled_post(client: httpx.AsyncClient, gate: asyncio.Event):
+async def stalled_post(
+    client: httpx.AsyncClient,
+    gate: asyncio.Event,
+    held: asyncio.Event,
+    path: str = PATH,
+):
     """An upload whose body stops after its first bytes until ``gate`` is set:
-    the request holds whatever the route holds while a body arrives."""
+    the request holds whatever the route holds while a body arrives. ``held`` is
+    set when the app has asked for the chunk after the first, which it does only
+    once it has taken its permit and started to read: a test waits for it instead
+    of for a time."""
     body, headers = valid_form()
 
     async def chunks():
         yield body[:20]
+        held.set()
         await gate.wait()
         yield body[20:]
 
-    return await client.post(PATH, content=chunks(), headers=headers)
+    return await client.post(path, content=chunks(), headers=headers)
 
 
 async def quick_post(client: httpx.AsyncClient):
@@ -191,11 +195,12 @@ def test_an_upload_past_the_bound_is_503_at_once_with_its_own_sentence_and_a_wai
     app = one_permit(monkeypatch)
 
     async def scenario() -> tuple[httpx.Response, httpx.Response]:
-        gate = asyncio.Event()
+        gate, held = asyncio.Event(), asyncio.Event()
         async with client_of(app) as client:
-            first = asyncio.create_task(stalled_post(client, gate))
+            first = asyncio.create_task(stalled_post(client, gate, held))
             try:
-                await asyncio.sleep(0.3)  # the first holds the permit, body unfinished
+                # The first holds the permit, its body unfinished.
+                await asyncio.wait_for(held.wait(), timeout=5)
                 refused = await asyncio.wait_for(quick_post(client), timeout=5)
             finally:
                 gate.set()  # whatever happened, the first is let go
@@ -218,10 +223,10 @@ def test_the_refusal_reads_no_byte_of_the_body(
     pulled: list[int] = []
 
     async def scenario() -> httpx.Response:
-        gate = asyncio.Event()
+        gate, held = asyncio.Event(), asyncio.Event()
         async with client_of(app) as client:
-            first = asyncio.create_task(stalled_post(client, gate))
-            await asyncio.sleep(0.3)
+            first = asyncio.create_task(stalled_post(client, gate, held))
+            await asyncio.wait_for(held.wait(), timeout=5)
 
             async def chunks():
                 pulled.append(1)
@@ -270,14 +275,13 @@ def test_the_permit_comes_back_when_the_client_goes_away_mid_body(
     app = one_permit(monkeypatch)
 
     async def scenario() -> httpx.Response:
-        gate = asyncio.Event()  # never set: the body never ends
+        gate, held = asyncio.Event(), asyncio.Event()  # gate never set
         async with client_of(app) as client:
-            first = asyncio.create_task(stalled_post(client, gate))
-            await asyncio.sleep(0.3)
+            first = asyncio.create_task(stalled_post(client, gate, held))
+            await asyncio.wait_for(held.wait(), timeout=5)
             first.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await first
-            await asyncio.sleep(0.1)
             return await quick_post(client)
 
     after = asyncio.run(scenario())
@@ -290,15 +294,15 @@ def test_each_app_has_its_own_permits(monkeypatch: pytest.MonkeyPatch) -> None:
     first, second = one_permit(monkeypatch), claims_app()
 
     async def scenario() -> httpx.Response:
-        gate = asyncio.Event()
+        gate, held = asyncio.Event(), asyncio.Event()
         async with client_of(first) as busy, client_of(second) as other:
-            held = asyncio.create_task(stalled_post(busy, gate))
+            stalled = asyncio.create_task(stalled_post(busy, gate, held))
             try:
-                await asyncio.sleep(0.3)
+                await asyncio.wait_for(held.wait(), timeout=5)
                 answer = await asyncio.wait_for(quick_post(other), timeout=5)
             finally:
                 gate.set()
-            await held
+            await stalled
             return answer
 
     assert asyncio.run(scenario()).json()["detail"] == NO_DATABASE

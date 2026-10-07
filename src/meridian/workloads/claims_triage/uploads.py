@@ -1,11 +1,14 @@
 """A claimant's uploaded file: ``POST /claims/{claim_id}/files`` (S070, T-38).
 
-A file's bytes are stored with its claim (``claims.claim_files``), listed for
-the adjuster and read back by the pages. Nothing reads the file: no text is
-extracted, nothing is sent to a model, no rule changes. An upload is NOT a
-document arrival (the design's advisor reading): it moves no claim, stores no
-document name, starts no triage and calls no runtime, so no upload can spend
-the model budget. A scanner is designed, not built.
+A file's bytes are stored with its claim (``claims.claim_files``). The claimant's
+form and the adjuster's list of a claim's files (F4a) show its kind, size and
+time, and for the adjuster its type and hash, "not scanned". The download that
+serves the bytes back is NOT built: F4b will build it, with its own switch and
+review, and ``file_content`` below has no caller until then. Nothing reads the
+file: no text is extracted, nothing is sent to a model, no rule changes. An
+upload is NOT a document arrival (the design's advisor reading): it moves no
+claim, stores no document name, starts no triage and calls no runtime, so no
+upload can spend the model budget. A scanner is designed, not built.
 
 The route is unauthenticated, as every route of the app is until S021, so every
 bound is the app's own and the order of its checks is the contract. Each check
@@ -27,29 +30,34 @@ row):
 6. the global ceilings on the table: stored bytes and rows (507).
 
 The body is read before any connection is opened, so no lock is held while
-bytes arrive. Then one transaction takes an advisory lock for the claim, then
-one for the store (always in that order), reads the sums and holds the insert
-and its one audit row. The sums are exact because every upload takes the
-locks before it reads them: under READ COMMITTED an unlocked sum lets N
-uploads at the same moment overshoot a ceiling by N-1 files.
+bytes arrive. It is read under a deadline (408), and a client that goes away
+mid-body is no error: a line at INFO and an answer nobody receives. Then one
+transaction takes an advisory lock for the claim, then one for the store (always
+in that order), reads the sums and holds the insert and its one audit row. The
+sums are exact because every upload takes the locks before it reads them: under
+READ COMMITTED an unlocked sum lets N uploads at the same moment overshoot a
+ceiling by N-1 files.
 """
 
 import asyncio
 import hashlib
+import logging
 import re
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from http import HTTPStatus
-from typing import Literal, get_args
+from typing import Annotated, Literal, get_args
 
 import psycopg
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from opentelemetry.trace import Tracer
+from pydantic import Field
 from starlette.datastructures import UploadFile
 from starlette.formparsers import MultiPartException, MultiPartParser
+from starlette.requests import ClientDisconnect
 
 from meridian.platform.common.audit import AuditEvent, record_event
 from meridian.platform.common.db import connect
@@ -68,9 +76,10 @@ from meridian.workloads.claims_triage.adjuster import (
     is_cross_site,
 )
 from meridian.workloads.claims_triage.lifecycle import SERVICE_NAME
-from meridian.workloads.claims_triage.models import ClaimErrorBody
 from meridian.workloads.claims_triage.rules import Document
 from meridian.workloads.claims_triage.triaging import answer, claim_database_failure
+
+logger = logging.getLogger(__name__)
 
 # ── the settings: three variables, which the chart sets ─────────────────────
 # The chart sets this one (``route.uploads.enabled``, F3) to ``on``; the other two
@@ -129,6 +138,14 @@ MAX_CONCURRENT_UPLOADS = 4
 # or a lock is free in moments; the rate's window is a minute.
 BUSY_RETRY_SECONDS = 5
 RATE_RETRY_SECONDS = RATE_WINDOW_SECONDS
+# The most time the route gives a body to arrive, while it holds one of the four
+# permits (a slow or stalled body would otherwise hold it for as long as the
+# client likes, and four of them would refuse the route to everyone). A 1 MiB file
+# is whole in well under a second on any link the pages expect; 20 s is a link of
+# about 50 KB a second, which is slow and still served. Past it: 408, the permit
+# freed. Envoy buffers the whole request first, so this bounds a caller that goes
+# round the edge (in the cluster, or through a port-forward).
+READ_DEADLINE_SECONDS = 20
 # The first number of each advisory lock's key (the second is the claim's hash,
 # or zero for the store): two lock spaces that cannot meet. A claim's lock is
 # always taken before the store's, so two uploads cannot wait on each other.
@@ -158,6 +175,7 @@ KIND_FIELD_MAX_BYTES = 64
 FILE_KINDS: tuple[str, ...] = (*get_args(Document), "other")
 FileKind = Literal[*FILE_KINDS]
 MediaType = Literal["application/pdf", "image/jpeg", "image/png"]
+ConflictReason = Literal["claim_full", "claim_bytes", "duplicate"]
 # The first bytes of each type; none is the start of another.
 SIGNATURES: tuple[tuple[bytes, MediaType], ...] = (
     (b"%PDF-", "application/pdf"),
@@ -181,6 +199,7 @@ UNSUPPORTED_DETAIL = "the file is not a PDF, a JPEG or a PNG"
 CLAIM_FULL_DETAIL = "the claim already holds five files"
 CLAIM_BYTES_DETAIL = "the claim would hold more than 3 MiB of files"
 DUPLICATE_DETAIL = "the claim already holds this file"
+READ_TIMEOUT_DETAIL = "the file did not arrive in time"
 STORE_FULL_DETAIL = "uploads are stopped: the store is full"
 RATE_DETAIL = "too many uploads in the last minute; try again shortly"
 SATURATED_DETAIL = "uploads are busy: too many at once; try again shortly"
@@ -307,8 +326,28 @@ class StoredFile(WireModel):
     file_id: uuid.UUID
     kind: FileKind
     media_type: MediaType
-    size_bytes: int
-    sha256: str
+    size_bytes: Annotated[int, Field(ge=1, le=MAX_FILE_BYTES)]
+    sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+
+
+class UploadErrorBody(ErrorBody):
+    """An error answer of the upload route. The route's own answers (a refusal
+    after the claim was looked up, a busy or a failed store) say which claim; the
+    middleware's 500 for a failure nobody handled, and the audit log's 503, say
+    only ``detail``. No run: an upload starts none."""
+
+    claim_id: str | None = None
+
+
+class UploadConflict(HTTPException):
+    """A 409 that says which of the three it is, so that nothing parses the
+    sentence: the claim holds five files, it would hold over 3 MiB, or it holds
+    this file already. The JSON route answers all three alike, the claimant's form
+    takes the last as the success it is (a retry after a lost answer)."""
+
+    def __init__(self, reason: ConflictReason, detail: str) -> None:
+        super().__init__(409, detail)
+        self.reason = reason
 
 
 @dataclass(frozen=True, slots=True)
@@ -323,7 +362,9 @@ def file_content(
     conn: psycopg.Connection, tenant: str, claim_id: str, file_id: uuid.UUID
 ) -> FileContent | None:
     """One file's bytes and type, by claim and identifier: ``None`` unless the
-    tenant's claim holds that file."""
+    tenant's claim holds that file. It has no caller until F4b, the download,
+    which is built with its own review and switch; it is here so that the one
+    query that selects ``content`` is written once, with its tenant filter."""
     if conn.execute(CLAIM_EXISTS_SQL, (claim_id, tenant)).fetchone() is None:
         return None
     row = conn.execute(FILE_CONTENT_SQL, (claim_id, file_id)).fetchone()
@@ -349,7 +390,18 @@ class MemoryOnlyParser(MultiPartParser):
     disk past 1 MiB, and the route's body limit lets a part a little past 1 MiB
     through (the envelope's allowance). The pod's only writable path is 16 Mi of
     ``/tmp``, and no upload may touch it. No part can be larger than the body, so
-    nothing rolls over, and the route then refuses a file past 1 MiB itself."""
+    nothing rolls over, and the route then refuses a file past 1 MiB itself.
+
+    This leans on Starlette internals that are not documented API: the class
+    attribute ``spool_max_size``, which the parser reads as ``self.spool_max_size``
+    when it makes each file part's ``SpooledTemporaryFile``; and ``_rolled``, which
+    that file's own test reads. Starlette is not a pin of this repository: it
+    arrives with ``fastapi``, so a refresh of the lock can rename or move them,
+    and the override would then do nothing, silently. A test with no database
+    (``test_claim_uploads_body_read.py``) feeds a part of 1.05 MiB and fails if it
+    is rolled to disk, and feeds the stock parser the same part to show it would
+    be. The public parts used are the constructor's keywords, ``parse()``,
+    ``FormData.multi_items()`` and ``MultiPartException``."""
 
     spool_max_size = UPLOAD_BODY_LIMIT_BYTES
 
@@ -435,11 +487,11 @@ def store_file(
         # An aggregate answers exactly one row.
         ((count, held_bytes),) = conn.execute(CLAIM_FILES_SQL, (claim_id,)).fetchall()
         if count >= MAX_FILES_PER_CLAIM:
-            raise HTTPException(409, CLAIM_FULL_DETAIL)
+            raise UploadConflict("claim_full", CLAIM_FULL_DETAIL)
         if held_bytes + size > MAX_CLAIM_BYTES:
-            raise HTTPException(409, CLAIM_BYTES_DETAIL)
+            raise UploadConflict("claim_bytes", CLAIM_BYTES_DETAIL)
         if conn.execute(DUPLICATE_SQL, (claim_id, digest.digest())).fetchone():
-            raise HTTPException(409, DUPLICATE_DETAIL)
+            raise UploadConflict("duplicate", DUPLICATE_DETAIL)
         conn.execute(LOCK_STORE_SQL, (STORE_LOCK_CLASS,))
         ((rows, stored_bytes, recent),) = conn.execute(
             STORE_TOTALS_SQL, (RATE_WINDOW_SECONDS,)
@@ -466,7 +518,7 @@ def store_file(
             # to be answered as one. No text of the 409 is kept: ``from None``.
             if exc.diag.constraint_name != DUPLICATE_CONSTRAINT:
                 raise
-            raise HTTPException(409, DUPLICATE_DETAIL) from None
+            raise UploadConflict("duplicate", DUPLICATE_DETAIL) from None
         record_event(
             conn,
             AuditEvent(
@@ -488,7 +540,7 @@ def store_file(
 
 
 # ── the route ───────────────────────────────────────────────────────────────
-def refuse_cross_site(request: Request) -> None:
+async def refuse_cross_site(request: Request) -> None:
     """A post another site made is refused before a byte of it is read (T-70). A
     multipart post is one a browser sends cross-site with no preflight, which a
     JSON route is not; a client that sends none of the headers passes, as on
@@ -515,9 +567,10 @@ REQUEST_BODY = {
                             "type": "string",
                             "format": "binary",
                             "description": (
-                                "A PDF, a JPEG or a PNG of 1 byte to 1 MiB, known "
-                                "by its first bytes alone; its name and declared "
-                                "type are ignored and never kept."
+                                "Synthetic files only; never a real person's "
+                                "document. A PDF, a JPEG or a PNG of 1 byte to "
+                                "1 MiB, known by its first bytes alone; its name "
+                                "and declared type are ignored and never kept."
                             ),
                         },
                     },
@@ -531,7 +584,7 @@ CROSS_SITE_RESPONSE = {
 }
 
 
-def refuse_encoded_path(request: Request) -> None:
+async def refuse_encoded_path(request: Request) -> None:
     """A request whose RAW path holds a ``%`` is the 404 of a path that is no
     route, before a byte of its body is read. uvicorn decodes the path before the
     router sees it, so ``/claims/CLM-0001/%66iles`` reaches this route; but the
@@ -551,40 +604,71 @@ RETRY_AFTER = {
         "schema": {"type": "integer"},
     }
 }
+# The answers the route documents beyond its own 201 and the 422 FastAPI adds. The
+# 408, 500 and 503 are ``UploadErrorBody``: the route's own answers say which
+# claim, and the middleware's 500 and the audit log's 503 do not. The 503 is the
+# busy answer too (too many at once, a lock that did not come in time), which asks
+# the caller to wait; the 415 is about the file's type, which a wrong content type
+# of the request (a 422) is not.
 REFUSALS = (
     CROSS_SITE_RESPONSE
     | {
+        408: {
+            "model": UploadErrorBody,
+            "description": "The file did not arrive within the route's deadline.",
+        },
+        415: {
+            "model": ErrorBody,
+            "description": (
+                "The file is not a PDF, a JPEG or a PNG, by its first bytes."
+            ),
+        },
         429: {
             "model": ErrorBody,
             "description": "The store took too many files in the last minute.",
             "headers": RETRY_AFTER,
-        }
+        },
+        503: {
+            "model": UploadErrorBody,
+            "description": (
+                "Busy (too many uploads at once, or a lock not free in time: try "
+                "again after the wait), or the database or the audit log is "
+                "unavailable (no wait is given)."
+            ),
+            "headers": RETRY_AFTER,
+        },
     }
-    | error_responses(404, 409, 413, 415, 507)
-    | error_responses(500, 503, model=ClaimErrorBody)
+    | error_responses(404, 409, 413, 507)
+    | error_responses(500, model=UploadErrorBody)
 )
-# The 503 is also the busy answer (too many uploads at once, or a lock that did
-# not come in time), which asks the caller to wait.
-REFUSALS[503] = REFUSALS[503] | {"headers": RETRY_AFTER}
 
 
 @dataclass(frozen=True, slots=True)
 class UploadRefusal:
     """A refusal the handler returns rather than raises: the 503 that is not a
     database that is down (too many uploads at once, a lock that did not come in
-    time) and a database failure. ``retry_after`` is the seconds to wait, when the
-    caller is to wait. The other refusals are ``HTTPException`` s: the JSON route
-    lets its handler answer them, the claimant's form turns them into pages."""
+    time), the 408 of a body that did not arrive in time, and a database failure.
+    ``retry_after`` is the seconds to wait, when the caller is to wait. The other
+    refusals are ``HTTPException`` s: the JSON route lets its handler answer them,
+    the claimant's form turns them into pages."""
 
     status: int
     detail: str
     retry_after: int | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class UploadAbandoned:
+    """The client went away before its body was whole. Nobody receives the answer,
+    so a route sends an empty 400 and nothing is stored."""
+
+
 # What both routes run, the JSON route here and the claimant's form in
 # ``claimant_uploads``: one function, so the permits are one pool and the checks
 # and their order are the same by construction.
-type UploadHandler = Callable[[str, Request], Awaitable[StoredFile | UploadRefusal]]
+type UploadHandler = Callable[
+    [str, Request], Awaitable[StoredFile | UploadRefusal | UploadAbandoned]
+]
 
 
 def refusal_response(refusal: UploadRefusal, claim_id: str) -> JSONResponse:
@@ -594,6 +678,11 @@ def refusal_response(refusal: UploadRefusal, claim_id: str) -> JSONResponse:
     if refusal.retry_after is not None:
         response.headers["Retry-After"] = str(refusal.retry_after)
     return response
+
+
+def abandoned_response() -> Response:
+    """The answer to a client that is gone: empty, a 400. Nobody receives it."""
+    return Response(status_code=400)
 
 
 def add_upload_routes(
@@ -618,14 +707,27 @@ def add_upload_routes(
 
     async def handle_upload(
         claim_id: str, request: Request
-    ) -> StoredFile | UploadRefusal:
+    ) -> StoredFile | UploadRefusal | UploadAbandoned:
         if permits.locked():
             return UploadRefusal(503, SATURATED_DETAIL, BUSY_RETRY_SECONDS)
-        # Released on every exit: a refusal, an exception, a client that goes
-        # away (the task is cancelled; the store's thread, which the cancel
-        # waits for, has finished by then).
+        # Released on every exit: a refusal, an exception, a deadline, a client
+        # that goes away (uvicorn then raises ``ClientDisconnect`` from the body
+        # read; a task that is cancelled instead waits for the store's thread,
+        # which has finished by then).
         async with permits:
-            kind, content = await read_upload(request)
+            try:
+                async with asyncio.timeout(READ_DEADLINE_SECONDS):
+                    kind, content = await read_upload(request)
+            except TimeoutError:
+                return UploadRefusal(408, READ_TIMEOUT_DETAIL)
+            except ClientDisconnect as exc:
+                # Class only: the exception holds nothing of the request. Nothing
+                # was stored, and there is nobody to answer.
+                logger.info(
+                    "an upload's client went away before its body was whole: %s",
+                    type(exc).__name__,
+                )
+                return UploadAbandoned()
             with start_span(tracer, "claims.upload") as span:
                 set_span_attributes(
                     span, {"meridian.claim_id": claim_id, "meridian.tenant": tenant}
@@ -636,11 +738,21 @@ def add_upload_routes(
                     )
                 except psycopg.Error as exc:
                     mark_error(span, exc)
-                    status, detail = claim_database_failure(exc, claim_id)
-                    # A statement cancelled by the 10 s bound is a wait for a
-                    # lock that did not end, not a database that is down.
+                    # A statement cancelled by the 10 s bound is a wait for a lock
+                    # that did not end, not a database that is down: busy, one
+                    # WARNING with the class and SQLSTATE, and not the error lines
+                    # of a database fault (contention under the store's lock is
+                    # normal).
                     if exc.sqlstate == QUERY_CANCELED_SQLSTATE:
+                        logger.warning(
+                            "upload to claim %s waited too long for a lock: %s "
+                            "(sqlstate %s)",
+                            claim_id,
+                            type(exc).__name__,
+                            exc.sqlstate,
+                        )
                         return UploadRefusal(503, LOCK_BUSY_DETAIL, BUSY_RETRY_SECONDS)
+                    status, detail = claim_database_failure(exc, claim_id)
                     return UploadRefusal(status, detail)
 
     @app.post(
@@ -648,17 +760,20 @@ def add_upload_routes(
         status_code=201,
         response_model=StoredFile,
         tags=["claims"],
-        summary="Store a claimant's file (a PDF, a JPEG or a PNG) with the claim.",
+        summary=(
+            "Store a claimant's file (a PDF, a JPEG or a PNG) with the claim. "
+            "Synthetic files only; never a real person's document."
+        ),
         dependencies=[Depends(refuse_cross_site), Depends(refuse_encoded_path)],
         openapi_extra=REQUEST_BODY,
         responses=REFUSALS,
     )
-    async def upload_file(
-        claim_id: ClaimId, request: Request
-    ) -> StoredFile | JSONResponse:
+    async def upload_file(claim_id: ClaimId, request: Request) -> StoredFile | Response:
         result = await handle_upload(claim_id, request)
         if isinstance(result, UploadRefusal):
             return refusal_response(result, claim_id)
+        if isinstance(result, UploadAbandoned):
+            return abandoned_response()
         return result
 
     return handle_upload

@@ -379,7 +379,8 @@ route:
   # (SMALL_BODY_LIMIT_BYTES); the app still enforces it for chunked bodies.
   requestBufferLimit: 64Ki
   # The route for a claimant's file (uploads, S070, T-38): a second HTTPRoute for
-  # POST to /claims/{claim_id}/files and its page twin under /claimant/, with a
+  # POST to /claims/{claim_id}/files and the claimant's form's post to
+  # /claimant/claims/{claim_id}/files (both exist in the app, F4a), with a
   # request buffer and a rate limit of its own, and MERIDIAN_CLAIMS_UPLOADS=on
   # on the Claims API. Off here and on kind, apart from `route.enabled`: turning
   # the pages on does not turn uploads on, and the chart refuses uploads while
@@ -392,8 +393,8 @@ route:
     # number of a million or more would render as 1.1264e+06): 1 MiB for the
     # file and 76 KiB for the multipart envelope and the form's other field,
     # 1,126,400. It is the app's UPLOAD_BODY_LIMIT_BYTES; a test of the app's
-    # contract or of the documents' will hold the two equal. Envoy answers 413
-    # above it, before the Claims API sees the body.
+    # limits holds the two equal. Envoy answers 413 above it, before the Claims
+    # API sees the body.
     requestBufferLimit: "1126400"
     # A LOCAL rate limit for the whole route, in Envoy Gateway's
     # BackendTrafficPolicy (spec.rateLimit.local.rules[].limit): one bucket for

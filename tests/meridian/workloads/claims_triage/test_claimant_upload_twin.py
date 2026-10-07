@@ -365,11 +365,11 @@ def test_a_twin_post_past_the_bound_is_the_503_page_with_a_wait_and_reads_no_bod
     pulled: list[int] = []
 
     async def scenario() -> httpx.Response:
-        gate = asyncio.Event()
+        gate, held = asyncio.Event(), asyncio.Event()
         async with client_of(app) as client:
-            held = asyncio.create_task(stalled_post(client, gate))  # the JSON route
+            stalled = asyncio.create_task(stalled_post(client, gate, held))  # JSON
             try:
-                await asyncio.sleep(0.3)
+                await asyncio.wait_for(held.wait(), timeout=5)
 
                 async def chunks():
                     pulled.append(1)
@@ -380,7 +380,7 @@ def test_a_twin_post_past_the_bound_is_the_503_page_with_a_wait_and_reads_no_bod
                 )
             finally:
                 gate.set()
-            await held
+            await stalled
             return refused
 
     refused = asyncio.run(scenario())
@@ -397,22 +397,15 @@ def test_a_json_post_past_the_bound_is_refused_when_the_twin_holds_the_permit(
     app = one_permit(monkeypatch)
 
     async def scenario() -> httpx.Response:
-        gate = asyncio.Event()
-        body = valid_form()[0]
-
-        async def chunks():
-            yield body[:20]
-            await gate.wait()
-            yield body[20:]
-
+        gate, held = asyncio.Event(), asyncio.Event()
         async with client_of(app) as client:
-            held = asyncio.create_task(twin_form_post(client, chunks()))
+            stalled = asyncio.create_task(stalled_post(client, gate, held, TWIN))
             try:
-                await asyncio.sleep(0.3)
+                await asyncio.wait_for(held.wait(), timeout=5)
                 refused = await asyncio.wait_for(quick_post(client), timeout=5)
             finally:
                 gate.set()
-            await held
+            await stalled
             return refused
 
     refused = asyncio.run(scenario())

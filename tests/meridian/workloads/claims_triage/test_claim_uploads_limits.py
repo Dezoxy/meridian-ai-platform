@@ -2,9 +2,11 @@
 the per-route body limit and what keeps every other route at 64 KiB, the
 settings, the signatures, and the other services' limits unchanged."""
 
+import asyncio
 import re
 from collections.abc import Iterator
 
+import httpx
 import pytest
 import yaml
 from fastapi import FastAPI
@@ -32,7 +34,6 @@ from meridian.workloads.claims_triage.uploads import (
     ENVELOPE_ALLOWANCE_BYTES,
     MAX_CEILING_BYTES,
     MAX_CEILING_ROWS,
-    MAX_FILE_BYTES,
     MIN_CEILING_BYTES,
     MIN_CEILING_ROWS,
     UPLOAD_BODY_LIMIT_BYTES,
@@ -236,12 +237,6 @@ def test_settings_built_in_code_are_held_to_the_same_floor_and_cap() -> None:
 
 
 # ── the route's own limit: 1 MiB, the envelope and nothing more ─────────────
-def test_the_route_limit_is_a_mebibyte_and_a_stated_envelope() -> None:
-    assert MAX_FILE_BYTES == MIB
-    assert UPLOAD_BODY_LIMIT_BYTES == MAX_FILE_BYTES + ENVELOPE_ALLOWANCE_BYTES
-    assert ENVELOPE_ALLOWANCE_BYTES == 76 * 1024
-
-
 def test_the_edges_buffer_for_the_route_is_the_apps_limit() -> None:
     """The chart's second route buffers what the app's limit says (F3 wrote its
     default once, here it is held equal): the edge and the app refuse together."""
@@ -500,10 +495,31 @@ def a_form_post(headers: dict[str, str]):
 def test_a_post_from_another_site_is_403_before_the_form_is_read(
     headers: dict[str, str],
 ) -> None:
-    response = a_form_post(headers)
+    pulled: list[int] = []
+    body, content_type = multipart_body(
+        [("kind", None, None, b"photos"), *NO_KIND], boundary="b"
+    )
+
+    async def chunks():
+        pulled.append(1)
+        yield body
+
+    async def scenario() -> httpx.Response:
+        transport = httpx.ASGITransport(
+            app=APP_WITH_UPLOADS, raise_app_exceptions=False
+        )
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as client:
+            return await client.post(
+                concrete(UPLOAD_PATH), content=chunks(), headers=content_type | headers
+            )
+
+    response = asyncio.run(scenario())
 
     assert response.status_code == 403
     assert response.json() == {"detail": "the request came from another site"}
+    assert pulled == []  # the app never asked for a chunk of the body
 
 
 @pytest.mark.parametrize(

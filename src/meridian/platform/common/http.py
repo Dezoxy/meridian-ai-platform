@@ -178,7 +178,8 @@ def install_error_handlers(app: FastAPI) -> None:
 
 
 class RoutePattern:
-    """An exact (method, path pattern) a body limit is set for: ``/claims/{id}/files``.
+    """An exact (method, path pattern) a body limit is set for, such as
+    ``/things/{id}/attachments``.
 
     A ``{name}`` is a whole segment and matches exactly one non-empty segment;
     every other segment matches itself, character for character. So the pattern
@@ -404,8 +405,9 @@ def create_service_app(
     and ``GET /healthz``, which reads nothing per request and nothing of the
     caller's. ``close`` runs at shutdown. ``too_large`` is the answer to a
     declared body over the limit (see ``BodyLimitMiddleware``).
-    ``route_body_limits`` gives an exact route a limit of its own; no service
-    passes any but the one route that takes a file. No server span keeps a
+    ``route_body_limits`` gives an exact route a limit of its own; a service
+    that takes a file passes one for that route, and every other route keeps
+    ``max_body_bytes``. No server span keeps a
     query string (see ``drop_query_from_span``).
 
     The certificate ``environ`` names is loaded here (S056, T-89). Inside its
