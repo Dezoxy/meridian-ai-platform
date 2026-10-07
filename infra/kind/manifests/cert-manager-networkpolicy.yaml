@@ -8,24 +8,6 @@
 # without a cluster until `make up` and `make smoke` have run on one.
 #
 # Ingress: nothing, except
-#   10250 TCP  to cert-manager's webhook and to approver-policy's, each in its
-#              own policy. Both webhooks are `failurePolicy: Fail`, so a webhook
-#              the API server cannot reach refuses every Certificate and every
-#              policy. The caller is the API server, which on kind is the node
-#              itself, at an address that changes with every new cluster and
-#              that no pod selector can name, so these two rules name the port
-#              and no peer. Unlike the egress rule below they are not filled in
-#              by `make up`: that the address the API server's calls arrive from
-#              is the endpoint's (the `kubernetes` EndpointSlice) is not known,
-#              nobody has measured it, and a wrong peer on a `Fail` webhook
-#              refuses every Certificate. So any pod of the cluster may open a
-#              connection to 10250 of these two pods. What it reaches is a TLS
-#              endpoint that answers admission reviews, and it answers anyone:
-#              any pod can post a forged review and read the verdict. A review
-#              applies nothing, so a forged one changes nothing. A flood of
-#              them against the two webhooks, which fail closed, can stall the
-#              issuance and the renewal of certificates until it stops (the
-#              alert on a certificate 21 days from its end is the only net)
 #   9402 TCP   to the controller's metrics, from Prometheus alone (the pods of
 #              the Prometheus resource in `observability`). The ServiceMonitor
 #              in cert-manager-metrics.yaml scrapes the controller only, and
@@ -34,6 +16,50 @@
 #              The cainjector's and the webhook's metrics port (9402 too) and
 #              the approver's are scraped by nobody and stay closed
 # The kubelet's probes (6080, 6060, 9403) are not blocked by a policy.
+#
+# 10250 TCP, the port of cert-manager's webhook and of approver-policy's, is
+# admitted from no pod: no rule names it, and the two policies named for the
+# webhooks below select those pods and hold no ingress rule, which denies every
+# pod (the default-deny below does the same; they say it where a reader looks).
+# Both webhooks are `failurePolicy: Fail`, so a webhook the API server cannot
+# reach refuses every Certificate and every policy, and a flood from a pod
+# could stall the issuing of certificates until it stopped: that is why no pod
+# may call the port. The caller is the API server alone, and it needs no rule.
+# It calls from the node, and a call that starts on the node passes every
+# NetworkPolicy of this cluster's network plugin: measured on kind 2026-10-07,
+# the API server's call to a pod arrived from the node's own address on the pod
+# network (the first of the pod range), not from the address the egress rule's
+# placeholder stands for, and reached a pod of `meridian`, whose ingress is
+# denied by default, with no rule that admits it (seen on kind 2026-10-07, for
+# a call by way of the pod proxy; a
+# webhook call through the Service's address is not seen separately, and is
+# taken to leave from the same place). What Kubernetes says: the NetworkPolicy
+# concept page (kubernetes.io/docs/concepts/services-networking/network-policies/,
+# read 2026-10-07 by the main session), in its list of the entities a Pod can
+# communicate with, says of IP blocks: "(exception: traffic to and from the node
+# where a Pod is running is always allowed, regardless of the IP address of the
+# Pod or the node)". What this cluster shows beside it: ingress from the node
+# passed a default-deny policy (the measurement above), and egress to the API
+# server's Service address is refused without a rule (smoke's network-policy
+# check prints that line on every run: seen). So on this plugin the page's "to"
+# half does not hold for that path, and the egress rules below are not
+# decorative. The kind cluster has one node and the API server
+# runs on it. A rule would be needed on a cluster with more than one node (the
+# API server may then call from another node), or with a plugin that polices
+# the node; the rule is then one ipBlock peer, filled in the way the egress
+# rule's address is (below). If a cold `make up` shows a webhook unreachable
+# (no Certificate is issued, and smoke fails loudly), the rule comes back on
+# 10250 with the node's pod-network address as its one peer, and with the node's
+# published address as well when that is not the source: after the Service's
+# translation the source of a call through a Service could be either, and it is
+# not seen which. The order in which a wrong premise about the webhooks would
+# show, in a cold run: cert-manager's release (its startup check Job calls the
+# webhook), then approver-policy's apply (retried for two minutes, then it
+# stops), then the database's install (the operator's webhooks fail closed too),
+# and last, silently, the Prometheus operator's target (its webhooks are
+# `Ignore`). This change is
+# implemented in this file and tested without a cluster; it is not seen on
+# kind: a cold `make up` and the issued Certificates are that test.
 #
 # Egress, for every pod of the namespace: DNS and the API server, nothing else.
 # Every component only watches and writes API objects (the controller, the
@@ -100,6 +126,9 @@ spec:
         - port: 6443
           protocol: TCP
 ---
+# No `ingress` key: no pod reaches this webhook. Only the API server does, from
+# the node, and the node needs no rule (the header says why, and what to do if
+# a cold `make up` shows otherwise).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -111,11 +140,8 @@ spec:
       app.kubernetes.io/name: webhook
       app.kubernetes.io/instance: cert-manager
   policyTypes: [Ingress]
-  ingress:
-    - ports:
-        - port: 10250
-          protocol: TCP
 ---
+# No `ingress` key: as for cert-manager's webhook above.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -126,10 +152,6 @@ spec:
     matchLabels:
       app: cert-manager-approver-policy
   policyTypes: [Ingress]
-  ingress:
-    - ports:
-        - port: 10250
-          protocol: TCP
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
