@@ -1,23 +1,31 @@
 """The cloud-neutral protections of the Terraform wrapper (S020).
 
-``infra/terraform/planguard.sh`` holds, moved from ``aws.sh`` without a change,
-the checks that name no cloud: the clean environment's callers, the git calls
-with less of the caller's configuration, the refusal of a variable or override
-file, the default workspace, the plan record and the tree checks. ``aws.sh``
-sources it the way it sources ``common.sh``, and a wrapper for another cloud will
-source the same file, so that the protections are one copy.
+``infra/terraform/planguard.sh`` holds, moved from ``aws.sh`` (three texts were
+reworded to name no cloud), the checks that name no cloud: the Terraform calls,
+the git calls with less of the caller's configuration, the refusal of a variable
+or override file, the default workspace, the plan record and the tree checks.
+``aws.sh`` sources it the way it sources ``common.sh``, and a wrapper for another
+cloud will source the same file, so that the protections are one copy.
 
-These tests read the three files as text; none runs a shell. What the commands
-do with the moved code is held by ``test_aws_script.py`` and
+Most tests read the three files as text; one runs the wrapper to hold a message.
+What the commands do with the moved code is held by ``test_aws_script.py`` and
 ``test_aws_script_plan.py``, which run the wrapper against stand-in programs.
 """
 
 import os
 import re
 import subprocess
+from pathlib import Path
 
 import pytest
-from awsscriptsupport import TERRAFORM_DIR
+from awsscriptsupport import (
+    MODULE_IDS,
+    MODULES,
+    TERRAFORM_DIR,
+    Module,
+    make_tree,
+    with_local_file,
+)
 
 AWS_SH = TERRAFORM_DIR / "aws.sh"
 COMMON_SH = TERRAFORM_DIR / "common.sh"
@@ -393,21 +401,120 @@ def test_every_function_the_wrapper_calls_is_defined_in_a_file_it_reads() -> Non
     assert sorted(called - defined) == []
 
 
-def test_the_moved_code_calls_only_what_the_wrapper_or_the_shared_file_defines() -> (
+# What a wrapper must provide before it sources a function of planguard.sh runs.
+# The functions: run_clean alone, because the environment a program is given
+# (the names it keeps, the variables it is handed) is the cloud's own. The
+# globals: the selected module's row, the two sentences' words and the README the
+# sentences cite. The header of planguard.sh lists the same names.
+WRAPPER_FUNCTIONS = {"run_clean"}
+WRAPPER_GLOBALS = {
+    "MODULE_DIR",
+    "MODULE_REL",
+    "MODULE_NAME",
+    "PLAN_FILE",
+    "PLAN_RECORD_FILE",
+    "MODULE_README",
+    "CMD_PLAN",
+    "STATE_DIR_UNDER_HOME",
+    "STATE_FILE_NAME",
+    "SHARED_README",
+    "ENVIRONMENT_WORDS",
+}
+
+VARIABLE_REFERENCE = re.compile(r"\$\{?[!#]?([A-Z][A-Z0-9_]*)\b")
+ASSIGNED_NAME = re.compile(r"^\s*(?:readonly |local )?([A-Z][A-Z0-9_]*)=", re.MULTILINE)
+# Set by the shell or the caller's environment, not by a wrapper.
+FROM_THE_ENVIRONMENT = frozenset({"HOME", "BASH_REMATCH", "BASH_SOURCE"})
+
+
+def globals_read_from_outside(text: str) -> set[str]:
+    """The upper-case variables a file reads and never assigns itself."""
+    code = code_of(text)
+    return (
+        set(VARIABLE_REFERENCE.findall(code))
+        - set(ASSIGNED_NAME.findall(code))
+        - FROM_THE_ENVIRONMENT
+    )
+
+
+def listed_in_header(text: str, label: str) -> set[str]:
+    """The names after ``#   <label>:`` in the header, and on the indented lines
+    of comment that follow it."""
+    lines = text.splitlines()
+    start = next(n for n, line in enumerate(lines) if line.startswith(f"#   {label}:"))
+    names = re.findall(r"[A-Za-z_][A-Za-z0-9_]+", lines[start].split(":", 1)[1])
+    for line in lines[start + 1 :]:
+        if not re.match(r"^#\s{5,}\S", line):
+            break
+        names += re.findall(r"[A-Za-z_][A-Za-z0-9_]+", line)
+    return set(names)
+
+
+def test_the_global_reader_sees_a_name_nobody_assigns_and_no_other() -> None:
+    text = (
+        'f() {\n  echo "${OUTSIDE_ONE}" "$OUTSIDE_TWO" "${HOME}"\n'
+        '  OWN=1\n  echo "$OWN"\n}\n'
+    )
+
+    assert globals_read_from_outside(text) == {"OUTSIDE_ONE", "OUTSIDE_TWO"}
+
+
+def test_planguard_calls_only_what_it_or_the_shared_file_defines_and_run_clean() -> (
     None
 ):
-    wrapper = AWS_SH.read_text(encoding="utf-8")
     moved = PLANGUARD_SH.read_text(encoding="utf-8")
-    defined = (
-        defined_in(wrapper)
-        | defined_in(COMMON_SH.read_text(encoding="utf-8"))
-        | defined_in(moved)
-    )
+    defined = defined_in(moved) | defined_in(COMMON_SH.read_text(encoding="utf-8"))
 
     called = called_and_not_ours(moved)
 
-    assert {"run_clean", "git_here", "tf_plain", "redact", "die"} <= called
-    assert sorted(called - defined) == []
+    # The scan reached the moved code and the shared file's functions.
+    assert {"current_commit", "git_here", "tf_plain", "redact", "die", "log"} <= called
+    assert called - defined == WRAPPER_FUNCTIONS
+
+
+def test_planguard_reads_from_the_wrapper_exactly_the_globals_pinned_here() -> None:
+    moved = PLANGUARD_SH.read_text(encoding="utf-8")
+
+    assert globals_read_from_outside(moved) == WRAPPER_GLOBALS
+
+
+def test_the_header_of_planguard_lists_the_same_functions_and_globals() -> None:
+    moved = PLANGUARD_SH.read_text(encoding="utf-8")
+
+    assert listed_in_header(moved, "functions") == WRAPPER_FUNCTIONS
+    assert listed_in_header(moved, "globals") == WRAPPER_GLOBALS
+
+
+def test_the_wrapper_defines_every_function_and_global_planguard_needs() -> None:
+    wrapper = AWS_SH.read_text(encoding="utf-8")
+    code = code_of(wrapper)
+
+    unassigned = [n for n in sorted(WRAPPER_GLOBALS) if not re.search(rf"\b{n}=", code)]
+    assert defined_in(wrapper) >= WRAPPER_FUNCTIONS
+    assert unassigned == []
+
+
+# The one sentence of the moved code that names the environment by a variable the
+# wrapper sets: the words the wrapper's messages had before they were a variable.
+@pytest.mark.parametrize("module", MODULES, ids=MODULE_IDS)
+def test_the_state_directory_refusal_prints_the_same_sentence_as_before(
+    module: Module, tmp_path: Path
+) -> None:
+    tree = with_local_file(make_tree(tmp_path, module))
+
+    done = tree.run("plan", HOME="")
+
+    assert done.returncode == 1
+    assert done.stderr.splitlines()[-1] == (
+        "error: HOME is not set, and the state of the AWS environment is kept in "
+        f"a directory under it ({module.readme}, State)"
+    )
+
+
+def test_the_wrapper_names_the_environment_in_one_read_only_variable() -> None:
+    code = code_of(AWS_SH.read_text(encoding="utf-8"))
+
+    assert 'readonly ENVIRONMENT_WORDS="the AWS environment"' in code.splitlines()
 
 
 # ── a move, not a copy ───────────────────────────────────────────────────────

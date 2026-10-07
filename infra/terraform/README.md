@@ -151,6 +151,14 @@ hash, the tree checks) live in `planguard.sh`, which `aws.sh` sources as it
 sources `common.sh`; a wrapper for the Azure platform module, which does not
 exist yet, would source the same file.
 
+Its git calls run with the caller's configuration, hooks and file monitor
+switched off, and they do not stop one thing: a `filter.<name>.clean` program
+in the repository's own `.git/config`, with an attributes line that names it,
+runs during `git status` for a tracked file whose modification time changed
+and whose size did not. Nothing in the wrapper turns that off;
+[aws/README.md](aws/README.md) lists it with the rest of what the wrapper
+does not stop.
+
 ## Prerequisites
 
 `az` (signed in with a user account: `az login`), `terraform` 1.16, `jq`,

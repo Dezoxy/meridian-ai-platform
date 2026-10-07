@@ -1,24 +1,26 @@
 # shellcheck shell=bash
 # The protections of a Terraform wrapper that name no cloud, moved here from the
-# first wrapper without a change (S020), so that a second wrapper sources the
-# same code and the checks stay one copy. Source it after common.sh; do not run
-# it.
+# first wrapper (S020), so that a second wrapper sources the same code and the
+# checks stay one copy. Source it after common.sh; do not run it.
 #
-# What it holds: the Terraform calls that need no program of the wrapper's own
-# (tf_signed, tf_validating, tf_state_list), the git version the git calls need,
-# the refusal of a variable or an override file, the default workspace, init with
-# the local state, the checks of the tree (the commit, the changes, the untracked
-# .tf files), the saved plan and its record (drop_plan, file_sha256 and the check
-# that the plan is this tree's and fresh) and the directory validate keeps the
-# providers in.
+# What it holds: the Terraform and git calls (tf_plain, tf_signed, tf_validating,
+# tf_state_list, git_here), the git version they need, the refusal of a variable
+# or an override file, the state's directory under home, the default workspace,
+# init with the local state, the checks of the tree (the commit, the changes, the
+# untracked .tf files), the saved plan and its record (drop_plan, file_sha256 and
+# the check that the plan is this tree's and fresh) and the directory validate
+# keeps the providers in.
 #
-# What it reads from the wrapper, which defines all of it before any function
-# here runs: the functions run_clean, tf_plain and git_here (the environment each
-# program is given is the wrapper's to choose), the globals of the selected
-# module's row (MODULE_DIR, MODULE_REL, MODULE_NAME, PLAN_FILE, PLAN_RECORD_FILE,
-# MODULE_README, CMD_PLAN), STATE_PATH (set by the wrapper's prepare_state) and
-# SHARED_README. The functions of common.sh (die, log, redact) are the other
-# shared file's.
+# What it needs from the wrapper, which defines all of it before any function
+# here runs. The environment each program is given is the cloud's own, so the
+# one function is run_clean; the globals are the selected module's row, the
+# words of two sentences and the README those sentences cite. The functions of
+# common.sh (die, log, redact) are the other shared file's. A test holds these
+# two lists equal to what the code below calls and reads.
+#   functions: run_clean
+#   globals:   MODULE_DIR, MODULE_REL, MODULE_NAME, PLAN_FILE, PLAN_RECORD_FILE,
+#              MODULE_README, CMD_PLAN, STATE_DIR_UNDER_HOME, STATE_FILE_NAME,
+#              SHARED_README, ENVIRONMENT_WORDS
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   printf 'planguard.sh is sourced by a Terraform wrapper; it is not run\n' >&2
   exit 1
@@ -29,6 +31,15 @@ fi
 # ago. Thirty minutes is the length of one plan-read-apply sitting.
 readonly PLAN_MAX_AGE_SECONDS=1800
 
+# terraform in the module's directory, without colour. -chdir also makes the
+# plan file path relative to that directory. The sub-command comes first because
+# -no-color is an option of the sub-command. "plain" has no cloud credential:
+# format, init, validate and the state's list need none.
+tf_plain() {
+  local sub="$1"
+  shift
+  run_clean plain terraform -chdir="${MODULE_DIR}" "${sub}" -no-color "$@"
+}
 tf_signed() {
   local sub="$1"
   shift
@@ -47,6 +58,33 @@ tf_validating() {
   run_clean plain env "TF_DATA_DIR=${DATA_DIR}" terraform -chdir="${MODULE_DIR}" "${sub}" -no-color "$@"
 }
 tf_state_list() { run_clean plain terraform -chdir="${MODULE_DIR}" state list -no-color; }
+
+# git with the environment of this script's choosing: a GIT_DIR or a
+# GIT_WORK_TREE of the caller must not point it at another repository. And with
+# less of the caller's configuration: the caller's global and the system
+# configuration files are switched off (GIT_CONFIG_GLOBAL, GIT_CONFIG_NOSYSTEM;
+# the first needs git 2.32, from 2021, which the next function checks), the two
+# settings that make `git status` run a program are set by hand, which outranks
+# the repository's own file too (core.fsmonitor, a program asked what changed,
+# and core.hooksPath, the hooks), and the caller's default ignore file is
+# switched off (core.excludesFile, which would otherwise be ~/.config/git/ignore:
+# a line there hid an untracked .tf from `status`).
+# The two commands used here that matter, `status --porcelain` and `rev-parse`,
+# talk to no remote, so no credential helper is asked, and page nothing when
+# their output is not a terminal, so no core.pager or GIT_PAGER runs.
+#
+# What this does NOT stop: a `filter.<name>.clean` program configured in the
+# repository's OWN .git/config, together with an attributes line that names it
+# (a committed .gitattributes, or .git/info/attributes), DOES run during
+# `status` for a tracked file whose modification time changed and whose size
+# did not (the third review ran it with a file made by `touch`). Nothing here
+# turns it off. It is described in infra/terraform/README.md, in the paragraph
+# on planguard.sh.
+git_here() {
+  run_clean plain env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
+    git -c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.excludesFile=/dev/null \
+    -C "${MODULE_DIR}" "$@"
+}
 
 # GIT_CONFIG_GLOBAL is read by git 2.32 and newer; an older git ignores it and
 # reads the caller's ~/.gitconfig, so the sentence above would be false. The
@@ -99,6 +137,17 @@ refuse_files_that_change_the_plan() {
     esac
   done
   shopt -u dotglob nullglob
+}
+
+# The state's directory under home, made private, and the path Terraform is
+# given at init. validate never calls this: it inits with no backend.
+prepare_state() {
+  [[ -n "${HOME:-}" ]] ||
+    die "HOME is not set, and the state of ${ENVIRONMENT_WORDS} is kept in a directory under it (${MODULE_README}, State)"
+  STATE_DIR="${HOME}/${STATE_DIR_UNDER_HOME}"
+  mkdir -p "${STATE_DIR}"
+  chmod 700 "${STATE_DIR}"
+  STATE_PATH="${STATE_DIR}/${STATE_FILE_NAME}"
 }
 
 # The state is under home only in the default workspace. A workspace made by hand

@@ -24,7 +24,7 @@
 #             Terraform's data directory, where init puts the providers, is a
 #             private directory under ~/.cache/meridian-terraform named for the
 #             module, never .terraform in the module's directory
-#             (data_dir_for_validate below): a validate leaves nothing in the
+#             (data_dir_for_validate in planguard.sh): a validate leaves nothing in the
 #             module.
 #   plan      init, then plan into the module's saved plan (aws.tfplan, or
 #             aws-kubeadm.tfplan); changes nothing in AWS. Records the module,
@@ -102,6 +102,9 @@ readonly AWS_LOCAL_ENV="${TF_DIR}/local.env-aws"
 # both; the sentences about a module's state and its removal name the module's
 # own (MODULE_README, below).
 readonly SHARED_README=infra/terraform/aws/README.md
+# What the messages of planguard.sh call the environment this script builds (the
+# refusal when HOME is not set, in prepare_state).
+readonly ENVIRONMENT_WORDS="the AWS environment"
 readonly LOCAL_KEYS=(MERIDIAN_AWS_ACCOUNT_ID MERIDIAN_AWS_REGION MERIDIAN_AWS_ENDPOINT_CIDR MERIDIAN_AWS_BUDGET_EMAIL)
 # The Regions of EU member states the module accepts (hard rule 3), the list in
 # the validation of "region" in aws/variables.tf; a test holds the two equal. The
@@ -285,42 +288,6 @@ run_clean() {
   env -i "${pass[@]}" "$@"
 }
 
-# terraform in the module's directory, without colour. -chdir also makes the
-# plan file path relative to that directory. The sub-command comes first because
-# -no-color is an option of the sub-command. "plain" has no AWS credential:
-# format, init, validate and the state's list need none.
-tf_plain() {
-  local sub="$1"
-  shift
-  run_clean plain terraform -chdir="${MODULE_DIR}" "${sub}" -no-color "$@"
-}
-
-# git with the environment of this script's choosing: a GIT_DIR or a
-# GIT_WORK_TREE of the caller must not point it at another repository. And with
-# less of the caller's configuration: the caller's global and the system
-# configuration files are switched off (GIT_CONFIG_GLOBAL, GIT_CONFIG_NOSYSTEM;
-# the first needs git 2.32, from 2021, which the next function checks), the two
-# settings that make `git status` run a program are set by hand, which outranks
-# the repository's own file too (core.fsmonitor, a program asked what changed,
-# and core.hooksPath, the hooks), and the caller's default ignore file is
-# switched off (core.excludesFile, which would otherwise be ~/.config/git/ignore:
-# a line there hid an untracked .tf from `status`).
-# The two commands used here that matter, `status --porcelain` and `rev-parse`,
-# talk to no remote, so no credential helper is asked, and page nothing when
-# their output is not a terminal, so no core.pager or GIT_PAGER runs.
-#
-# What this does NOT stop: a `filter.<name>.clean` program configured in the
-# repository's OWN .git/config, together with an attributes line that names it
-# (a committed .gitattributes, or .git/info/attributes), DOES run during
-# `status` for a tracked file whose modification time changed and whose size
-# did not (the third review ran it with a file made by `touch`). Nothing here
-# turns it off. It is listed in infra/terraform/aws/README.md with the rest.
-git_here() {
-  run_clean plain env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
-    git -c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.excludesFile=/dev/null \
-    -C "${MODULE_DIR}" "$@"
-}
-
 # What the local file may hold and what a value may be made of: digits, letters
 # and the few characters of an account number, a Region, an address with a prefix
 # length and an e-mail address. No quote, space, dollar sign, backtick or
@@ -412,17 +379,6 @@ require_pinned_account() {
   [[ "${caller}" == "${MERIDIAN_AWS_ACCOUNT_ID}" ]] ||
     die "the signed-in AWS account is not the one pinned in ${AWS_LOCAL_ENV}; sign in to the right account, or correct the pin if it is wrong"
   log "AWS account: the pinned one"
-}
-
-# The state's directory under home, made private, and the path Terraform is
-# given at init. validate never calls this: it inits with no backend.
-prepare_state() {
-  [[ -n "${HOME:-}" ]] ||
-    die "HOME is not set, and the state of the AWS environment is kept in a directory under it (${MODULE_README}, State)"
-  STATE_DIR="${HOME}/${STATE_DIR_UNDER_HOME}"
-  mkdir -p "${STATE_DIR}"
-  chmod 700 "${STATE_DIR}"
-  STATE_PATH="${STATE_DIR}/${STATE_FILE_NAME}"
 }
 
 # Which module this run is about, said first: a plan, an apply and a removal
