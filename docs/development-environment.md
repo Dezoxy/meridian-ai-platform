@@ -228,7 +228,7 @@ guess about another.
 | The first `make deploy` | 1 min 30 s | 61 s of it waits out the ingestion's token window |
 | `make smoke` | 40 to 52 s | Over 2026-10-06; 35 lines on the deployed cluster |
 | `make demo` on a deployed cluster | 30 s | |
-| The python job in CI | about 8 min | GitHub's four-core runner. On 2026-10-07, before coverage, the whole job took 10 min 1 s to 14 min 29 s in five pull requests (the workflow's comment has the five); the limit is 30 minutes since S074 |
+| The python job in CI | 10 min 1 s to 14 min 29 s | GitHub's four-core runner. On 2026-10-07, before coverage, the whole job took that long in five pull requests (the workflow's comment has the five); the limit is 30 minutes since S074 |
 | One contract at an `implementer` | 3 to 15 min | Reading, tests first, the change, its gates |
 | One review by a reviewer agent | 3 to 13 min | |
 
@@ -500,9 +500,9 @@ what a person at the keyboard needs.
   `fail_under` in `pyproject.toml` holds. A run without the variable measures
   nothing and cannot fail on coverage, so one file or a subset runs as before;
   with the variable a subset fails, because the floor is for the whole suite
-  (one file measured 6.08 % and the run exited 2). The measuring core is the
-  interpreter's own monitoring, set in `pyproject.toml` so that every xdist
-  worker uses it. A whole suite costs 2.0 % more with it on this machine
-  (257.63 s against 252.52 s at six workers, 2026-10-07; see "What things
-  cost"). The data files a run leaves, `.coverage` and `.coverage.*`, are
-  ignored by git.
+  (one file measured 6.08 %; pytest ended with 1 and `make` with 2). The
+  measuring core is the interpreter's own monitoring, set in `pyproject.toml`
+  so that every xdist worker uses it. A whole suite costs 2.0 % more with it
+  on this machine (257.63 s against 252.52 s at six workers, 2026-10-07; see
+  "What things cost"). The data files a run leaves, `.coverage` and
+  `.coverage.*`, are ignored by git.

@@ -12,12 +12,14 @@ and ``spikes/``, and shell under ``infra/`` and ``scripts/``. The vendored kit
 (``.claude/``, ``.agents/``, ``.codex/``), generated files and data are not
 source for this check, and no path outside the prefixes is read.
 
-The exceptions file is a ratchet. One line per file: the path, the largest line
-count the file may have, and a reason of five words or more, separated by
-spaces; blank lines and lines that start with ``#`` are ignored. A listed file
-may shrink and may not grow past its count. A listed file that is now 800 lines
-or under, that is gone, or that is not source for this check, fails too, with
-the line to remove, so the list can only get shorter.
+The exceptions file is a ratchet: an entry can only be lowered or removed. One
+line per file: the path, the line count the file has, and a reason of five words
+or more, separated by spaces; blank lines and lines that start with ``#`` are
+ignored. A listed file that is over its count fails (it grew), and so does one
+that is under it while still over the ceiling (it shrank: lower the entry to
+the count it has now, so that it cannot grow back). A listed file that is now
+800 lines or under, that is gone, or that is not source for this check, fails
+too, with the line to remove, so the list can only get shorter.
 
 Lines are counted as ``wc -l`` counts them (newlines, plus one for a last line
 with no newline).
@@ -136,6 +138,12 @@ def check(root: Path, files: list[str], exceptions_text: str) -> list[str]:
                 f"{path}: {lines} lines, over the {allowed[path][0]} recorded in "
                 f"{EXCEPTIONS_FILE}:{allowed[path][1]}; an excepted file may "
                 f"shrink and may not grow: cut it back, do not raise the count"
+            )
+        elif lines < allowed[path][0]:
+            failures.append(
+                f"{path}: {lines} lines, under the {allowed[path][0]} recorded in "
+                f"{EXCEPTIONS_FILE}:{allowed[path][1]}; the file shrank: lower "
+                f"the entry to {lines}, so that it cannot grow back"
             )
 
     for path, (recorded, number) in sorted(allowed.items(), key=lambda i: i[1][1]):

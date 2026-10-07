@@ -161,12 +161,34 @@ class Sizes(unittest.TestCase):
         self.assertIn(f"{EXCEPTIONS}:1", first)
         self.assertIn("do not raise the count", first)
 
-    def test_an_excepted_file_that_shrank_but_is_still_over_passes(self) -> None:
+    def test_an_excepted_file_that_shrank_but_is_still_over_fails_until_the_entry_is_lowered(
+        self,
+    ) -> None:
+        # Turned around in S074's review: it once pinned that a shrunk file
+        # passes, which let a file shrink and grow back unnoticed. The entry can
+        # only be lowered or removed.
         self.write("src/big.py", lines(850))
 
         run = self.run_check(f"src/big.py 900 {REASON}\n")
 
-        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(run.returncode, 1)
+        (first, *_) = run.stderr.splitlines()
+        self.assertIn("src/big.py: 850 lines, under the 900 recorded", first)
+        self.assertIn(f"{EXCEPTIONS}:1", first)
+        self.assertIn("lower the entry to 850", first)
+
+    def test_the_entry_lowered_to_the_new_count_passes_and_cannot_grow_back(
+        self,
+    ) -> None:
+        self.write("src/big.py", lines(850))
+
+        lowered = self.run_check(f"src/big.py 850 {REASON}\n")
+        self.write("src/big.py", lines(851))
+        regrown = self.run_check(f"src/big.py 850 {REASON}\n")
+
+        self.assertEqual(lowered.returncode, 0, lowered.stderr)
+        self.assertEqual(regrown.returncode, 1)
+        self.assertIn("over the 850 recorded", regrown.stderr)
 
     def test_a_stale_exception_for_a_file_now_at_the_ceiling_names_the_line_to_remove(
         self,

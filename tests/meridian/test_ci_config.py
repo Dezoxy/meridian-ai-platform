@@ -331,12 +331,35 @@ PAID_TARGETS = (
 
 def test_the_floor_is_configured_in_one_place_and_equals_the_constant_here() -> None:
     assert COVERAGE_CONFIG["report"]["fail_under"] == COVERAGE_FLOOR
+    # Without two decimals coverage.py rounds the total to a whole number before
+    # it compares it with the floor, and a total of 97.5 passes a floor of 98.
+    assert COVERAGE_CONFIG["report"]["precision"] == 2
     assert COVERAGE_CONFIG["run"]["source"] == ["src/meridian"]
     # Neither the Makefile nor the workflow repeats the number: pytest-cov takes
     # it from the configuration when `--cov` is given without `--cov-fail-under`.
     for text in (MAKEFILE, WORKFLOW_TEXT):
         assert "--cov-fail-under" not in text
         assert not re.search(r"fail[-_]under\W*\d", text)
+
+
+def test_a_run_with_a_failed_test_does_not_print_the_floors_failure_as_well() -> None:
+    # A failed or crashed test lowers the covered total, so the floor would fail
+    # too and print a second, noisy failure under the real one. A passing run
+    # below the floor still fails on it (proved in S074's second contract).
+    switches = re.search(r"^PYTEST_COVERAGE_ARGS\s*:=.*$", MAKEFILE, re.MULTILINE)
+
+    assert switches is not None
+    assert "--no-cov-on-fail" in switches.group(0)
+
+
+def test_the_help_lines_of_both_pytest_targets_say_what_coverage_does_to_a_subset() -> (
+    None
+):
+    for target in ("pytest", "pytest-db"):
+        (line,) = re.findall(rf"^## {target}\s+(.*)$", MAKEFILE, re.MULTILINE)
+
+        assert "with COVERAGE=1 a run of a part of the suite fails the" in line
+        assert "coverage floor" in line
 
 
 def test_the_suite_step_turns_coverage_on() -> None:

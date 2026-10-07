@@ -1020,7 +1020,10 @@ that day; the rest stand as their step recorded them.
 | `NAME_MASKED = ("CLM-1053", "CLM-1054")` is written out in three test files: defined in `test_run_input_stack.py` and in `test_posted_text_screen.py`, and inline in `test_claims_app.py` (`tests/synthetic/test_injection_cases.py` holds the same two with their names as `NAME_MASKED_CASES`) | S074 (leftovers, T2) | open: one definition in `servicesupport.py` beside `injection_case_claim`; not built | S074 |
 | 46 source files over the 800-line ceiling have no row of their own: `scripts/file-size-exceptions.txt` lists 51, each with the line count it may not pass (a ratchet), and five of them are homed elsewhere (`scripts/check_docs_consistency.py`, a copy of development-base's file, whose copy is the one to split; the two AWS script test files and the two upkeep and migration-rule test files, which have the rows above). The other 46 carry the reason "over the ceiling before the check existed; a row of S074 homes its split", and this row is that row. Two are not tests (`infra/terraform/aws.sh`, 812 lines, and `src/meridian/platform/registry/checks.py`, 857) and 44 are, the largest `test_runtime_app.py` (3,160 lines), `test_adjuster_pages.py` (3,097) and `test_claimant_pages.py` (2,743). Each split is work nobody has homed: a cut by S074's method (a script proves the moves) and the removal of the file's line from the list | S074 (the size check, C1, 2026-10-07) | open; each file's split is a contract of its own, none is built | S074 |
 | The ten least covered files of `src/meridian`, from the whole suite of 2026-10-07 (99.11 % of 13,783 statements, 122 missed; the same lines with the tracing core and with the monitoring one): `workloads/claim_brief/evaluation.py` 82.2 %, `platform/evaluation/report.py` 94.2 %, `platform/evaluation/fingerprints.py` 94.8 %, `workloads/claims_triage/mcp_server/tools.py` 95.1 %, `platform/gateway/startup.py` 96.0 %, `workloads/claim_brief/workflow.py` 96.2 %, `platform/policy_mcp/seed.py` 96.3 %, `platform/cli/knowledge.py` 96.4 %, `workloads/claims_triage/evaluation_http.py` 96.7 % and `platform/gateway/providers/azure_openai.py` 96.7 %. The lines still missing are ordinary error paths; no file is reachable only through the paid opt-in tests, and nothing is omitted for them. The floor is 98 for the whole, so one of these files can lose coverage without failing the gate | S074 (the coverage floor, C1, 2026-10-07) | open; a list for a person who works in those files, no fix built | S074 |
-| Coverage's cost on the hosted runner is not measured: the 2.0 % (257.63 s against 252.52 s) is the development machine's, at six workers, and the CI job's limit of 30 minutes was set from it by arithmetic (the slowest of five jobs, 14 min 29 s, scaled by 257.63 / 252.52 to 14 min 47 s, doubled and rounded up). The first pull request whose `python` check runs with `COVERAGE=1` gives the number: the Tests step's time and the whole job's, against the 8 minutes and the 10 min 1 s to 14 min 29 s read before it; if the step costs much more than 2.0 %, the limit and the workflow's comment are reread | S074 (C1b, 2026-10-07) | open; read from the first pull request that runs it | S074 |
+| Coverage's cost on the hosted runner is not measured: the 2.0 % (257.63 s against 252.52 s) is the development machine's, at six workers, and the CI job's limit of 30 minutes was set from it by arithmetic (the slowest of five jobs, 14 min 29 s, scaled by 257.63 / 252.52 to 14 min 47 s, doubled and rounded up). The first pull request whose `python` check runs with `COVERAGE=1` gives the number: the Tests step's time and the whole job's, against the 10 min 1 s to 14 min 29 s read before it; if the step costs much more than 2.0 %, the limit and the workflow's comment are reread | S074 (C1b, 2026-10-07) | open; read from the first pull request that runs it | S074 |
+| No test reads the measuring core that coverage actually used. If the monitoring core is unavailable, or branch coverage or dynamic contexts are turned on, coverage.py 7.16.2 emits a `CoverageWarning` and falls back to the trace function without failing, and the suite then takes about 40 per cent longer (252 s to 346 s measured; on CI about 14.8 min to 20.7 min, still under the 30 minutes). The test of the configuration reads `core = "sysmon"` and the absence of `branch`, not the core in use, so the fallback would be a slow warning, not a failure | S074 (the review of the three gates, finding 7, 2026-10-07) | open; low; a check would read `coverage debug sys` or the data file's metadata after a small run | S074 |
+| The size check's scope has gaps. It reads Python under five directories and shell under two, so a new top-level Python directory is outside it, and so are `infra/kind/alerts/meridian.test.yaml` (2,184 lines, the one file over 800 outside the check), the chart's helpers (`_helpers.tpl`, 766), `tests/test_guard_bash.sh` (736), Terraform (largest 286 lines) and SQL (largest 526). A path with a space cannot be listed: the failure message suggests a line that the parser (`line.split()`) rejects, and no tracked path has a space today | S074 (the review of the three gates, finding 8, 2026-10-07) | open; low | S074 |
+| Code that runs only in a child process counts as not covered: pytest-cov 7.1 has no subprocess hook, `patch = subprocess` is not set and nothing sets `COVERAGE_PROCESS_START`, so what a test reaches only through a `python -m` child shows as missed (the reviewer ran a function reached only that way and its lines were missed). The 99.11 per cent does not rest on it, and a change in that share, up or down, is not visible in the number | S074 (the review of the three gates, 2026-10-07) | open; low; seen by the reviewer, not measured over the suite | S074 |
 
 ## Part C — Step details
 
@@ -14734,17 +14737,21 @@ a cluster.
 
 | Gate | Where | Number | Measured |
 |---|---|---|---|
-| File size check | `scripts/check_file_sizes.py`, run by `make lint` (so the CI `python` job runs it); the list `scripts/file-size-exceptions.txt`; `tests/test_check_file_sizes.py`, 19 tests run by `make test` | 800 lines; a ratchet list of 51 files | `make lint` ended 0 with `check_file_sizes: 810 source files, none over 800 lines without an exception (51 listed)` |
-| Per-test timeout | `pytest-timeout` 2.4.0 (development group, pinned with `==`), `timeout` and `timeout_method` in `pyproject.toml`; `tests/meridian/test_pytest_timeout_gate.py`, 9 tests | 600 s, method `signal`; never under 120 s | the slowest test took 45.0 s without coverage and 52.4 s with the trace function (53.5 s in a third run), at six workers on the development machine |
+| File size check | `scripts/check_file_sizes.py`, run by `make lint` (so the CI `python` job runs it); the list `scripts/file-size-exceptions.txt`; `tests/test_check_file_sizes.py`, 20 tests run by `make test` | 800 lines; a ratchet list of 51 files (an entry can only be lowered or removed) | `make lint` ended 0 with `check_file_sizes: 810 source files, none over 800 lines without an exception (51 listed)` |
+| Per-test timeout | `pytest-timeout` 2.4.0 (development group, pinned with `==`), `timeout` and `timeout_method` in `pyproject.toml`; `tests/meridian/test_pytest_timeout_gate.py`, 8 tests | 600 s, method `signal`; never under 120 s | the slowest test took 45.0 s without coverage and 52.4 s with the trace function (53.5 s in a third run), at six workers on the development machine |
 | Coverage floor | `pytest-cov` 7.1.0, `fail_under = 98` in `pyproject.toml` (the one place), `COVERAGE=1` in the `Makefile` (`make pytest` and `make pytest-db`), set by the Tests step of `python.yml` | 98 % of lines of `src/meridian` | 99.11 % of 13,783 statements, 122 missed, 166 files |
 
 - **The file size check.** It reads the files git tracks: Python under
   `src/`, `tests/`, `scripts/`, `data/synthetic/generator/` and `spikes/`,
   shell under `infra/` and `scripts/`; nothing vendored (`.claude/`,
   `.agents/`, `.codex/`), generated or data. Lines are counted as `wc -l`
-  counts them. A file over 800 fails unless the exceptions file names it; a
-  listed file may shrink and may not grow past its count, and a listed file
-  that is 800 or under, gone or not source fails with the line to remove. Its
+  counts them. A file over 800 fails unless the exceptions file names it. The
+  list is a ratchet: an entry can only be lowered or removed. A listed file
+  over its count fails (it grew), a listed file under its count and still
+  over 800 fails until the entry is lowered to the count it has now (the
+  review's fix: the first build let a file shrink and grow back unnoticed),
+  and a listed file that is 800 or under, gone or not source fails with the
+  line to remove. Its
   failure line names the file, its count, the ceiling or the recorded count,
   and what to do. Its tests build a real temporary git repository (over, at
   and under the ceiling, a missing final newline, shell files, vendored
@@ -14808,7 +14815,8 @@ a cluster.
   checks that the `Makefile` and the workflow do not repeat it. `COVERAGE=1`
   turns it on; anything else leaves it off, so a person who runs one file is
   not refused: a one-file run with `COVERAGE=1` ended `Required test coverage
-  of 98.0% not reached. Total coverage: 6.08%` with exit 2, and the same file
+  of 98.0% not reached. Total coverage: 6.08%` (pytest ended with 1, `make`
+  with 2), and the same file
   without it exited 0. The paid opt-in tests are counted as uncovered and
   nothing is omitted for them: no file is reachable only through them, and
   the lines still missing are ordinary error paths. The ten least covered
@@ -14846,7 +14854,8 @@ a cluster.
   checks that the comment names 14 min 29 s, 14 min 47 s, 252.52 s and
   257.63 s. The 2.0 % is not the hosted runner's.
 - **A hang, and the two limits.** The per-test limit of 600 s is longer than
-  the Tests step's eight minutes or so on CI, and 69 per cent of the slowest
+  the Tests step on CI (the five whole jobs measured the same day took 10 min
+  1 s to 14 min 29 s), and 69 per cent of the slowest
   whole job measured (869 s). Against the job's old limit of 15 minutes (900
   s) a test that hung more than 300 s into the job would have met the job's
   limit before its own, and the job would have been cancelled with no failure
@@ -14933,13 +14942,40 @@ a cluster.
 - **Reviews.** What was reviewed: nothing by a reviewer is recorded in C1's
   or C1b's reports; each implementer ran its own gates (above). The workflow
   change and the new dependencies were not read by an infrastructure
-  reviewer in the records read for this part. REVIEW-LINE
+  reviewer in the records read for this part.
+- **The review.** An infrastructure review of the workflow and the
+  configuration change (2026-10-07): approve with fixes, 0 critical, 0 high,
+  1 medium and 9 low. Changed for it (the second contract, C2): the
+  exceptions list is a real ratchet now (a listed file under its count fails
+  until the entry is lowered; the test that pinned "a shrunk file passes" was
+  turned around on purpose, and all 51 entries already equalled their files'
+  counts, so none was lowered); `precision = 2` under `[tool.coverage.report]`
+  (without it coverage.py rounds the total to a whole number before it
+  compares, so a total of 97.5 passed a floor of 98); one clause in the help
+  lines of `make pytest` and `make pytest-db` about `COVERAGE=1` and a part of
+  the suite, and "exit 2" made exact (pytest ends with 1, `make` with 2);
+  `--no-cov-on-fail` in the coverage switches, so that a run with a failed
+  test prints one failure and not the floor's as well (seen in a scratch
+  directory: a failing test with a floor it would miss printed one failure
+  and ended 1, a passing run below the floor still failed on the floor, a
+  passing run above it ended 0); and two counts (the timeout gate's file has
+  8 tests, not 9; the Tests step's "eight minutes or so" gave way to the five
+  jobs measured the same day, 10 min 1 s to 14 min 29 s). Accepted as they
+  are: the job-limit test pins one number and two arithmetic bounds, and two
+  tests pin strings that need a hand edit when the suite grows or a third paid
+  test appears; the hand edit is the guard's point. What the reviewer checked
+  by running: the workers' coverage data combine to the same total at one and
+  at two workers; the 600 s limit interrupts a sleep, a blocked socket read, a
+  thread join and an asyncio poll; a crashed worker fails the run. What nobody
+  checked: whether the limit interrupts a blocked psycopg call, and the cost
+  on the hosted runner. Three rows record what was left (the core in use, the
+  size check's scope, code that runs only in a child process).
 - **The whole suite on the final tree** (the main session fills the next line
   when it has run): FINAL-SUITE-RESULT
 - **Plan version of this part:** PLAN-VERSION
 - **What S074 still holds after this.** The step stays `doing`. Open: the
   rows the second half's last table keeps; the backlog rows with home S074
-  that are still open (among them the three new rows of this part, each file's
+  that are still open (among them the six new rows of this part, each file's
   split of the 46, the ten least covered files, and coverage's cost on the
   hosted runner, to be read from the first pull request that runs it; and
   the rows on the manifests outside the repository, a runner for `shellcheck`,

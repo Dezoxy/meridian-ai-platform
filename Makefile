@@ -54,9 +54,11 @@ PYTEST_ARGS         ?=
 # pyproject.toml's [tool.coverage.report] fail_under holds, the one place it is
 # written (S074). CI sets it; a run without it measures nothing and cannot fail
 # on coverage, so a person running one file is never refused. Anything but 1
-# leaves it off.
+# leaves it off. --no-cov-on-fail keeps a run with a failed test from printing
+# the floor's failure as well: that run fails once, for the test (a passing run
+# below the floor still fails on the floor).
 COVERAGE            ?=
-PYTEST_COVERAGE_ARGS := $(if $(filter 1,$(COVERAGE)),--cov --cov-report=term:skip-covered,)
+PYTEST_COVERAGE_ARGS := $(if $(filter 1,$(COVERAGE)),--cov --cov-report=term:skip-covered --no-cov-on-fail,)
 # Worker processes for `make pytest` and `make pytest-db` (pytest-xdist -n): a
 # number, or auto for one per CPU core; 0 runs the tests in one process. Ten,
 # the owner's decision of 2026-10-06 for the 12-core development machine,
@@ -193,7 +195,7 @@ lint:
 	uv run lint-imports
 	uv run python scripts/check_file_sizes.py
 
-## pytest          tests under tests/meridian and tests/synthetic, including the import-contract detection test, run in parallel (PYTEST_WORKERS, default 10; 0 runs them in one process)
+## pytest          tests under tests/meridian and tests/synthetic, including the import-contract detection test, run in parallel (PYTEST_WORKERS, default 10; 0 runs them in one process; with COVERAGE=1 a run of a part of the suite fails the coverage floor)
 pytest:
 	uv run pytest -n $(PYTEST_WORKERS) $(PYTEST_COVERAGE_ARGS) $(PYTEST_ARGS)
 
@@ -204,7 +206,7 @@ alerts:
 	docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /bin/promtool -v "$(CURDIR)/.alerts:/rules:ro" -w /rules $(PROMTOOL_IMAGE) check rules --lint=all --lint-fatal meridian.rules.yaml
 	docker run --rm --network none --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges --entrypoint /bin/promtool -v "$(CURDIR)/.alerts:/rules:ro" -w /rules $(PROMTOOL_IMAGE) test rules meridian.test.yaml gateway-cost.test.yaml
 
-## pytest-db       pytest in parallel (PYTEST_WORKERS, default 10; 0 runs them in one process) with a throwaway PostgreSQL 17 on 127.0.0.1:55432 and a throwaway Redis 8 on 127.0.0.1:26379, neither persisted (needs Docker; concurrent runs each need their own PYTEST_DB_CONTAINER, PYTEST_DB_PORT, PYTEST_REDIS_CONTAINER and PYTEST_REDIS_PORT); the database and Redis tests run instead of skipping
+## pytest-db       pytest in parallel (PYTEST_WORKERS, default 10; 0 runs them in one process) with a throwaway PostgreSQL 17 on 127.0.0.1:55432 and a throwaway Redis 8 on 127.0.0.1:26379, neither persisted (needs Docker; concurrent runs each need their own PYTEST_DB_CONTAINER, PYTEST_DB_PORT, PYTEST_REDIS_CONTAINER and PYTEST_REDIS_PORT); the database and Redis tests run instead of skipping; with COVERAGE=1 a run of a part of the suite fails the coverage floor
 pytest-db:
 	@set -e; \
 	docker rm -f $(PYTEST_DB_CONTAINER) $(PYTEST_REDIS_CONTAINER) >/dev/null 2>&1 || true; \

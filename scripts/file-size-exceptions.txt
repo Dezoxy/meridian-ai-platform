@@ -3,11 +3,12 @@
 #
 #   path  allowed-lines  reason of five words or more
 #
-# A listed file may shrink and may not grow past its count; a file that is now
-# 800 lines or under, or is gone, fails the check until its line is removed
-# here, so this list only gets shorter. A new file over 800 lines is not added
-# here: it is split. Every line starts as the first run of the check found it
-# (2026-10-07).
+# The list is a ratchet: an entry can only be lowered or removed. A file over
+# its count fails (it grew), a file under its count but still over 800 fails
+# until its entry is lowered to the count it has now, and a file that is now 800
+# lines or under, or is gone, fails until its line is removed. A new file over
+# 800 lines is not added here: it is split. Every line starts as the first run
+# of the check found it (2026-10-07).
 
 infra/terraform/aws.sh 812 over the ceiling before the check existed; a row of S074 homes its split
 scripts/check_docs_consistency.py 828 copied unchanged from development-base, whose copy is the one to split

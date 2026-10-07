@@ -122,6 +122,9 @@ core = "sysmon"
 
 [tool.coverage.report]
 skip_empty = true
+# Two decimals, or coverage.py rounds the total to a whole number before it
+# compares it with the floor, which makes 97.5 pass a floor of 98.
+precision = 2
 # The floor: 99.11 % of 13,783 statements were covered in the whole suite on
 # 2026-10-07 (20,015 tests, six workers, the database and Redis present), the
 # same 122 missed lines with the trace function and with the monitoring core
