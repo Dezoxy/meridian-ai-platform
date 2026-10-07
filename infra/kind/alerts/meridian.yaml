@@ -211,9 +211,12 @@ spec:
     # From kube-state-metrics.
     - name: meridian.workloads
       rules:
+        # Not the database operator: its Deployment `cnpg-cloudnative-pg` is in
+        # this namespace since S072 and is not a Meridian service. Nothing alerts
+        # when the operator is down (a backlog row).
         - alert: MeridianServiceUnavailable
           expr: |
-            kube_deployment_status_replicas_available{namespace="meridian"} == 0
+            kube_deployment_status_replicas_available{namespace="meridian", deployment!="cnpg-cloudnative-pg"} == 0
           for: 5m
           labels:
             severity: critical

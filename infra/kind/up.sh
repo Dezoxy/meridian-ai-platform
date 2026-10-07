@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# Create the local platform on kind: `make up`. Safe to run again; it converges.
+# Create the local platform on kind: `make up`. Safe to run again on a cluster
+# this script made; it converges. A cluster made before the CloudNativePG operator
+# moved into `meridian` (S072, contract C) holds a namespace this script no longer
+# makes: it refuses it before it changes anything, and says to run `make down`
+# and then `make up` (that destroys the kind cluster and its database).
 #   1. kind cluster "meridian" (only if absent), credentials in infra/kind/kubeconfig
 #   2. namespaces (with Pod Security labels), the NetworkPolicies, Envoy Gateway and
 #      the edge Gateway: the database's, the CloudNativePG operator's,
@@ -126,6 +130,27 @@ check_prerequisites() {
     log "warning: kind is ${kind_version}; the node image in pins.env is for ${KIND_VERSION}"
 }
 
+# The namespace of the operator's old layout, which is history (S072, contract C):
+# the CloudNativePG operator was released into a namespace of its own, and a
+# cluster made then still holds it. Nothing here makes it; this script only asks
+# whether it is there, to refuse such a cluster before it changes anything.
+readonly OLD_OPERATOR_NAMESPACE=cnpg-system
+
+# refuse_the_old_operator_layout: stop, with nothing changed, on a cluster made
+# before the operator moved into `meridian`. The operator's release there owns the
+# CRDs, ClusterRoles and webhook configurations that a release in `meridian`
+# cannot take over (Helm's ownership check), and by then this script would have
+# applied the new policies, so the old operator would already have lost the
+# database's status port. A read that fails is not "the namespace is not there":
+# it stops the run too.
+refuse_the_old_operator_layout() {
+  local found
+  found="$(kctl get namespace "${OLD_OPERATOR_NAMESPACE}" -o name --ignore-not-found)" ||
+    die "could not read whether the namespace ${OLD_OPERATOR_NAMESPACE} exists (kubectl's error is above); that is not 'it does not exist', so the run stops here and nothing was changed: run make up again once the API server answers"
+  [[ -z "${found}" ]] ||
+    die "the namespace ${OLD_OPERATOR_NAMESPACE} exists: this cluster was made before the CloudNativePG operator moved into meridian (S072), and make up cannot bring it to the new layout: the operator's release owns cluster-scoped objects (CRDs, ClusterRoles, webhook configurations) that a release in meridian cannot take over, and Helm would refuse it only after this run had applied the new policies and cut the old operator off from the database; nothing was changed. On a disposable cluster, run 'make down' and then 'make up': that destroys the kind cluster and its database, which holds the only copy of the audit log on kind, so never do it to clear a fault nobody has looked at"
+}
+
 create_cluster() {
   if cluster_exists; then
     log "kind cluster ${CLUSTER_NAME} exists"
@@ -133,6 +158,8 @@ create_cluster() {
     kind export kubeconfig --name "${CLUSTER_NAME}" --kubeconfig "${KUBECONFIG_FILE}"
     # Who holds it (S075): before anything below changes the cluster.
     check_cluster_holder "make up"
+    # A cluster made before the operator moved: before the first write below.
+    refuse_the_old_operator_layout
     # From here on a failed run leaves the record saying `changing`.
     record_cluster_holder changing
     return

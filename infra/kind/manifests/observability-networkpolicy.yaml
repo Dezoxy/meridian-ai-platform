@@ -82,10 +82,14 @@
 #                    shows the operator's webhook unreachable (an object it
 #                    should have refused is let through: it fails open, so
 #                    nothing says so), that peer is added with the node's
-#                    pod-network address. No other pod may reach the port (it
+#                    pod-network address, and with the node's published address
+#                    too when that is not the source: after the Service's
+#                    translation the source of a call through a Service could be
+#                    either (not seen). No other pod may reach the port (it
 #                    was open to every pod of the cluster until S072); the two
-#                    webhooks of cert-manager, which fail closed, are the ones
-#                    a flood could stall: cert-manager-networkpolicy.yaml. This
+#                    webhooks that fail closed, cert-manager's and
+#                    approver-policy's (two pods), are the ones a flood could
+#                    stall: cert-manager-networkpolicy.yaml. This
 #                    change is implemented here and tested without a cluster;
 #                    it is not seen on kind. If Prometheus's target for the
 #                    operator is down on the Targets page, this rule is wrong
@@ -164,11 +168,19 @@
 # `https-metrics` (10250) and its three paths only (metrics, cAdvisor, probes),
 # so nothing scrapes them and they are not opened. The one rule gives 10250 to
 # every pod that policy selects, though only Prometheus scrapes the kubelet: the
-# placeholder is held once per file (a test of each of the three files says so,
-# and `make up` refuses a file that holds it twice), so one rule serves the pods
-# that need either port. What the other pods gain is a connection to the
-# kubelet's port, not an access: it asks for a credential, and their accounts
-# have no rights on the node (not read on this cluster).
+# placeholder is held once per file (a test of each of the files says so, and
+# `make up` refuses a file that holds it twice), so one rule serves the pods that
+# need either port. Three workloads besides Prometheus are selected (the
+# operator with its two hook Jobs, kube-state-metrics and Grafana: five pods), and
+# they gain a path to the kubelet's port. Known: on this cluster a pod's egress to
+# the API server's Service address is refused without a rule (smoke's
+# network-policy check prints that line on every run: seen). Not known: whether a
+# pod's egress straight to the node's address on a port that no rule names is
+# refused; it has NOT been tried. Whether those pods are then kept out by the
+# kubelet's own check is also unread: it asks for a credential, and their
+# accounts have no rights on the node (not read on this cluster). The cold run
+# tries it once, from Tempo's pod (which no rule here reaches the node from) to
+# the kubelet's port 10250: if it is not refused, the header says so.
 #
 # What leaves the cluster, and is now refused. Loki sets no `analytics` block, so
 # its usage report to stats.grafana.org is on (its default) and is refused: Loki
@@ -182,10 +194,16 @@
 #     logs it, and as far as its documentation says it does not hold readiness.
 #   - The operator's calls to Prometheus pods, if it makes any, are not in the
 #     render; the Prometheus resource's status comes through the API server.
-#   - Loki's compactor address is its own Service (port 9095) and no ingress rule
-#     admits 9095; Tempo's modules call each other at the pod's own address. Both
-#     are a pod's connection to itself, taken as not filtered, as the ingress
-#     side above has taken them since S063. No egress rule is written for them.
+#   - Loki's compactor address is a Service's cluster address
+#     (loki.observability.svc.cluster.local:9095, values/loki.yaml), so that
+#     connection leaves the pod's network namespace and comes back to it: it is
+#     not a connection inside the pod, and whether the plugin filters it is not
+#     known. No ingress rule admits 9095, and none has since S063, while Loki's
+#     queries worked (seen then), so a break is not expected; no egress rule is
+#     written for it. A cold run reads Loki's log for a compactor or a
+#     delete-request error. Tempo's modules call each other at the pod's own
+#     address, which stays inside the pod's network namespace and is not
+#     filtered.
 # Each costs a log line or a status, none a Ready pod, as far as the files say.
 #
 # Implemented here, tested without a cluster (tests/meridian/
@@ -194,7 +212,15 @@
 # kubelet's three paths, the API server, CoreDNS, cert-manager's controller,
 # Grafana, kube-state-metrics, the operator and Prometheus's two), certificates
 # issued, and smoke's 46 lines passing, with no pod's log naming a connection
-# that was refused but the usage report. The way back: a target found down is
+# that was refused but the usage report. Four reads besides: the order in which a
+# wrong premise about the webhooks would show (cert-manager's release first,
+# approver-policy's apply, the database's install, then, silently, this
+# operator's target on the Targets page: the operator's webhooks are `Ignore`);
+# one connection from Tempo's pod to the node's kubelet port 10250, which no rule
+# here gives that pod (whether it is refused is the open question above); Loki's
+# log, which must hold no compactor or delete-request error; and the proxy
+# Service's `externalTrafficPolicy` (envoy-gateway-networkpolicy.yaml). The way
+# back: a target found down is
 # added once, from what the run shows (its namespace, pod labels and port); a
 # second round of surprises takes the egress policy out again and states the gap
 # in its place, instead of a third guess (S063 judged a half-right egress policy

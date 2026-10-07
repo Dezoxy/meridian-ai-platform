@@ -39,7 +39,10 @@
 #               separately, and is taken to leave from the same place). So no
 #               rule. A cluster with more than one node, or a plugin that
 #               polices the node, would need one ipBlock peer on 9443, with the
-#               node's pod-network address. This webhook is `Ignore`, unlike
+#               node's pod-network address and, when that is not the source,
+#               the node's published address too: after the Service's
+#               translation the source of a call through a Service could be
+#               either (not seen). This webhook is `Ignore`, unlike
 #               cert-manager's two: a call that did not get through raises no
 #               error and leaves no refused request, so it is not loud, and it
 #               does not stop the edge.
@@ -97,8 +100,10 @@
 #               for it is the public entry (loopback only on the laptop, threat
 #               model T-01 and T-03: the port mapping's listen address). It is
 #               the only rule without a peer in this file, and a test holds
-#               that. It also admits any pod of the cluster to that port, which
-#               any pod can reach through the proxy's Service anyway.
+#               that. It admits every source, the pods of the cluster
+#               included: a narrower rule would need an address range (an
+#               ipBlock with an exception for the pod range), which this file
+#               does not hold and its own test forbids.
 #   IN   19001  metrics: smoke.sh reads the listener's counter through the API
 #               server's pod proxy, which starts on the node (the path measured
 #               2026-10-07). No scraper. No rule.
@@ -161,7 +166,9 @@
 # the edge, which are the proof that 10080 and 8000 are admitted. To settle the
 # one open fact, read the proxy Service's `externalTrafficPolicy` as the API
 # server holds it (expected `Local`) and, if the proxy logs access, the peer
-# address of a request from the laptop. Not seen on kind: this file is
+# address of a request from the laptop. The release of cert-manager, which
+# follows this one, is where a wrong premise about the webhooks would first show
+# (cert-manager's header gives the order). Not seen on kind: this file is
 # implemented and tested without a cluster
 # (tests/meridian/test_kind_envoy_gateway_policy.py).
 #

@@ -35,7 +35,12 @@
 # node, would need one ipBlock peer on port 9443. If a cold `make up` shows the
 # webhooks unreachable (the install of `platform-db` fails with "failed calling
 # webhook ... cnpg.io", which fails closed), that peer is added with the node's
-# pod-network address, as the cert-manager file says for its two webhooks.
+# pod-network address, as the cert-manager file says for its two webhooks, and
+# with the node's published address too when that is not the source: after the
+# Service's translation the source of a call through a Service could be either
+# (not seen). This is the third place a wrong premise about the webhooks would
+# show in a cold run, after cert-manager's release and approver-policy's apply
+# (cert-manager's header gives the order).
 #
 # Egress, three rules and nothing else, each with a peer and a port:
 #   53    DNS: the cluster's DNS pods (UDP and TCP), the form of every other file
@@ -50,11 +55,13 @@
 #         HTTP port: the operator asks each instance for its status there. The
 #         database's policy admits the operator on that port alone, by these
 #         pods' labels: the two rules are one fact, and a test ties them
-# Not 5432: the database's policy admits the operator on 8000 only, and the
-# Cluster has been healthy under it (measured on the owner's cluster, S019: with
-# the rule, healthy; without it "Instance Status Extraction Error" within 40
-# seconds), so the operator reaches PostgreSQL through the instance manager (pods
-# and `pods/exec` are in its Role) and not by the SQL port. A rule for 5432 here
+# Not 5432: the database's policy admits the operator on 8000 only and has never
+# admitted it on 5432, and the Cluster has been healthy under it (measured on the
+# owner's cluster, S019: with the rule, healthy; without it "Instance Status
+# Extraction Error" within 40 seconds). That is the evidence that the operator
+# does not need the SQL port: it was never given it there. It is evidence about
+# the database's INGRESS; the operator's EGRESS policy is new in this change, so
+# that nothing else is needed is unproved until a cold run. A rule for 5432 here
 # with no half in the database's policy would be half a rule; with the half, it
 # would widen the database. Nothing reaches the telemetry stack: the operator
 # sends no span, log line or metric, and the collector's own rule (which admits
@@ -66,11 +73,15 @@
 # Databases applied, and `make deploy` and `make smoke` after it passing with
 # the chart's default-deny in place. A cluster made before this change keeps the
 # release in a namespace of its own and does not converge: Helm meets
-# cluster-scoped objects that the other release owns. It needs `make down` and
-# then `make up`. If one cold `make up` does not bring the database up, the
-# change is taken out again (up.sh's comment above the install says how and
-# what it looks like), and the operator's reach is recorded as accepted with
-# "tried, and what failed".
+# cluster-scoped objects that the other release owns. `make up` refuses such a
+# cluster before it changes anything (up.sh), and it needs `make down` and then
+# `make up`. The operator's ClusterRole is left with nodes, the webhook
+# configurations and image catalogs; the chart also renders two ClusterRoles
+# that nothing binds or aggregates (`cnpg-cloudnative-pg-view` and
+# `cnpg-cloudnative-pg-edit`). If one cold `make up` does not bring the
+# database up, the change is taken out again (up.sh's comment above the install
+# says how and what it looks like), and the operator's reach is recorded as
+# accepted with "tried, and what failed".
 #
 # Implemented here, tested without a cluster (tests/meridian/
 # test_kind_cnpg_operator_confined.py); not seen on kind. That kindnet enforces

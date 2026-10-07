@@ -33,15 +33,31 @@
 # denied by default, with no rule that admits it (seen on kind 2026-10-07, for
 # a call by way of the pod proxy; a
 # webhook call through the Service's address is not seen separately, and is
-# taken to leave from the same place). Kubernetes says the same of a pod's own
-# node (the NetworkPolicy concept page: traffic to and from the node a pod
-# runs on is always allowed). The kind cluster has one node and the API server
+# taken to leave from the same place). What Kubernetes says: the NetworkPolicy
+# concept page (kubernetes.io/docs/concepts/services-networking/network-policies/,
+# read 2026-10-07 by the main session), in its list of the entities a Pod can
+# communicate with, says of IP blocks: "(exception: traffic to and from the node
+# where a Pod is running is always allowed, regardless of the IP address of the
+# Pod or the node)". What this cluster shows beside it: ingress from the node
+# passed a default-deny policy (the measurement above), and egress to the API
+# server's Service address is refused without a rule (smoke's network-policy
+# check prints that line on every run: seen). So on this plugin the page's "to"
+# half does not hold for that path, and the egress rules below are not
+# decorative. The kind cluster has one node and the API server
 # runs on it. A rule would be needed on a cluster with more than one node (the
 # API server may then call from another node), or with a plugin that polices
 # the node; the rule is then one ipBlock peer, filled in the way the egress
 # rule's address is (below). If a cold `make up` shows a webhook unreachable
 # (no Certificate is issued, and smoke fails loudly), the rule comes back on
-# 10250 with the node's pod-network address as its one peer. This change is
+# 10250 with the node's pod-network address as its one peer, and with the node's
+# published address as well when that is not the source: after the Service's
+# translation the source of a call through a Service could be either, and it is
+# not seen which. The order in which a wrong premise about the webhooks would
+# show, in a cold run: cert-manager's release (its startup check Job calls the
+# webhook), then approver-policy's apply (retried for two minutes, then it
+# stops), then the database's install (the operator's webhooks fail closed too),
+# and last, silently, the Prometheus operator's target (its webhooks are
+# `Ignore`). This change is
 # implemented in this file and tested without a cluster; it is not seen on
 # kind: a cold `make up` and the issued Certificates are that test.
 #

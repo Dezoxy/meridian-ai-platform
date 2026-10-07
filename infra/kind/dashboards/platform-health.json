@@ -412,7 +412,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "kube_deployment_status_replicas_available{namespace=\"meridian\"}",
+          "expr": "kube_deployment_status_replicas_available{namespace=\"meridian\", deployment!=\"cnpg-cloudnative-pg\"}",
           "legendFormat": "{{deployment}}",
           "range": true,
           "refId": "A"
@@ -464,7 +464,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (pod) (kube_pod_container_status_restarts_total{namespace=\"meridian\"})",
+          "expr": "sum by (pod) (kube_pod_container_status_restarts_total{namespace=\"meridian\", pod!~\"cnpg-cloudnative-pg-.+\"})",
           "legendFormat": "{{pod}}",
           "range": true,
           "refId": "A"

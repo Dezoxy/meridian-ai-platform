@@ -37,8 +37,10 @@ and has no namespace of its own (S072, contract C). The release is made with
 `config.clusterWide=false`, so its rules over Secrets, ConfigMaps, pods
 (`pods/exec` too) and roles are a Role in `meridian` and no longer a
 ClusterRole over every namespace; the ClusterRole is left with nodes (read),
-the webhook configurations (get, patch) and image catalogs (read). Its pod has
-a NetworkPolicy of its own,
+the webhook configurations (get, patch) and image catalogs (read). The chart
+also renders two ClusterRoles, `cnpg-cloudnative-pg-view` and
+`cnpg-cloudnative-pg-edit` (read and write on the operator's own objects), that
+nothing binds or aggregates; they stay. Its pod has a NetworkPolicy of its own,
 [`manifests/cnpg-operator-networkpolicy.yaml`](manifests/cnpg-operator-networkpolicy.yaml),
 which `make up` applies before the release: the chart's `default-deny`, added
 by `make deploy`, selects every pod of `meridian`. **Implemented in files and
@@ -46,7 +48,9 @@ tested without a cluster; not seen on kind.** If one cold `make up` does not
 bring the database up under it, the change is taken out again and the
 operator's reach is recorded as accepted with "tried, and what failed" (the
 comment above the install in [`up.sh`](up.sh) says how, and what that looks
-like). A cluster made before this change needs `make down` and then `make up`
+like). A cluster made before this change needs `make down` and then `make up`;
+`make up` refuses such a cluster, before it changes anything, when the old
+namespace exists, and says so (F2 of S072; not seen on kind)
 (`make down` deletes the kind cluster, `down.sh` says so; that is allowed on a
 disposable cluster and never to clear a fault nobody has looked at, as the
 cluster's database holds the only copy of the audit log): Helm does not move a
@@ -1661,8 +1665,9 @@ What stays open, in one list:
 - The edge's listener is open to any address, by design: port 10080 of the
   proxy pods (the Gateway's port 80 plus 10000) has no peer, because it is
   the public entry and a request from outside keeps its source address
-  (`Local`, above). It also admits any pod of the cluster to that port, which
-  any pod can reach through the proxy's Service anyway. The rest of
+  (`Local`, above). The rule admits every source, the pods of the cluster
+  included; a narrower one would need an address range, which the file's own
+  test forbids. The rest of
   `envoy-gateway-system` is closed (S072, contract N). Not seen on kind: a cold
   `make up` must show the certgen hook Job completed (it runs under the default
   deny before the controller exists), the proxy configured, and `make smoke`'s
@@ -1697,7 +1702,12 @@ What stays open, in one list:
   node, would need one `ipBlock` peer on each, filled in the way the
   egress address is; if a cold `make up` shows a webhook unreachable (no
   certificate issued, smoke fails), each rule comes back with the node's
-  pod-network address as its one peer. The change is in the files and
+  pod-network address as its one peer, and with the node's published address
+  too when that is not the source (after the Service's translation a call
+  through a Service could carry either; not seen). A cold run shows a wrong
+  premise in this order: cert-manager's release, approver-policy's apply, the
+  database's install and, silently, the Prometheus operator's target. The
+  change is in the files and
   tested without a cluster; a cold `make up` has not run it. The two that
   fail closed (cert-manager's and approver-policy's) are the ones a flood
   could have stalled; the operator's is `failurePolicy: Ignore`.

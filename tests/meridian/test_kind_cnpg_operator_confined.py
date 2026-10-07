@@ -19,7 +19,9 @@ what to do when it does not).
 """
 
 import ipaddress
+import os
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -29,6 +31,7 @@ from kindsupport import (
     DB_POLICY_FILE,
     KIND_DIR,
     UP_SH,
+    function_body,
     function_definition,
     load_documents,
     requires_jq,
@@ -126,7 +129,11 @@ def test_nothing_creates_the_operators_old_namespace() -> None:
     assert OLD_NAMESPACE not in namespaces
     assert "meridian" in namespaces
     assert "--create-namespace" not in UP_SH
-    assert re.findall(rf"^\s*(?!#).*{OLD_NAMESPACE}", UP_SH, re.MULTILINE) == []
+    # The one code line that names it is the guard's constant (contract F2): the
+    # guard refuses a cluster that still has the namespace, and nothing makes it.
+    assert re.findall(rf"^\s*(?!#).*{OLD_NAMESPACE}", UP_SH, re.MULTILINE) == [
+        f"readonly OLD_OPERATOR_NAMESPACE={OLD_NAMESPACE}"
+    ]
 
 
 def test_the_operator_follows_the_namespaces_and_its_policy_and_precedes_the_db() -> (
@@ -486,3 +493,134 @@ def test_smoke_says_where_the_operators_log_is_now() -> None:
     assert f"read its log {where}" in smoke
     assert f"read the operator's log {where}" in smoke
     assert OLD_NAMESPACE not in smoke
+
+
+# ── `make up` on a cluster made before this change (contract F2) ─────────────
+
+
+def run_create_cluster(
+    tmp_path: Path, *, namespace: str, read_status: int = 0
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    """The real ``create_cluster`` and guard of up.sh, for a cluster that exists,
+    against stand-ins that write every call they get to a file. ``namespace`` is
+    what the stand-in read of the old namespace prints ('' when it is absent) and
+    ``read_status`` its exit status."""
+    calls = tmp_path / "calls"
+    calls.touch()
+    script = "\n".join(
+        [
+            "set -euo pipefail",
+            'die() { printf "error: %s\\n" "$*" >&2; exit 1; }',
+            'log() { echo "==> $*"; }',
+            'note() { printf "%s\\n" "$*" >>"${CALLS}"; }',
+            "cluster_exists() { note cluster_exists; return 0; }",
+            'kind() { note "kind $*"; }',
+            'check_cluster_holder() { note "check_cluster_holder $*"; }',
+            'record_cluster_holder() { note "record_cluster_holder $*"; }',
+            "CLUSTER_NAME=meridian; KUBECONFIG_FILE=/dev/null",
+            "kctl() {",
+            '  note "kctl $*"',
+            '  [[ "${READ_STATUS}" == 0 ]] || { echo "Error: boom" >&2; return 1; }',
+            '  [[ "$*" != *"get namespace"* ]] || printf "%s" "${NAMESPACE_FOUND}"',
+            "}",
+            *re.findall(r"^readonly OLD_OPERATOR_NAMESPACE=.*$", UP_SH, re.M),
+            function_definition(UP_SH, "refuse_the_old_operator_layout"),
+            function_definition(UP_SH, "create_cluster"),
+            "create_cluster",
+            'note "after create_cluster"',
+        ]
+    )
+    done = subprocess.run(
+        ["bash", "-c", script],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": os.environ["PATH"],
+            "CALLS": str(calls),
+            "READ_STATUS": str(read_status),
+            "NAMESPACE_FOUND": f"namespace/{namespace}" if namespace else "",
+        },
+        check=False,
+    )
+    return done, calls.read_text(encoding="utf-8").splitlines()
+
+
+def test_up_stops_before_any_change_when_the_old_operator_namespace_exists(
+    tmp_path: Path,
+) -> None:
+    done, calls = run_create_cluster(tmp_path, namespace=OLD_NAMESPACE)
+
+    assert done.returncode != 0
+    message = done.stderr
+    # What was found, why `make up` cannot bring the cluster over, what to run,
+    # and what that costs.
+    assert f"the namespace {OLD_NAMESPACE} exists" in message
+    assert "made before" in message and "meridian" in message
+    assert "cannot bring" in message and "Helm" in message
+    assert "run 'make down' and then 'make up'" in message
+    assert "destroys the kind cluster and its database" in message
+    assert "only copy of the audit log" in message
+    assert "nobody has looked at" in message
+    assert "nothing was changed" in message
+    # The order of the calls: the check of the holder, the read, then the stop.
+    # No record, no apply, nothing after.
+    assert calls[0] == "cluster_exists"
+    assert calls[1].startswith("kind export kubeconfig")
+    assert calls[2].startswith("check_cluster_holder")
+    assert calls[3].startswith("kctl get namespace " + OLD_NAMESPACE)
+    assert len(calls) == 4
+    assert not any("record_cluster_holder" in call for call in calls)
+    assert not any("apply" in call for call in calls)
+    assert "after create_cluster" not in calls
+
+
+def test_up_goes_on_when_the_old_operator_namespace_is_not_there(
+    tmp_path: Path,
+) -> None:
+    done, calls = run_create_cluster(tmp_path, namespace="")
+
+    assert done.returncode == 0, done.stderr
+    holder = [i for i, c in enumerate(calls) if c.startswith("check_cluster_holder")]
+    read = [i for i, c in enumerate(calls) if c.startswith("kctl get namespace")]
+    record = [i for i, c in enumerate(calls) if c == "record_cluster_holder changing"]
+    # The read sits between the check of the holder and the first write.
+    assert holder[0] < read[0] < record[0]
+    assert calls[-1] == "after create_cluster"
+    assert "--ignore-not-found" in calls[read[0]]
+
+
+def test_a_read_that_fails_is_not_a_namespace_that_does_not_exist(
+    tmp_path: Path,
+) -> None:
+    done, calls = run_create_cluster(tmp_path, namespace="", read_status=1)
+
+    assert done.returncode != 0
+    assert "could not read whether the namespace" in done.stderr
+    assert "that is not 'it does not exist'" in done.stderr
+    assert "nothing was changed" in done.stderr
+    assert not any("record_cluster_holder" in call for call in calls)
+    assert "after create_cluster" not in calls
+
+
+def test_the_guard_sits_in_the_existing_cluster_branch_and_the_header_says_so() -> None:
+    body = function_body(UP_SH, "create_cluster")
+    exists = body[: body.index("return")]
+    flat = " ".join(
+        line.removeprefix("#").strip()
+        for line in UP_SH.split("set -euo pipefail")[0].splitlines()
+    )
+
+    # A cluster made here cannot hold the namespace: the read is in the branch
+    # for a cluster that exists, after the holder check and before the record.
+    assert exists.index("check_cluster_holder") < exists.index(
+        "refuse_the_old_operator_layout"
+    )
+    assert exists.index("refuse_the_old_operator_layout") < exists.index(
+        "record_cluster_holder changing"
+    )
+    assert body.count("refuse_the_old_operator_layout") == 1
+    assert "Safe to run again; it converges." not in flat
+    assert "Safe to run again on a cluster this script made" in flat
+    assert "refuses it before it changes anything" in flat
+    assert "make down" in flat
+    assert OLD_NAMESPACE not in flat
