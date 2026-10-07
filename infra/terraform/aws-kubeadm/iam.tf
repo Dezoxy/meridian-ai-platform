@@ -1,7 +1,46 @@
-# Implemented as code, never applied (S079). Two instance roles: both may use
-# Session Manager (the only way into a node: no key pair, no port 22); the
-# control plane's may WRITE the one join parameter, the workers' may READ it with
-# decryption; nothing else.
+# Implemented as code, never applied (S079), and no run has seen what either role
+# can do. Two instance roles, each with the managed policy
+# AmazonSSMManagedInstanceCore (below) and one inline policy of this module.
+#
+# What each role can and cannot do, AFTER the managed policy is counted:
+#
+# * Both: use Session Manager (the only way into a node: no key pair, no port
+#   22) and the rest of what that managed policy allows (the list is below).
+# * The control plane: WRITE the one join parameter. It can read NO parameter:
+#   an explicit Deny of the four read actions on every resource beats the
+#   managed policy's Allow.
+# * A worker: READ the one join parameter with decryption (its own Allow is
+#   redundant with the managed policy's, which the page below says allows
+#   ssm:GetParameter on every resource, and stays as the statement of intent).
+#   It can read NO other parameter: an explicit Deny of the four read actions on
+#   every resource but the join parameter. It cannot write one.
+#
+# What the page says, and what only the account settles: the "AWS managed
+# policy reference" page for AmazonSSMManagedInstanceCore, read 2026-10-07 at
+# https://docs.aws.amazon.com/aws-managed-policy/latest/reference/AmazonSSMManagedInstanceCore.html
+# shows version v2 as the default, edited 2019-05-23, with ssm:GetParameter and
+# ssm:GetParameters on Resource "*". It lists neither ssm:GetParametersByPath
+# nor ssm:GetParameterHistory: those two are denied as well in case a later
+# version adds them. What the policy says TODAY in the account is settled by
+# `aws iam get-policy-version` there, and that was not run. The Deny statements
+# are right whatever it says.
+#
+# What that managed policy also allows and this module does not need (the same
+# page): ssm:DescribeAssociation, ssm:ListAssociations,
+# ssm:ListInstanceAssociations, ssm:UpdateAssociationStatus,
+# ssm:UpdateInstanceAssociationStatus, ssm:GetDocument, ssm:DescribeDocument,
+# ssm:GetManifest, ssm:GetDeployablePatchSnapshotForInstance, ssm:PutInventory,
+# ssm:PutComplianceItems and ssm:PutConfigurePackageResult, all on every
+# resource. The agent's own messaging (ssmmessages:* for Session Manager,
+# ec2messages:* and ssm:UpdateInstanceInformation) is what a node needs to be
+# reachable. It has no SendCommand, StartSession or Put*Parameter. Nothing here
+# narrows the first list: a customer-managed policy with only the messaging
+# actions would, and is not built.
+#
+# Not seen: whether the Deny breaks the SSM agent, if the agent reads a
+# parameter of its own with these credentials (the page does not say why the
+# managed policy grants the read). An apply shows it as a node that never
+# registers with Systems Manager.
 
 # The managed policy is read by NAME and attached by the ARN that comes back,
 # never by a typed ARN (the managed module's cluster.tf says why). The name is
@@ -51,6 +90,18 @@ data "aws_iam_policy_document" "control_plane_write_join_command" {
     actions   = ["ssm:PutParameter"]
     resources = [aws_ssm_parameter.join_command.arn]
   }
+
+  # It writes the join parameter and reads none (iam.tf's header says why).
+  statement {
+    effect = "Deny"
+    actions = [
+      "ssm:GetParameter",
+      "ssm:GetParameters",
+      "ssm:GetParametersByPath",
+      "ssm:GetParameterHistory",
+    ]
+    resources = ["*"]
+  }
 }
 
 resource "aws_iam_role_policy" "control_plane_write_join_command" {
@@ -79,6 +130,18 @@ data "aws_iam_policy_document" "worker_read_join_command" {
     effect    = "Allow"
     actions   = ["ssm:GetParameter"]
     resources = [aws_ssm_parameter.join_command.arn]
+  }
+
+  # A worker reads the join parameter and no other (iam.tf's header says why).
+  statement {
+    effect = "Deny"
+    actions = [
+      "ssm:GetParameter",
+      "ssm:GetParameters",
+      "ssm:GetParametersByPath",
+      "ssm:GetParameterHistory",
+    ]
+    not_resources = [aws_ssm_parameter.join_command.arn]
   }
 }
 

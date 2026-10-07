@@ -3,9 +3,13 @@
 # scripts that make them a cluster (templates/).
 #
 # No key pair and no port 22: the only way into a node is Session Manager. The
-# metadata service is at version 2 with a hop limit of 1, so a pod (one network
-# hop beyond the node) cannot use the node's role. Root volumes are encrypted
-# and go with the instance.
+# metadata service is at version 2 with a hop limit of 1, so a pod with its OWN
+# network namespace (one more hop beyond the node) cannot reach it. A pod on the
+# host network can: calico-node, kube-proxy and any pod with hostNetwork: true
+# share the node's network stack and so can fetch the node role's credentials,
+# and those work from outside the node until they expire (nothing in a policy
+# ties them to the VPC or an address). iam.tf says what the role can do with
+# them. Root volumes are encrypted and go with the instance.
 
 # The image id comes from Canonical's public parameter (main.tf says which and
 # why it is a moving input). The value is an image id and no secret, so the

@@ -445,6 +445,13 @@ def test_every_ingress_rule_is_one_the_design_lists_and_none_is_open_to_the_worl
             '"tcp"',
             "local.api_port",
             "local.api_port",
+            "control_plane.id",
+        ),
+        (
+            "control_plane",
+            '"tcp"',
+            "local.api_port",
+            "local.api_port",
             '"${aws_instance.worker[count.index].public_ip}/32"',
         ),
         (
@@ -466,6 +473,113 @@ def test_every_ingress_rule_is_one_the_design_lists_and_none_is_open_to_the_worl
         assert rule["ip_protocol"] != '"-1"'
         assert rule["cidr_ipv4"] != '"0.0.0.0/0"'
         assert "ipv6" not in str(rule)
+
+
+INLINE_RULE = re.compile(r"^\s*(ingress|egress)\b\s*[={]", re.MULTILINE)
+GROUP_TYPES = ("aws_security_group", "aws_default_security_group")
+
+
+def rules_made_another_way(text: str) -> list[str]:
+    """What admits traffic without being an ``aws_vpc_security_group_*_rule``
+    resource: an ``aws_security_group_rule`` resource, and an ``ingress`` or
+    ``egress`` block or attribute inside a security group (the default group
+    included). The ingress test above reads the one resource type only."""
+    code = code_of(text)
+    found = [
+        f"resource {match[1]}"
+        for match in re.finditer(
+            r'^\s*resource\s+"?(aws_security_group_rule)"?\s', code, re.MULTILINE
+        )
+    ]
+    for group_type in GROUP_TYPES:
+        for name, body in blocks(code, "resource", group_type).items():
+            found += [
+                f"{group_type}.{name}: {m[1]}" for m in INLINE_RULE.finditer(body)
+            ]
+    return found
+
+
+def test_the_module_admits_traffic_only_through_the_rule_resources_the_tests_read() -> (
+    None
+):
+    assert rules_made_another_way(module_text()) == []
+
+
+@pytest.mark.parametrize(
+    ("planted", "expected"),
+    [
+        (
+            'resource "aws_security_group" "worker" {\n  ingress {\n'
+            "    from_port = 22\n  }\n}\n",
+            ["aws_security_group.worker: ingress"],
+        ),
+        (
+            'resource "aws_security_group" "worker" {\n  egress = [{ a = 1 }]\n}\n',
+            ["aws_security_group.worker: egress"],
+        ),
+        (
+            'resource "aws_default_security_group" "main" {\n  ingress {\n  }\n}\n',
+            ["aws_default_security_group.main: ingress"],
+        ),
+        (
+            'resource "aws_security_group_rule" "open" {\n  type = "ingress"\n}\n',
+            ["resource aws_security_group_rule"],
+        ),
+    ],
+)
+def test_a_rule_made_another_way_is_found(planted: str, expected: list[str]) -> None:
+    assert rules_made_another_way(planted) == expected
+
+
+def test_a_comment_that_names_an_inline_block_is_not_one() -> None:
+    text = 'resource "aws_security_group" "worker" {\n  # no ingress { here\n}\n'
+
+    assert rules_made_another_way(text) == []
+
+
+def test_the_hairpin_hedge_admits_6443_from_each_group_by_group_reference() -> None:
+    rules = ingress_rules()
+    text = read(MODULE_DIR / "security.tf")
+
+    for name, source in (
+        ("api_from_workers", "aws_security_group.worker.id"),
+        ("api_from_control_plane_group", "aws_security_group.control_plane.id"),
+    ):
+        rule = rules[name]
+        assert rule["security_group_id"] == "aws_security_group.control_plane.id"
+        assert rule["referenced_security_group_id"] == source
+        assert rule["cidr_ipv4"] is None
+        assert rule["ip_protocol"] == '"tcp"'
+        assert (rule["from_port"], rule["to_port"]) == ("local.api_port",) * 2
+    # The comment says it is a hedge and what an apply would show.
+    (comment,) = re.findall(
+        r"((?:^#.*\n)+)resource \"aws_vpc_security_group_ingress_rule\" "
+        r"\"api_from_control_plane_group\"",
+        text,
+        re.MULTILINE,
+    )
+    prose = " ".join(re.sub(r"^# ?", "", comment, flags=re.MULTILINE).split())
+    assert "hedge" in prose
+    assert "private source" in prose
+    assert "An apply shows" in prose
+
+
+def test_the_network_header_points_at_the_security_file_and_counts_its_rules() -> None:
+    header = " ".join(
+        re.sub(r"^# ?", "", line)
+        for line in read(MODULE_DIR / "network.tf").split("\n\n")[0].splitlines()
+    )
+    ingress = len(ingress_rules())
+    egress = len(
+        blocks(module_text(), "resource", "aws_vpc_security_group_egress_rule")
+    )
+
+    assert "(security.tf," in header
+    assert "nodes.tf" not in header
+    assert "from one /32" not in header  # four rules admit 6443 from an address
+    assert f"{ingress} ingress rule resources" in header
+    assert f"{egress} egress rules" in header
+    assert "never from 0.0.0.0/0" in header
 
 
 def test_the_api_port_is_the_ports_and_protocols_pages_6443() -> None:
@@ -599,6 +713,10 @@ def statements(document: str) -> list[str]:
     )
 
 
+def statements_of(document: str, effect: str) -> list[str]:
+    return [s for s in statements(document) if value_of(s, "effect") == f'"{effect}"']
+
+
 @pytest.mark.parametrize(
     ("document", "actions"),
     [
@@ -606,19 +724,56 @@ def statements(document: str) -> list[str]:
         ("worker_read_join_command", '["ssm:GetParameter"]'),
     ],
 )
-def test_each_role_may_do_one_thing_to_the_one_parameter_and_nothing_else(
+def test_each_roles_own_document_allows_one_thing_to_the_one_parameter(
     document: str, actions: str
 ) -> None:
     text = module_text()
     documents = blocks(text, "data", "aws_iam_policy_document")
 
-    (statement,) = statements(documents[document])
+    (statement,) = statements_of(documents[document], "Allow")
 
-    assert value_of(statement, "effect") == '"Allow"'
     assert value_of(statement, "actions") == actions
     assert value_of(statement, "resources") == "[aws_ssm_parameter.join_command.arn]"
     assert "*" not in statement
     assert "kms:" not in statement
+
+
+READ_ACTIONS = [
+    "ssm:GetParameter",
+    "ssm:GetParameters",
+    "ssm:GetParametersByPath",
+    "ssm:GetParameterHistory",
+]
+
+
+def test_the_control_plane_is_denied_every_read_of_every_parameter() -> None:
+    documents = blocks(module_text(), "data", "aws_iam_policy_document")
+
+    (deny,) = statements_of(documents["control_plane_write_join_command"], "Deny")
+
+    assert re.findall(r'"(ssm:\w+)"', deny) == READ_ACTIONS
+    assert value_of(deny, "resources") == '["*"]'
+    assert "not_resources" not in deny
+
+
+def test_a_worker_is_denied_every_read_of_every_parameter_but_the_join_parameter() -> (
+    None
+):
+    documents = blocks(module_text(), "data", "aws_iam_policy_document")
+
+    (deny,) = statements_of(documents["worker_read_join_command"], "Deny")
+
+    assert re.findall(r'"(ssm:\w+)"', deny) == READ_ACTIONS
+    assert value_of(deny, "not_resources") == "[aws_ssm_parameter.join_command.arn]"
+    assert re.search(r"^\s*resources\s*=", deny, re.MULTILINE) is None
+
+
+def test_each_roles_document_has_one_allow_and_one_deny() -> None:
+    documents = blocks(module_text(), "data", "aws_iam_policy_document")
+
+    for name in ("control_plane_write_join_command", "worker_read_join_command"):
+        assert len(statements(documents[name])) == 2, name  # one Allow, one Deny
+        assert len(statements_of(documents[name], "Allow")) == 1, name
 
 
 def test_there_are_exactly_two_inline_policies_and_the_roles_trust_only_ec2() -> None:
@@ -645,13 +800,35 @@ def test_there_are_exactly_two_inline_policies_and_the_roles_trust_only_ec2() ->
     }
 
 
-def test_workers_cannot_write_the_parameter_and_the_control_plane_cannot_read_it() -> (
+def test_the_modules_own_documents_give_workers_no_write_and_the_plane_no_read() -> (
     None
 ):
+    """What this reads is the module's own two documents. The managed policy
+    attached to both roles is read by name and is NOT in them: what it allows
+    is settled by ``aws iam get-policy-version`` in the account, and the Deny
+    statements above are what keep it from counting (iam.tf says so)."""
     documents = blocks(module_text(), "data", "aws_iam_policy_document")
 
-    assert "PutParameter" not in documents["worker_read_join_command"]
-    assert "GetParameter" not in documents["control_plane_write_join_command"]
+    workers = statements_of(documents["worker_read_join_command"], "Allow")
+    plane = statements_of(documents["control_plane_write_join_command"], "Allow")
+
+    assert all("PutParameter" not in s for s in workers)
+    assert all("GetParameter" not in s for s in plane)
+
+
+def test_the_iam_header_counts_the_managed_policy_and_says_no_run_has_seen_it() -> None:
+    header = " ".join(
+        re.sub(r"^# ?", "", line)
+        for line in read(MODULE_DIR / "iam.tf").split("\n\n")[0].splitlines()
+    )
+
+    assert "no run has seen" in header
+    assert "AFTER the managed policy is counted" in header
+    assert "nothing else" not in header  # the claim the review found untrue
+    assert "ssm:GetParameter and ssm:GetParameters on Resource" in header
+    assert "aws-managed-policy/latest/reference/AmazonSSMManagedInstanceCore" in header
+    assert "aws iam get-policy-version" in header
+    assert "read 2026-10-07" in header
 
 
 # ── the parameter ────────────────────────────────────────────────────────────
@@ -762,4 +939,115 @@ def test_the_readme_labels_the_directory_and_gives_no_cost_figure() -> None:
     assert "no command creates it" in words
     assert "USD" not in text
     assert re.search(r"\$\s?\d", text) is None
-    assert len(text.splitlines()) <= 25
+    # Prose wraps at 80 columns (tables, fences and single long tokens exempt).
+    assert [line for line in text.splitlines() if len(line) > 80] == []
+
+
+def readme_prose() -> str:
+    """The README with every run of whitespace made one space, so that a
+    sentence is found whatever its line breaks."""
+    return " ".join(read(MODULE_DIR / "README.md").replace("**", "").split())
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        # M1: what only the account settles.
+        "What that policy allows today in the account is settled only by "
+        "`aws iam get-policy-version`",
+        "an explicit `Deny` of the four read actions",
+        "tested with stand-ins: the tests read the two documents' text",
+        # M4: a pod on the host network.
+        "A pod on the host network can",
+        "`hostNetwork: true`",
+        "the credentials work from outside the node until they expire",
+        # M5: the key's expiry.
+        "After that date the fingerprint still matches",
+        "the apply must come before 2026-12-29",
+        # M6: the state.
+        "No by-hand `terraform apply` before the wrapper knows this module",
+        "A bare `terraform init` writes the state beside the `.tf` files",
+        "A saved plan holds the three sensitive variables in clear",
+        # L2, L3.
+        "It is a hedge",
+        "none of the repositories, registries, the snap store or the AWS "
+        "endpoints the boot scripts reach has a fixed address to name",
+        "It could be limited by port and is not",
+        # L5, L6, L7.
+        "The AWS CLI. The boot scripts install it from AWS's snap, unpinned.",
+        "which pins the manifest and not the images it names",
+        "A boot that fails stays up and bills",
+        "The way out is the removal",
+        "`--skip-token-print`",
+        "should not hold: a token",
+        "Nothing here was seen.",
+    ],
+)
+def test_the_readme_says_what_the_security_review_asked_it_to_say(
+    sentence: str,
+) -> None:
+    assert sentence in readme_prose()
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        "The hairpin's source address",
+        "`aws ssm put-parameter --value file://...`",
+        "The default key",
+        "The token in the log",
+        "`snap` and the AWS CLI under cloud-init",
+        "`br_netfilter` and `overlay`",
+        '`ip_protocol = "4"`',
+        "containerd's configuration",
+        "The join command's exact text",
+        "snapd finishes seeding within the script's 300 seconds",
+        "The Calico digest's provenance",
+    ],
+)
+def test_the_apply_list_names_each_thing_the_review_said_only_an_apply_settles(
+    item: str,
+) -> None:
+    prose = readme_prose()
+
+    assert "## What only an apply settles" in read(MODULE_DIR / "README.md")
+    assert item in prose.split("What only an apply settles", 1)[1]
+
+
+def test_the_security_file_gives_the_egress_reason_that_is_true() -> None:
+    text = " ".join(
+        re.sub(r"^# ?", "", line)
+        for line in read(MODULE_DIR / "security.tf").splitlines()
+        if line.startswith("#")
+    )
+
+    assert "NONE of them has a fixed address" in text
+    assert "It could be limited by port and protocol" in text
+    assert "and is NOT" in text
+    assert "nothing of value for that hour" in text
+    assert "AWS-0104" in text
+
+
+def test_the_metadata_comment_says_a_host_network_pod_can_reach_the_service() -> None:
+    text = " ".join(
+        re.sub(r"^# ?", "", line)
+        for line in read(MODULE_DIR / "nodes.tf").split("\n\n")[0].splitlines()
+    )
+
+    assert "a pod with its OWN network namespace" in text
+    assert "A pod on the host network can" in text
+    assert "hostNetwork: true" in text
+
+
+def test_the_key_expiry_comment_says_the_pin_still_passes_and_apt_fails() -> None:
+    main = " ".join(
+        re.sub(r"^\s*# ?", "", line)
+        for line in read(MODULE_DIR / "main.tf").splitlines()
+        if line.lstrip().startswith("#")
+    )
+
+    assert "2026-12-29" in main
+    assert "the pin check still PASSES" in main
+    assert "`apt-get update` with apt's own signature error" in main
+    assert "the apply must come before 2026-12-29" in main
+    assert "the check fails with its own line" not in main

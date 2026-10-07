@@ -38,9 +38,13 @@ locals {
   # signing key is used for all repositories". This is the
   # fingerprint of the key that Release.key served on 2026-10-07 (for v1.34,
   # v1.35, v1.36 and v1.37 alike); the node refuses a key with another one.
-  # That key expires on 2026-12-29: after that date the check fails with its
-  # own line, and the fingerprint of the project's new key is read and put here
-  # in a committed change.
+  # That key expires on 2026-12-29. After that date an expired key still has
+  # the same fingerprint, so the pin check still PASSES, and what fails is
+  # `apt-get update` with apt's own signature error (the script stops there
+  # under set -e, with no line of its own). The pin's own refusal fires only
+  # when the project rotates to a DIFFERENT key. So the apply must come before
+  # 2026-12-29, or the project's current key is read again first (its expiry and
+  # its fingerprint) and put here in a committed change.
   kubernetes_apt_key_fingerprint = "DE15B14486CD377B9E876E1A234654DA9A296436"
 
   # 6443 is kubeadm's default API server port; the Kubernetes page "Ports and

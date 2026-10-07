@@ -63,6 +63,25 @@ resource "aws_vpc_security_group_ingress_rule" "api_from_workers" {
   description                  = "The API server from the workers' security group (their private addresses)."
 }
 
+# A hedge, not a rule the design needs: the control plane reaches its own API
+# server through the Elastic IP (the public-address rules below admit that), and
+# if AWS keeps the node's private source address on a packet sent to its own
+# Elastic IP, only a reference to the node's own group would match. This opens
+# nothing the public-address rules do not already admit (the same port, from the
+# same node) and it holds in either case. An apply shows only whether the first
+# boot got through, not which rule admitted the packet (there are no flow logs
+# and no audit policy); learning that would cost another apply with a rule
+# removed. The workers' group needs no twin of it: api_from_workers above is
+# that reference for the workers.
+resource "aws_vpc_security_group_ingress_rule" "api_from_control_plane_group" {
+  security_group_id            = aws_security_group.control_plane.id
+  referenced_security_group_id = aws_security_group.control_plane.id
+  ip_protocol                  = "tcp"
+  from_port                    = local.api_port
+  to_port                      = local.api_port
+  description                  = "The API server from the control plane's own security group, in case the node's private address is the source (a hedge)."
+}
+
 # The API server's address in the certificates, the kubeconfigs and the join
 # command is the Elastic IP. A worker that connects to it connects to a public
 # address. The session's understanding, from general knowledge and NOT from an
@@ -166,14 +185,22 @@ resource "aws_vpc_security_group_ingress_rule" "ipip_workers_from_workers" {
 
 # ---- egress -----------------------------------------------------------------
 
-# Everything out. The nodes reach the Ubuntu and Kubernetes package
-# repositories, GitHub for the plugin's manifest, the plugin's and the
-# Kubernetes images' registries, the snap store and the Systems Manager and
-# Parameter Store endpoints, none of which has an address the module can
-# name, and the control plane's public address from the workers. The managed
-# module has no security group of its own for its nodes (EKS makes one), so
-# this decision is this module's. Production: private subnets, a NAT gateway or
-# VPC endpoints, and egress limited to those.
+# Everything out, every port and protocol. The reason, as far as it is true:
+# the nodes reach the Ubuntu and Kubernetes package repositories, GitHub for the
+# plugin's manifest, the plugin's and the Kubernetes images' registries, the
+# snap store and the Systems Manager and Parameter Store endpoints, and NONE of
+# them has a fixed address the module can name, so egress cannot be limited by
+# destination. It could be limited by port and protocol (tcp 80 and 443, DNS,
+# and the node-to-node rules above) and is NOT: a port closed by mistake stops
+# a boot that is only seen at the one paid apply, and costs more than an hour of
+# open egress from nodes that hold nothing of value for that hour (the cluster's
+# own CA and admin certificates and the role credentials of iam.tf). What open
+# egress exposes is data sent out, or a command channel in, from a node or a pod
+# that someone has taken over. The scan's AWS-0104 fires on any 0.0.0.0/0 egress
+# whatever the ports, so narrowing them would not remove it. The managed module
+# has no security group of its own for its nodes (EKS makes one), so this
+# decision is this module's. Production: private subnets, a NAT gateway or VPC
+# endpoints, and egress limited to those.
 resource "aws_vpc_security_group_egress_rule" "control_plane_all" {
   security_group_id = aws_security_group.control_plane.id
   cidr_ipv4         = "0.0.0.0/0"

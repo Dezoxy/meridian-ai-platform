@@ -1,0 +1,20 @@
+# Findings of the configuration scan that are accepted for this module, which is
+# a test environment applied once and removed within hours (S079). The
+# acceptances are the session's decisions of 2026-10-07: the owner sees them
+# before any apply and may overturn any of them.
+#
+# One Trivy check ID per line, exactly `AWS-` and four digits and nothing after
+# it (no expiry, no file name, no wildcard, not the older AVD- spelling), and on
+# the line directly above it the reason: what the check says, why it holds here,
+# and what a production environment would do instead. The module's tests
+# (tests/meridian/test_aws_kubeadm_scan.py) fail on an entry that breaks any of
+# this, on an inline ignore comment in a .tf file, on a Trivy configuration or
+# YAML ignore file in this directory, and on a second subnet or a third egress
+# rule: an entry here applies to EVERY resource of the directory, not to one. A
+# finding fixed in the module is deleted from here.
+
+# AWS-0104 (critical), "Security group rule allows unrestricted egress to any IP address": the two node groups send everything to 0.0.0.0/0. None of the package repositories, registries, snap store or AWS endpoints the boot scripts reach has a fixed address to name, so egress cannot be limited by destination. It could be limited by port and is not: the check fires on any 0.0.0.0/0 egress whatever the ports, and a port closed by mistake stops a boot that is first seen at the one paid apply. The nodes hold nothing of value for the hour they live (the cluster's own certificates and the instance role's credentials). Production: private subnets with a NAT gateway or VPC endpoints, and egress limited to those.
+AWS-0104
+
+# AWS-0164 (high), "Subnet associates public IP address": the one subnet gives its instances public addresses. The design has no NAT gateway, because one bills by the hour and survives a removal that stops half way; the node groups admit nothing from the internet but port 6443, from the owner's /32 and the nodes' own addresses. Production: private subnets behind a NAT gateway or VPC endpoints.
+AWS-0164

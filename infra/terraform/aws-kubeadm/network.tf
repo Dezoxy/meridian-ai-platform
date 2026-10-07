@@ -1,10 +1,12 @@
 # Implemented as code, never applied (S079). One VPC, ONE public subnet, an
 # internet gateway and a route table. No NAT gateway (it bills by the hour and
 # survives a removal that stops half way, ADR 6, "What keeps costing"), so every
-# node has a public IPv4 address (USD 0.005 an hour each) and the security
-# groups (nodes.tf) admit nothing from the internet but the API server's port
-# from one /32. Nothing is made for a second zone: no EKS and no RDS here asks
-# for one.
+# node has a public IPv4 address (USD 0.005 an hour each). The two security
+# groups (security.tf, 12 ingress rule resources and 2 egress rules) admit
+# nothing from the internet but the API server's port: from the one /32 the
+# owner names and from the nodes' own public addresses, never from 0.0.0.0/0.
+# Everything else is between the two groups. Nothing is made for a second zone:
+# no EKS and no RDS here asks for one.
 #
 # A production cluster puts the nodes in private subnets behind a NAT gateway or
 # VPC endpoints and the control plane behind a load balancer.
