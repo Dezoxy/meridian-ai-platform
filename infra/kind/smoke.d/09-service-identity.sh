@@ -50,9 +50,11 @@
 #                 (the gateway throttles its refusal rows to one per reason and
 #                 minute). Skipped while the Meridian services are not deployed
 #                 (`make deploy`). A traceback is a failure, not a refusal.
-#                 What the fifth line does not prove: uvicorn, which the
-#                 services run under, ends an unknown CA's connection without
-#                 delivering the alert (against the test server with its flags:
+#                 What the fifth line does not prove: uvicorn, which the five
+#                 services that serve TLS run (through the TLS start module,
+#                 S069), ends an unknown CA's connection without
+#                 delivering the alert (against the test server with its flags,
+#                 plain uvicorn and not that module:
 #                 a reset under TLS 1.3, an EOF under 1.2), so `reset` is the
 #                 answer expected of the gateway, and it is the answer the
 #                 cluster gave on every run of 2026-10-06 (`refused`, the
@@ -104,7 +106,8 @@
 #                   the connection, so a gateway slower than that turns a
 #                   refusal into `closed-after-request`; it fails closed.
 #                   Measured against the test server
-#                   that has the services' uvicorn flags, the alert never
+#                   that has the services' uvicorn flags (plain uvicorn, not the
+#                   TLS start module), the alert never
 #                   arrives: a reset under TLS 1.3, an EOF under 1.2, so `reset`
 #                   is the answer expected of the gateway (the cluster gave it
 #                   on every run of 2026-10-06; `refused` was never seen

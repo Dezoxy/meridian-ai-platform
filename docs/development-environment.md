@@ -486,9 +486,11 @@ what a person at the keyboard needs.
   `data/synthetic/generator/` and `spikes/`, and shell under `infra/` and
   `scripts/`. A file over 800 lines fails unless
   `scripts/file-size-exceptions.txt` lists it with its line count and a reason.
-  A listed file may shrink and may not grow past its count, and a listed file
-  that is 800 lines or under, or gone, fails until its line is removed. A new
-  file over the ceiling is split, not listed.
+  A listed file must have exactly its recorded count: one that grew fails, and
+  one that shrank fails until its entry is lowered, so a change to a listed
+  file edits its entry in the same commit, and an entry is only ever lowered
+  or removed. A listed file that is 800 lines or under, or gone, fails until
+  its line is removed. A new file over the ceiling is split, not listed.
 - **Every test has a limit of 600 seconds**, fixtures included, from
   `timeout` in `pyproject.toml`, in every run and not only CI's. A hung test
   fails with pytest-timeout's message and the worker lives (the method is

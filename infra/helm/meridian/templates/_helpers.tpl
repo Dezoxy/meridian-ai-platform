@@ -274,8 +274,10 @@ reading its own key.
 {{- end -}}
 
 {{- /*
-tlsFlags: what uvicorn is given to serve TLS and to ask for a client
-certificate; the same for every service that sets `tls`, so it is written once.
+tlsFlags: what the start module (meridian.platform.common.tlsstart, the
+service's command in the values) is given to serve TLS and to ask for a client
+certificate; they are uvicorn's own flags, and the module passes them to
+uvicorn. The same for every service that sets `tls`, so it is written once.
 --ssl-cert-reqs 1 is CERT_OPTIONAL: the kubelet's probe presents no certificate,
 and a certificate from another CA still fails the handshake. --http selects the
 protocol that puts the verified certificate's URIs in the request's scope. Takes

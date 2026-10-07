@@ -37,6 +37,7 @@ from chartsupport import (
 from kindsupport import SMOKE_SH
 from servicesupport import REGISTRY_DIR, REPO_ROOT
 
+from meridian.platform.common.tlsstart import parse_arguments
 from meridian.platform.registry import load_registry
 
 TLS_SERVICES = (
@@ -59,6 +60,8 @@ TLS_VARIABLES = {
 }
 PREFIX_VARIABLE = "MERIDIAN_IDENTITY_PREFIX"
 HTTP_PROTOCOL = "meridian.platform.common.peercert:PeerCertProtocol"
+# What the five start through: uvicorn's flags go to it (S069).
+START_COMMAND = ["python", "-m", "meridian.platform.common.tlsstart"]
 SERVER_FLAGS = [
     "--ssl-certfile",
     f"{TLS_DIRECTORY}/tls.crt",
@@ -441,10 +444,30 @@ def test_the_commands_of_the_five_end_with_the_tls_flags(name: str) -> None:
     command = container_of(workloads(rendered_chart())[name])["command"]
 
     assert command[-len(SERVER_FLAGS) :] == SERVER_FLAGS
-    # What came before is the service's own command from the values.
-    assert command[0] == "uvicorn"
+    # What came before is the service's own command from the values: the start
+    # module that reads the certificate once (S069), then uvicorn's own words.
+    assert command[: len(START_COMMAND)] == START_COMMAND
+    assert "uvicorn" not in command
     assert command[command.index("--port") + 1] == str(PORT)
     assert command.count("--ssl-certfile") == 1
+
+
+@pytest.mark.parametrize("name", TLS_SERVICES)
+def test_the_start_module_takes_the_words_of_the_rendered_command(name: str) -> None:
+    command = container_of(workloads(rendered_chart())[name])["command"]
+
+    arguments = parse_arguments(command[len(START_COMMAND) :])
+
+    assert arguments.factory is True
+    assert arguments.app.endswith(":create_app_from_env")
+    assert arguments.host == "0.0.0.0"  # noqa: S104 - the pod's own address
+    assert arguments.port == PORT
+    assert arguments.ssl_certfile == TLS_VARIABLES["MERIDIAN_TLS_CERT_FILE"]
+    assert arguments.ssl_keyfile == TLS_VARIABLES["MERIDIAN_TLS_KEY_FILE"]
+    assert arguments.ssl_ca_certs == TLS_VARIABLES["MERIDIAN_TLS_CA_FILE"]
+    assert arguments.ssl_cert_reqs == 1
+    assert arguments.http == HTTP_PROTOCOL
+    assert arguments.ws == "none"
 
 
 def test_the_http_flag_names_a_class_that_imports() -> None:
@@ -466,12 +489,28 @@ def test_the_flags_are_not_written_in_the_values() -> None:
         assert "--http" not in service["command"]
 
 
+def test_every_tls_service_in_the_values_starts_through_the_start_module() -> None:
+    """Read from values.yaml, not from a render: a render of an override that
+    sets ``tls`` on a ``uvicorn`` command is a shape two tests make on purpose,
+    so the template does not refuse it; this is what keeps the values right."""
+    chart = yaml.safe_load((CHART_DIR / "values.yaml").read_text(encoding="utf-8"))
+
+    serving = {n: s for n, s in chart["services"].items() if s.get("tls") is True}
+
+    assert set(serving) == set(TLS_SERVICES)
+    for name, service in serving.items():
+        assert service["command"][: len(START_COMMAND)] == START_COMMAND, name
+
+
 def test_the_claims_api_command_has_no_tls_flag() -> None:
     command = container_of(workloads(rendered_chart())["claims-api"])["command"]
 
     assert not [w for w in command if w.startswith("--ssl")]
     assert "--http" not in command
     assert "--ws" not in command
+    # It serves no TLS, so it does not start through the TLS start module.
+    assert command[0] == "uvicorn"
+    assert "-m" not in command
 
 
 @pytest.mark.parametrize("name", [*PLAIN_SERVICES, *TLS_SERVICES])
