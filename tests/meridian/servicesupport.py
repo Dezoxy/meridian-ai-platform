@@ -19,6 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 TESTS_ROOT = REPO_ROOT / "tests"
 REGISTRY_DIR = REPO_ROOT / "config" / "registry"
 CLAIMS_JSON = REPO_ROOT / "data" / "synthetic" / "claims.json"
+INJECTION_CASES_JSON = REPO_ROOT / "data" / "synthetic" / "injection" / "cases.json"
 
 # What the gateway answers a chat call with, for the tests that stand in for it.
 GATEWAY_REPLY = {
@@ -217,6 +218,21 @@ def synthetic_claims() -> list[dict]:
 def claim_with_id(claim_id: str, index: int = 0) -> dict:
     """A synthetic claim from claims.json under another claim ID."""
     return {**synthetic_claims()[index], "claim_id": claim_id}
+
+
+def injection_case_claim(case_id: str) -> dict:
+    """The claim of one injection case (``CLM-1053``: a name that masks words).
+
+    Read afresh on every call, so a caller may change what it gets. A case that
+    is not in the file fails the test that asked for it: a skip is silent in CI.
+    """
+    cases = json.loads(INJECTION_CASES_JSON.read_text(encoding="utf-8"))
+    found = [case for case in cases if case["case"] == case_id]
+    assert len(found) == 1, (
+        f"{len(found)} injection cases named {case_id!r} in "
+        f"{INJECTION_CASES_JSON.relative_to(REPO_ROOT)}, expected exactly one"
+    )
+    return found[0]["claim"]
 
 
 def owner_rows(db: DatabaseHandle, statement: str, params: tuple = ()) -> list[tuple]:

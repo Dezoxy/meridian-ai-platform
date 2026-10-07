@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 import pytest
-from servicesupport import REPO_ROOT, synthetic_claims
+from servicesupport import injection_case_claim, synthetic_claims
 
 from meridian.workloads.claims_triage import claimant_name, triaging
 from meridian.workloads.claims_triage.lifecycle import AGENT
@@ -36,11 +36,7 @@ def golden_submission() -> ClaimSubmission:
 
 
 def name_masked_submission(case_id: str) -> ClaimSubmission:
-    path = REPO_ROOT / "data" / "synthetic" / "injection" / "cases.json"
-    (case,) = [
-        c for c in json.loads(path.read_text(encoding="utf-8")) if c["case"] == case_id
-    ]
-    return ClaimSubmission.model_validate(case["claim"])
+    return ClaimSubmission.model_validate(injection_case_claim(case_id))
 
 
 def sent_body(run_input: dict[str, Any]) -> dict[str, Any]:
