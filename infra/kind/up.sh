@@ -15,8 +15,9 @@
 #      the one for smoke's telemetrygen Jobs, the one that gives smoke's probe
 #      pod its egress to the rate store (S066) and the one of the log agent's
 #      namespace `logging`, all before the releases they guard,
-#      cert-manager (its own approver off), approver-policy with the policies
-#      that say who may ask for a certificate, the CA that signs the
+#      cert-manager (its own approver off), approver-policy (and, applied after
+#      its install, the liveness probe the chart has no value for: S073) with the
+#      policies that say who may ask for a certificate, the CA that signs the
 #      services' certificates, and the CA of its own in `observability` that
 #      signs the collector's certificate (its public certificate goes into the
 #      ConfigMap telemetry-ca in `meridian` and in `logging`, on every run)
@@ -209,6 +210,28 @@ apply_api_server_policy() {
   manifest="$(api_server_policy_manifest "${file}" "${peers}")" || exit 1
   kctl apply --server-side --force-conflicts -f - <<<"${manifest}" >/dev/null
   log "network: ${whose} pods may reach ${ports} at $(paste -sd ',' - <<<"${api_server_addresses}") alone"
+}
+
+# Give approver-policy's Deployment its liveness probe (S073), which the chart has
+# no value for (manifests/approver-policy-liveness.yaml says why and what it
+# does and does not catch). One server-side apply under the field manager
+# `meridian-kind`, which owns that one field. Conflicts are NOT forced: if a
+# later chart takes the field, the apply fails and says so, and the remedy is to
+# delete the manifest and this function and set the chart's value. The probe
+# changes the pod template, so the Deployment rolls out once; the wait below
+# ends the step only when the new pod is Ready, and the policies are applied
+# after it, against the pod that will stay. A second run applies the same
+# object: that is expected to change nothing and start no rollout (Helm's own
+# apply leaves a field it does not own alone), and it has not been seen on a
+# cluster yet.
+apply_approver_liveness_probe() {
+  local out
+  out="$(kctl apply --server-side --field-manager=meridian-kind \
+    -f "${KIND_DIR}/manifests/approver-policy-liveness.yaml" 2>&1)" ||
+    die "the liveness probe of approver-policy was not applied; kubectl said: ${out}. A conflict names a field manager other than meridian-kind: then the chart has taken the field, so delete infra/kind/manifests/approver-policy-liveness.yaml and apply_approver_liveness_probe from up.sh and set the chart's value in values/approver-policy.yaml"
+  kctl -n cert-manager rollout status deployment/cert-manager-approver-policy \
+    --timeout=5m >/dev/null ||
+    die "approver-policy's Deployment did not finish its rollout after the liveness probe was added, in the 5m this waits (the wait can also have failed at once; kubectl's own message above says which): look at its pods (kubectl -n cert-manager get pods; describe the one that is not ready) and at the log of the old and the new pod (kubectl -n cert-manager logs deploy/cert-manager-approver-policy); a probe that fails shows as 'Liveness probe failed' in the pod's events"
 }
 
 # Apply the policies for approver-policy, trying again until the API server
@@ -434,11 +457,13 @@ install_release cert-manager cert-manager "${CERT_MANAGER_CHART}" \
 # cert-manager already ran with its approver on, this order turns the approver
 # off first and brings the policies later: the certificates already issued are
 # not touched, and a request made in between waits and is then decided. Later
-# can be minutes (Helm's wait for approver-policy, then the apply's retries).
+# can be minutes (Helm's wait for approver-policy, the rollout its liveness probe
+# causes, then the apply's retries).
 install_release approver-policy cert-manager "${APPROVER_POLICY_CHART}" \
   "${APPROVER_POLICY_VERSION}" "${CERT_MANAGER_REPO}" approver-policy.yaml \
   --set "image.tag=${APPROVER_POLICY_IMAGE_TAG}" \
   --set "image.digest=${APPROVER_POLICY_IMAGE_DIGEST}"
+apply_approver_liveness_probe
 apply_certificate_policy
 # The policies must be Ready before the CA is requested, or its request would
 # find none that is appropriate and wait.
