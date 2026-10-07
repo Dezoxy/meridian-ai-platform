@@ -318,3 +318,53 @@ def test_make_secret_scan_refuses_a_base_that_does_not_exist() -> None:
     assert done.returncode != 0
     assert "no-such-ref" in done.stderr
     assert "commits scanned" not in done.stdout + done.stderr
+
+
+# ── the runner has terraform (S079) ─────────────────────────────────────────
+TERRAFORM_ACTION = "hashicorp/setup-terraform@"
+VERSIONS_FILES = sorted((REPO_ROOT / "infra" / "terraform").glob("*/versions.tf"))
+
+
+def terraform_step() -> dict:
+    (step,) = [
+        s for s in JOB["steps"] if s.get("uses", "").startswith(TERRAFORM_ACTION)
+    ]
+    return step
+
+
+def test_the_workflow_installs_terraform_before_the_tests_without_its_wrapper() -> None:
+    steps = JOB["steps"]
+    setup = terraform_step()
+
+    assert re.fullmatch(r"hashicorp/setup-terraform@[0-9a-f]{40}", setup["uses"])
+    assert steps.index(setup) < steps.index(step_named("Tests"))
+    # One pin: the step reads the job's value. The tests read the program's own
+    # output, so the wrapper is off, and nothing else is given to the action (no
+    # credential, no hostname, no token).
+    assert setup["with"] == {
+        "terraform_version": "${{ env.TERRAFORM_VERSION }}",
+        "terraform_wrapper": False,
+    }
+
+
+def test_the_workflow_runs_no_terraform_command_of_its_own() -> None:
+    # The tests call `terraform console` on scratch copies, which needs no
+    # provider; a step that ran init would download one, and a plan would need a
+    # credential the runner does not have.
+    for step in JOB["steps"]:
+        assert "terraform " not in step.get("run", ""), step
+
+
+def test_the_terraform_version_the_workflow_pins_is_one_every_module_accepts() -> None:
+    pinned = JOB["env"]["TERRAFORM_VERSION"]
+    major, minor, _patch = (int(part) for part in pinned.split("."))
+
+    assert len(VERSIONS_FILES) >= 4
+    for versions in VERSIONS_FILES:
+        text = versions.read_text(encoding="utf-8")
+        (constraint,) = re.findall(r'^\s*required_version\s*=\s*"(.+)"', text, re.M)
+        # `~> 1.16` is at least 1.16 and below 2.0; no other form is read here.
+        wanted = re.fullmatch(r"~> (\d+)\.(\d+)", constraint)
+        assert wanted, f"{versions}: {constraint}"
+        assert major == int(wanted[1]), versions
+        assert minor >= int(wanted[2]), versions

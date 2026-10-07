@@ -107,7 +107,7 @@ refuse** at that level. None was seen in a plan.
 
 | Variable | What it is | Sensitive | Validation, in words |
 |---|---|---|---|
-| `region` | Region of the regional resources; default `europe-west3` | no | One of the eleven Regions of EU member states below; London and Zurich are refused by name |
+| `region` | Region of the regional resources; default `europe-west3` | no | One of the ten Regions of EU member states below; London, Zurich and europe-north1 are refused by name |
 | `project_id` | The ID of the existing project; the module never creates one | yes, no default | 6 to 30 characters: lowercase letters, digits and hyphens, a letter first, no hyphen last |
 | `expected_project_number` | The number the project pin compares with | yes, no default | Digits only, 6 to 15 |
 | `billing_account` | The Cloud Billing account the budget is made on | yes, no default | Three groups of six digits or capital letters A to F, joined by hyphens |
@@ -570,15 +570,15 @@ None of this is built. Each line is a production value beside the test value.
 
 ## The Region list
 
-The `region` variable accepts eleven Regions of Google Cloud in EU member
+The `region` variable accepts ten Regions of Google Cloud in EU member
 states, written from Google's own page "Regions and zones"
 (<https://docs.cloud.google.com/compute/docs/regions-zones>, read on
 2026-10-07), with the country that page gives for each: `europe-central2`
-(Poland), `europe-north1` (Finland), `europe-north2` (Sweden),
-`europe-southwest1` (Spain), `europe-west1` (Belgium), `europe-west3`
-(Germany), `europe-west4` (Netherlands), `europe-west8` (Italy), `europe-west9`
-(France), `europe-west10` (Germany) and `europe-west12` (Italy). The default is
-`europe-west3`, as ADR 7 chose.
+(Poland), `europe-north2` (Sweden), `europe-southwest1` (Spain),
+`europe-west1` (Belgium), `europe-west3` (Germany), `europe-west4`
+(Netherlands), `europe-west8` (Italy), `europe-west9` (France), `europe-west10`
+(Germany) and `europe-west12` (Italy). The default is `europe-west3`, as ADR 7
+chose.
 
 **The zone of each Region** is written in `main.tf` from the same page, read on
 2026-10-07: the cluster is zonal, and a Region's zones are not always a, b and
@@ -590,6 +590,13 @@ Region: `-a` for every Region but `europe-west1`, which uses `europe-west1-b`.
 The machine types the list allows (E2) are on the page in every one of these
 zones. There is no fallback: a Region added to the list without an entry fails
 the plan at the index, and a test holds the two lists equal.
+
+`europe-north1` (Finland) is in the EU and is left out as well: this module
+keeps a regional secret, and Google's page "Secret Manager locations"
+(<https://cloud.google.com/secret-manager/docs/locations>, read on 2026-10-07,
+updated 2026-09-30) says Secret Manager keeps no regional secret in that Region,
+so an apply there would fail at the secret, after the network and the cluster
+exist. A test holds it out by name.
 
 London (`europe-west2`) and Zurich (`europe-west6`) are on that page and are
 left out: they are in Google's "Europe" and not in the EU, and the repository's

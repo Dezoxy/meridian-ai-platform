@@ -7,9 +7,10 @@ not Ready.
 
 Status (S056, S062): written from the policies, the chart and the alert
 rules. The procedure at the end of this page, which watches a renewal, was
-run on the kind cluster on 2026-10-06 and its table says what was seen; the
-steps of "Confirm" and "What to do" were not exercised, but for the command
-of step 3 (S073: what one run saw of it is in that step). cert-manager's
+run on the kind cluster on 2026-10-06 and again on 2026-10-07, and its two
+tables say what was seen; the steps of "Confirm" and "What to do" were not
+exercised, but for the command of step 3 (S073: what one run saw of it is in
+that step). cert-manager's
 metrics reach Prometheus through the ServiceMonitor `cert-manager` in
 `observability`. That monitor and the first two alerts have been seen on
 the kind cluster (2026-10-05): the target up, the series for the CA and the
@@ -28,7 +29,9 @@ year like the CA's (the next section).
 
 The chart's values `certificate.duration` (90 days, `2160h`, by default) and
 `certificate.renewBefore` (empty: cert-manager's default, a third of the
-lifetime) change this for the seven service certificates, never the CA's. A
+lifetime) change this for the eight certificates of `meridian` (the six
+services, the ingestion Job's `meridian-ingest` and the rate store), never the
+CA's. A
 duration above `2160h` (the most the issuer's policy signs) or below `1h`
 (cert-manager's shortest), and a `renewBefore` that is not shorter than the
 duration, fail the render with a message that names the value. The service's
@@ -41,7 +44,7 @@ of one more margin earlier than that (up to five sixths of a margin). A
 by a server-side dry run on 2026-10-06: 1 minute and 4 minutes refused, 5
 accepted). The values are tested without a cluster; the procedure at the end
 of this page ran with `duration: 1h` and `renewBefore: 30m` on the kind
-cluster on 2026-10-06.
+cluster on 2026-10-06 and again on 2026-10-07.
 
 ## What you see
 
@@ -376,7 +379,7 @@ a renewal, restart them, and write down what was seen.
 - If the cause was a policy that did not match a legitimate request, the
   fix is a change to the policy or to the Certificate, with a test.
 
-## Watching a renewal on kind (run on 2026-10-06)
+## Watching a renewal on kind (run on 2026-10-06 and 2026-10-07)
 
 To see a renewal, the 503 and the restart in an hour instead of in 60 days,
 give the certificates a short life, then put it back. Nothing here deletes a
@@ -388,7 +391,7 @@ procedure before step 5.
 
 1. In a working copy of `infra/kind/values/meridian.yaml`, never committed,
    add `certificate:` with `duration: 1h` and `renewBefore: 30m` beneath it,
-   and run `make deploy`. It reissues the seven certificates and waits for
+   and run `make deploy`. It reissues the eight certificates and waits for
    them to be Ready.
 2. The services still hold the certificates they loaded, which last 90 days,
    and a service reads its file again only near the end of the one it
@@ -402,9 +405,9 @@ procedure before step 5.
    minutes before the end (50 minutes in for the first service by name, about
    41 for the last; tested with the clock injected. Seen on kind on
    2026-10-07, run R2: the shares are set on the six services, 0, 1/6, 2/6,
-   3/6, 4/6 and 5/6 in name order. Not seen: the restarts at a renewal, which
-   needs this procedure run again); about a minute later the kubelet restarts
-   the container. Each of
+   3/6, 4/6 and 5/6 in name order. The procedure run again on 2026-10-07, run
+   R7, saw the restarts at a renewal: the second table below); about a minute
+   later the kubelet restarts the container. Each of
    these only reads:
 
    ```sh
@@ -444,7 +447,37 @@ machine:
 | 04:51:46 to 05:51:46 | `MeridianCertificateNotRenewed` pending for the seven certificates, then firing (seen firing at 05:52:36) |
 | 05:54:53 | the two lines removed and `make deploy` run: the seven Certificates reissued for 90 days at once; the Deployments restarted once; within five minutes no Meridian alert was pending or firing, and `make smoke` passed |
 
-Two things the watch showed:
+What was seen, on 2026-10-07 (UTC), on the same cluster (the watch run again,
+with the shares): the six services each had a share of the margin (0, 1/6, 2/6,
+3/6, 4/6 and 5/6 in the sorted list: agent-runtime, claims-api, claims-mcp,
+knowledge-mcp, model-gateway, policy-mcp), certificates of one hour, a renewal
+at 30 minutes, and eight Certificates in all.
+
+| Time | What was seen |
+|---|---|
+| 09:42:00 | `make deploy` with `certificate.duration: 1h` and `renewBefore: 30m` in an uncommitted edit of kind's values: all eight Certificates reissued at once (revision +1), `notAfter` 10:41:59, renewal time 10:11:59 |
+| 09:42:01 | the six service Deployments restarted once by hand, to load the one-hour certificates (the new pods started at 09:42:01) |
+| 10:11:59 | cert-manager renewed all eight (revision +1 again, `notAfter` 11:11:59, read at 10:13:30) |
+| 10:13:02 | the rate store restarted itself, 63 seconds after the renewal: its liveness rule, as designed (it had also restarted once after the reissue, so the count on its pod went from 0 to 2) |
+| 10:24:32 | `policy-mcp`'s old container stopped (the share 5/6, the first to look at the file) |
+| 10:26:11 | `model-gateway` (99 seconds after the one before) |
+| 10:27:51 | `knowledge-mcp` (100 seconds) |
+| 10:29:31 | `claims-mcp` (100 seconds) |
+| 10:31:11 | `claims-api` (100 seconds) |
+| 10:32:51 | `agent-runtime` (100 seconds; the share 0, the last) |
+| samples, a line every 5 seconds from 10:20 to 10:35 | each service was not Ready for 41 to 46 seconds (`policy-mcp` from 10:23:52 to 10:24:37, for example) and never two at once; the fewest of the six Ready in any sample was 5 |
+| over the run | 8 Warning events in `meridian` said a liveness probe failed: the six services and the rate store's two |
+| 10:35:21 | the edit taken back and `make deploy` run (the 90-day certificates), the six services restarted once by hand; five minutes later `make smoke`, rc 0 at 10:41:36: 45 PASS, 0 FAIL, 1 SKIP (the cost-series line: the Model Gateway had settled no call since it started at 10:35:22, the designed skip after a restart) |
+
+By the chart's arithmetic (the certificate ends 10:41:59, the margin is 10
+minutes, each place is one sixth of the margin) the first look at the file is at
+10:23:39 and the last at 10:31:59. Each restart came 52 or 53 seconds after its
+computed moment, the same for all six: that is the liveness probe's period and
+failure threshold (the probe asks every 10 seconds and fails the container on
+the sixth 503), so a service's restart is that long after the moment the chart
+computes for it.
+
+Two things the watches showed:
 
 1. All six services restarted in the same minute, because one deploy issues
    their certificates in the same second. With one replica each, nothing
@@ -455,8 +488,18 @@ Two things the watch showed:
    certificate, four hours apart for 90 days) and none comes later than it
    did. Two replicas of one service would still restart together. This is
    tested with the chart rendered and the clock injected. The shares were seen
-   set on the six pods on kind (2026-10-07, run R2); the spread of the
-   restarts at a renewal has not been seen on a cluster. The spread holds when
+   set on the six pods on kind (2026-10-07, run R2). Seen on kind on
+   2026-10-07 (run R7, the second table): the spread of the restarts at a
+   renewal, with one replica of each service: six restarts 99 or 100 seconds
+   apart, in the reverse order of the shares, each service not Ready for 41 to
+   46 seconds, and never fewer than five of the six Ready: one at a time,
+   where the watch of 2026-10-06 had all six in the same minute. Not seen: two
+   replicas of one service (they would still restart together), a
+   `renewBefore` shorter than one and five sixths of the margin (the services
+   would then wait for the file and restart together when it changes), and the
+   alert `MeridianCertificateNotRenewed` in that run (it trips an hour after
+   issuance for a duration under 21 days, and the run gave the values back
+   before then). The spread holds when
    the renewal comes before the
    earliest look at the file: always with the default `renewBefore`, and with a
    set one when it is longer than one and five sixths of the margin (the
