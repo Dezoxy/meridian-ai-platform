@@ -51,6 +51,17 @@ variable "api_access_cidr" {
 # date this module did not look up). 1.37 is not tested by v3.32. The Kubernetes
 # project's package repository serves all of them. 1.36 is kind's version and
 # the managed cluster's default.
+#
+# The second limit is the container runtime the image's package gives. All
+# read 2026-10-07: Ubuntu's package page for containerd in noble (24.04) lists
+# 2.2.1-0ubuntu1~24.04.3 for amd64 (the only architecture this module uses;
+# noble's release pocket has 1.7.12, and the node's apt takes the newer version
+# from noble-updates); the Kubernetes v1.35 release blog says v1.35 is the last
+# release to support containerd 1.x; and containerd's release page lists, for
+# Kubernetes 1.35, containerd 2.2.0+ or 2.1.5+ and, for 1.36, 2.3.0+ or 2.2.0+
+# (for 1.37, 2.4.0+ or 2.3.0+, which the 2.2.1 package is not). So 1.36 is the
+# newest minor that both the package and Calico v3.32 support, and it stays the
+# default. If Ubuntu's package changes, read those pages again.
 variable "kubernetes_version" {
   description = "Kubernetes minor version of the packages the nodes install (kubeadm, kubelet, kubectl from the project's package repository for that minor)."
   type        = string

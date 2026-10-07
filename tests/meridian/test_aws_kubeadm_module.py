@@ -598,6 +598,138 @@ def test_egress_is_one_open_rule_per_group_and_says_why() -> None:
     assert "Production: private subnets" in text
 
 
+# What the EC2 API accepts in the text of a security group's name and description
+# and of a rule's description. Read on 2026-10-07 in the EC2 API reference:
+# https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_IpRange.html
+# ("Up to 255 characters in length. Allowed characters are a-z, A-Z, 0-9,
+# spaces, and ._-:/()#,@[]+=&;{}!$*") and, for a group,
+# https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_CreateSecurityGroup.html
+# (the same set and length for GroupName and GroupDescription; a name may not
+# start with "sg-"). An apostrophe is NOT in the set: the API answers
+# InvalidParameterValue after the resources around it exist. Checked and
+# unrestricted: the one Parameter Store description (PutParameter, read the same
+# day: 0 to 1024 characters, no character set) is not held to this set.
+EC2_TEXT = re.compile(r"^[A-Za-z0-9 ._\-:/()#,@\[\]+=&;{}!$*]{1,255}$")
+EC2_TEXT_RESOURCES = (
+    "aws_security_group",
+    "aws_vpc_security_group_ingress_rule",
+    "aws_vpc_security_group_egress_rule",
+)
+
+
+def unaccepted_ec2_texts(text: str, name_prefix: str = "") -> list[str]:
+    """Each description (and each group name) of a security group or one of its
+    rules that the EC2 API would refuse, as ``type.name: attribute``."""
+    code = code_of(text)
+    refused = []
+    for type_ in EC2_TEXT_RESOURCES:
+        for name, body in blocks(code, "resource", type_).items():
+            attributes = ["description"] + (
+                ["name"] if type_ == "aws_security_group" else []
+            )
+            for attribute in attributes:
+                raw = value_of(body, attribute)
+                if raw is None:
+                    refused.append(f"{type_}.{name}: {attribute} is missing")
+                    continue
+                literal = re.fullmatch(r'"(.*)"', raw)
+                value = (
+                    literal[1].replace("${local.name}", name_prefix) if literal else ""
+                )
+                if (
+                    literal is None
+                    or "${" in value
+                    or not EC2_TEXT.match(value)
+                    or (attribute == "name" and value.startswith("sg-"))
+                ):
+                    refused.append(f"{type_}.{name}: {attribute}")
+    return refused
+
+
+def test_every_name_and_description_of_a_group_or_rule_is_text_the_api_accepts() -> (
+    None
+):
+    main = read(MODULE_DIR / "main.tf")
+    (local_name,) = re.findall(r'^  name = "([^"]+)"$', main, re.MULTILINE)
+
+    refused = unaccepted_ec2_texts(
+        read(MODULE_DIR / "security.tf") + read(MODULE_DIR / "network.tf"),
+        name_prefix=local_name,
+    )
+
+    assert refused == []
+
+
+def test_every_description_of_the_security_and_network_files_is_one_it_reads() -> None:
+    """A description on a resource type the check above does not list would
+    escape it: the number written equals the number of groups and rules."""
+    text = code_of(read(MODULE_DIR / "security.tf") + read(MODULE_DIR / "network.tf"))
+    groups_and_rules = sum(
+        len(blocks(text, "resource", type_)) for type_ in EC2_TEXT_RESOURCES
+    )
+
+    written = re.findall(r"^\s*description\s*=", text, re.MULTILINE)
+
+    assert groups_and_rules > 0
+    assert len(written) == groups_and_rules
+
+
+# Characters that are not in the set, written by code point so that no
+# look-alike character sits in this file.
+CURLY_APOSTROPHE = chr(0x2019)
+EN_DASH = chr(0x2013)
+E_ACUTE = chr(0xE9)
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        "The API server from the workers' security group.",  # the review's find
+        f"The API server from the control plane{CURLY_APOSTROPHE}s own address.",
+        f"The API server {EN_DASH} from one address.",
+        f"A description with an accent: caf{E_ACUTE}.",
+        "x" * 256,
+        "",
+        "Interpolated ${var.region}",
+        'Quote " inside',
+        "Tab\there",
+    ],
+)
+def test_a_description_the_api_would_refuse_is_found(description: str) -> None:
+    planted = (
+        'resource "aws_vpc_security_group_ingress_rule" "planted" {\n'
+        f'  description = "{description}"\n'
+        "}\n"
+    )
+
+    assert unaccepted_ec2_texts(planted) == [
+        "aws_vpc_security_group_ingress_rule.planted: description"
+    ]
+
+
+def test_every_character_and_the_length_the_page_allows_is_accepted() -> None:
+    characters = "azAZ09 ._-:/()#,@[]+=&;{}!$*"
+    everything = characters + "x" * (255 - len(characters))
+    planted = (
+        'resource "aws_security_group" "planted" {\n'
+        f'  name        = "sg"\n  description = "{everything}"\n'
+        "}\n"
+    )
+
+    assert len(everything) == 255
+    assert unaccepted_ec2_texts(planted) == []
+
+
+def test_a_group_name_that_starts_with_sg_is_found() -> None:
+    planted = (
+        'resource "aws_security_group" "planted" {\n'
+        '  name        = "sg-mine"\n  description = "fine"\n'
+        "}\n"
+    )
+
+    assert unaccepted_ec2_texts(planted) == ["aws_security_group.planted: name"]
+
+
 def instances() -> dict[str, str]:
     return blocks(module_text(), "resource", "aws_instance")
 
@@ -652,6 +784,110 @@ def test_an_instance_has_no_secret_in_its_user_data_arguments(name: str) -> None
         "kubeconfig",
     ):
         assert forbidden not in call
+
+
+def depends_on(body: str) -> set[str]:
+    (listed,) = re.findall(r"^  depends_on = \[(.*?)\]", body, re.MULTILINE | re.DOTALL)
+    return set(re.findall(r"[\w.]+", re.sub(r"#.*", "", listed)))
+
+
+# The rules that let a node out (egress) and let the nodes in to the API server.
+# `api_from_worker_addresses` is not here: it reads the workers' public
+# addresses, so a worker cannot wait for it (a cycle), and the control plane
+# waits for it instead (below).
+EGRESS_RULES = {
+    "aws_vpc_security_group_egress_rule.control_plane_all",
+    "aws_vpc_security_group_egress_rule.worker_all",
+}
+API_RULES = {
+    "aws_vpc_security_group_ingress_rule.api_from_workers",
+    "aws_vpc_security_group_ingress_rule.api_from_control_plane_group",
+    "aws_vpc_security_group_ingress_rule.api_from_control_plane_address",
+}
+WORKER_ADDRESS_RULES = "aws_vpc_security_group_ingress_rule.api_from_worker_addresses"
+
+
+@pytest.mark.parametrize("name", ["control_plane", "worker"])
+def test_no_instance_boots_before_it_can_reach_out_and_in(name: str) -> None:
+    waits_for = depends_on(instances()[name])
+
+    assert waits_for >= EGRESS_RULES
+    assert waits_for >= API_RULES
+    # What it waited for before is still waited for.
+    assert "aws_route_table_association.public" in waits_for
+
+
+def test_the_control_plane_waits_for_the_worker_address_rules_and_no_worker_does() -> (
+    None
+):
+    found = instances()
+
+    assert WORKER_ADDRESS_RULES in depends_on(found["control_plane"])
+    assert WORKER_ADDRESS_RULES not in depends_on(found["worker"])
+
+
+def test_no_instance_waits_for_a_resource_that_reads_that_instance() -> None:
+    """A cycle: the worker-address rules read ``aws_instance.worker[...]``. Only
+    `terraform validate` builds the graph, and the tests need no provider, so the
+    one direct way into a cycle is read from the text."""
+    code = code_of(module_text())
+    resources = blocks(code, "resource")
+
+    for name, body in instances().items():
+        for waited in depends_on(body):
+            assert waited in resources, waited
+            assert f"aws_instance.{name}" not in resources.get(waited, ""), (
+                name,
+                waited,
+            )
+
+
+@pytest.mark.parametrize("name", ["control_plane", "worker"])
+def test_a_new_image_does_not_replace_a_node_on_a_second_apply(name: str) -> None:
+    (lifecycle,) = nested(instances()[name], "lifecycle")
+
+    assert value_of(lifecycle, "ignore_changes") == "[ami]"
+
+
+@pytest.mark.parametrize("name", ["control_plane", "worker"])
+def test_a_node_runs_in_standard_credit_mode_not_unlimited(name: str) -> None:
+    (credits_,) = nested(instances()[name], "credit_specification")
+
+    assert value_of(credits_, "cpu_credits") == '"standard"'
+
+
+@pytest.mark.parametrize("name", ["control_plane", "worker"])
+def test_user_data_goes_out_compressed_through_the_base64_argument(name: str) -> None:
+    body = instances()[name]
+
+    assert re.search(
+        r"^  user_data_base64 = base64gzip\(templatefile\(", body, re.MULTILINE
+    )
+    assert re.search(r"^\s*user_data\s*=", body, re.MULTILINE) is None
+    assert "user_data_replace_on_change = true" in body
+
+
+@pytest.mark.parametrize("template", ["control-plane", "worker"])
+def test_the_text_cloud_init_gets_after_decompression_starts_with_a_shebang(
+    template: str,
+) -> None:
+    text = (MODULE_DIR / "templates" / f"{template}.sh.tftpl").read_bytes()
+
+    assert text.startswith(b"#!")
+
+
+def test_the_instances_comment_cites_the_pages_that_say_cloud_init_takes_gzip() -> None:
+    comments = " ".join(
+        re.sub(r"^\s*# ?", "", line)
+        for line in read(MODULE_DIR / "nodes.tf").splitlines()
+        if line.lstrip().startswith("#")
+    )
+
+    assert "cloudinit.readthedocs.io/en/latest/explanation/format/gzip.html" in comments
+    assert "reference/config-format-headers.html" in comments
+    assert "read 2026-10-07" in comments
+    assert "magic bytes" in comments
+    assert "user_data_base64" in comments
 
 
 def test_each_template_is_given_exactly_the_names_it_uses() -> None:
@@ -1012,6 +1248,59 @@ def test_the_apply_list_names_each_thing_the_review_said_only_an_apply_settles(
 
     assert "## What only an apply settles" in read(MODULE_DIR / "README.md")
     assert item in prose.split("What only an apply settles", 1)[1]
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        # M7: what the cluster cannot run, and what the hour is for.
+        "There is no StorageClass, no CSI driver, no load balancer controller and "
+        "no ingress controller",
+        "The platform's chart is not expected to run here as it is",
+        "The hour is for seeing the parts of a control plane",
+        # L4: how long to wait and how to look.
+        "ten to twelve minutes after the apply ends",
+        "a Session Manager session on the control plane",
+        "kubectl --kubeconfig /etc/kubernetes/admin.conf get nodes",
+        "Nothing is copied off the node by the module",
+        # M4: a second apply.
+        "A second apply is never done: remove, then apply",
+        "a recreated control plane leaves a stale join command",
+        "`lifecycle { ignore_changes = [ami] }`",
+        # M8: no door yet.
+        "Nothing in CI runs `terraform validate` or the scan on this module yet",
+        "gives `aws.sh validate` this module's name",
+        # L5: Calico.
+        "The Calico facts in `security.tf`'s comment are from the project's "
+        "documentation",
+        "The manifest's own lines were not read",
+        # L8: tags on volumes.
+        "default tags reach the root volumes",
+        # M2: the Kubernetes minor.
+        "containerd 2.2.1",
+        "Kubernetes 1.36",
+        "read 2026-10-07",
+        # L3: no price.
+        "No price is stated in this directory",
+    ],
+)
+def test_the_readme_says_what_the_infrastructure_review_asked_it_to_say(
+    sentence: str,
+) -> None:
+    assert sentence in readme_prose()
+
+
+def test_no_comment_or_text_of_the_module_states_a_price() -> None:
+    """A comment is not where a figure lives: it goes stale and nothing tests
+    it. `in USD` as a unit (the budget's) is not a price."""
+    found = [
+        line
+        for path in sorted(MODULE_DIR.glob("*.tf"))
+        for line in read(path).splitlines()
+        if re.search(r"USD\s*\d|\d\s*USD|\$\s?\d|\d\s*(cents?|dollars?|EUR)\b", line)
+    ]
+
+    assert found == []
 
 
 def test_the_security_file_gives_the_egress_reason_that_is_true() -> None:

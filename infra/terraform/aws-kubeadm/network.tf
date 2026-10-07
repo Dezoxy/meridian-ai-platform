@@ -1,7 +1,7 @@
 # Implemented as code, never applied (S079). One VPC, ONE public subnet, an
 # internet gateway and a route table. No NAT gateway (it bills by the hour and
 # survives a removal that stops half way, ADR 6, "What keeps costing"), so every
-# node has a public IPv4 address (USD 0.005 an hour each). The two security
+# node has a public IPv4 address, which bills by the hour. The two security
 # groups (security.tf, 12 ingress rule resources and 2 egress rules) admit
 # nothing from the internet but the API server's port: from the one /32 the
 # owner names and from the nodes' own public addresses, never from 0.0.0.0/0.

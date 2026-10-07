@@ -25,7 +25,7 @@ from test_aws_scan import (
 
 MODULE = REPO_ROOT / "infra" / "terraform" / "aws-kubeadm"
 TRIVYIGNORE = MODULE / ".trivyignore"
-ACCEPTED = ["AWS-0104", "AWS-0164"]
+ACCEPTED = ["AWS-0104", "AWS-0164", "AWS-0178"]
 # What the module's own tests must refuse in place of the ignore file's reading:
 # an inline ignore of either of the pinned scanner's spellings.
 INLINE_PLANT = "  #trivy:ignore:AWS-0104\n"
@@ -51,10 +51,11 @@ def test_the_modules_entries_are_each_exactly_a_check_id() -> None:
     assert malformed_entries(text) == []
 
 
-def test_the_accepted_findings_are_the_two_the_first_scan_reported() -> None:
-    """The first scan reported one HIGH (AWS-0164, the subnet) and two CRITICAL
-    (AWS-0104, the two egress rules) and nothing else at those severities. A
-    third ID needs a change of this list, with its reason, in the same diff."""
+def test_the_accepted_findings_are_the_three_the_scan_reports_unfiltered() -> None:
+    """The scan, run with every severity, reports one HIGH (AWS-0164, the
+    subnet), two CRITICAL (AWS-0104, the two egress rules) and one MEDIUM
+    (AWS-0178, the VPC's missing flow logs), and nothing else. A fourth ID needs
+    a change of this list, with its reason, in the same diff."""
     text = TRIVYIGNORE.read_text(encoding="utf-8")
 
     assert sorted(entries(text)) == ACCEPTED
@@ -75,6 +76,14 @@ def test_each_reason_names_its_check_and_says_what_production_does() -> None:
     assert "nothing of value" in egress
     (subnet,) = re.findall(r"^# (AWS-0164 .+)$", text, re.MULTILINE)
     assert "NAT gateway" in subnet
+    # The flow logs: why a network of an hour that holds no data goes without,
+    # and what a production network sets instead.
+    (flow_logs,) = re.findall(r"^# (AWS-0178 .+)$", text, re.MULTILINE)
+    assert "flow logs" in flow_logs
+    assert "lives an hour" in flow_logs
+    assert "holds no data" in flow_logs
+    assert "(medium)" in flow_logs
+    assert "Production: flow logs" in flow_logs
 
 
 def test_no_terraform_file_of_the_module_carries_an_inline_ignore_comment() -> None:
@@ -96,21 +105,23 @@ def test_the_module_directory_holds_no_scanner_configuration_or_yaml_ignore() ->
     assert scanner_files(MODULE) == []
 
 
-def test_the_subnet_and_the_egress_rules_are_what_the_ignore_reasons_describe() -> None:
-    """An entry applies to every resource of the directory: a second subnet or
-    a third egress rule would be accepted unseen."""
+def test_the_vpc_subnet_and_egress_rules_are_what_the_ignore_reasons_describe() -> None:
+    """An entry applies to every resource of the directory: a second VPC, a
+    second subnet or a third egress rule would be accepted unseen."""
     text = module_text()
 
+    vpcs = count_resources(text, "aws_vpc")
     subnets = count_resources(text, "aws_subnet")
     egress = count_resources(text, "aws_vpc_security_group_egress_rule")
 
     reasons = (
-        "infra/terraform/aws-kubeadm/.trivyignore accepts AWS-0164 for the one "
-        "subnet and AWS-0104 for the two egress rules its reasons describe, and an "
-        "ignore entry applies to every resource of the directory: a new subnet or "
-        "egress rule is accepted silently. Decide again in that file, in the "
-        "reasons, before changing these numbers."
+        "infra/terraform/aws-kubeadm/.trivyignore accepts AWS-0178 for the one "
+        "VPC, AWS-0164 for the one subnet and AWS-0104 for the two egress rules "
+        "its reasons describe, and an ignore entry applies to every resource of "
+        "the directory: a new VPC, subnet or egress rule is accepted silently. "
+        "Decide again in that file, in the reasons, before changing these numbers."
     )
+    assert vpcs == 1, reasons
     assert subnets == 1, reasons
     assert egress == 2, reasons
 

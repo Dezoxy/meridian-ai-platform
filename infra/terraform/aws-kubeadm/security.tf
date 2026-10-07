@@ -16,16 +16,17 @@
 # * 179/tcp (BGP) and IP-in-IP (IP protocol number 4), between all nodes. The
 #   Calico page "System requirements" (v3.32, read 2026-10-07) lists them under
 #   "Network requirements" for "Calico networking (BGP)" and "Calico networking
-#   with IP-in-IP enabled (default)", and the pinned manifest has the BGP
-#   backend (calico_backend "bird") and CALICO_IPV4POOL_IPIP "Always".
+#   with IP-in-IP enabled (default)". That the pinned manifest has the BGP
+#   backend (calico_backend "bird") and CALICO_IPV4POOL_IPIP "Always" is the
+#   documentation's default: the manifest's own lines were not read.
 #
 # What is NOT opened, and why: etcd (2379-2380/tcp), kube-scheduler (10259) and
 # kube-controller-manager (10257) are "Used by: Self" on the same page, and
 # with one control-plane node nothing else talks to them. NodePort services
 # (30000-32767) are not used by anything this module installs, and the page
 # lists them as "Used by: All": a person who later exposes one opens it
-# knowingly. Typha (5473/tcp) is off in the manifest (typha_service_name
-# "none").
+# knowingly. Typha (5473/tcp) is off in the manifest's defaults
+# (typha_service_name "none"; not read in the manifest).
 
 resource "aws_security_group" "control_plane" {
   name        = "${local.name}-control-plane"
@@ -60,7 +61,7 @@ resource "aws_vpc_security_group_ingress_rule" "api_from_workers" {
   ip_protocol                  = "tcp"
   from_port                    = local.api_port
   to_port                      = local.api_port
-  description                  = "The API server from the workers' security group (their private addresses)."
+  description                  = "The API server from the security group of the workers (their private addresses)."
 }
 
 # A hedge, not a rule the design needs: the control plane reaches its own API
@@ -79,7 +80,7 @@ resource "aws_vpc_security_group_ingress_rule" "api_from_control_plane_group" {
   ip_protocol                  = "tcp"
   from_port                    = local.api_port
   to_port                      = local.api_port
-  description                  = "The API server from the control plane's own security group, in case the node's private address is the source (a hedge)."
+  description                  = "The API server from the security group of the control plane itself, in case the private address of the node is the source (a hedge)."
 }
 
 # The API server's address in the certificates, the kubeconfigs and the join
@@ -100,7 +101,7 @@ resource "aws_vpc_security_group_ingress_rule" "api_from_worker_addresses" {
   ip_protocol       = "tcp"
   from_port         = local.api_port
   to_port           = local.api_port
-  description       = "The API server from one worker's public address, which is how a worker reaches the Elastic IP."
+  description       = "The API server from the public address of one worker, which is how a worker reaches the Elastic IP."
 }
 
 # The same applies to the control plane itself: its admin kubeconfig, its own
@@ -117,7 +118,7 @@ resource "aws_vpc_security_group_ingress_rule" "api_from_control_plane_address" 
   ip_protocol       = "tcp"
   from_port         = local.api_port
   to_port           = local.api_port
-  description       = "The API server from the control plane's own Elastic IP, which is how the node reaches itself."
+  description       = "The API server from the Elastic IP of the control plane itself, which is how the node reaches itself."
 }
 
 # ---- the kubelet ------------------------------------------------------------

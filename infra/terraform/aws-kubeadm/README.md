@@ -4,8 +4,9 @@ A second Terraform root module, beside [the managed one](../aws/README.md): a
 cluster whose control plane runs on plain virtual machines and is brought up
 by kubeadm (one control-plane node, two workers, a network plugin, a join
 command passed through one Parameter Store parameter). Status: **implemented
-as code**, checked by `terraform validate` and by tests on its text and on its
-two boot scripts against stand-in programs; **never planned and never
+as code**, validated by `terraform validate` run by hand on a copy (nothing in
+CI runs it: see "What checks this module") and checked by tests on its text and
+on its two boot scripts against stand-in programs; **never planned and never
 applied**. No command creates it yet: there is no `make` target and no wrapper
 for it, and those come in a later change. The full text (what it creates, the
 apply and the removal) comes with the step's documents.
@@ -14,6 +15,104 @@ Every sentence below about a control says which of three things it is: code
 that `terraform validate` accepted, a control **tested with stand-ins** (a test
 that reads the module's text, or runs a script against programs that pretend to
 be `kubeadm` and `aws`), or **seen** on a real account. Nothing here was seen.
+
+## What this cluster cannot run
+
+There is no StorageClass, no CSI driver, no load balancer controller and no
+ingress controller, and no cloud controller manager: the module installs
+Kubernetes and Calico and nothing else (the control plane's script applies one
+manifest, Calico's: code, read in the script, not seen). A PersistentVolumeClaim
+(PostgreSQL's, for one) stays Pending, and a Service of type `LoadBalancer`
+stays Pending. The platform's chart is not expected to run here as it is. That
+is by design: the hour is not for running the platform. The hour is for seeing
+the parts of a control plane that a managed cluster hides (an API server, etcd,
+the certificates, a join), for one documented read of the nodes through Session
+Manager, and for the comparison with the managed cluster, written from what was
+built. A cluster that runs the platform needs a volume driver, a load balancer
+controller and an ingress controller on top of this, and that is not built.
+
+## How long to wait, and how to look
+
+The apply ends in about two minutes, when the instances exist; it does not wait
+for the cluster. The cluster is ready about ten to twelve minutes after the
+apply ends (the control plane installs, runs `kubeadm init` and applies Calico,
+and each worker waits for the join command). These figures are an estimate from
+reading the boot scripts, **not seen**. A worker polls for the join command for
+a bound set in `templates/worker.sh.tftpl` (`JOIN_ATTEMPTS` tries,
+`POLL_SECONDS` apart: about twenty minutes at the defaults of this writing)
+after its own install, and then gives up with one line in its log.
+
+To look, open a Session Manager session on the control plane (its instance id
+is the `control_plane_instance_id` output; there is no port 22 and no key) and
+run `sudo kubectl --kubeconfig /etc/kubernetes/admin.conf get nodes`. The admin
+kubeconfig lives on that node only: Nothing is copied off the node by the
+module, and no output of the module holds it (the second is **tested with
+stand-ins** as a text check). `/var/log/cloud-init-output.log` on a node holds
+the boot scripts' progress and, if one failed, its error line. A person runs
+these; they are not run here and not seen.
+
+## A second apply is never done
+
+A second apply is never done: remove, then apply. The instances carry
+`lifecycle { ignore_changes = [ami] }`, so a new image from the publisher does
+not replace them on a second apply (code, **tested with stand-ins** as a text
+check, not seen). The reason is the one that remains: a recreated control plane
+leaves a stale join command. The join parameter keeps its value across the
+second apply, so workers started after it would read a command that was made
+for the first control plane, a well-formed one the new control plane does not
+know, make one attempt and stop. A change to a boot script replaces the
+instances too (`user_data_replace_on_change`), for the same reason. So the way
+to change anything is the removal, then a fresh apply.
+
+## What checks this module
+
+Nothing in CI runs `terraform validate` or the scan on this module yet.
+`make aws-validate` and `make aws-scan` name the managed module only. A later
+contract of the step that made this module (after the first contract of the
+Google Cloud step has merged) gives `aws.sh validate` this module's name. Until
+then `terraform validate` and the configuration scan were run by hand on a
+copy, by the sessions that changed the module, and what this README says of
+them rests on those runs; the tests read `.trivyignore` as text and never run
+the scanner. The tests also hold every name and description of a security group
+and of its rules to the character set and the length the EC2 API reference
+gives (read 2026-10-07; an apostrophe is not in the set); the API itself was
+never asked, so that is **tested with stand-ins**, not seen.
+
+## The Kubernetes minor and the container runtime
+
+The default minor is Kubernetes 1.36 and the allowed list is 1.35 and 1.36. What
+was read, on 2026-10-07: Ubuntu's package page for `containerd` in noble
+(24.04), which lists containerd 2.2.1 for amd64 (from the noble-updates pocket;
+the release pocket has 1.7.12, and only amd64 is used here); the Kubernetes
+v1.35 release blog, which says 1.35 is the last release to support containerd
+1.x; the Kubernetes "Container runtimes" page, which says a later release drops
+the fallback that lets containerd 1.x work; containerd's release page, whose
+table for Kubernetes 1.36 lists containerd 2.3.0+ or 2.2.0+ (so 2.2.1 is
+within it, and is not for 1.37, which wants 2.3.0+ or 2.4.0+); and Calico's
+"System requirements" page for v3.32, which lists 1.34, 1.35 and 1.36. So 1.36
+is the newest minor that both the package and the pinned Calico release
+support, and the default does not change. The signing key pin is the same for
+all minors (`main.tf`), so it does not change either. The version is read from
+pages: whether containerd 2.2.1 and kubelet 1.36 work together on the node is
+**not seen**, and is the first thing a failed boot would show. If Ubuntu's
+package moves, read those pages again.
+
+## Tags, and what this costs
+
+The provider's `default_tags` apply to the instances and, per the provider's
+page for `aws_instance` (read 2026-10-07 in the provider repository's
+documentation at v6.67.0, the locked version), the default tags reach the root
+volumes too, so a volume left behind
+carries the same `project`, `environment` and `managed-by` tags as the nodes
+and `volume_tags` is not set. Only the `Name` tag stays off the volumes. That
+is the page's statement, **not seen**.
+
+No price is stated in this directory. The figure for an hour in the step's
+design is an estimate, and it stays one until the owner's billing console
+confirms it. What bills, with no figure: three instances by the second, three
+root volumes, the public IPv4 addresses (the Elastic IP and the nodes' own),
+and data transfer between the nodes through their public addresses. The budget
+alerts after money is spent and stops nothing.
 
 ## The state, and what not to do by hand
 
@@ -96,6 +195,16 @@ update` with apt's own signature error, with no line from the script. The pin's
 refusal fires only if the project rotates to a different key. So **the apply
 must come before 2026-12-29**, or the project's current key (its expiry and its
 fingerprint) is read again first and the pin is changed in a committed change.
+
+## The Calico facts
+
+The Calico facts in `security.tf`'s comment are from the project's documentation
+(the "System requirements" page for v3.32, read 2026-10-07): the ports and the
+protocol number it lists for BGP and IP-in-IP. The manifest's own lines were
+not read: that the pinned manifest uses the BGP backend, sets IP-in-IP to
+`Always` and leaves Typha off is the documentation's default, **not seen** in
+the file the node applies. The scan that ran on the module covers Terraform and
+not the manifest.
 
 ## Inputs that move
 

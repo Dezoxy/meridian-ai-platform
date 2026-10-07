@@ -18,3 +18,6 @@ AWS-0104
 
 # AWS-0164 (high), "Subnet associates public IP address": the one subnet gives its instances public addresses. The design has no NAT gateway, because one bills by the hour and survives a removal that stops half way; the node groups admit nothing from the internet but port 6443, from the owner's /32 and the nodes' own addresses. Production: private subnets behind a NAT gateway or VPC endpoints.
 AWS-0164
+
+# AWS-0178 (medium), "VPC does not have VPC Flow Logs enabled": the one VPC sends no flow logs anywhere. The network lives an hour, holds no data of value (three nodes with no workload on them and no database) and is removed with the nodes, and flow logs would need a log group or a bucket that outlives the removal and bills until someone deletes it. The scan's recipe lists only HIGH and CRITICAL findings, so this entry is for the reader and for the unfiltered run, which reports it. Production: flow logs to a log group or a bucket with a retention period, for every VPC.
+AWS-0178
