@@ -34,6 +34,13 @@
 --   call): those are plain idle, which is idle_session_timeout's business and is
 --   not set here.
 --
+--   What an ended session answers. The first statement of a session this setting
+--   ended raises IdleInTransactionSessionTimeout (SQLSTATE 25P03), which the two
+--   maps of "database unavailable" (common/http.py, toolserver/pipeline.py) do not
+--   hold, so a service answers its generic 500 or the reason unexpected. That
+--   stays: the database is there, and a service that left a transaction idle for
+--   a minute has a fault of its own; a 503 would send an operator to the database.
+--
 --   Sessions that connect before it. A database-level setting is read when a
 --   session starts. A session that is already connected keeps the value it had
 --   (off) until it reconnects. The services open one connection per call and keep

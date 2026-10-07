@@ -155,7 +155,12 @@ taking the right to make temporary tables from PUBLIC (a database-level privileg
 is not copied to the test databases, and two tests use the right as their
 control). A test over the migrated catalog fails for any trigger function or
 `SECURITY DEFINER` function in the owner's schemas that does not name `pg_temp`
-last, so the next one has to carry the pin.
+last, so the next one has to carry the pin. A session the timeout ended raises
+`IdleInTransactionSessionTimeout`, which the two maps of "database unavailable"
+(`common/http.py`, `toolserver/pipeline.py`) do not hold, so a service answers its
+generic 500 (or the reason `unexpected`); that stays on purpose, because the
+database is there and a service that left a transaction idle for a minute has a
+fault of its own, and a 503 would send an operator to the database.
 
 ## Database-level settings and the tests' template
 
