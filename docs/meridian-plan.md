@@ -17039,10 +17039,19 @@ published address (if it is not refused, the header says so); Loki's log for
 compactor and delete-request errors; and the proxy Service's
 `externalTrafficPolicy` (expected `Local`).
 
-The main session's run of the whole suite on the batch's tree goes on the
-next line.
-
-FINAL-SUITE-RESULT
+The main session's run on the batch's tree with `main` 8e2f4a1 merged in
+(S074's third part: the smoke script as an entry and ten parts; cadf82b):
+`make test` (372 tests), `make docs` (14 checks) and `make lint` ended 0;
+the whole suite at six workers beside the kind cluster and no other run
+with a database: 18,259 passed, 8 skipped (3 min 28 s). The merge of the
+smoke script was the one place both sides had changed: the batch's two
+hunks, in checks 8 and 10, merged into the entry without a conflict (the
+split left those two checks there for this reason); `bash -n` on the eleven
+files and `shellcheck` on the entry and the parts ended 0, and the 869 tests
+that read the script passed. And on the cluster the cold run made (run R10,
+11:30 UTC): `make smoke` from cadf82b, the first tree where the split and
+the batch meet: 46 PASS, 0 FAIL, 0 SKIP, its lines equal to the cold run's
+with the numbers and the trace ID masked.
 
 **The cold run, R9** (the main session's, 2026-10-07, 11:08 to 11:17 UTC,
 from the batch's commit 4050156, which is W, E, C, N, S and F2; the
