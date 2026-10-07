@@ -21,6 +21,16 @@ later number cannot hide behind a named shape in an earlier one. The hits per
 shape are pinned (``PINNED_HITS``), so that a change of the matcher that moves a
 count without making a new shape fails too.
 
+One form of text is written apart, with a second seed (``_shared_prefix_text``):
+a national number whose last group is the "06" or "00" that begins the number
+after it, with an international number in front or not. The national pass reads
+the first through that group and the third loses its prefix (a leak of the pass
+itself, on ``main`` with no international number); the cut of an international
+span at a space (S070) fed it text the matcher before the cut did not, and the
+sweep over this form fails, with some 900 lost runs that fit no shape, when the
+cut is made there. It adds no lost run and moves no hit count today, because the
+reference leaves the same digits: only the two shared-leak counts move.
+
 The old first-digit rule hid, on ``main``, a leak that the strengthened sweep
 found (``test_a_known_leak_...``); nothing on this branch changed what the
 matcher does. The runs that fit no shape are an exact list
@@ -54,6 +64,7 @@ from meridian.platform.guardrails import hungarian, redact
 from meridian.platform.guardrails.redaction import PLACEHOLDERS
 
 TEXT_COUNT = 24_000
+SHARED_PREFIX_COUNT = 2_000
 SEED = 20261006
 
 # --- The generator ------------------------------------------------------------
@@ -208,9 +219,37 @@ def _text(generator: random.Random) -> Segments:
     return segments
 
 
+def _shared_prefix_text(generator: random.Random) -> Segments:
+    """A national number whose last group is "06" or "00" and is also the prefix
+    of the number after it ("06 20 765 43" and "06 20 123 4567" written
+    "06 20 765 43 06 20 123 4567"), with an international number in front or
+    not. The national pass reads the first number through that group, as a
+    number of the plan, and the third is left without its prefix."""
+    separator = generator.choice([" ", NO_BREAK_SPACE])
+    shared = generator.choice(["06", "00"])
+    code, tail = _valid_digits(generator)
+    second = [
+        generator.choice(["06", "0036", "00 36"]),
+        *_grouped(generator, code, tail[:-2]),
+    ]
+    code, tail = _valid_digits(generator)
+    prefix = ["06"] if shared == "06" else ["00", "36"]
+    third = [*prefix, *_grouped(generator, code, tail)]
+    segments: Segments = [("", False)]
+    if generator.random() < 0.5:  # an international number in front
+        code, tail = _valid_digits(generator)
+        first = separator.join(["+36", *_grouped(generator, code, tail)])
+        segments += [(first, True), (generator.choice([" ", NO_BREAK_SPACE]), False)]
+    segments += [(separator.join(second), True), (separator, False)]
+    return [*segments, (separator.join(third), True), ("", False)]
+
+
 def generated_texts() -> list[Segments]:
     generator = random.Random(SEED)  # noqa: S311 - a fixed seed, not a secret
-    return [_text(generator) for _ in range(TEXT_COUNT)]
+    texts = [_text(generator) for _ in range(TEXT_COUNT)]
+    # A second seed, so that the texts above are the ones they always were.
+    generator = random.Random(SEED + 1)  # noqa: S311 - a fixed seed, not a secret
+    return texts + [_shared_prefix_text(generator) for _ in range(SHARED_PREFIX_COUNT)]
 
 
 # --- What today's matcher left in the clear -----------------------------------
@@ -530,6 +569,24 @@ def test_the_generator_makes_twenty_thousand_texts_of_two_or_three_numbers() -> 
     assert generated_texts() == texts  # the same seed, the same texts
 
 
+def test_the_generator_writes_a_number_that_ends_in_the_prefix_of_the_next() -> None:
+    # The last texts (a second seed, so the others are what they were): a
+    # national number whose last group is the "06" or "00" that begins the
+    # number after it, with an international number in front in about half.
+    texts = generated_texts()[TEXT_COUNT:]
+
+    numbers = [[piece for piece, is_number in text if is_number] for text in texts]
+    completed = [
+        re.sub(r"\D", "", pieces[-2]) + re.sub(r"\D", "", pieces[-1])[:2]
+        for pieces in numbers
+    ]
+
+    assert len(texts) == SHARED_PREFIX_COUNT
+    assert all(hungarian.national_phone_holds(digits) for digits in completed)
+    assert {len(pieces) for pieces in numbers} == {2, 3}
+    assert {pieces[-1][:2] for pieces in numbers} == {"06", "00"}
+
+
 def test_the_reference_is_the_matcher_before_the_date_guard() -> None:
     # The guard keeps these three from being read as a phone number; the
     # reference has no guard, and a reference that followed the product would
@@ -700,8 +757,8 @@ PINNED_HITS = {
 # letters and digits that are no number, and the matcher is not asked to hide
 # them), and the row of the plan that counted them had 12,281 and 12,147 of
 # 24,000 texts before the generator wrote the forms it lacks.
-PINNED_IN_THE_CLEAR = 11_965
-PINNED_IN_THE_REFERENCE_TOO = 11_843
+PINNED_IN_THE_CLEAR = 13_964
+PINNED_IN_THE_REFERENCE_TOO = 13_829
 
 
 def test_the_hits_of_each_named_shape_are_pinned() -> None:

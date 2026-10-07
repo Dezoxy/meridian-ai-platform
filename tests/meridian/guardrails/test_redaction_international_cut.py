@@ -15,7 +15,13 @@ narrow no-break space (U+202F), a thin space (U+2009) and a tab. A line break,
 a carriage return, a vertical tab and a form feed are no space of a phone
 number, and a number does not run over one.
 
-Two tables, typed by hand, each row a text and the exact output wanted:
+The cut is not made where the second number ends in a group "06" or "00" at
+which a third number is taken (R3b): the national pass reads greedily through
+that group and would leave the third visible, so the span stays as it was before
+the cut. ``GREEDY_NATIONAL_READING`` pins those texts, with the output of the
+matcher before the cut, as a known leak that is no wanted behaviour.
+
+Three tables, typed by hand, each row a text and the exact output wanted:
 
 - ``CUT``: the left part and the right part are each replaced. Written and run
   against the matcher before the change: each row but the ones the comments
@@ -25,6 +31,8 @@ Two tables, typed by hand, each row a text and the exact output wanted:
   cut. Some of these outputs leave digits in the clear (a number that the
   numbering plan or the date guard refuses is no number); the row pins that the
   change does not move them, and it is no statement that the output is wanted.
+- ``GREEDY_NATIONAL_READING``: the output of the matcher before the cut, which
+  the narrowed cut gives again (see above).
 
 Every number is made up and passes the numbering plan by construction."""
 
@@ -294,6 +302,101 @@ NOT_CUT = [
     ),
 ]
 
+# A LEAK, open (S070, R3b), pinned so that nobody reads it as wanted behaviour:
+# the national pass reads a number greedily, through a last group that is itself
+# "06" or "00", and so takes the prefix of the number after it ("06 20 765 43
+# 06" is a number of the plan, and "20 123 4567" is what is left of the third).
+# Without an international number in front it is so on ``main`` today, and the
+# last row pins exactly that. With one in front the cut of R3 handed the second
+# number to that reading and left the third visible where the matcher before the
+# cut hid it (by accident: its international span took the first digits of the
+# second number and the national pass found the third whole). So the cut is not
+# made where the second number ends in such a group and a number is taken from
+# that group, and these rows give the output of the matcher BEFORE the cut,
+# which leaves a few digits of the second number and hides the third. A fix of
+# the greedy reading is a backlog row; when it lands these rows change with it.
+# (text, the output of the matcher before the cut, why)
+GREEDY_NATIONAL_READING = [
+    (
+        "+36 30 123 4567 06 1 234 56 06 1 234 5678",
+        "[phone] 56 [phone]",
+        "the review's text: a Budapest number that ends in the group 06 takes"
+        " the prefix of the third",
+    ),
+    (
+        "+36 30 123 4567 06 20 765 43 06 20 123 4567",
+        "[phone] 765 43 [phone]",
+        "the review's other text: a mobile number that ends in the group 06",
+    ),
+    (
+        f"+36 30 123 4567{NO_BREAK_SPACE}06 20 765 43 06 20 123 4567",
+        "[phone] 765 43 [phone]",
+        "a no-break space at the place of the cut",
+    ),
+    (
+        f"+36 30 123 4567{NARROW_NO_BREAK_SPACE}06 20 765 43 06 20 123 4567",
+        "[phone] 765 43 [phone]",
+        "a narrow no-break space at the place of the cut",
+    ),
+    (
+        f"+36 30 123 4567{THIN_SPACE}06 20 765 43 06 20 123 4567",
+        "[phone] 765 43 [phone]",
+        "a thin space at the place of the cut",
+    ),
+    (
+        "+36 30 123 4567\t06 20 765 43 06 20 123 4567",
+        "[phone] 765 43 [phone]",
+        "a tab at the place of the cut",
+    ),
+    (
+        "+36 30 123 4567 (06) 20 765 43 06 20 123 4567",
+        "[phone] 765 43 [phone]",
+        "the second number opens with (06)",
+    ),
+    (
+        "+36 30 123 4567 (06) 1 234 56 06 1 234 5678",
+        "[phone] 56 [phone]",
+        "the second number opens with (06), a Budapest number",
+    ),
+    (
+        "+36 30 123 4567 06 1 234 56 (06) 1 234 5678",
+        "[phone] 56 [phone]",
+        "the third number opens with (06)",
+    ),
+    (
+        "+36 30 123 4567 06 20 765 43 00 36 20 123 4567",
+        "[phone] 765 43 [phone]",
+        "the second number ends in the group 00, the third begins 00 36",
+    ),
+    (
+        "+36 30 123 4567 06 1 234 56 00 36 1 234 5678",
+        "[phone] 56 [phone]",
+        "a Budapest number that ends in the group 00",
+    ),
+    (
+        "+36 30 123 4567 00 36 20 765 43 06 20 123 4567",
+        "[phone] 765 43 [phone]",
+        "the second number is written with 00 36",
+    ),
+    (
+        "+36 30 123 4567 06 20 765 43 06 20 123 4567 06 30 123 4567",
+        "[phone] 765 43 [phone] [phone]",
+        "four numbers: the third and the fourth are both hidden",
+    ),
+    (
+        "+36 30 123 4567 06 20 765 43 06 20 123 4567 Ft",
+        "[phone] 765 43 [phone] Ft",
+        "a word after the third number",
+    ),
+    (
+        # A LEAK, open, on ``main`` today with no international number: the
+        # greedy reading takes the third number's "06" as its last group.
+        "06 20 765 43 06 20 123 4567",
+        "[phone] 20 123 4567",
+        "A LEAK, open: no international number in front, the same reading",
+    ),
+]
+
 
 def _found(expected: str) -> dict[str, int]:
     count = expected.count("[phone]")
@@ -322,11 +425,29 @@ def test_a_span_that_the_cut_does_not_apply_to_is_what_it_was_before(
     assert dict(result.found) == _found(expected)
 
 
+@pytest.mark.parametrize(
+    ("text", "expected", "why"),
+    GREEDY_NATIONAL_READING,
+    ids=[row[2] for row in GREEDY_NATIONAL_READING],
+)
+def test_a_known_leak_a_second_number_that_ends_in_a_06_group_takes_the_third_prefix(
+    text: str, expected: str, why: str
+) -> None:
+    # The expectation is the output of the matcher before the cut of R3, a leak
+    # of a few digits of the second number that hides the third. It is no
+    # statement that the output is wanted (see the table's comment).
+    result = redact(text)
+
+    assert result.text == expected, why
+    assert dict(result.found) == _found(expected)
+
+
 def test_the_cut_rows_and_the_not_cut_rows_are_enough_and_distinct() -> None:
     # A table that shrinks, or that repeats a text, proves less than it seems.
     assert len(CUT) >= 15
     assert len(NOT_CUT) >= 15
-    texts = [row[0] for row in CUT + NOT_CUT]
+    assert len(GREEDY_NATIONAL_READING) >= 10
+    texts = [row[0] for row in CUT + NOT_CUT + GREEDY_NATIONAL_READING]
     assert len(set(texts)) == len(texts)
 
 
@@ -345,6 +466,10 @@ ADVERSARIAL: dict[str, Callable[[int], str]] = {
     "cut-spaces-and-06-never-a-number": lambda n: "+36 06 " * (n // 7),
     "cut-left-then-refused-right": lambda n: (
         "+36 30 123 4567 06 99 123 4567 " * (n // 31)
+    ),
+    # The narrowed cut (R3b): second numbers that each end in a 06 group.
+    "cut-narrowed-second-numbers-ending-in-06": lambda n: (
+        "+36 30 123 4567 06 20 765 43 06 " * (n // 32)
     ),
 }
 

@@ -106,6 +106,9 @@ NATIONAL_PHONE_SEPARATORS = SPACE_CHARS + "/.-"
 NATIONAL_PHONE = re.compile(
     rf"{TOKEN_START}\(?(?:06|00)[0-9(){NATIONAL_PHONE_SEPARATORS}]{{6,32}}"
 )
+# The last group of a national number when it is "06" or "00" (an opening
+# parenthesis, and its closing one, allowed): see ``_takes_the_next_prefix``.
+ENDS_IN_PREFIX_GROUP = re.compile(rf"[{NATIONAL_PHONE_SEPARATORS}]\(?(?:06|00)\)?\Z")
 NATIONAL_PHONE_SHAPE = re.compile(rf"[0-9]+(?:[{NATIONAL_PHONE_SEPARATORS}][0-9]+)*")
 NATIONAL_PAREN_GROUP = re.compile(
     rf"\([0-9]+(?:[{NATIONAL_PHONE_SEPARATORS}][0-9]+)*\)"
@@ -170,15 +173,29 @@ def _is_hungarian_international(number: str) -> bool:
     )
 
 
-def _national_number_follows(text: str, start: int) -> bool:
-    """Whether a national number begins at ``start`` as the national pass will
-    see it: ``NATIONAL_PHONE`` matches there and ``_choose_national_phone_span``
-    takes it (which refuses a candidate that starts as a date)."""
+def _national_span(text: str, start: int) -> tuple[int, int] | None:
+    """The span of the national number that begins at ``start`` as the national
+    pass will see it: ``NATIONAL_PHONE`` matches there and
+    ``_choose_national_phone_span`` takes it (which refuses a candidate that
+    starts as a date)."""
     candidate = NATIONAL_PHONE.match(text, start)
-    return (
-        candidate is not None
-        and _choose_national_phone_span(text, start, candidate.end()) is not None
-    )
+    if candidate is None:
+        return None
+    return _choose_national_phone_span(text, start, candidate.end())
+
+
+def _national_number_follows(text: str, start: int) -> bool:
+    """Whether a national number begins at ``start`` (``_national_span``)."""
+    return _national_span(text, start) is not None
+
+
+def _takes_the_next_prefix(text: str, start: int, end: int) -> bool:
+    """Whether the national number at ``start`` to ``end`` ends in a group "06" or
+    "00" (an opening parenthesis allowed) at which another national number is
+    taken: the national pass reads greedily, so that group may be the prefix of
+    the number after it, which then loses it."""
+    group = ENDS_IN_PREFIX_GROUP.search(text, start, end)
+    return group is not None and _national_number_follows(text, group.start() + 1)
 
 
 def _national_run_on(text: str, start: int, limit: int) -> int | None:
@@ -190,15 +207,23 @@ def _national_run_on(text: str, start: int, limit: int) -> int | None:
     "+36 30 0036 123") or a number followed by an amount ("+36 30 123 4567 00
     Ft") is no cut. The date-tail refusal (``_is_date_tail``) needs a dot or a
     slash right before the candidate, never a space, so it cannot apply here;
-    the refusals of a candidate that starts as a date are in the chooser."""
+    the refusals of a candidate that starts as a date are in the chooser.
+
+    There is no cut either where the second number ends in a group "06" or
+    "00" at which a number is taken (``_takes_the_next_prefix``): the national
+    pass would read the second number through that group and leave the third
+    without its prefix, visible, where the span as it was (no cut) hides it.
+    The text then goes on to the next space, as for a refused candidate."""
     # The pattern is four characters long: a match that begins before ``limit``
     # ends before ``limit + 4``.
     stop = min(limit + 3, len(text))
     at = start
     while (match := PHONE_RUN_ON.search(text, at, stop)) and match.start() < limit:
         space = match.start()
-        left_is_complete = _is_hungarian_international(text[start:space])
-        if left_is_complete and _national_number_follows(text, space + 1):
+        right = None
+        if _is_hungarian_international(text[start:space]):
+            right = _national_span(text, space + 1)
+        if right is not None and not _takes_the_next_prefix(text, *right):
             return space
         at = space + 1
     return None
@@ -218,7 +243,11 @@ def _international_span(text: str, start: int, end: int) -> tuple[int, int] | No
     too few or too many digits, a date): the span is then the longest prefix
     whose shape holds, as before, and what the span leaves of the second number
     stays in the clear. A group of the first number that begins "06" or "00" is
-    no cut either."""
+    no cut either. Nor is the cut made where the second number ends in a group
+    "06" or "00" that begins a third number: the national pass reads greedily
+    through that group and would leave the third visible (a leak of the pass
+    itself, on ``main`` with no international number), so the span is as it was
+    before the cut, which hides the third."""
     joined_before = (
         start > 0
         and text[start - 1] in TOKEN_CHARS
