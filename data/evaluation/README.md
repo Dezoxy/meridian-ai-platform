@@ -13,6 +13,7 @@ Never edit a file by hand: each has a command that writes it.
 | `prompt-comparison.md` | The two live reports side by side (`meridian eval diff`) | `make eval-record` |
 | `claims-triage-injection-baseline.json` | The report of the injection cases answered by a scripted model that obeys: the injection gate's baseline | `make eval-baseline` |
 | `injection-summary.md` | That baseline's counts, by carrier and family, with the IDs of the cases that passed the screen | `make eval-baseline` |
+| `judge-labels/claims-triage.json` | A person's worksheet, neither a fingerprint nor a report: the 13 recorded judge verdicts' rationales and clauses, to label blind. The one file here edited by hand; `make eval` does not read it | `python -m meridian.workloads.claims_triage.judge_labels sheet` |
 
 ## The gate
 
@@ -291,6 +292,51 @@ outside the claim's row lock, and added to the adjuster's pages. None of it
 changed one of the 27 recorded requests, and nothing here is paid. The "not
 covered" bullet of the last section is unchanged: a name made of the words
 an exclusion turns on is still a backlog row (S070), asked of the owner.
+
+## The judge against a person's labels
+
+`judge-labels/claims-triage.json` is a worksheet for one person, not a
+fingerprint of the gate and not a report: `make eval` does not read it, and
+nothing reads it but the two commands below and their own tests (a test
+searches the repository for the directory's name and fails when another file
+names it). Filling it in moves no baseline and no fingerprint.
+
+It holds one entry for each of the 13 judge verdicts in the recording, in the
+recording's order: the claim's ID, its peril and description, the triage
+model's assessment and rationale (what the judge was asked about), the clauses
+the judge was shown (number, title and text), an empty `person_grounded` and
+an empty `person_note`. It holds neither the judge's verdict nor its reason,
+so that the person labels blind: do not open the baseline or the recording
+before every entry is labelled. Set `person_grounded` to `true` when every
+statement of the rationale is supported by the claim and the clauses shown,
+`false` otherwise, and write a note where the call was close. Everything in
+it is synthetic and already committed elsewhere.
+
+```text
+uv run python -m meridian.workloads.claims_triage.judge_labels sheet
+uv run python -m meridian.workloads.claims_triage.judge_labels compare
+```
+
+`sheet` writes the worksheet from the baseline, the recording and
+`data/synthetic/`; it refuses to overwrite a file that already holds a label
+or a note. `compare` reads the filled worksheet and the baseline and prints
+how many entries are labelled and how many are missing, the agreement (count
+and share), each disagreement by claim ID with both verdicts and the judge's
+reason, and the four cells of the confusion table. With no label filled it
+says so and exits 0; a label that is not `true`, `false` or `null` is refused
+with the claim's ID. It prints IDs and verdicts, never a rationale, a
+description or a clause. The command lives in the claims workload, not in
+`meridian eval`: the clauses the judge saw come from the rules' own selection
+(`select_terms`), and the platform never imports a workload.
+
+Read the result for what it is. It is 13 cases from one recording, and the
+judge called every one of them grounded, so the "judge: ungrounded" column of
+the confusion table is empty by construction. Agreement shows that the judge
+and the person agree on cases the judge passed; it says little about the
+judge's ability to say "ungrounded". A person who labels a case false finds
+the judge's miss; a person who labels all 13 true shows only that the judge
+was not wrong about these. A larger and harder sample, with rationales that
+are known to be unsupported, is a paid step (it needs the live judge).
 
 ## Commands
 
