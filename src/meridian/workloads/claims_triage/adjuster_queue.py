@@ -19,16 +19,14 @@ QUEUE_LIMIT = 100
 # ``proposal_id`` as the decided-claims view does (0013); the lateral ``r`` is the
 # move that referred a waiting claim, what REASON_SQL reads for the claim's page,
 # and is looked up for a waiting claim only. A page costs at most two lateral
-# lookups per row. The same lookup of ``p`` also reads the two fields that say
-# what the recommendation rests on (S070), as the text ``->>`` gives; no new
-# index or lookup, and the page's marker is derived from them in ``proposal.py``.
+# lookups per row. The same lookup of ``p`` also reads the stored proposal
+# itself (S070), so that the page validates it with the one function the claim's
+# page uses and marks it only if it can be read; no new index or lookup.
 _QUEUE_SELECT = (
     "SELECT c.claim_id, c.state, c.state_changed_at, c.submission ->> 'peril', "
-    "c.submission -> 'claimed_amount', p.reason, r.reason, "
-    "p.recommendation, p.assessment "
+    "c.submission -> 'claimed_amount', p.reason, r.reason, p.proposal "
     "FROM claims.claims AS c "
-    "LEFT JOIN LATERAL (SELECT reason, proposal ->> 'recommendation' "
-    "AS recommendation, proposal ->> 'assessment' AS assessment "
+    "LEFT JOIN LATERAL (SELECT reason, proposal "
     "FROM claims.triage_proposals "
     "WHERE claim_id = c.claim_id ORDER BY created_at DESC, proposal_id LIMIT 1) "
     "AS p ON true "
@@ -54,10 +52,10 @@ class QueueRow(NamedTuple):
     # The reason of the move that referred a waiting claim; ``None`` for a claim
     # in another state and for a move with no reason.
     referral_reason: str | None
-    # The latest proposal's recommendation and assessment, as stored text;
-    # ``None`` for a claim with no proposal or a row that lacks either.
-    recommendation: str | None = None
-    assessment: str | None = None
+    # The latest proposal as stored (the decoded JSON, not yet validated: the
+    # page does that); ``None`` for a claim with no proposal and for a row of the
+    # walking skeleton, which has a draft and no structured proposal.
+    proposal: object = None
 
 
 class QueueCursor(NamedTuple):

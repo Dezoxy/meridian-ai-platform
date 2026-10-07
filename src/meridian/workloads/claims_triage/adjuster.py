@@ -101,7 +101,8 @@ CROSS_SITE_DETAIL = "the request came from another site"
 NO_PROPOSAL_TEXT = "no proposal is stored"
 ARRIVED_LABEL = "Documents that arrived later"
 NO_STRUCTURED_PROPOSAL_TEXT = "no structured proposal"
-UNREADABLE_PROPOSAL_TEXT = "the stored proposal could not be read"
+UNREADABLE_PROPOSAL_MARK = "could not be read"
+UNREADABLE_PROPOSAL_TEXT = f"the stored proposal {UNREADABLE_PROPOSAL_MARK}"
 TRAIL_LIMIT = 200
 HTTP_OK = 200
 HTTP_FORBIDDEN = 403
@@ -409,6 +410,18 @@ def _next_page_path(cursor: QueueCursor) -> str:
     return f"{QUEUE_PATH}?{query}"
 
 
+def _queue_mark(row: QueueRow) -> str:
+    """The queue's cell: the proposal is judged by ``_proposal_of``, as on the
+    claim's page, in memory (one validation per row, no database call)."""
+    if row.proposal is None:
+        return ""
+    proposal, _ = _proposal_of(row.claim_id, (row.proposal,))
+    if proposal is None:
+        return UNREADABLE_PROPOSAL_MARK
+    kind = recommendation_rests_on(proposal.recommendation, proposal.assessment)
+    return RESTS_ON_MARKS.get(kind, "")
+
+
 def render_queue(
     rows: list[QueueRow],
     next_page: QueueCursor | None = None,
@@ -426,9 +439,7 @@ def render_queue(
             "peril": _text(r.peril),
             "amount": _euros(r.claimed_amount),
             "reason": _text(r.reason),
-            "rests_on": RESTS_ON_MARKS.get(
-                recommendation_rests_on(r.recommendation, r.assessment), ""
-            ),
+            "rests_on": _queue_mark(r),
             # The same test as the claim's page: the sweep referred it.
             "overdue": r.state == "awaiting_adjuster"
             and r.referral_reason == DOCUMENTS_OVERDUE_REASON,
