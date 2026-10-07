@@ -135,8 +135,10 @@ def _stored_outcome(
     dsn: str, identity: RunIdentity, own: RunOutcome, failure: Exception | None
 ) -> tuple[RunOutcome, bool, psycopg.Error | None]:
     """What a leg answers when its write moved nothing. Returns the outcome,
-    whether someone else (the sweep) ended the run, and the error if the stored
-    status cannot be read.
+    whether someone else moved the run on (the sweep ended it, or another leg
+    took it over after this one's lease ran out: the stored status is then
+    ``Running``, or what that leg has since written), and the error if the
+    stored status cannot be read.
 
     A stored status equal to the leg's own means its own write is recorded (it
     committed and the connection dropped before the answer, so the retry found
@@ -162,7 +164,8 @@ def _stored_outcome(
             )
         return own, False, None
     logger.warning(
-        "run %s was ended before its leg could mark it %s",
+        "run %s was moved on before its leg could mark it %s "
+        "(ended by the sweep, or taken over by another leg)",
         identity.run_id,
         own.status,
     )

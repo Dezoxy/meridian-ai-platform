@@ -551,7 +551,7 @@ def resume(client: TestClient, run_id: str, **overrides: Any) -> httpx.Response:
     body = {
         "tenant": "claims-triage",
         "reference": "CLM-0001",
-        "input": {"approved": True},
+        "input": {},
     } | overrides
     return client.post(f"/runs/{run_id}/resume", json=body)
 

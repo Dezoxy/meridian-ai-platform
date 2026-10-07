@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlsplit
 
-import httpx
 from pydantic import AfterValidator
 
 REGISTRY_DIR_ENV = "MERIDIAN_REGISTRY_DIR"
@@ -56,6 +55,11 @@ def service_url_problem(value: str) -> str | None:
         # The same log line would carry a ``?token=`` too; a bare ``?`` or
         # ``#`` parses to an empty part and is refused all the same.
         return "must not carry a query or a fragment"
+    # Imported here, not at the top: every service reads its settings through
+    # this module, and the scheduled sweep (a job that must load no web stack)
+    # is one of them. The client loads only when an address is checked.
+    import httpx
+
     try:
         httpx.URL(value)
     except httpx.InvalidURL:

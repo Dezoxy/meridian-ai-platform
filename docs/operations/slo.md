@@ -237,7 +237,10 @@ namespace; Meridian's file does not repeat them.
   `failed` with `not-saved`, whatever the leg did. A run the database
   refused before its first leg, or a resume it refused to claim, is
   counted `failed` with `not-started`; a refusal of the caller (a 403, a
-  404) is counted nowhere. The run counter was seen on kind on 2026-10-06
+  404) is counted nowhere. A resume that cannot read its run is counted
+  `not-started` too, under its `meridian_tenant` when the registry holds
+  the tenant and with no `meridian_agent` label, as the run's agent was
+  not read (S069, in tests). The run counter was seen on kind on 2026-10-06
   with `paused` and `completed` after a demo; a failed leg, `not-saved` and
   `not-started` were not seen. Both carry `meridian_tenant` and
   `meridian_agent`. Two rules read them, for presence only:

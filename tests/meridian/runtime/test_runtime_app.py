@@ -989,8 +989,7 @@ def started_run(db: DatabaseHandle) -> runs.RunIdentity:
         tenant="claims-triage",
         reference="CLM-0001",
     )
-    runs.start_run(db.dsn("agent_runtime"), identity)
-    return identity
+    return runs.start_run(db.dsn("agent_runtime"), identity)
 
 
 def stored_row(db: DatabaseHandle, run_id: uuid.UUID) -> tuple:
@@ -1617,7 +1616,10 @@ def test_the_final_status_is_recorded_before_the_checkpoints_are_deleted(
 
 
 # ── resuming a paused run (S015) ────────────────────────────────────────────
-APPROVAL = {"approved": True}
+# A resume delivers no value (S069): the decision is read from the record, so the
+# only value a request may carry is the empty one. The name stays: it is what the
+# pause is handed when the approval arrives.
+APPROVAL: dict[str, Any] = {}
 BEFORE = {"stage": "before"}
 
 
@@ -2227,12 +2229,26 @@ def test_a_resumed_gateway_timeout_leaves_the_run_paused_with_504(
 LOOKS_LIKE_AN_INTERRUPT_ID = "a" * 32  # LangGraph reads such keys as a map
 
 
+def test_the_pause_is_handed_the_empty_value_of_a_resume(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register(monkeypatch, resumable())
+    client = make_client(fresh_database)
+    run_id = paused_run(client)
+
+    response = resume(client, run_id, input={})
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "Completed"
+    assert response.json()["output"] == {"stage": "after", "answer": {}}
+
+
 @pytest.mark.parametrize(
     "value",
-    [{}, {LOOKS_LIKE_AN_INTERRUPT_ID: "not the pause's id"}],
-    ids=["empty", "hex-key"],
+    [{"approved": True}, {LOOKS_LIKE_AN_INTERRUPT_ID: "not the pause's id"}],
+    ids=["a-key", "hex-key"],
 )
-def test_the_pause_reads_the_resume_value_verbatim_whatever_its_keys(
+def test_a_resume_that_carries_a_value_is_refused_and_the_run_stays_paused(
     fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch, value: dict
 ) -> None:
     register(monkeypatch, resumable())
@@ -2241,8 +2257,11 @@ def test_the_pause_reads_the_resume_value_verbatim_whatever_its_keys(
 
     response = resume(client, run_id, input=value)
 
-    assert response.json()["status"] == "Completed"
-    assert response.json()["output"] == {"stage": "after", "answer": value}
+    assert response.status_code == 422
+    assert "no value" in response.text
+    assert "not the pause" not in response.text
+    assert run_rows(fresh_database)[0][5] == "AwaitingApproval"
+    assert "run.resumed" not in event_names(fresh_database, run_id)
 
 
 def test_a_thread_whose_checkpoints_are_gone_fails_the_resume_before_any_node_runs(
@@ -2324,10 +2343,10 @@ def test_a_run_that_pauses_again_keeps_its_checkpoints_and_resumes_again(
     run_id = paused_run(client)
     thread = the_only_thread(fresh_database)
 
-    again = resume(client, run_id, input={"step": 1})
+    again = resume(client, run_id)
     kept = checkpoint_counts(fresh_database, thread)
     status_between = run_rows(fresh_database)[0][5]
-    last = resume(client, run_id, input={"step": 2})
+    last = resume(client, run_id)
 
     assert again.status_code == 200
     assert again.json() == {
@@ -2338,7 +2357,7 @@ def test_a_run_that_pauses_again_keeps_its_checkpoints_and_resumes_again(
     assert status_between == "AwaitingApproval"
     assert all(count > 0 for count in kept.values()), kept
     assert last.json()["status"] == "Completed"
-    assert last.json()["output"] == {"stage": "after", "answer": {"step": 2}}
+    assert last.json()["output"] == {"stage": "after", "answer": {}}
     assert event_names(fresh_database, run_id) == [
         "run.started",
         "run.awaiting_approval",
@@ -2651,7 +2670,6 @@ def test_pausing_after_a_failed_resume_says_whether_it_moved_the_run(
 ) -> None:
     identity = started_run(fresh_database)
     dsn = fresh_database.dsn("agent_runtime")
-    make_running(fresh_database, str(identity.run_id), idle_seconds=0)
 
     first = runs.pause_after_failed_resume(dsn, identity, reason="unexpected")
     second = runs.pause_after_failed_resume(dsn, identity, reason="unexpected")
@@ -2663,9 +2681,11 @@ def test_pausing_after_a_failed_resume_says_whether_it_moved_the_run(
     )
 
 
-def test_a_resume_input_of_exactly_32_kib_is_accepted_and_one_byte_more_is_not(
+def test_a_resume_input_of_32_kib_or_more_is_refused_for_its_value_and_not_echoed(
     fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # The size bound that this test used to pin (32 KiB accepted, one byte more
+    # refused) is gone with the value: a resume delivers none (S069).
     register(monkeypatch, resumable())
     client = make_client(fresh_database)
     run_id = paused_run(client)
@@ -2673,10 +2693,9 @@ def test_a_resume_input_of_exactly_32_kib_is_accepted_and_one_byte_more_is_not(
     over = resume(client, run_id, input=input_of_size(32 * 1024 + 1))
     exact = resume(client, run_id, input=input_of_size(32 * 1024))
 
-    assert over.status_code == 422
-    assert "xxxxxxxx" not in over.text
-    assert exact.status_code == 200
-    assert exact.json()["status"] == "Completed"
+    assert (over.status_code, exact.status_code) == (422, 422)
+    assert "xxxxxxxx" not in over.text + exact.text
+    assert run_rows(fresh_database)[0][5] == "AwaitingApproval"
 
 
 @pytest.mark.parametrize(

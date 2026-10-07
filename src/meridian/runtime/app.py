@@ -506,14 +506,22 @@ def create_app(
             _log_failure(identity.run_id, exc, leg)
             mark_error(span, exc)
             failure, outcome = exc, RunOutcome("Failed", None)
-        settled, answered, unsaved = settle(dsn, identity, leg, failure, outcome)
+        try:
+            settled, answered, unsaved = settle(dsn, identity, leg, failure, outcome)
+        except BaseException:
+            # Whatever ends the settling, the leg is counted once, as the
+            # unexpected end that it is (a status the meters read as failed).
+            meters.leg_ended(identity, RunOutcome("Failed", None), None)
+            raise
         # Counted once, after the write, by what the leg itself did (not what
         # settle answers for the sweep); not-saved when nothing was written.
         meters.leg_ended(identity, outcome, failure, saved=unsaved is None)
-        if settled.status != "AwaitingApproval":
+        if settled.status in ("Completed", "Failed"):
             # The checkpoint holds the claim; a finished run needs none,
             # whether or not its status could be recorded. After settle: the
             # second host's delete skips a run its row does not say has ended.
+            # Not for a run another leg holds (``Running``, after a takeover)
+            # or one paused: their checkpoints are in use.
             _forget(host, identity)
         set_span_attributes(span, {"meridian.run_status": settled.status})
         if unsaved is not None:
@@ -563,7 +571,8 @@ def create_app(
             # Both passed tenant_may_run: a refused start counts under them.
             with meters.start_counted(identity.tenant, identity.agent):
                 host = opened.enter_context(scope())
-                runs.start_run(dsn, identity)
+                # The first leg's identity carries the claim its insert wrote.
+                identity = runs.start_run(dsn, identity)
             return run_leg(host, span, identity, response, body.input)
 
     @app.post(
@@ -591,7 +600,12 @@ def create_app(
         calling = caller_service(request)
         if not caller_may_name(policy, calling, body.tenant):
             raise refuse(body.tenant, None, body.reference, NAME_REFUSAL_REASON)
-        found = runs.fetch_run(dsn, run_id)
+        # A database that cannot be read here is a resume that did not start.
+        # The run is unread, so its agent is not known, and the tenant is
+        # caller-chosen: it labels the count only when the registry holds it.
+        known = body.tenant if registry.tenant(body.tenant) is not None else None
+        with meters.start_counted(known, None):
+            found = runs.fetch_run(dsn, run_id)
         # The same answer for a run that is not there and one under another
         # tenant or reference: no answer says that a run ID exists (T-10).
         if found is None or (found.tenant, found.reference) != (
