@@ -7,10 +7,14 @@ command passed through one Parameter Store parameter). Status: **implemented
 as code**, validated by `terraform validate` (`make aws-kubeadm-validate`;
 nothing in CI runs it: see "What checks this module") and checked by tests on
 its text and on its two boot scripts against stand-in programs; **never planned
-and never applied**. No command creates it yet: the two `make` targets of this
-module check it and nothing else, and the ones that plan, apply and remove it
-come in a later change. The full text (what it creates, the
-apply and the removal) comes with the step's documents.
+and never applied**. No `make` target creates it yet: the two `make` targets of
+this module check it and nothing else, and the ones that plan, apply and remove
+it come in a later change, with the command guard's rules for them. The wrapper
+`infra/terraform/aws.sh` knows the module: it plans, applies and removes it by
+one word after the command (see "Running it by the wrapper"), **implemented as
+code and tested against stand-in programs, never run against an account**. The
+full text (what it creates, the apply and the removal) comes with the step's
+documents.
 
 Every sentence below about a control says which of three things it is: code
 that `terraform validate` accepted, a control **tested with stand-ins** (a test
@@ -111,7 +115,8 @@ aws-kubeadm` (`terraform fmt -check`, `init -backend=false` and `validate`, in
 this directory), and `make aws-kubeadm-scan` runs Trivy's configuration scan
 from the image `make aws-scan` uses, offline, and fails on a HIGH or CRITICAL
 finding that `.trivyignore` does not list. No target plans, applies or removes
-this module. Before the targets existed, `terraform validate` and the
+this module; the wrapper's own command line does ("Running it by the wrapper").
+Before the targets existed, `terraform validate` and the
 configuration scan were run by hand on a copy, by the sessions that changed the
 module, and what this README says of them rests on those runs; the tests read
 `.trivyignore` as text and never run the scanner. The tests also hold every name
@@ -172,9 +177,10 @@ pricing page and is not written here.
 
 ## The state, and what not to do by hand
 
-- **No by-hand `terraform apply` before the wrapper knows this module.** The
-  wrapper is a later change. `versions.tf` declares a local backend with no
-  path, on purpose: the wrapper is what will give it one.
+- **No by-hand `terraform apply`: the wrapper knows this module.** Plan, apply
+  and remove it with `infra/terraform/aws.sh` ("Running it by the wrapper").
+  `versions.tf` declares a local backend with no path, on purpose: the wrapper
+  gives it one, under the home directory and outside every checkout.
 - **A bare `terraform init` writes the state beside the `.tf` files**, as
   `terraform.tfstate`, in whatever checkout it ran in. If that worktree is
   deleted, the instances and the Elastic IP keep billing with nothing left to
@@ -184,10 +190,141 @@ pricing page and is not written here.
   number, the one address that may reach the API server, the budget's e-mail
   address): `sensitive` hides a value from the printed plan, not from the file
   `-out` writes. A plan file is as private as those three values and is not
-  kept. The wrapper's handling of the plan is a later change.
+  kept. The wrapper writes the plan under a private umask and removes it after
+  the apply ("The saved plan").
 
 These three are statements about how Terraform behaves, from general knowledge
 and from the review of this module; none was run here.
+
+## Running it by the wrapper
+
+`infra/terraform/aws.sh` plans, applies and removes this module. The three
+commands take one word after them, `aws-kubeadm`; with no word they work on the
+managed module, and any other word (`aws` and `gcp` included, and a path) is
+refused before a program runs. There is no `make` target for them yet: the
+targets come in a later change together with the command guard's rules, so that
+no creating command exists that the guard does not read. The owner runs the
+commands below from a machine where no session holds the credentials, at the
+step's paid stop and after the cost is stated, not before; a session does not
+run them:
+
+```sh
+infra/terraform/aws.sh plan aws-kubeadm
+infra/terraform/aws.sh apply aws-kubeadm
+infra/terraform/aws.sh destroy aws-kubeadm
+```
+
+All of it is **implemented as code and tested with stand-ins**: the tests run
+the script against programs that pretend to be `terraform` and `aws`, in a
+temporary tree. Nothing was seen against an account.
+
+### The local file
+
+The script reads the managed module's local file,
+`infra/terraform/local.env-aws` (the file is described in
+[that README](../aws/README.md#the-local-file)), and no file of its own for this
+module. The same four keys serve both: the account, the Region, the one address
+and the e-mail address belong to the owner's account, so there is one pin. The
+script gives this module exactly its four variables
+without a default or with the Region (`region`, `api_access_cidr`,
+`budget_email`, `expected_account_id`) and unsets every other `TF_VAR_*` the
+caller has, so the closed lists of this module (the instance type, the node
+count, the Kubernetes minor) keep their defaults. A test holds the names the
+script gives to the names `variables.tf` declares.
+
+### State
+
+The state is `~/.local/state/meridian-aws-kubeadm/aws-kubeadm.tfstate` (with
+Terraform's `.backup` beside it), in a directory the script makes with mode 700,
+outside every checkout. It is not the managed module's state, and the two never
+share a directory or a file (`~/.local/state/meridian-aws/` is that one's).
+The state is under home only in Terraform's default workspace: `plan` and
+`destroy` refuse after their init, and `apply` before it, unless
+`.terraform/environment` in this directory is absent or says `default`; get back
+with `terraform -chdir=infra/terraform/aws-kubeadm workspace select default`.
+The managed README's "State" gives the reasons. A `terraform` command typed by
+hand with no `-backend-config` puts the state beside the `.tf` files: do not.
+
+### The saved plan
+
+`aws.sh plan aws-kubeadm` writes `aws-kubeadm.tfplan` and, beside it,
+`aws-kubeadm.tfplan.meta` in this directory, both mode 600 and ignored by git
+and by the scan. The record has four lines: `module=aws-kubeadm`, `commit=`,
+`time=` and `sha256=` (the plan file's SHA-256). `apply aws-kubeadm` applies the
+plan only if the record names this module (a record that names the managed
+module is refused whatever its hash says), the plan file is the recorded one,
+the commit is the one checked out now, nothing in this directory has changed
+since (untracked `*.tf` files an ignore rule hides included), and the plan is
+less than thirty minutes old. A plan made from a changed directory is shown and
+gets no record. The managed module's plan is another file in another directory
+and is never looked at by this module's commands, and the other way round. The
+managed README's "The saved plan" has the rest.
+
+### What the plan shows
+
+Everything Terraform prints goes through `redact`. For this module's plan of
+instances it hides the identifier of an instance, an image, a VPC, a subnet, a
+security group and its rules, a route table and its association, an internet
+gateway, an Elastic IP's allocation and association, a network interface and a
+volume (`<resource-id>`); a public or private address (`<ip>`); a host written
+with dashes that embeds an address (`<host>`); an instance profile's, a role's
+and a parameter's ARN with the account in it (`<arn>`); and compressed user data
+(`<user-data>`). A test runs a whole synthetic excerpt of this module's plan
+through it. It is a filter, not a guarantee, and it does not hide an IPv6
+address (this module makes none), a name that starts `meridian-aws-kubeadm`, or
+the text of a policy. The state holds the rendered boot scripts, with the
+Elastic IP in them, in clear: the provider's schema as this module's review read
+it, **not seen**. Read a plan before pasting it anywhere.
+
+### What the wrapper does not stop
+
+What the managed README lists under "What stops a session, and what does not"
+holds here word for word: a session with credentials plans, applies and removes
+through the same commands, a pseudo-terminal satisfies the removal's terminal
+check, a session can call the `aws` CLI itself, the command guard's rules slow
+these down and do not close them, and what the environment does not close (the
+`PATH`, Terraform's own configuration file, a helper named in the AWS
+configuration, a clean filter in the repository's own `.git/config`, a changed
+`HOME`, a link at the plan's path) is the same list. What holds is that no
+session holds the credentials. New for this module: the command guard was
+written for the managed module's names, and its rules for this module are the
+later change. From the guard's text, not run against these names: its patterns
+for `aws.sh` followed by `plan`, `apply` or `destroy` read the three command
+lines above as they read the managed module's, and its path patterns match
+`.tfstate`, `.tfplan` and `meridian-aws` as substrings, which reach this
+module's state and plan; they do not name the directory
+`infra/terraform/aws-kubeadm` for Terraform by hand, and the file-tool denies
+for the state directory are a glob for `meridian-aws/`, which does not reach
+`meridian-aws-kubeadm/`.
+
+## Removal
+
+`aws.sh destroy aws-kubeadm` removes everything the module created. Terraform
+asks its own question and waits for a typed `yes`; the script refuses unless
+standard input is a terminal (which stops an accident and a plain shell, not a
+session that makes itself one), checks the account, runs `init` against this
+module's state, refuses over an empty state, and says `removed` only when the
+state held something before and holds nothing after. A failed removal says what
+to do: read `terraform -chdir=infra/terraform/aws-kubeadm state list`, look in
+the console, in the Region of the local file, for what is left, and run the
+command again. The admin kubeconfig and the cluster's certificates live on the
+nodes and go with them.
+
+### If the state is lost
+
+The state is under home, so a deleted checkout does not lose it; another
+machine, another user or a deleted home directory does. Then what the module
+created may still exist and bill, and the command above refuses over the empty
+state with a sentence that says so. Look in the console, in the Region of the
+local file, for what carries the name `meridian-aws-kubeadm` or the tags
+`project=meridian`, `environment=aws-kubeadm` and `managed-by=terraform`: three
+instances and their root volumes, an Elastic IP, the VPC with its subnet,
+internet gateway, route table and security groups, two IAM roles with their
+instance profiles, the Parameter Store parameter
+`/meridian-aws-kubeadm/join-command` and the budget
+`meridian-aws-kubeadm-monthly`. Removing them in the console, the
+instances and the address first, is the way out when the state is gone; this
+is the list as the module's files declare it, **not seen**.
 
 ## What each instance role can do
 

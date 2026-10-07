@@ -254,13 +254,22 @@ the line to take out first.
 |---|---|---|---|
 | `make aws-validate` | `terraform fmt -check`, `init -backend=false`, `validate`, run with no AWS credential in the environment. Needs no account and no local file; never calls the `aws` CLI. | No | The session or the owner: free, no credentials |
 | `make aws-scan` | Trivy's configuration scan of this directory, from an image pinned by digest, network off, read-only. Fails on a HIGH or CRITICAL finding that `.trivyignore` does not list. Needs Docker. | No | The session or the owner: free |
-| `make aws-plan` | Checks the account, runs `init` against the state under home, then `plan` into `aws.tfplan` (mode 600), and records the commit, the time and the plan file's SHA-256 beside it (none, from a directory with uncommitted changes). Review it. | No | The owner's session: needs credentials the session does not hold |
+| `make aws-plan` | Checks the account, runs `init` against the state under home, then `plan` into `aws.tfplan` (mode 600), and records the module, the commit, the time and the plan file's SHA-256 beside it (none, from a directory with uncommitted changes). Review it. | No | The owner's session: needs credentials the session does not hold |
 | `make aws-apply` | Checks the account, applies exactly the saved plan if it is this tree's and fresh, then removes the plan file. Refuses without a saved plan. | Yes, and it costs money | The owner |
 | `make aws-destroy` | Checks the account, runs `init`, refuses over an empty state, then Terraform asks its own question and waits for the owner's `yes`. Refuses unless standard input is a terminal. | Yes, it removes | The owner, in a terminal |
 
 The order is `aws-validate`, `aws-scan`, then, with the owner,
 `aws-plan`, a read of the plan, `aws-apply`, and `aws-destroy` when the test
 is done. All five go through [`aws.sh`](../aws.sh) except the scan.
+
+The same script drives the [self-managed module](../aws-kubeadm/README.md)
+(S079), which has no `make` target that plans, applies or removes it yet: the
+three commands take the one word `aws-kubeadm` (`aws.sh plan aws-kubeadm`, and
+so on), and with no word they work on this module. Everything in the sections
+below that is about the script (the pin, the local file, the environment, the
+saved plan, the git it needs, the files that may not change a plan) holds for
+both modules, each from its own directory, plan, record and state; the
+self-managed module's README says what differs.
 
 Nothing here runs in CI. Terraform and the scan in the pipeline are S022's.
 The gates are the two local commands above.
@@ -477,6 +486,13 @@ default is not exported, or when the script exports a name the module does not
 declare. There is no example file: the ignore pattern would ignore it too, and
 the foundation has none.
 
+The one file serves the self-managed module as well, with the same four keys:
+the account, the Region, the address and the e-mail address belong to the
+owner's account and not to a module, so there is one pin, and the two modules
+cannot be pointed at different accounts or carry different addresses. A module
+gets exactly the variables its own `variables.tf` declares (a row of the
+script's table, held by a test for each module), from the same four values.
+
 Before a plan, an apply or a removal the script asks the `aws` CLI who is
 signed in (`sts get-caller-identity`) and refuses unless that account is the
 one in the file. Every refusal is one sentence that says what to do, and none
@@ -537,7 +553,14 @@ Terraform call passes `-no-color`, so an escape sequence cannot stand between
 a cluster or a database (`<host>`), an e-mail address (`<email>`), an IPv4
 address with or without a prefix length (`<ip>`), a secret access key, a
 session token, a signature and an encoded authorization failure message where
-they follow their label, as well as the Azure shapes. The IPv4 rule has no word
+they follow their label, as well as the Azure shapes. For the self-managed
+module's plan of instances it also knows the identifier of an instance, an
+image, a VPC, a subnet, a security group and its rules, a route table and its
+association, an internet gateway, an Elastic IP's allocation and association, a
+network interface and a volume (`<resource-id>`: the prefix and eight or
+seventeen lower-case hexadecimal digits), a host written with dashes that
+embeds an address (`ip-10-0-1-23.…compute.internal`, `<host>`) and compressed
+user data (`<user-data>`). The IPv4 rule has no word
 boundary, so it also hides a four-part version number such as `1.2.3.4` and the
 VPC's own `10.0.0.0/16`: harmless here, where a miss would leak an address. It
 is a filter, not a guarantee: read a plan before pasting it anywhere.
@@ -581,9 +604,12 @@ until the console is clean (see "Removal").
 
 ### The saved plan
 
-`make aws-plan` writes `aws.tfplan` and, beside it, `aws.tfplan.meta`, three
-lines: `commit=` (the commit), `time=` (ten digits, seconds since the epoch)
-and `sha256=` (the SHA-256 of the plan file). `make aws-apply` applies the plan
+`make aws-plan` writes `aws.tfplan` and, beside it, `aws.tfplan.meta`, four
+lines: `module=` (`aws`; the self-managed module's record says `aws-kubeadm`),
+`commit=` (the commit), `time=` (ten digits, seconds since the epoch) and
+`sha256=` (the SHA-256 of the plan file). A record that names the other module
+is refused, whatever its hash says, as is a record of the older three lines.
+`make aws-apply` applies the plan
 only if the plan file's SHA-256 is the recorded one (so a plan written by hand
 over the script's, with a `-target` or another variable, is refused), that
 commit is the one checked out now, the module's directory has no uncommitted

@@ -124,7 +124,7 @@ def test_the_failing_form_keeps_what_pytest_reads_of_a_test(
 
 def test_the_test_files_use_the_one_definition_and_define_none() -> None:
     names = [
-        "test_aws_script",
+        "test_aws_module_rules",
         "test_gcp_module",
         "test_aws_kubeadm_module",
         "test_aws_kubeadm_bootstrap",

@@ -3,10 +3,10 @@
 ``infra/terraform/aws-kubeadm`` is implemented as code and checked by
 ``terraform validate`` and by these tests on its own text; it is never planned
 and never applied here. Each test reads the ``.tf`` files, as the managed
-module's tests (``test_aws_script.py``) do, and the validations of ``variables.tf``
-are run through ``terraform console`` on a scratch copy, which needs no provider
-and no account (skipped where Terraform is not installed, failed under
-``GITHUB_ACTIONS=true``: the python workflow installs it).
+module's tests (``test_aws_module_rules.py``) do, and the validations of
+``variables.tf`` are run through ``terraform console`` on a scratch copy, which
+needs no provider and no account (skipped where Terraform is not installed,
+failed under ``GITHUB_ACTIONS=true``: the python workflow installs it).
 """
 
 import os
@@ -1208,7 +1208,7 @@ def test_the_readme_labels_the_directory_and_gives_no_cost_figure() -> None:
     assert "implemented as code" in words
     assert "never planned" in words
     assert "never applied" in words
-    assert "no command creates it" in words
+    assert "no `make` target creates it" in words
     assert "USD" not in text
     assert re.search(r"\$\s?\d", text) is None
     # Prose wraps at 80 columns (tables, fences and single long tokens exempt).
@@ -1237,7 +1237,7 @@ def readme_prose() -> str:
         "After that date the fingerprint still matches",
         "the apply must come before 2026-12-29",
         # M6: the state.
-        "No by-hand `terraform apply` before the wrapper knows this module",
+        "No by-hand `terraform apply`: the wrapper knows this module",
         "A bare `terraform init` writes the state beside the `.tf` files",
         "A saved plan holds the three sensitive variables in clear",
         # L2, L3.

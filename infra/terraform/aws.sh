@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Drive the AWS module (infra/terraform/aws): `make aws-validate`,
-# `make aws-plan`, `make aws-apply`, `make aws-destroy` (S036).
+# Drive the AWS modules: the managed one (infra/terraform/aws) by `make
+# aws-validate`, `make aws-plan`, `make aws-apply` and `make aws-destroy` (S036),
+# and the self-managed one (infra/terraform/aws-kubeadm, S079) by this script's
+# own command line: it has the validate and scan targets and no target that plans,
+# applies or removes it yet.
 #   validate  format check, init with no backend, validate. Needs no AWS
 #             credential (it is run with none) and no local file, and never
 #             calls the aws CLI. It takes the name of a module, one of aws
@@ -8,18 +11,17 @@
 #             three commands on infra/terraform/gcp (S078), and
 #             `validate aws-kubeadm` on infra/terraform/aws-kubeadm (S079, the
 #             self-managed cluster's module), with no credential of any cloud.
-#             The Google Cloud module is never planned and never applied, and
-#             this script does not plan, apply or remove the self-managed one
-#             (yet), so validate is the one command that takes a word and plan,
-#             apply and destroy refuse one.
-#   plan      init, then plan into aws.tfplan; changes nothing in AWS. Records
+#             The Google Cloud module is never planned and never applied:
+#             validate is the one command that takes the word gcp.
+#   plan      init, then plan into the module's saved plan (aws.tfplan, or
+#             aws-kubeadm.tfplan); changes nothing in AWS. Records the module,
 #             the commit, the time and the plan file's SHA-256 beside the plan,
 #             unless the module's directory has uncommitted changes: the plan is
 #             shown then, and no record is written, so apply refuses it.
 #   apply     apply exactly that saved plan, then remove it (creates AWS
 #             resources, which cost money). Refuses a plan that is not this
-#             tree's, is not the file the record names, or is older than thirty
-#             minutes.
+#             module's, is not this tree's, is not the file the record names, or
+#             is older than thirty minutes.
 #   destroy   remove everything the module created. Terraform asks its own
 #             question, and this refuses unless standard input is a terminal.
 #             That stops an accident and a plain shell. It does NOT stop a
@@ -27,9 +29,18 @@
 #             from removing the environment is that no session holds the
 #             credentials (infra/terraform/aws/README.md, "What stops a
 #             session, and what does not").
+# plan, apply and destroy take one word after the command, from a closed list of
+# one: `plan aws-kubeadm`, `apply aws-kubeadm` and `destroy aws-kubeadm` work on
+# the self-managed module, and with no word they work on the managed one. Any
+# other word (aws and gcp included, and a path, and a second word) is refused
+# before any program runs; gcp with a sentence that says why. The module is a row
+# of literals (select_module below): its directory, its saved plan and the
+# record's name, its state's directory and file under the caller's home (the two
+# modules never share a state), its variables and the sentences that name it.
 # plan, apply and destroy first read infra/terraform/local.env-aws (gitignored:
 # the pattern infra/terraform/local.env* covers it, and the hook that stops a
 # `cat` of a .env file reads the name as one, which `local.env.aws` escapes).
+# The one file serves both modules.
 # The file is READ, never run: KEY=value lines for the four known keys, each
 # value of a fixed alphabet, owned by the caller and closed to group and others.
 # They refuse unless the signed-in AWS account is the one pinned there, as the
@@ -38,11 +49,13 @@
 # endpoint, and the e-mail address of the budget's alerts. This script prints
 # none of them, and a refusal about the file names a line NUMBER and nothing of
 # the line. Terraform's own output is another matter: it prints a variable that
-# is not sensitive, which is why the module marks the address and the e-mail
+# is not sensitive, which is why the modules mark the address and the e-mail
 # sensitive. Everything printed from Terraform goes through redact (common.sh)
 # as well, a filter that knows the shapes of an AWS account number, an ARN,
-# credentials, an e-mail address, an IPv4 address and the host of a cluster or
-# a database. The aws CLI's own words are never printed: only a sentence of this
+# credentials, an e-mail address, an IPv4 address, the host of a cluster or a
+# database, and what a plan of instances prints (instance, image and network
+# identifiers, a host written with dashes that embeds an address, compressed user
+# data). The aws CLI's own words are never printed: only a sentence of this
 # script says what to do.
 #
 # Terraform and the aws CLI are each run with an environment this script chose
@@ -61,22 +74,18 @@ unset BASH_XTRACEFD PS4
 # shellcheck source=common.sh
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
-readonly AWS_MODULE_DIR="${TF_DIR}/aws"
 readonly AWS_LOCAL_ENV="${TF_DIR}/local.env-aws"
-# The directory tf_plain works in. Only validate moves it, to a module of its
-# closed list (aws, gcp, aws-kubeadm) at the end of this file; every other
-# command works on the AWS module's.
-module_dir="${AWS_MODULE_DIR}"
-readonly PLAN_FILE=aws.tfplan
-readonly PLAN_RECORD_FILE=aws.tfplan.meta
+# The one README that says what the script stops and what it does not, and what
+# the local file holds: the managed module's. The self-managed module reads the
+# same file (one account, one Region, one address, one e-mail address), so the
+# sentences about the file and about the script's rules name this README for
+# both; the sentences about a module's state and its removal name the module's
+# own (MODULE_README, below).
+readonly SHARED_README=infra/terraform/aws/README.md
 # A plan older than this is not applied: the account, the quotas and the
 # prices it was made against may have changed, and the owner read it a while
 # ago. Thirty minutes is the length of one plan-read-apply sitting.
 readonly PLAN_MAX_AGE_SECONDS=1800
-# The state is a file under the caller's home, never in a checkout: the
-# sessions of this repository work in worktrees that are deleted.
-readonly STATE_DIR_UNDER_HOME=.local/state/meridian-aws
-readonly STATE_FILE_NAME=aws.tfstate
 readonly LOCAL_KEYS=(MERIDIAN_AWS_ACCOUNT_ID MERIDIAN_AWS_REGION MERIDIAN_AWS_ENDPOINT_CIDR MERIDIAN_AWS_BUDGET_EMAIL)
 # The Regions of EU member states the module accepts (hard rule 3), the list in
 # the validation of "region" in aws/variables.tf; a test holds the two equal. The
@@ -116,8 +125,90 @@ done < <(compgen -e | grep '^TF_VAR_' || true)
 
 usage() {
   printf 'usage: %s <validate|plan|apply|destroy>\n' "$(basename "$0")" >&2
-  printf '       %s validate [aws|gcp|aws-kubeadm]  (the module to check, aws if none; the other commands take no word)\n' "$(basename "$0")" >&2
+  printf '       %s validate [aws|gcp|aws-kubeadm]  (the module to check, aws if none)\n' "$(basename "$0")" >&2
+  printf '       %s <plan|apply|destroy> [aws-kubeadm]  (the self-managed module; the managed one if no word)\n' "$(basename "$0")" >&2
   exit 2
+}
+
+# The Google Cloud module has no path that creates anything, by the owner's
+# decision (S078): validate is the one command that takes its name.
+refuse_gcp() {
+  printf 'error: the Google Cloud module is a scaffold that is never planned, applied or removed (the owner decided so in S078: no path of this script creates anything there); validate is the one command that takes the word gcp\n' >&2
+  exit 2
+}
+
+# The table of the modules this script drives: select_module WORD sets one row.
+# Every value of a row is a literal written here; no path, file name or sentence
+# is ever built from the word the caller typed (the dispatch at the end of this
+# file matches the word against the closed list and calls this with a literal).
+# A row is set once and then read-only: one command works on one module.
+#   MODULE_DIR     the module's directory, which every check of the tree reads
+#   MODULE_REL     that directory as the sentences name it
+#   MODULE_NAME    the module's name in the record beside a saved plan
+#   PLAN_FILE, PLAN_RECORD_FILE   the saved plan and its record, in MODULE_DIR
+#   STATE_DIR_UNDER_HOME, STATE_FILE_NAME   the module's state, under the
+#     caller's home and never in a checkout (the sessions of this repository
+#     work in worktrees that are deleted); the two modules never share either
+#   MODULE_README  the README the sentences on the state and the removal name
+#   CMD_PLAN, CMD_APPLY, CMD_DESTROY   how a sentence tells the owner to run the
+#     command again: a make target for the managed module, and the script's own
+#     command line for the self-managed one, which has no target yet
+#   PLAN_REVIEW    what the owner reads in the plan before applying it
+#   MODULE_VARS    the module's variables load_aws_env gives it (an array: not
+#     read-only); each one is a variable the module declares in variables.tf
+# The gcp row has a directory and nothing else: validate is its only command.
+select_module() {
+  case "$1" in
+    aws)
+      MODULE_DIR="${TF_DIR}/aws"
+      MODULE_REL=infra/terraform/aws
+      MODULE_NAME=aws
+      PLAN_FILE=aws.tfplan
+      PLAN_RECORD_FILE=aws.tfplan.meta
+      STATE_DIR_UNDER_HOME=.local/state/meridian-aws
+      STATE_FILE_NAME=aws.tfstate
+      MODULE_README=infra/terraform/aws/README.md
+      CMD_PLAN="make aws-plan"
+      CMD_APPLY="make aws-apply"
+      CMD_DESTROY="make aws-destroy"
+      PLAN_REVIEW="network, cluster, registry, database, secret, budget"
+      MODULE_VARS=(region api_access_cidr budget_email expected_account_id)
+      ;;
+    aws-kubeadm)
+      MODULE_DIR="${TF_DIR}/aws-kubeadm"
+      MODULE_REL=infra/terraform/aws-kubeadm
+      MODULE_NAME=aws-kubeadm
+      PLAN_FILE=aws-kubeadm.tfplan
+      PLAN_RECORD_FILE=aws-kubeadm.tfplan.meta
+      STATE_DIR_UNDER_HOME=.local/state/meridian-aws-kubeadm
+      STATE_FILE_NAME=aws-kubeadm.tfstate
+      MODULE_README=infra/terraform/aws-kubeadm/README.md
+      CMD_PLAN="infra/terraform/aws.sh plan aws-kubeadm"
+      CMD_APPLY="infra/terraform/aws.sh apply aws-kubeadm"
+      CMD_DESTROY="infra/terraform/aws.sh destroy aws-kubeadm"
+      PLAN_REVIEW="network, security groups, roles, nodes, address, parameter, budget"
+      MODULE_VARS=(region api_access_cidr budget_email expected_account_id)
+      ;;
+    gcp)
+      MODULE_DIR="${TF_DIR}/gcp"
+      MODULE_REL=infra/terraform/gcp
+      MODULE_NAME=gcp
+      PLAN_FILE=
+      PLAN_RECORD_FILE=
+      STATE_DIR_UNDER_HOME=
+      STATE_FILE_NAME=
+      MODULE_README=
+      CMD_PLAN=
+      CMD_APPLY=
+      CMD_DESTROY=
+      PLAN_REVIEW=
+      MODULE_VARS=()
+      ;;
+    *) usage ;;
+  esac
+  readonly MODULE_DIR MODULE_REL MODULE_NAME PLAN_FILE PLAN_RECORD_FILE
+  readonly STATE_DIR_UNDER_HOME STATE_FILE_NAME MODULE_README
+  readonly CMD_PLAN CMD_APPLY CMD_DESTROY PLAN_REVIEW
 }
 
 # run_clean KIND COMMAND...: the command with an environment of this script's
@@ -154,14 +245,14 @@ run_clean() {
 tf_plain() {
   local sub="$1"
   shift
-  run_clean plain terraform -chdir="${module_dir}" "${sub}" -no-color "$@"
+  run_clean plain terraform -chdir="${MODULE_DIR}" "${sub}" -no-color "$@"
 }
 tf_signed() {
   local sub="$1"
   shift
-  run_clean signed terraform -chdir="${AWS_MODULE_DIR}" "${sub}" -no-color "$@"
+  run_clean signed terraform -chdir="${MODULE_DIR}" "${sub}" -no-color "$@"
 }
-tf_state_list() { run_clean plain terraform -chdir="${AWS_MODULE_DIR}" state list -no-color; }
+tf_state_list() { run_clean plain terraform -chdir="${MODULE_DIR}" state list -no-color; }
 
 # git with the environment of this script's choosing: a GIT_DIR or a
 # GIT_WORK_TREE of the caller must not point it at another repository. And with
@@ -186,7 +277,7 @@ tf_state_list() { run_clean plain terraform -chdir="${AWS_MODULE_DIR}" state lis
 git_here() {
   run_clean plain env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
     git -c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.excludesFile=/dev/null \
-    -C "${AWS_MODULE_DIR}" "$@"
+    -C "${MODULE_DIR}" "$@"
 }
 
 # GIT_CONFIG_GLOBAL is read by git 2.32 and newer; an older git ignores it and
@@ -210,7 +301,7 @@ require_a_git_that_reads_its_own_settings() {
   if ((10#${major} > GIT_NEEDED_MAJOR || (10#${major} == GIT_NEEDED_MAJOR && 10#${minor} >= GIT_NEEDED_MINOR))); then
     return 0
   fi
-  die "git ${major}.${minor} is too old: this needs git ${GIT_NEEDED_MAJOR}.${GIT_NEEDED_MINOR} or newer, the first that reads GIT_CONFIG_GLOBAL; an older one reads the caller's own git configuration, which the script switches off for the calls it makes (infra/terraform/aws/README.md, 'What stops a session, and what does not')"
+  die "git ${major}.${minor} is too old: this needs git ${GIT_NEEDED_MAJOR}.${GIT_NEEDED_MINOR} or newer, the first that reads GIT_CONFIG_GLOBAL; an older one reads the caller's own git configuration, which the script switches off for the calls it makes (${SHARED_README}, 'What stops a session, and what does not')"
 }
 
 # What the local file may hold and what a value may be made of: digits, letters
@@ -230,15 +321,20 @@ local_file_access() {
 }
 
 # Read the local file (never run it), check it holds the four values, and export
-# what the module and the aws CLI read. The names after TF_VAR_ are the module's
-# variables (aws/variables.tf): region, api_access_cidr (the one address that
-# may reach the cluster's public endpoint, a /32), budget_email and
-# expected_account_id (which the module's provider enforces). The last three have
-# no default, so a plan would stop to ask for them without these exports;
-# tests/meridian/test_aws_script.py fails when the script and the module drift.
+# what the module and the aws CLI read. The file is one for both modules: the
+# account, the Region, the one address and the e-mail address belong to the
+# owner's account and not to a module, and a second file would let the two
+# modules be pinned to different accounts. The names after TF_VAR_ are the
+# selected module's variables (its variables.tf, listed in the module's row as
+# MODULE_VARS): region, api_access_cidr (the one address that may reach the
+# cluster's public endpoint, a /32), budget_email and expected_account_id (which
+# the module's provider enforces). The last three have no default, so a plan
+# would stop to ask for them without these exports; a module gets exactly the
+# variables of its row and no other; tests/meridian/test_aws_script_plan.py
+# fails when the script and either module drift.
 load_aws_env() {
   [[ -f "${AWS_LOCAL_ENV}" ]] ||
-    die "no ${AWS_LOCAL_ENV}; create it as infra/terraform/aws/README.md describes (four values, mode 600)"
+    die "no ${AWS_LOCAL_ENV}; create it as ${SHARED_README} describes (four values, mode 600)"
   local_file_access
   unset "${LOCAL_KEYS[@]}"
   local keys line number=0 seen=" " key value
@@ -251,7 +347,7 @@ load_aws_env() {
     number=$((number + 1))
     if [[ -z "${line}" || "${line}" == \#* ]]; then continue; fi
     [[ "${line}" =~ ${pattern} ]] ||
-      die "line ${number} of ${AWS_LOCAL_ENV} is not KEY=value for one of the four keys infra/terraform/aws/README.md lists (nothing of the line is printed); the file is read, not run"
+      die "line ${number} of ${AWS_LOCAL_ENV} is not KEY=value for one of the four keys ${SHARED_README} lists (nothing of the line is printed); the file is read, not run"
     key="${BASH_REMATCH[1]}"
     value="${BASH_REMATCH[2]}"
     [[ "${seen}" != *" ${key} "* ]] ||
@@ -261,7 +357,7 @@ load_aws_env() {
   done <"${AWS_LOCAL_ENV}"
   for key in "${LOCAL_KEYS[@]}"; do
     [[ -n "${!key:-}" ]] ||
-      die "${key} is not set in ${AWS_LOCAL_ENV}; infra/terraform/aws/README.md says what the file holds"
+      die "${key} is not set in ${AWS_LOCAL_ENV}; ${SHARED_README} says what the file holds"
   done
   [[ "${MERIDIAN_AWS_ACCOUNT_ID}" =~ ^[0-9]{12}$ ]] ||
     die "MERIDIAN_AWS_ACCOUNT_ID in ${AWS_LOCAL_ENV} is not a twelve-digit account number"
@@ -270,15 +366,22 @@ load_aws_env() {
     if [[ "${region}" == "${MERIDIAN_AWS_REGION}" ]]; then allowed=yes; fi
   done
   [[ "${allowed}" == yes ]] ||
-    die "MERIDIAN_AWS_REGION in ${AWS_LOCAL_ENV} is not one of the six Regions of EU member states the module allows (hard rule 3: EU residency); the list is the validation of region in infra/terraform/aws/variables.tf, and nothing of the value is printed"
+    die "MERIDIAN_AWS_REGION in ${AWS_LOCAL_ENV} is not one of the six Regions of EU member states the module allows (hard rule 3: EU residency); the list is the validation of region in ${MODULE_REL}/variables.tf, and nothing of the value is printed"
   # One Region for the CLI, the provider and the variable; the default of the
   # caller's profile is not consulted (and is not passed on).
   unset AWS_DEFAULT_REGION
   export AWS_REGION="${MERIDIAN_AWS_REGION}"
-  export TF_VAR_region="${MERIDIAN_AWS_REGION}"
-  export TF_VAR_api_access_cidr="${MERIDIAN_AWS_ENDPOINT_CIDR}"
-  export TF_VAR_budget_email="${MERIDIAN_AWS_BUDGET_EMAIL}"
-  export TF_VAR_expected_account_id="${MERIDIAN_AWS_ACCOUNT_ID}"
+  # Exactly the variables of the selected module's row, each from its own key.
+  local variable
+  for variable in "${MODULE_VARS[@]}"; do
+    case "${variable}" in
+      region) export TF_VAR_region="${MERIDIAN_AWS_REGION}" ;;
+      api_access_cidr) export TF_VAR_api_access_cidr="${MERIDIAN_AWS_ENDPOINT_CIDR}" ;;
+      budget_email) export TF_VAR_budget_email="${MERIDIAN_AWS_BUDGET_EMAIL}" ;;
+      expected_account_id) export TF_VAR_expected_account_id="${MERIDIAN_AWS_ACCOUNT_ID}" ;;
+      *) die "internal error: the row of module ${MODULE_NAME} names a variable this script has no value for" ;;
+    esac
+  done
 }
 
 # The account the caller is signed in to must be the pinned one. Neither number
@@ -309,7 +412,7 @@ require_pinned_account() {
 refuse_files_that_change_the_plan() {
   local path name
   shopt -s dotglob nullglob
-  for path in "${AWS_MODULE_DIR}"/*; do
+  for path in "${MODULE_DIR}"/*; do
     name="$(printf '%s' "${path##*/}" | tr '[:upper:]' '[:lower:]')"
     case "${name}" in
       terraform.tfvars | terraform.tfvars.json | *.auto.tfvars | *.auto.tfvars.json)
@@ -327,7 +430,7 @@ refuse_files_that_change_the_plan() {
 # given at init. validate never calls this: it inits with no backend.
 prepare_state() {
   [[ -n "${HOME:-}" ]] ||
-    die "HOME is not set, and the state of the AWS environment is kept in a directory under it (infra/terraform/aws/README.md, State)"
+    die "HOME is not set, and the state of the AWS environment is kept in a directory under it (${MODULE_README}, State)"
   STATE_DIR="${HOME}/${STATE_DIR_UNDER_HOME}"
   mkdir -p "${STATE_DIR}"
   chmod 700 "${STATE_DIR}"
@@ -351,7 +454,7 @@ prepare_state() {
 # not skipped. A file that cannot be read (a directory, a mode of 000) is
 # refused, and the shell's own words about it are not printed.
 require_default_workspace() {
-  local file="${AWS_MODULE_DIR}/.terraform/environment" name=default readable=yes
+  local file="${MODULE_DIR}/.terraform/environment" name=default readable=yes
   if [[ -e "${file}" || -L "${file}" ]]; then
     { name="$(cat -- "${file}")"; } 2>/dev/null || readable=no
     name="${name#"${name%%[![:space:]]*}"}"
@@ -359,7 +462,7 @@ require_default_workspace() {
     if [[ -z "${name}" ]]; then name=default; fi
   fi
   [[ "${readable}" == yes && "${name}" == default ]] ||
-    die "the module's directory is not on Terraform's default workspace, or .terraform/environment cannot be read: Terraform would keep the state in terraform.tfstate.d/ in the checkout and not in the state under your home, and a removal would find it empty. Get back with: terraform -chdir=infra/terraform/aws workspace select default (infra/terraform/aws/README.md, State)"
+    die "the module's directory is not on Terraform's default workspace, or .terraform/environment cannot be read: Terraform would keep the state in terraform.tfstate.d/ in the checkout and not in the state under your home, and a removal would find it empty. Get back with: terraform -chdir=${MODULE_REL} workspace select default (${MODULE_README}, State)"
 }
 
 # init with the local state's path, and with the committed lock file as the
@@ -430,7 +533,7 @@ untracked_terraform_files_phrase() {
   fi
 }
 
-drop_plan() { rm -f "${AWS_MODULE_DIR}/${PLAN_FILE}" "${AWS_MODULE_DIR}/${PLAN_RECORD_FILE}"; }
+drop_plan() { rm -f "${MODULE_DIR}/${PLAN_FILE}" "${MODULE_DIR}/${PLAN_RECORD_FILE}"; }
 
 # The SHA-256 of a file, as sixty-four lower-case hex digits and nothing else.
 file_sha256() {
@@ -445,10 +548,9 @@ file_sha256() {
 }
 
 cmd_validate() {
-  local module="$1"
   log "terraform fmt -check"
   tf_plain fmt -check -diff 2>&1 | redact ||
-    die "terraform fmt found a file to format; run: terraform -chdir=infra/terraform/${module} fmt"
+    die "terraform fmt found a file to format; run: terraform -chdir=${MODULE_REL} fmt"
   log "terraform init -backend=false"
   # readonly: the committed lock file decides the provider, and a check does not
   # rewrite it.
@@ -471,10 +573,10 @@ cmd_plan() {
   changes="$(module_changes)"
   untracked="$(untracked_terraform_files)"
   if [[ -n "${changes}" ]]; then
-    log "warning: the module directory has uncommitted changes; the plan is shown (reading it is free) but no record is written for it, so 'make aws-apply' will refuse it until they are committed and the plan is made again"
+    log "warning: the module directory has uncommitted changes; the plan is shown (reading it is free) but no record is written for it, so '${CMD_APPLY}' will refuse it until they are committed and the plan is made again"
   fi
   if ((untracked > 0)); then
-    log "warning: the module directory holds $(untracked_terraform_files_phrase "${untracked}"), which Terraform reads whatever an ignore rule says; the plan is shown but no record is written for it, so 'make aws-apply' will refuse it. Commit the file if it belongs to the module; git cannot commit one that an ignore rule hides, so remove it. Then make the plan again"
+    log "warning: the module directory holds $(untracked_terraform_files_phrase "${untracked}"), which Terraform reads whatever an ignore rule says; the plan is shown but no record is written for it, so '${CMD_APPLY}' will refuse it. Commit the file if it belongs to the module; git cannot commit one that an ignore rule hides, so remove it. Then make the plan again"
   fi
   drop_plan # a plan that fails must not leave an older one to be applied
   init_with_state
@@ -494,45 +596,55 @@ cmd_plan() {
   untracked_after="$(untracked_terraform_files)"
   if [[ -n "${changes}" || -n "${changes_after}" || "${commit}" != "${commit_after}" ||
     "${untracked}" != 0 || "${untracked_after}" != 0 ]]; then
-    log "no record was written: the plan above was made from a module directory that no commit describes, so 'make aws-apply' will refuse it; commit the change, then make the plan again"
+    log "no record was written: the plan above was made from a module directory that no commit describes, so '${CMD_APPLY}' will refuse it; commit the change, then make the plan again"
     return 0
   fi
   local digest
-  digest="$(file_sha256 "${AWS_MODULE_DIR}/${PLAN_FILE}")"
-  printf 'commit=%s\ntime=%s\nsha256=%s\n' "${commit}" "$(date +%s)" "${digest}" >"${AWS_MODULE_DIR}/${PLAN_RECORD_FILE}"
-  log "review the plan above (network, cluster, registry, database, secret, budget), then: make aws-apply"
+  digest="$(file_sha256 "${MODULE_DIR}/${PLAN_FILE}")"
+  # Four lines: the module the plan was made for, the commit, the time and the
+  # plan file's hash. The module's name keeps a plan of one module from being
+  # applied as the other's even if its files were moved or copied by hand.
+  printf 'module=%s\ncommit=%s\ntime=%s\nsha256=%s\n' "${MODULE_NAME}" "${commit}" "$(date +%s)" "${digest}" >"${MODULE_DIR}/${PLAN_RECORD_FILE}"
+  log "review the plan above (${PLAN_REVIEW}), then: ${CMD_APPLY}"
 }
 
-# A saved plan is applied only if it was made at the commit that is checked out
-# now, from a module directory that has not changed since, and not too long ago.
-# Otherwise it is dropped (it is of no use any more) and the sentence says to
-# plan again.
+# A saved plan is applied only if it was made for this module, at the commit that
+# is checked out now, from a module directory that has not changed since, and not
+# too long ago. Otherwise it is dropped (it is of no use any more) and the
+# sentence says to plan again.
 require_a_plan_that_is_this_trees_and_fresh() {
-  local record="${AWS_MODULE_DIR}/${PLAN_RECORD_FILE}" line_commit line_time line_hash
+  local record="${MODULE_DIR}/${PLAN_RECORD_FILE}" line_module line_commit line_time line_hash
   local planned_commit planned_time planned_hash now age commit changes untracked
   stale() {
     drop_plan
-    die "$1; run 'make aws-plan' again"
+    die "$1; run '${CMD_PLAN}' again"
   }
-  [[ -f "${record}" ]] || stale "the saved plan has no record beside it of the commit, the time and the file it was made as (a plan made from a module directory with uncommitted changes gets none)"
-  { IFS= read -r line_commit && IFS= read -r line_time && IFS= read -r line_hash && ! IFS= read -r _; } <"${record}" ||
-    stale "the record beside the saved plan is not a commit, a time and a SHA-256"
+  [[ -f "${record}" ]] || stale "the saved plan has no record beside it of the module, the commit, the time and the file it was made as (a plan made from a module directory with uncommitted changes gets none)"
+  { IFS= read -r line_module && IFS= read -r line_commit && IFS= read -r line_time && IFS= read -r line_hash && ! IFS= read -r _; } <"${record}" ||
+    stale "the record beside the saved plan is not a module, a commit, a time and a SHA-256"
+  # The module's name is a lower-case word with dashes, nothing else, and it is
+  # this command's own module: a record that names the other one (its files moved
+  # or copied by hand) is refused whatever its hash says.
+  [[ "${line_module}" =~ ^module=([a-z][a-z-]{0,30})$ ]] ||
+    stale "the record beside the saved plan is not a module, a commit, a time and a SHA-256"
+  [[ "${BASH_REMATCH[1]}" == "${MODULE_NAME}" ]] ||
+    stale "the record beside the saved plan names another module than the one this command was given"
   [[ "${line_commit}" =~ ^commit=([0-9a-f]{40})$ ]] ||
-    stale "the record beside the saved plan is not a commit, a time and a SHA-256"
+    stale "the record beside the saved plan is not a module, a commit, a time and a SHA-256"
   planned_commit="${BASH_REMATCH[1]}"
   # Ten digits, no sign, no leading zero: a plain decimal. The shell reads a
   # number with a leading zero as octal (08 is an error, and the octal spelling of
   # the clock is read as the clock), so nothing else gets as far as arithmetic.
   [[ "${line_time}" =~ ^time=([1-9][0-9]{9})$ ]] ||
-    stale "the record beside the saved plan is not a commit, a time and a SHA-256"
+    stale "the record beside the saved plan is not a module, a commit, a time and a SHA-256"
   planned_time="${BASH_REMATCH[1]}"
   [[ "${line_hash}" =~ ^sha256=([0-9a-f]{64})$ ]] ||
-    stale "the record beside the saved plan is not a commit, a time and a SHA-256"
+    stale "the record beside the saved plan is not a module, a commit, a time and a SHA-256"
   planned_hash="${BASH_REMATCH[1]}"
   # The record is the script's and the plan file may not be: a plan written by
   # hand over it (a -target, another variable) would carry this record's commit.
-  [[ "$(file_sha256 "${AWS_MODULE_DIR}/${PLAN_FILE}")" == "${planned_hash}" ]] ||
-    stale "the saved plan file is not the one the record beside it was made for (its SHA-256 differs): something wrote it after 'make aws-plan'"
+  [[ "$(file_sha256 "${MODULE_DIR}/${PLAN_FILE}")" == "${planned_hash}" ]] ||
+    stale "the saved plan file is not the one the record beside it was made for (its SHA-256 differs): something wrote it after '${CMD_PLAN}'"
   commit="$(current_commit)"
   [[ "${planned_commit}" == "${commit}" ]] ||
     stale "the saved plan was made at another commit than the one checked out now"
@@ -554,7 +666,7 @@ require_a_plan_that_is_this_trees_and_fresh() {
 # The plan and its record are removed either way: after a failed apply the plan
 # is stale and Terraform would refuse it.
 cmd_apply() {
-  [[ -f "${AWS_MODULE_DIR}/${PLAN_FILE}" ]] || die "no ${PLAN_FILE}; run 'make aws-plan' first"
+  [[ -f "${MODULE_DIR}/${PLAN_FILE}" ]] || die "no ${PLAN_FILE}; run '${CMD_PLAN}' first"
   refuse_files_that_change_the_plan
   # apply runs no init, so a workspace file left since the plan is checked here.
   # The plan is not dropped for it: it is still good once the workspace is back.
@@ -569,8 +681,8 @@ cmd_apply() {
   local status=0
   tf_signed apply -input=false "${PLAN_FILE}" 2>&1 | redact || status=$?
   drop_plan
-  ((status == 0)) || die "terraform apply failed (exit ${status}); run 'make aws-plan' again"
-  log "applied. It bills by the hour until: make aws-destroy"
+  ((status == 0)) || die "terraform apply failed (exit ${status}); run '${CMD_PLAN}' again"
+  log "applied. It bills by the hour until: ${CMD_DESTROY}"
 }
 
 # No automatic approval and no -input=false: Terraform asks for its own "yes" on
@@ -583,7 +695,7 @@ cmd_apply() {
 # empty state Terraform would remove nothing and say it was done.
 cmd_destroy() {
   [[ -t 0 ]] ||
-    die "destroy needs a terminal: run 'make aws-destroy' yourself, in a terminal (this check stops an accident and a plain shell, not a session that makes itself a terminal; infra/terraform/aws/README.md says what does)"
+    die "destroy needs a terminal: run '${CMD_DESTROY}' yourself, in a terminal (this check stops an accident and a plain shell, not a session that makes itself a terminal; ${SHARED_README} says what does)"
   refuse_files_that_change_the_plan
   load_aws_env
   prepare_state
@@ -593,51 +705,69 @@ cmd_destroy() {
   before="$(count_state)" ||
     die "cannot read the state (terraform state list failed); nothing was touched, and the console is where to look"
   ((before > 0)) ||
-    die "the state holds nothing, so Terraform would remove nothing: the file is ${STATE_PATH}. If the state was lost (a deleted checkout, another machine, another user), what it described may still exist and bill: look in the console, in the Region of the local file (infra/terraform/aws/README.md, Removal, 'If the state is lost')"
+    die "the state holds nothing, so Terraform would remove nothing: the file is ${STATE_PATH}. If the state was lost (a deleted checkout, another machine, another user), what it described may still exist and bill: look in the console, in the Region of the local file (${MODULE_README}, Removal, 'If the state is lost')"
   log "the state holds ${before} resources"
   log "terraform destroy: Terraform asks for the confirmation"
   local status=0
   tf_signed destroy 2>&1 | redact || status=$?
   ((status == 0)) ||
-    die "terraform's removal failed (exit ${status}); the state still holds what is left. Read it with 'terraform -chdir=infra/terraform/aws state list', look in the console (in the Region of the local file) for what is left, then run 'make aws-destroy' again: Terraform removes what is still in the state (infra/terraform/aws/README.md, Removal)"
+    die "terraform's removal failed (exit ${status}); the state still holds what is left. Read it with 'terraform -chdir=${MODULE_REL} state list', look in the console (in the Region of the local file) for what is left, then run '${CMD_DESTROY}' again: Terraform removes what is still in the state (${MODULE_README}, Removal)"
   after="$(count_state)" ||
     die "cannot read the state after the removal; look in the console for what is left"
   ((after == 0)) ||
-    die "the state still holds ${after} resources, so the removal is not finished; run 'make aws-destroy' again"
-  log "removed. Look at the console for what is left: infra/terraform/aws/README.md, Removal"
+    die "the state still holds ${after} resources, so the removal is not finished; run '${CMD_DESTROY}' again"
+  log "removed. Look at the console for what is left: ${MODULE_README}, Removal"
 }
 
-# Only validate takes a word, the name of a module from a closed list: a path,
-# or anything else, is refused with the usage line before any program runs.
-if [[ "${1-}" == validate ]]; then
-  [[ $# -le 2 ]] || usage
-else
-  [[ $# -eq 1 ]] || usage
-fi
+# Every command takes at most one word after it, the name of a module from a
+# closed list, and a word that is not on the list (a path, another spelling, a
+# second word) is refused with the usage line before any program runs:
+#   validate           aws (the default), gcp or aws-kubeadm
+#   plan, apply, destroy   aws-kubeadm, or no word for the managed module; gcp is
+#                      refused with a sentence that says why, and so is the word
+#                      aws on these three (the managed module is no word at all)
+# The word is matched against literals, and each match calls select_module with a
+# literal of its own: the caller's text is never part of a path or a file name.
+case "${1-}" in
+  validate | plan | apply | destroy) [[ $# -le 2 ]] || usage ;;
+  *) usage ;;
+esac
 case "$1" in
   validate)
-    module="${2-aws}"
-    case "${module}" in
-      aws | gcp | aws-kubeadm) ;;
+    case "${2-aws}" in
+      aws) select_module aws ;;
+      gcp) select_module gcp ;;
+      aws-kubeadm) select_module aws-kubeadm ;;
       *) usage ;;
     esac
-    module_dir="${TF_DIR}/${module}"
     need_tools terraform
-    cmd_validate "${module}"
+    cmd_validate
     ;;
-  plan)
-    need_tools terraform aws git
-    require_a_git_that_reads_its_own_settings
-    cmd_plan
+  *)
+    if [[ $# -eq 1 ]]; then
+      select_module aws
+    else
+      case "$2" in
+        aws-kubeadm) select_module aws-kubeadm ;;
+        gcp) refuse_gcp ;;
+        *) usage ;;
+      esac
+    fi
+    case "$1" in
+      plan)
+        need_tools terraform aws git
+        require_a_git_that_reads_its_own_settings
+        cmd_plan
+        ;;
+      apply)
+        need_tools terraform aws git
+        require_a_git_that_reads_its_own_settings
+        cmd_apply
+        ;;
+      destroy)
+        need_tools terraform aws
+        cmd_destroy
+        ;;
+    esac
     ;;
-  apply)
-    need_tools terraform aws git
-    require_a_git_that_reads_its_own_settings
-    cmd_apply
-    ;;
-  destroy)
-    need_tools terraform aws
-    cmd_destroy
-    ;;
-  *) usage ;;
 esac
