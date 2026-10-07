@@ -14344,7 +14344,11 @@ of the step's branch at 3270162, before this record):
   seen.
 - **Tested with stand-ins and not seen on a cluster** is everything else of
   the ten contracts, and it is named in the next list.
-- **Gates, run by the main session on the final tree:** FINAL-SUITE-RESULT.
+- **Gates, run by the main session on the final tree** (`main` with S069, S036,
+  S074 and S068 merged in; 4efe910): `make test` (343 tests), `make docs` (14
+  checks) and `make lint` ended 0; the whole suite at six workers beside the
+  kind cluster and no other run with a database: 17,370 passed, 8 skipped (3
+  min 53 s). The commit after it fills this line.
 
 **Not seen** (the first half's list; the second half's items are above):
 
