@@ -7,7 +7,15 @@ from types import MappingProxyType
 from typing import Annotated, Literal, Self
 from uuid import UUID
 
-from pydantic import ConfigDict, Field, Strict, StringConstraints, model_validator
+from pydantic import (
+    ConfigDict,
+    Field,
+    Strict,
+    StringConstraints,
+    ValidationError,
+    model_validator,
+)
+from pydantic_core import ErrorDetails
 
 from meridian.platform.common.http import ErrorBody
 from meridian.platform.common.wire import NoNul, WireModel
@@ -219,3 +227,29 @@ class ClaimErrorBody(ErrorBody):
 
     claim_id: str
     run_id: UUID | None = None
+
+
+# What stands for a key of the data in a location: ``extra="forbid"`` puts the
+# key an unknown field was sent under in the error's location, and the key is
+# the caller's (or the stored row's, or the runtime's), not the model's.
+DATA_KEY = "*"
+
+
+def invalid_fields(exc: ValidationError) -> tuple[tuple[str, str], ...]:
+    """What failed to validate, as ``(dotted location, error type)`` pairs and
+    nothing else: never the message, the input or the context, which quote the
+    claimant's values (or the model's text). A list index is kept
+    (``documents.3``); a key of the data is replaced (``DATA_KEY``). No model
+    whose errors reach here has a mapping whose values are validated, so the
+    keys of the data come only from an undeclared field
+    (``test_model_error_locations.py`` walks them). It lives beside the models so
+    that the calls to the runtime and the triage can both log with it."""
+    errors = exc.errors(include_url=False, include_input=False, include_context=False)
+    return tuple((_dotted(error), error["type"]) for error in errors)
+
+
+def _dotted(error: ErrorDetails) -> str:
+    parts = [str(part) for part in error["loc"]]
+    if error["type"] == "extra_forbidden" and parts:
+        parts[-1] = DATA_KEY
+    return ".".join(parts)

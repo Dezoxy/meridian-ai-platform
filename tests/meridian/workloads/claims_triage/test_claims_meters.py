@@ -585,6 +585,34 @@ def test_a_bug_that_leaves_the_triage_by_no_branch_is_counted_once_and_raised(
     assert CANARY not in repr(triages(reader))
 
 
+def test_an_answer_that_cannot_be_built_after_the_proposal_is_stored_is_a_stored_triage(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unbuildable(**_: object) -> None:
+        raise RuntimeError(CANARY)
+
+    monkeypatch.setattr(triaging, "ClaimResponse", unbuildable)
+    reader = InMemoryMetricReader()
+    client = make_client(fresh_database, Runtime(UNAVAILABLE), reader)
+
+    response = post_json_claim(client, claim_with_id("CLM-9101"))
+
+    assert response.status_code == 500
+    assert proposals_stored(fresh_database) == 1
+    assert triages(reader) == [triage_count("stored")]
+    assert counts(reader) == [
+        (
+            {
+                "meridian.tenant": TENANT,
+                "meridian.outcome": "unavailable",
+                "meridian.reason": "not-json",
+            },
+            1,
+        )
+    ]
+    assert CANARY not in response.text
+
+
 def test_no_triage_label_holds_a_claims_id_or_the_text_of_a_claim(
     fresh_database: DatabaseHandle,
 ) -> None:
