@@ -15411,8 +15411,11 @@ a cluster.
   seconds, on a hosted runner that was slow during an incident at GitHub; its
   re-run passed. The 30 minutes of this part are that limit's answer.
 - **The whole suite on the final tree** (the main session fills the next line
-  when it has run): FINAL-SUITE-RESULT
-- **Plan version of this part:** PLAN-VERSION
+  when it has run): `20097 passed, 8 skipped, 8 warnings in 263.88s
+  (0:04:23)`, coverage 99.11 per cent of 13,869 statements (123 missed), on
+  the tree merged with `main` at 02be181; the documents-only commits after it
+  changed no code
+- **Plan version of this part:** v0.85
 - **What S074 still holds after this.** The step stays `doing`. Open: the
   rows the second half's last table keeps; the backlog rows with home S074
   that are still open (among them the six new rows of this part, each file's
@@ -20254,3 +20257,26 @@ real thing):
   runbook, `slo.md` (queries that named two namespaces where the rules name
   three), the kind README and T-91.
   The whole suite on the final tree: 20,080 passed, 8 skipped.
+- **v0.85, 2026-10-07:** S074, three gates in CI (still `doing`), the owner's
+  answer to "which gates": "Coverage threshold, File size check, Per-test
+  timeout". A file size check in `make lint`: a tracked Python or shell
+  source file over 800 lines fails unless `scripts/file-size-exceptions.txt`
+  lists it with its exact count (51 files today), and the list is a strict
+  ratchet: a listed file that grew fails, and one that shrank fails until its
+  entry is lowered. A limit of 600 seconds for every test, by signal (the
+  slowest test measured: 45 s). A coverage floor of 98 per cent to two
+  decimals, measured 99.11 per cent (13,869 statements, 123 missed), on in
+  CI: with the interpreter's monitoring core it costs 2.0 per cent of the
+  suite's time on this machine, where the trace function cost 37 to 40; the
+  job's limit goes from 15 to 30 minutes, and the same day a job of pull
+  request 126 was cancelled at the old limit with every step green. An
+  infrastructure review (approve with fixes; no critical, no high, one
+  medium, nine low): the list made a real ratchet, the floor made exact, a
+  failed run made to fail once. At the merge of `main` three listed files
+  that had grown there got their entries set once, and a branch cut before
+  the check reached `main` does the same once at its own merge. Not seen:
+  coverage's cost on the hosted runner (this pull request's own python
+  check is its first run there), a test stopped by the limit in CI, the
+  limit against a blocked database call. Backlog: three rows closed, one
+  corrected, six new.
+  The whole suite on the final tree, with coverage: 20,097 passed, 8 skipped.
