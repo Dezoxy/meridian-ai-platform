@@ -1,13 +1,15 @@
 # shellcheck shell=bash
-#  12. telemetry stores: eight lines (S072, contracts M3b and M4), run after the
+#  12. telemetry stores: ten lines (S072, contracts M3b, M4 and M4b), run after the
 #                 other eleven. They prove, from a Pod that is inside the
 #                 namespace as the collector is, what the two gateways and Tempo's
 #                 receiver refuse, and that the pods SERVE the certificate that is
 #                 in their Secret now. The first five are Loki's gateway, Tempo's
 #                 receiver and Loki's own port, then the certificates of the Loki
-#                 gateway and of Tempo; the last three, added by contract M4, are
+#                 gateway and of Tempo; the next three, added by contract M4, are
 #                 Prometheus's gateway, Prometheus's own port and the certificate
-#                 of Prometheus's gateway (below, after the first five).
+#                 of Prometheus's gateway; the last two, added by contract M4b,
+#                 are the odd forms of a read and the body of a POST (below, after
+#                 the first five).
 #                 The check starts one probe Pod in `observability`, of the
 #                 Claims API's own image and securityContext (nothing is pulled;
 #                 it has no curl, so Python does the work), labelled
@@ -45,8 +47,10 @@
 #                   pods alone, not the sender's. The control: the same Pod
 #                   relabelled with the gateway's three labels must reach the
 #                   port (up to four tries: the network plugin takes a moment),
-#                   and is relabelled back at once (while it carries them it is
-#                   an endpoint of the gateway's Service). A refusal, a name
+#                   and is relabelled back at once (while it carries them the
+#                   gateway's Service and policies select it; the Pod declares no
+#                   port, and the Services' target port is a NAME, so it is not
+#                   listed as an endpoint: recalled, not seen). A refusal, a name
 #                   that does not resolve and a failed exec are FAIL lines, never
 #                   "blocked"; a control that did not reach is a FAIL.
 #                 - the certificates served (the fourth and fifth lines): the
@@ -80,7 +84,23 @@
 #                   as the fourth, for prometheus-gateway-tls. nginx re-reads the
 #                   certificate at each handshake, so a difference after a renewal
 #                   is a fault.
-#                 Skipped, one line instead of eight, while no Meridian Deployment
+#                 - the odd forms of a read (the ninth line, contract M4b): with
+#                   no client certificate, GET /api/v1/query?query=1 is 200, and
+#                   the same request written with a doubled slash
+#                   (//api/v1/query?query=1), a per-cent-encoded letter
+#                   (/api/v1/quer%79?query=1) and a dot segment
+#                   (/api/v1/x/../query?query=1) is 403 each. nginx would decode,
+#                   merge or resolve each into the plain path, and only the
+#                   gateway's comparison of the raw and the normalised path refuses
+#                   it: this is the one live check of that guard, and it fails if
+#                   both maps were set to the normalised path.
+#                 - a POST with a body (the tenth line, contract M4b): the same
+#                   Pod posts `query=1` as a form (Content-Type
+#                   application/x-www-form-urlencoded, Grafana's own shape for a
+#                   query) to /api/v1/query and the answer is 200 with
+#                   "status":"success": the gateway forwards the body. The first
+#                   POSTs above send none.
+#                 Skipped, one line instead of ten, while no Meridian Deployment
 #                 exists (the probe Pod borrows the Claims API's image: `make
 #                 deploy`). A FAIL line that a missing gateway Deployment or
 #                 Tempo's StatefulSet gives says make up. A probe Pod that a lost
@@ -135,6 +155,21 @@ context.verify_mode = ssl.CERT_NONE
 connection = http.client.HTTPSConnection(host, port, context=context, timeout='"${TELEMETRY_STORES_TIMEOUT}"')
 connection.request(method, path, body=b"" if method == "POST" else None)
 print(connection.getresponse().status)'
+# A POST of a form body, as Grafana posts a query: arguments are host, port and
+# path; prints the HTTP status and the "status" of Prometheus's JSON answer.
+readonly TELEMETRY_STORES_FORM='import http.client, json, ssl, sys
+host, port, path = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+context = ssl.create_default_context()
+context.check_hostname = False
+context.verify_mode = ssl.CERT_NONE
+connection = http.client.HTTPSConnection(host, port, context=context, timeout='"${TELEMETRY_STORES_TIMEOUT}"')
+connection.request("POST", path, body=b"query=1", headers={"Content-Type": "application/x-www-form-urlencoded"})
+response = connection.getresponse()
+try:
+    answer = json.loads(response.read()).get("status")
+except ValueError:
+    answer = "unparsed"
+print(response.status, answer)'
 readonly TELEMETRY_STORES_FINGERPRINT='import hashlib, socket, ssl, sys
 host, port = sys.argv[1], int(sys.argv[2])
 context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -322,9 +357,10 @@ telemetry_stores_port_line() {
     fail "telemetry stores: the probe to ${store}'s own port (${target}) gave no answer of reached or blocked: ${blocked}"
     return
   fi
-  # The control: the same Pod with the gateway's labels. While it carries them it
-  # is an endpoint of the gateway's Service, so they are taken off again at once,
-  # whatever the probe said.
+  # The control: the same Pod with the gateway's labels. While it carries them the
+  # gateway's Service and policies select it (the Pod declares no port and the
+  # Services' target port is a name, so it is not listed as an endpoint: recalled),
+  # so the labels are taken off again at once, whatever the probe said.
   err_file="$(mktemp)"
   # shellcheck disable=SC2086  # the labels are separate arguments
   if kctl -n "${TELEMETRY_STORES_NAMESPACE}" label pod "${telemetry_probe_pod}" \
@@ -375,6 +411,38 @@ telemetry_stores_prometheus_gateway_line() {
     pass "telemetry stores: a pod with the collector's label and no client certificate gets 403 for the OTLP receiver's path, remote write and /-/reload on Prometheus's gateway (${gateway}) and 200 for a query: the gateway, not the label, decides who writes"
   else
     fail "telemetry stores: Prometheus's gateway refused the three paths with 403, but a query of /api/v1/query?query=1 was answered ${query}, not 200 (is Prometheus ready? kubectl -n observability get pods)"
+  fi
+}
+
+# telemetry_stores_prometheus_odd_forms_line: the ninth line (contract M4b). The
+# plain read is 200 and its three odd forms are each 403; the forms are asked one by
+# one so that the line names each that was served.
+telemetry_stores_prometheus_odd_forms_line() {
+  local gateway=${TELEMETRY_STORES_PROMETHEUS_GATEWAY} path served="" plain
+  telemetry_probe "${TELEMETRY_STORES_REQUEST}" "${gateway}" GET '/api/v1/query?query=1'
+  plain="${stores_answer}"
+  for path in '//api/v1/query?query=1' '/api/v1/quer%79?query=1' '/api/v1/x/../query?query=1'; do
+    telemetry_probe "${TELEMETRY_STORES_REQUEST}" "${gateway}" GET "${path}"
+    [[ "${stores_answer}" == 403 ]] || served+="${served:+, }GET ${path} gave ${stores_answer}"
+  done
+  if [[ "${plain}" != 200 ]]; then
+    fail "telemetry stores: the plain read GET /api/v1/query?query=1 of Prometheus's gateway (${gateway}) was answered ${plain}, not 200, so the odd forms beside it prove nothing (is Prometheus ready? kubectl -n observability get pods)"
+  elif [[ -n "${served}" ]]; then
+    fail "telemetry stores: Prometheus's gateway (${gateway}) did not refuse with 403 a read written another way (${served}): the comparison of the raw and the normalised path is not holding"
+  else
+    pass "telemetry stores: on Prometheus's gateway (${gateway}) the plain read is 200 and the same read written with a doubled slash, a per-cent-encoded letter and a dot segment is 403 each: the raw and the normalised path are compared"
+  fi
+}
+
+# telemetry_stores_prometheus_body_line: the tenth line (contract M4b). A form body
+# reaches Prometheus: a POST of `query=1` to /api/v1/query is 200 and "success".
+telemetry_stores_prometheus_body_line() {
+  local gateway=${TELEMETRY_STORES_PROMETHEUS_GATEWAY}
+  telemetry_probe "${TELEMETRY_STORES_FORM}" "${gateway}" /api/v1/query
+  if [[ "${stores_answer}" == "200 success" ]]; then
+    pass "telemetry stores: a POST of the form body query=1 to /api/v1/query on Prometheus's gateway (${gateway}) is answered 200 success: the gateway forwards the body, as Grafana's POSTed queries need"
+  else
+    fail "telemetry stores: a POST of the form body query=1 to /api/v1/query on Prometheus's gateway (${gateway}) was not answered 200 success (${stores_answer}): the body did not reach Prometheus, or the gateway refused it, and Grafana's POSTed queries would fail"
   fi
 }
 
@@ -434,5 +502,7 @@ check_telemetry_stores() {
   telemetry_stores_prometheus_line
   telemetry_stores_served_line "${TELEMETRY_STORES_PROMETHEUS_GATEWAY}" "${TELEMETRY_STORES_PROMETHEUS_GATEWAY_SECRET}" \
     "Prometheus's gateway" "run make up, which rolls the pod when its client CA changed, or restart deployment/prometheus-gateway"
+  telemetry_stores_prometheus_odd_forms_line
+  telemetry_stores_prometheus_body_line
   telemetry_stores_delete_pod || echo "smoke: could not delete the probe Pod ${telemetry_probe_pod} in ${TELEMETRY_STORES_NAMESPACE}; delete it by hand" >&2
 }

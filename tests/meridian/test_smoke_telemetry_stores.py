@@ -1,9 +1,9 @@
 """Smoke's check 12: the telemetry stores' refusals and the certificates they serve
-(S072, contracts M3b and M4).
+(S072, contracts M3b, M4 and M4b).
 
 ``check_telemetry_stores`` in ``infra/kind/smoke.d/12-telemetry-stores.sh`` starts
 one probe Pod in ``observability`` (the Claims API's image, the collector's name
-label and smoke's own) and prints eight lines: a push to Loki's gateway with no
+label and smoke's own) and prints ten lines: a push to Loki's gateway with no
 client certificate is 403 and a read is 200; Tempo's receiver ends a connection
 without a certificate in the alert "certificate required"; Loki's own port times
 out for the Pod and is reached by the same Pod with the gateway's labels; the
@@ -11,7 +11,10 @@ Loki gateway and Tempo's receiver each serve the certificate that is in their
 Secret; and, since contract M4, Prometheus's gateway answers 403 to the OTLP
 receiver's path, remote write and ``/-/reload`` with no client certificate and 200
 to a query, Prometheus's own port times out for the Pod (and is reached with the
-gateway's labels), and the gateway serves the certificate that is in its Secret.
+gateway's labels), and the gateway serves the certificate that is in its Secret;
+and, since contract M4b, the odd forms of a read (a doubled slash, a per-cent-
+encoded letter, a dot segment) are 403 beside the plain form's 200, and a POST of
+a form body ``query=1`` is answered ``200 success``.
 The harness runs the file in bash against a stub ``kctl`` whose probe answers are
 the test's, and a real certificate made by ``openssl`` for the fingerprints.
 """
@@ -71,6 +74,9 @@ kctl() {
         *http.client*)
           if [[ "$*" == *" prometheus-gateway"* ]]; then
             case "$*" in
+              *urlencoded*) printf '%s\n' "${PROM_FORM}" ;;
+              *" GET //api/"* | *" GET /api/v1/quer%79"* | *" GET /api/v1/x/../"*)
+                printf '%s\n' "${PROM_ODD}" ;;
               *" POST /api/v1/otlp/v1/metrics"*) printf '%s\n' "${PROM_OTLP}" ;;
               *" POST /api/v1/write"*) printf '%s\n' "${PROM_WRITE}" ;;
               *" POST /-/reload"*) printf '%s\n' "${PROM_RELOAD}" ;;
@@ -145,6 +151,8 @@ def run_check(
     prom_write: str = "403",
     prom_reload: str = "403",
     prom_query: str = "200",
+    prom_odd: str = "403",
+    prom_form: str = "200 success",
     prom_blocked: str = "blocked",
     prom_control: str = "reached",
     served_prom: str | None = None,
@@ -211,6 +219,8 @@ def run_check(
             "PROM_WRITE": prom_write,
             "PROM_RELOAD": prom_reload,
             "PROM_QUERY": prom_query,
+            "PROM_ODD": prom_odd,
+            "PROM_FORM": prom_form,
             "PROM_TCP_BLOCKED": prom_blocked,
             "PROM_TCP_CONTROL": prom_control,
             "CLAIMS": claims,
@@ -232,12 +242,12 @@ def verdicts(lines: list[str]) -> list[str]:
     return [line.split()[0] for line in lines]
 
 
-def test_all_eight_lines_pass_when_the_stores_refuse_and_serve_what_they_should(
+def test_all_ten_lines_pass_when_the_stores_refuse_and_serve_what_they_should(
     tmp_path: Path,
 ) -> None:
     lines, _, errors = run_check(tmp_path)
 
-    assert verdicts(lines) == ["PASS"] * 8
+    assert verdicts(lines) == ["PASS"] * 10
     assert errors == ""
     assert "403 for a push" in lines[0] and "200 for a read" in lines[0]
     assert "certificate required" in lines[1]
@@ -250,6 +260,10 @@ def test_all_eight_lines_pass_when_the_stores_refuse_and_serve_what_they_should(
     assert "Prometheus's own port" in lines[6] and "times out" in lines[6]
     assert "gateway's labels reaches it" in lines[6]
     assert "Prometheus's gateway serves the certificate" in lines[7]
+    # Contract M4b: the odd forms of a read, and the body of a POST.
+    assert "doubled slash" in lines[8] and "dot segment" in lines[8]
+    assert "403 each" in lines[8]
+    assert "form body query=1" in lines[9] and "200 success" in lines[9]
 
 
 def test_a_push_the_gateway_answers_with_anything_but_403_fails(
@@ -259,7 +273,7 @@ def test_a_push_the_gateway_answers_with_anything_but_403_fails(
         lines, _, _ = run_check(tmp_path / answer, push=answer)
         assert lines[0].startswith("FAIL  telemetry stores: a push to Loki's gateway")
         assert f"answered {answer}, not 403" in lines[0]
-        assert verdicts(lines)[1:] == ["PASS"] * 7
+        assert verdicts(lines)[1:] == ["PASS"] * 9
 
 
 def test_a_refused_push_with_a_read_that_is_not_200_fails_and_says_which(
@@ -355,7 +369,7 @@ def test_a_gateway_that_serves_another_certificate_than_its_secret_fails(
 ) -> None:
     lines, _, _ = run_check(tmp_path, served_gateway="a" * 64)
 
-    assert verdicts(lines) == ["PASS", "PASS", "PASS", "FAIL"] + ["PASS"] * 4
+    assert verdicts(lines) == ["PASS", "PASS", "PASS", "FAIL"] + ["PASS"] * 6
     assert (
         "Loki's gateway serves a certificate that is NOT the one in the Secret"
         in (lines[3])
@@ -369,7 +383,7 @@ def test_a_receiver_that_serves_another_certificate_than_its_secret_fails(
 ) -> None:
     lines, _, _ = run_check(tmp_path, served_tempo="b" * 64)
 
-    assert verdicts(lines) == ["PASS"] * 4 + ["FAIL"] + ["PASS"] * 3
+    assert verdicts(lines) == ["PASS"] * 4 + ["FAIL"] + ["PASS"] * 5
     assert "Tempo's receiver serves a certificate that is NOT the one in" in lines[4]
     assert "tempo-receiver-tls" in lines[4]
     assert "statefulset/tempo" in lines[4]
@@ -380,7 +394,7 @@ def test_a_prometheus_gateway_that_serves_another_certificate_than_its_secret_fa
 ) -> None:
     lines, _, _ = run_check(tmp_path, served_prom="c" * 64)
 
-    assert verdicts(lines) == ["PASS"] * 7 + ["FAIL"]
+    assert verdicts(lines) == ["PASS"] * 7 + ["FAIL"] + ["PASS"] * 2
     assert "Prometheus's gateway serves a certificate that is NOT" in lines[7]
     assert "prometheus-gateway-tls" in lines[7]
     assert "make up" in lines[7] and "deployment/prometheus-gateway" in lines[7]
@@ -391,7 +405,7 @@ def test_a_prometheus_secret_with_no_certificate_in_it_is_a_fail_not_a_pass(
 ) -> None:
     lines, _, _ = run_check(tmp_path, prom_secret="")
 
-    assert verdicts(lines) == ["PASS"] * 7 + ["FAIL"]
+    assert verdicts(lines) == ["PASS"] * 7 + ["FAIL"] + ["PASS"] * 2
     assert lines[7].startswith("FAIL  telemetry stores: could not read the cert")
     assert "prometheus-gateway-tls" in lines[7]
 
@@ -418,7 +432,7 @@ def test_a_closed_path_of_prometheus_s_gateway_that_is_not_403_is_a_fail_naming_
         for other in set(paths.values()) - {paths[path_kwarg]}:
             assert other not in lines[5].split("(", 2)[2]
         assert verdicts(lines)[:5] == ["PASS"] * 5
-        assert verdicts(lines)[6:] == ["PASS"] * 2
+        assert verdicts(lines)[6:] == ["PASS"] * 4
 
 
 def test_all_three_closed_paths_that_answer_otherwise_are_all_named(
@@ -444,6 +458,62 @@ def test_a_query_that_is_not_200_while_the_closed_paths_are_403_fails_and_says_s
 
     assert lines[5].startswith("FAIL  telemetry stores: Prometheus's gateway refused")
     assert "answered 502, not 200" in lines[5]
+
+
+def test_an_odd_form_of_a_read_that_is_served_is_a_fail_that_names_it(
+    tmp_path: Path,
+) -> None:
+    for answer in ("200", "404", "400"):
+        lines, _, _ = run_check(tmp_path / answer, prom_odd=answer)
+
+        assert lines[8].startswith("FAIL  telemetry stores: Prometheus's gateway")
+        for form in (
+            "GET //api/v1/query?query=1",
+            "GET /api/v1/quer%79?query=1",
+            "GET /api/v1/x/../query?query=1",
+        ):
+            assert f"{form} gave {answer}" in lines[8]
+        assert "raw and the normalised path" in lines[8]
+        assert verdicts(lines)[:8] == ["PASS"] * 8 and verdicts(lines)[9] == "PASS"
+
+
+def test_odd_forms_beside_a_plain_read_that_is_not_200_prove_nothing(
+    tmp_path: Path,
+) -> None:
+    lines, _, _ = run_check(tmp_path, prom_query="502")
+
+    assert lines[8].startswith("FAIL  telemetry stores: the plain read")
+    assert "answered 502, not 200" in lines[8] and "prove nothing" in lines[8]
+
+
+def test_a_form_body_that_does_not_come_back_as_success_is_a_fail(
+    tmp_path: Path,
+) -> None:
+    for answer in ("400 error", "403 unparsed", "200 error", "error: timed out"):
+        lines, _, _ = run_check(tmp_path / answer.replace(" ", "-"), prom_form=answer)
+
+        assert lines[9].startswith("FAIL  telemetry stores: a POST of the form body")
+        assert answer in lines[9]
+        assert verdicts(lines)[:9] == ["PASS"] * 9
+
+
+def test_the_form_post_carries_the_body_and_the_form_content_type(
+    tmp_path: Path,
+) -> None:
+    _, asked, _ = run_check(tmp_path)
+    (form,) = [c for c in asked.splitlines() if " exec " in c and "urlencoded" in c]
+
+    assert 'body=b"query=1"' in form
+    assert "application/x-www-form-urlencoded" in form
+    assert form.endswith("/api/v1/query")
+    # The odd forms are asked as written, never normalised on the way.
+    forms = [c for c in asked.splitlines() if " exec " in c and " GET " in c]
+    for path in (
+        "//api/v1/query?query=1",
+        "/api/v1/quer%79?query=1",
+        "/api/v1/x/../query?query=1",
+    ):
+        assert any(c.endswith(f" GET {path}") for c in forms), path
 
 
 def test_prometheus_s_own_port_reached_by_the_probe_is_a_fail(tmp_path: Path) -> None:
@@ -484,7 +554,9 @@ def test_the_prometheus_checks_name_the_gateway_and_prometheus_s_own_address(
     assert PROMETHEUS in " ".join(execs)
     # The gateway's four requests, Prometheus's port twice and the gateway's
     # fingerprint: seven calls added to the seven of contract M3b.
-    assert len([c for c in execs if "prometheus-gateway" in c]) == 4 + 1
+    # The four requests of line 6, the fingerprint, and (contract M4b) the plain
+    # read and three odd forms of line 9 and the form POST of line 10.
+    assert len([c for c in execs if "prometheus-gateway" in c]) == 4 + 1 + 4 + 1
     assert len([c for c in execs if "kube-prometheus-stack-prometheus" in c]) == 2
     assert [c for c in execs if "POST /api/v1/write" in c]  # remote write is asked
     assert [c for c in execs if "POST /-/reload" in c]
@@ -529,7 +601,7 @@ def test_a_failed_exec_is_reported_as_an_error_and_never_as_a_refusal(
         tmp_path, exec_status=1, exec_error="Traceback: name does not resolve"
     )
 
-    assert verdicts(lines) == ["FAIL"] * 8
+    assert verdicts(lines) == ["FAIL"] * 10
     assert "name does not resolve" in " ".join(lines)
     assert not any(line.startswith("PASS") for line in lines)
 
@@ -572,7 +644,8 @@ def test_the_probe_presents_no_certificate_and_names_the_stores_addresses(
     # Loki's side: two requests, the alert, Tempo's and the gateway's fingerprints,
     # and Loki's port twice (the control is the second). Prometheus's (contract
     # M4): four requests, its port twice and its gateway's fingerprint.
-    assert len(execs) == (2 + 1 + 1 + 1 + 2) + (4 + 2 + 1)
+    # M4b: the plain read and three odd forms, and the form POST.
+    assert len(execs) == (2 + 1 + 1 + 1 + 2) + (4 + 2 + 1) + (4 + 1)
     assert GATEWAY.split(":")[0] in text and TEMPO.split(":")[0] in text
     assert LOKI.split(":")[0] in text
     assert "load_cert_chain" not in text and "certfile" not in text

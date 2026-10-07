@@ -72,8 +72,9 @@ RULE_COUNT = 21
 # the refusals of Loki's gateway, Tempo's receiver and Loki's own port and the
 # certificates the gateway and the receiver serve: 51. S072 (M4) added three to it
 # (Prometheus's gateway, Prometheus's own port and the certificate its gateway
-# serves): 54.
-SMOKE_LINES_AFTER_DEPLOY = 54
+# serves): 54. S072 (M4b) added two more: the odd forms of a read are 403 beside
+# the plain form's 200, and a form body reaches Prometheus: 56.
+SMOKE_LINES_AFTER_DEPLOY = 56
 # Counted from the checks' own skip lines, not measured: edge 1, database 3 and
 # one SKIP for its stores, tools 1 SKIP, telemetry 7, cost panel 3 and one SKIP
 # for the series, adjuster pages 1 SKIP, sweep 2 SKIP (the Job's line and the

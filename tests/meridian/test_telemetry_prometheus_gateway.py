@@ -87,7 +87,11 @@ PLACEHOLDERS = (
     "IMAGE-PLACEHOLDER",
     "MANIFEST-SHA256-PLACEHOLDER",
     "CA-SHA256-PLACEHOLDER",
+    "SERVICE-ADDRESS-PLACEHOLDER",
 )
+# A cluster address the stub answers for the Prometheus Service (a documentation
+# address, RFC 5737).
+SERVICE_ADDRESS = "192.0.2.17"
 
 # What the gateway serves without a certificate, and where each path comes from.
 # "grafana": a call of Grafana's Prometheus datasource (RECALLED from the datasource,
@@ -108,15 +112,22 @@ READ_PATHS = {
     "/api/v1/label/job/values": "grafana",
     "/api/v1/label/__name__/values": "grafana",
     "/api/v1/metadata": "grafana review",
-    "/api/v1/targets": "review",
+    # The run's probe through Grafana's proxy reads the Targets (that Prometheus's
+    # two self-scrape endpoints are up), which no dashboard does.
+    "/api/v1/targets": "probe",
     "/api/v1/rules": "smoke grafana review",
-    "/api/v1/alerts": "review",
+    "/api/v1/alerts": "grafana review",
     "/api/v1/status/buildinfo": "grafana review",
-    "/api/v1/status/runtimeinfo": "review",
-    "/api/v1/status/flags": "review",
-    "/api/v1/status/config": "review",
-    "/api/v1/status/tsdb": "review",
 }
+# The status pages that were on the list until contract M4b and have no caller: the
+# configuration (it prints the scrape configuration), the flags (reconnaissance),
+# the runtime and the TSDB. Closed, whatever the certificate.
+REMOVED_STATUS_PATHS = [
+    "/api/v1/status/config",
+    "/api/v1/status/flags",
+    "/api/v1/status/runtimeinfo",
+    "/api/v1/status/tsdb",
+]
 # The one path that writes, and the only one a certificate opens.
 WRITE_PATH = "/api/v1/otlp/v1/metrics"
 # Remote write, the admin API and the lifecycle endpoints: 403 whatever the
@@ -139,6 +150,7 @@ CLOSED_WRITE_SURFACES = [
 ]
 # Everything else the pinned image serves, and a few that it does not.
 OTHER_CLOSED_PATHS = [
+    *REMOVED_STATUS_PATHS,
     "/-/healthy",
     "/-/ready",
     "/federate",
@@ -217,6 +229,7 @@ ODD_FORMS = [
 # the POST ones that change state.
 ROUTES_SEEN = {
     *READ_PATHS,
+    *REMOVED_STATUS_PATHS,
     WRITE_PATH,
     "/api/v1/write",
     "/api/v1/read",
@@ -417,6 +430,23 @@ def test_the_collectors_client_name_with_a_server_usage_is_still_denied() -> Non
     assert decision(request) == "denied"
 
 
+def test_the_client_certificate_has_no_subject_block_and_the_model_denies_one() -> None:
+    # The gateways compare the whole subject, `$ssl_client_s_dn`, with
+    # `CN=otel-collector-client`: an `organizations` entry would make it
+    # `CN=otel-collector-client,O=...` and every write a 403. approver-policy denies
+    # a request with a subject block that no policy allows (recalled), and the
+    # model in certpolicysupport.py now says the same.
+    client = certificate(COLLECTOR_CLIENT)
+    with_subject = changed(client, subject={"organizations": ["meridian"]})
+
+    assert "subject" not in client["spec"]
+    assert client["spec"]["commonName"] == "otel-collector-client"
+    assert decision(request_of(client)) == "approved"
+    assert decision(request_of(with_subject)) == "denied"
+    gateway = changed(certificate(GATEWAY_CERTIFICATE), subject={"countries": ["HU"]})
+    assert decision(request_of(gateway)) == "denied"
+
+
 def test_the_policys_boundaries_are_inclusive() -> None:
     gateway = certificate(GATEWAY_CERTIFICATE)
     cap = policies()[PROMETHEUS_GATEWAY_POLICY]["spec"]["constraints"]["maxDuration"]
@@ -454,9 +484,13 @@ def test_the_manifest_holds_each_placeholder_once_and_no_digest_of_its() -> None
     assert not re.search(r"sha256:[0-9a-f]{64}", text)
     assert container()["image"] == "IMAGE-PLACEHOLDER"
     template = deployment()["spec"]["template"]["metadata"]["annotations"]
+    # Three annotations, each a reason to roll the pod: the file (the configuration),
+    # the authority's certificate (read at start only) and the Prometheus Service's
+    # cluster address (resolved once, at start).
     assert template == {
         "meridian-manifest-sha256": "MANIFEST-SHA256-PLACEHOLDER",
         "meridian-ca-sha256": "CA-SHA256-PLACEHOLDER",
+        "meridian-prometheus-address": "SERVICE-ADDRESS-PLACEHOLDER",
     }
 
 
@@ -666,25 +700,30 @@ def test_the_upstream_is_static_and_only_one_location_proxies() -> None:
         assert forbidden not in conf, forbidden
 
 
-def test_the_locations_are_the_probe_path_the_api_prefix_and_a_closed_default() -> None:
-    server = server_block()
+def location_bodies() -> dict[tuple[str, str], list[str]]:
+    """Each location of the server block, by (modifier, path), as its directives."""
     locations = re.findall(
-        r"^\s*location (\S+ )?(\S+) \{\n(.*?)^\s*\}", server, re.M | re.S
+        r"^\s*location (\S+ )?(\S+) \{\n(.*?)^\s*\}", server_block(), re.M | re.S
     )
+    return {(m.strip(), path): directives(body) for m, path, body in locations}
 
-    assert [(m.strip(), path) for m, path, _ in locations] == [
+
+def test_the_locations_are_the_probe_path_the_api_prefix_and_a_closed_default() -> None:
+    bodies = location_bodies()
+
+    assert list(bodies) == [
         ("=", "/"),
         ("^~", "/api/v1/"),
         ("=", "/api/v1"),
         ("", "/"),
     ]
-    bodies = {(m.strip(), path): directives(body) for m, path, body in locations}
     # nginx answers `/` itself, and the other two paths that are not the API
     # prefix answer 403: nothing unclassified is proxied.
     assert bodies[("=", "/")] == ["return 200 'OK';"]
     assert bodies[("=", "/api/v1")] == ["return 403;"]
     assert bodies[("", "/")] == ["return 403;"]
     assert bodies[("^~", "/api/v1/")] == [
+        "limit_except GET POST { deny all; }",
         "if ($prometheus_denied) { return 403; }",
         f"proxy_pass {UPSTREAM};",
     ]
@@ -702,7 +741,12 @@ def test_the_body_limit_fits_a_batch_and_the_read_timeout_outlasts_a_query() -> 
     # Bodies and responses are streamed, so /tmp (bounded) never holds them.
     assert "proxy_request_buffering off;" in conf
     assert "proxy_max_temp_file_size 0;" in conf
+    # HTTP/1.1 to the upstream (a chunked body streams); no keep-alive line that
+    # would do nothing without an `upstream` block, and there is none.
     assert "proxy_http_version 1.1;" in conf
+    code = "\n".join(directives(conf))  # the directives, not the comments
+    assert "proxy_set_header Connection" not in code
+    assert "upstream " not in code and "keepalive" not in code
 
 
 def test_the_access_log_records_who_wrote() -> None:
@@ -809,13 +853,24 @@ def test_a_read_path_with_a_query_string_is_still_a_read_path(path: str) -> None
     assert not denied(path + query, *NO_CERTIFICATE)
 
 
-def test_a_post_is_no_different_from_a_get() -> None:
-    # Grafana's datasource posts its queries (httpMethod POST): the decision never
-    # reads the method, and the maps have no variable for it.
+def test_the_class_is_decided_by_path_and_the_methods_that_pass_are_get_and_post() -> (
+    None
+):
+    # Grafana's datasource posts its queries (httpMethod POST): the CLASS of a
+    # request never reads the method, and the maps have no variable for it. A
+    # method that Prometheus has no use for here (DELETE, which it registers on
+    # /api/v1/series, PUT, PATCH, OPTIONS) is refused in the one location that
+    # proxies, by `limit_except`, whatever the path and the certificate.
     conf = nginx_conf()
+    maps = " ".join(f"{source} {body}" for source, body in parse_maps().values())
+    proxying = location_bodies()[("^~", "/api/v1/")]
 
     assert "$request_method" not in conf and "$http_" not in conf
-    assert "limit_except" not in conf and "if ($request_method" not in conf
+    assert "$request_method" not in maps
+    assert "if ($request_method" not in conf
+    assert proxying[0] == "limit_except GET POST { deny all; }"
+    # GET implies HEAD in nginx; nothing else is let through.
+    assert not re.search(r"limit_except [^{]*(DELETE|PUT|PATCH|OPTIONS)", conf)
 
 
 def test_the_one_write_path_is_served_only_to_the_collectors_certificate() -> None:
@@ -856,24 +911,47 @@ def test_a_path_written_to_get_past_a_pattern_is_refused_whatever_the_certificat
     assert denied(path, *client), (path, client)
 
 
-def test_the_view_of_the_path_nginx_matches_a_location_on_is_modelled() -> None:
-    assert normalised("//api/v1/otlp/v1/metrics") == WRITE_PATH
-    assert normalised("/api/v1/otlp/v1/metric%73") == WRITE_PATH
-    assert normalised("/api/v1/x/../otlp/v1/metrics") == WRITE_PATH
-    assert normalised("/api/v1/./otlp/v1/metrics?a=//") == WRITE_PATH
-    assert normalised("/-/%72eload") == "/-/reload"
-    assert normalised("/") == "/"
-    # The raw view alone would let each of these through as the path it becomes,
-    # and the normalised view alone would let a decoded one through; the gateway
-    # compares them.
-    source, entries = parse_maps()["$prometheus_class_raw"]
-    assert source == "$request_uri"
-    assert evaluate(entries, "/api/v1/otlp/v1/metric%73") == "x"
-    assert evaluate(entries, "//api/v1/otlp/v1/metrics") == "x"
-    assert evaluate(entries, WRITE_PATH) == "w"
-    # And the raw view holds a `%` or a doubled slash in no pattern.
+def test_the_raw_view_holds_a_percent_or_a_doubled_slash_in_no_pattern() -> None:
+    # The patterns of the raw view match the path literally, so a path nginx would
+    # decode or merge before it matches a location is not on any list. (This test
+    # was longer: its other lines asserted the Python model of nginx's
+    # normalisation against itself, which no nginx behaviour stands behind here;
+    # the live check is line 9 of smoke's check 12.)
+    _, entries = parse_maps()["$prometheus_class_raw"]
+
     for pattern, _ in entries:
         assert "%" not in pattern and "//" not in pattern
+
+
+def read_alternation() -> set[str]:
+    """The paths the manifest's read pattern names, taken out of the pattern."""
+    _, entries = parse_maps()["$prometheus_class_raw"]
+    found = [
+        re.fullmatch(r"~\^/api/v1/\(([^)]*)\)\(\\\?\.\*\)\?\$", key)
+        for key, value in entries
+        if value == "r" and key.startswith("~^/api/v1/(")
+    ]
+    (alternation,) = found
+    assert alternation is not None
+    return {f"/api/v1/{name}" for name in alternation.group(1).split("|")}
+
+
+def test_the_read_alternation_in_the_manifest_is_the_read_list_of_this_file() -> None:
+    # EXTRACTED from the pattern, not restated: a path added to the pattern and not
+    # to READ_PATHS (with its source), or the other way, fails here.
+    plain = {p for p in READ_PATHS if p != "/" and "/label/" not in p}
+    _, entries = parse_maps()["$prometheus_class_raw"]
+    reads = [key for key, value in entries if value == "r"]
+
+    assert read_alternation() == plain
+    # Three patterns of class r and no more: `/`, the alternation and the label
+    # values (one pattern for any label name).
+    assert len(reads) == 3
+    assert r"~^/api/v1/label/[A-Za-z_][A-Za-z0-9_]*/values(\?.*)?$" in reads
+    for path in (p for p in READ_PATHS if "/label/" in p):
+        assert class_of(path) == "r", path
+    # The pages that were taken off in contract M4b are in neither.
+    assert not set(REMOVED_STATUS_PATHS) & read_alternation()
 
 
 def test_every_route_the_pinned_image_serves_is_a_read_the_write_or_closed() -> None:
@@ -890,7 +968,9 @@ def test_every_route_the_pinned_image_serves_is_a_read_the_write_or_closed() -> 
 def test_each_read_path_has_a_source_and_the_ones_from_smoke_are_in_smoke() -> None:
     smoke = "\n".join(p.read_text("utf-8") for p in (KIND_DIR / "smoke.d").glob("*.sh"))
 
-    assert all(READ_PATHS.values())
+    vocabulary = {"smoke", "grafana", "review", "probe", "nginx"}
+    for path, source in READ_PATHS.items():
+        assert source.split() and set(source.split()) <= vocabulary, path
     assert set(READ_PATHS) <= ROUTES_SEEN
     for path, source in READ_PATHS.items():
         if "smoke" in source.split():
@@ -1235,15 +1315,21 @@ def test_the_function_builds_then_applies_the_policies_then_the_gateway_and_wait
     built_at = body.index('manifest="$(prometheus_gateway_manifest ')
     policies_at = body.index('-f "${PROMETHEUS_POLICY_FILE}"')
     manifest_at = body.index("kctl apply --server-side --force-conflicts -f - <<<")
-    wait_at = body.index("wait --for=condition=Available deployment/prometheus-gateway")
+    wait_at = body.index("kctl -n observability rollout status deployment/")
 
     # Nothing that closes a port follows an unchecked step: the manifest is built
     # (and its placeholders checked) before the policies are applied.
     assert built_at < policies_at < manifest_at < wait_at
     assert "object_fingerprint secret prometheus-gateway-tls 'ca\\.crt'" in body
+    assert 'address="$(prometheus_service_address)"' in body
     assert "tls.key" not in body and "tls\\.key" not in body
+    # The wait is on the ROLLOUT: `wait --for=condition=Available` stays true while
+    # the old pod serves, so on a warm cluster it would return at once.
+    assert "rollout status deployment/prometheus-gateway" in body
+    assert "condition=Available" not in body.split("apply_prometheus_gateway() {")[-1]
     assert "--timeout=5m" in body[wait_at:]
     assert "make up" in body[wait_at:]
+    assert "did not finish rolling out" in body[wait_at:]
 
 
 def test_the_files_up_applies_are_the_files_this_branch_holds() -> None:
@@ -1262,6 +1348,7 @@ def test_the_files_up_applies_are_the_files_this_branch_holds() -> None:
         constants["PROMETHEUS_GATEWAY_IMAGE_PLACEHOLDER"],
         constants["PROMETHEUS_GATEWAY_MANIFEST_PLACEHOLDER"],
         constants["PROMETHEUS_GATEWAY_CA_PLACEHOLDER"],
+        constants["PROMETHEUS_GATEWAY_ADDRESS_PLACEHOLDER"],
     ) == PLACEHOLDERS
 
 
@@ -1271,11 +1358,17 @@ def run_up_functions(
     *,
     manifest: Path = GATEWAY_FILE,
     wait_fails: bool = False,
+    address: str = SERVICE_ADDRESS,
 ) -> tuple[subprocess.CompletedProcess[str], list[str], str]:
     """The functions of up.sh that build and apply the gateway, in bash against a
     stub ``kctl``: it logs each call, answers a read of a Secret with a base64
-    certificate text, and keeps what an ``apply -f -`` receives. Returns the
-    process, the logged calls and the manifest applied."""
+    certificate text and a read of the Service with ``address``, and keeps what an
+    ``apply -f -`` receives. It models the difference that matters on a warm
+    cluster: ``wait --for=condition=Available`` ALWAYS succeeds (the old pod keeps
+    the Deployment Available) and only ``rollout status`` fails when the new pod
+    never becomes Ready (``wait_fails``). Returns the process, the logged calls and
+    the manifest applied."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
     log = tmp_path / "calls"
     applied = tmp_path / "applied.yaml"
     script = "\n".join(
@@ -1288,16 +1381,19 @@ def run_up_functions(
             f"readonly PROMETHEUS_GATEWAY_IMAGE_PLACEHOLDER={PLACEHOLDERS[0]}",
             f"readonly PROMETHEUS_GATEWAY_MANIFEST_PLACEHOLDER={PLACEHOLDERS[1]}",
             f"readonly PROMETHEUS_GATEWAY_CA_PLACEHOLDER={PLACEHOLDERS[2]}",
+            f"readonly PROMETHEUS_GATEWAY_ADDRESS_PLACEHOLDER={PLACEHOLDERS[3]}",
             "kctl() {",
             f'  echo "$*" >>"{log}"',
             '  case "$*" in',
             '    *"get secret"*) printf "%s" "Q0VSVElGSUNBVEUtVEVYVA==" ;;',
+            '    *"get service"*) printf "%s" "${SERVICE_ADDRESS}" ;;',
             f'    *"apply"*"-f -"*) cat >"{applied}" ;;',
-            '    *" wait "*) [[ "${WAIT_FAILS}" != yes ]] || return 1 ;;',
+            '    *" rollout status "*) [[ "${WAIT_FAILS}" != yes ]] || return 1 ;;',
             "  esac",
             "}",
             up_function("object_fingerprint"),
             up_function("fill_placeholder"),
+            up_function("prometheus_service_address"),
             up_function("prometheus_gateway_manifest"),
             up_function("apply_prometheus_gateway"),
             calls,
@@ -1306,6 +1402,7 @@ def run_up_functions(
     env = {
         "PATH": __import__("os").environ["PATH"],
         "WAIT_FAILS": "yes" if wait_fails else "no",
+        "SERVICE_ADDRESS": address,
         "NGINX_GATEWAY_IMAGE_REPOSITORY": PINS["NGINX_GATEWAY_IMAGE_REPOSITORY"],
         "NGINX_GATEWAY_IMAGE_TAG": PINS["NGINX_GATEWAY_IMAGE_TAG"],
         "NGINX_GATEWAY_IMAGE_DIGEST": PINS["NGINX_GATEWAY_IMAGE_DIGEST"],
@@ -1322,7 +1419,7 @@ def run_up_functions(
     return done, asked, applied.read_text() if applied.exists() else ""
 
 
-def test_up_writes_the_pin_and_the_two_digests_into_the_deployment(
+def test_up_writes_the_pin_the_two_digests_and_the_address_into_the_deployment(
     tmp_path: Path,
 ) -> None:
     done, _, applied = run_up_functions(tmp_path, "apply_prometheus_gateway")
@@ -1339,6 +1436,7 @@ def test_up_writes_the_pin_and_the_two_digests_into_the_deployment(
     assert pod["metadata"]["annotations"] == {
         "meridian-manifest-sha256": sha256(GATEWAY_FILE.read_bytes()).hexdigest(),
         "meridian-ca-sha256": sha256(b"CERTIFICATE-TEXT").hexdigest(),
+        "meridian-prometheus-address": SERVICE_ADDRESS,
     }
     for placeholder in PLACEHOLDERS:
         assert placeholder not in applied
@@ -1360,26 +1458,101 @@ def test_up_builds_the_manifest_then_applies_the_policies_the_gateway_and_waits(
         "-n observability get secret prometheus-gateway-tls "
         "-o jsonpath={.data.ca\\.crt}"
     )
-    assert kubectl[1].startswith("apply --server-side --force-conflicts -f ")
-    assert kubectl[1].endswith("observability-prometheus-networkpolicy.yaml")
-    assert kubectl[2] == "apply --server-side --force-conflicts -f -"
-    assert kubectl[3] == (
-        "-n observability wait --for=condition=Available "
-        "deployment/prometheus-gateway --timeout=5m"
+    assert kubectl[1] == (
+        "-n observability get service kube-prometheus-stack-prometheus "
+        "-o jsonpath={.spec.clusterIP}"
     )
-    assert len(kubectl) == 4
+    assert kubectl[2].startswith("apply --server-side --force-conflicts -f ")
+    assert kubectl[2].endswith("observability-prometheus-networkpolicy.yaml")
+    assert kubectl[3] == "apply --server-side --force-conflicts -f -"
+    # The ROLLOUT of the new pod, not the Deployment's Available condition.
+    assert kubectl[4] == (
+        "-n observability rollout status deployment/prometheus-gateway --timeout=5m"
+    )
+    assert len(kubectl) == 5
     # Only the public field of the Secret is read.
     assert not any("tls.key" in c or "tls\\.key" in c for c in asked)
 
 
-def test_a_gateway_that_is_not_available_stops_make_up_with_a_sentence(
+def test_a_gateway_whose_new_pod_never_becomes_ready_stops_make_up_with_a_sentence(
     tmp_path: Path,
 ) -> None:
-    done, _, _ = run_up_functions(tmp_path, "apply_prometheus_gateway", wait_fails=True)
+    # The stub's `wait --for=condition=Available` succeeds whatever happens (the old
+    # pod keeps the Deployment Available on a warm cluster); only the rollout fails.
+    # A wait on that condition would pass this test's setup and fail this assertion.
+    done, asked, _ = run_up_functions(
+        tmp_path, "apply_prometheus_gateway", wait_fails=True
+    )
 
     assert done.returncode == 1
+    assert any(" rollout status " in f" {c} " for c in asked)
+    assert not any(" wait " in f" {c} " for c in asked)
     assert "prometheus-gateway" in done.stderr and "5m" in done.stderr
+    assert "did not finish rolling out" in done.stderr
     assert "make up" in done.stderr and "refused and dropped" in done.stderr
+    assert "old pod may still serve" in done.stderr
+
+
+@pytest.mark.parametrize("answer", ["", "None", "no address", "10.0.0.1; x"])
+def test_a_prometheus_service_with_no_usable_address_stops_before_anything_is_applied(
+    tmp_path: Path, answer: str
+) -> None:
+    done, asked, applied = run_up_functions(
+        tmp_path, "apply_prometheus_gateway", address=answer
+    )
+
+    assert done.returncode == 1, answer
+    assert "kube-prometheus-stack-prometheus" in done.stderr
+    assert "no cluster address" in done.stderr
+    assert applied == "" and not any(" apply " in f" {c} " for c in asked)
+
+
+def test_a_service_made_again_changes_the_pod_template_and_so_rolls_the_gateway(
+    tmp_path: Path,
+) -> None:
+    def template(address: str) -> dict:
+        done, _, applied = run_up_functions(
+            tmp_path / address.replace(".", "-"),
+            "apply_prometheus_gateway",
+            address=address,
+        )
+        assert done.returncode == 0, done.stderr
+        deployment = next(
+            d for d in yaml.safe_load_all(applied) if d and d["kind"] == "Deployment"
+        )
+        return deployment["spec"]["template"]
+
+    before, after = template("192.0.2.17"), template("192.0.2.99")
+
+    assert before != after
+    assert before["metadata"]["annotations"]["meridian-prometheus-address"] == (
+        "192.0.2.17"
+    )
+    assert after["metadata"]["annotations"]["meridian-prometheus-address"] == (
+        "192.0.2.99"
+    )
+    # Nothing else differs: the address alone is what changed the template.
+    before["metadata"]["annotations"].pop("meridian-prometheus-address")
+    after["metadata"]["annotations"].pop("meridian-prometheus-address")
+    assert before == after
+
+
+def test_a_placeholder_word_left_after_the_fills_is_refused(tmp_path: Path) -> None:
+    # A fifth placeholder added to the manifest and not filled by the function would
+    # be applied as it stands.
+    extra = tmp_path / "extra.yaml"
+    extra.write_text(
+        GATEWAY_FILE.read_text("utf-8") + "\n# NEW-THING-PLACEHOLDER\n",
+        encoding="utf-8",
+    )
+
+    done, asked, applied = run_up_functions(
+        tmp_path, "apply_prometheus_gateway", manifest=extra
+    )
+
+    assert done.returncode == 1
+    assert "still holds a placeholder word" in done.stderr
+    assert applied == "" and not any(" apply " in f" {c} " for c in asked)
 
 
 @pytest.mark.parametrize(
@@ -1407,7 +1580,7 @@ def test_a_manifest_that_lost_or_doubled_a_placeholder_is_never_applied(
     # policies that close Prometheus's port, so a broken file leaves the cluster as
     # it was (the Secret was read, and that is every call).
     assert not any(" apply " in f" {c} " for c in asked), asked
-    assert all("get secret" in c for c in asked), asked
+    assert all("get secret" in c or "get service" in c for c in asked), asked
 
 
 def test_the_value_of_a_placeholder_is_never_read_as_an_expression(
@@ -1435,6 +1608,18 @@ def test_the_pin_is_the_one_name_both_gateways_read() -> None:
     )
     assert "${NGINX_GATEWAY_IMAGE_TAG}" in loki_release
     assert "${NGINX_GATEWAY_IMAGE_DIGEST}" in loki_release
+    # The repository too (contract M4b, review L-6): Loki's chart is given the
+    # registry and the repository of the pin, so a repository changed in pins.env
+    # moves BOTH gateways, and not Prometheus's alone. The chart's keys are
+    # `gateway.image.registry` and `.repository` (values.yaml of Loki 18.13.7).
+    assert '--set "gateway.image.registry=${NGINX_GATEWAY_IMAGE_REPOSITORY%%/*}"' in (
+        loki_release
+    )
+    assert '--set "gateway.image.repository=${NGINX_GATEWAY_IMAGE_REPOSITORY#*/}"' in (
+        loki_release
+    )
+    registry, _, repository = PINS["NGINX_GATEWAY_IMAGE_REPOSITORY"].partition("/")
+    assert (registry, repository) == ("docker.io", "nginxinc/nginx-unprivileged")
     assert "LOKI_GATEWAY_IMAGE" not in UP_SH and "LOKI_GATEWAY_IMAGE" not in "\n".join(
         PINS
     )

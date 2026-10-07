@@ -225,9 +225,12 @@ spec:
 # server usages, 90 days. The names are the gateway Service's (loki-gateway, the
 # chart's name for it) and the host the collector's exporter dials
 # (values/otel-collector.yaml), in the short and the fully qualified form as the
-# collector's own certificate has both. Lifetime and key as its neighbours. Whether
-# nginx reads a renewed certificate without a restart is not established: it does
-# not by itself.
+# collector's own certificate has both. Lifetime and key as its neighbours. nginx
+# reads a renewed certificate at each handshake (the certificate and the key are
+# variables of a `map`, values/loki.yaml: SEEN on the pinned image, a pair replaced
+# under the mount was served at the next handshake with no reload); its client CA
+# is read at start only, so up.sh rolls the pod when the authority's certificate
+# changes.
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:

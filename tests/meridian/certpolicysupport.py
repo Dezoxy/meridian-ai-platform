@@ -80,6 +80,11 @@ def request_of(certificate: dict, namespace: str | None = None) -> dict:
         "usages": spec.get("usages", []),
         "isCA": spec.get("isCA", False),
         "commonName": spec.get("commonName", ""),
+        # A `subject:` block (organizations, countries, ...): none of Meridian's
+        # Certificates has one (contract M4b), because the gateways compare the
+        # whole subject, `$ssl_client_s_dn`, with `CN=otel-collector-client`, and
+        # an organization would make every write a 403.
+        "subject": spec.get("subject", {}),
         # cert-manager copies the Certificate's spec.duration to the request
         # as it is (requestmanager_controller.go at v1.21.2: `Duration:
         # crt.Spec.Duration`) and its defaults set no duration, so a
@@ -116,6 +121,15 @@ def common_name_ok(rule: dict | None, common_name: str) -> bool:
     return not common_name or wildcard(rule["value"], common_name)
 
 
+def subject_ok(rule: dict | None, subject: dict) -> bool:
+    """approver-policy's ``allowed.subject`` (organizations, countries, ...; recalled
+    from its CRD, as a field that is left out is "deny all"): no policy of this
+    repository sets one, so a request that carries a subject block is not
+    permitted, and the model reads no rule it has no policy to test."""
+    assert rule is None, "no policy sets allowed.subject: the model reads none"
+    return not any(subject.values())
+
+
 def never_decides(policy: dict, request: dict) -> bool:
     """constraints/evaluator.go at approver-policy v0.28.0: with maxDuration
     set and no duration in the request, ``request.Spec.Duration.String()`` is
@@ -141,6 +155,7 @@ def allows(policy: dict, request: dict) -> bool:
         and values_ok(allowed.get("ipAddresses"), request["ipAddresses"])
         and values_ok(allowed.get("emailAddresses"), request["emailAddresses"])
         and common_name_ok(allowed.get("commonName"), request["commonName"])
+        and subject_ok(allowed.get("subject"), request.get("subject", {}))
         and (allowed.get("isCA", False) or not request["isCA"])
         and set(request["usages"]) <= set(allowed.get("usages", []))
         and within

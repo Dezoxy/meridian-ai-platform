@@ -1028,18 +1028,34 @@ def test_lokis_policies_are_applied_just_before_its_release_not_at_the_start() -
 def test_a_failed_release_says_the_window_stays_open_until_a_rerun() -> None:
     lines = script_lines()
     note = line_containing('release_failure_note="telemetry stays refused')
+    start = line_containing('apply_api_server_policy "${OBSERVABILITY_POLICY_FILE}"')
+    first_release = line_index("install_release envoy-gateway ")
+    stack = line_index("install_release kube-prometheus-stack ")
     loki = line_index("install_release loki ")
     collector = line_index("install_release otel-collector ")
     empty = [i for i, line in enumerate(lines) if line == 'release_failure_note=""']
     body = up_function("install_release")
 
-    # Empty at the top of the script, set before Loki's release and emptied again
-    # once the collector's release has run: the note belongs to those two only.
+    # Empty at the top of the script, set right after the namespace's policies are
+    # applied (S072, contract M4b: from that apply on, on a warm cluster, Grafana
+    # cannot read Prometheus and the old collector's metrics time out) and emptied
+    # again once the collector's release has run: every release between them says so.
     assert len(empty) == 2
-    assert empty[0] < note < loki < collector < empty[1]
-    for words in ("refused and dropped", "Grafana's Loki reads fail", "re-run"):
+    assert empty[0] < start < note < stack < loki < collector < empty[1]
+    assert start < first_release  # the note is set before any release can fail
+    for words in (
+        "refused and dropped",
+        "Grafana's Prometheus and Loki reads fail",
+        "re-run",
+        "old collector's exporters",
+    ):
         assert words in lines[note], words
     assert "converges" in lines[note]
+    # Three assignments in all: the empty one at the top, the one note, and the one
+    # that empties it (a note set later, before Loki's release, would leave the
+    # failures before it without one, which is what this replaced).
+    assignments = [x for x in lines if x.startswith("release_failure_note=")]
+    assert len(assignments) == 3
     assert "${release_failure_note:+: ${release_failure_note}}" in body
 
 

@@ -38,7 +38,7 @@ git clone https://github.com/Dezoxy/meridian-ai-platform.git
 cd meridian-ai-platform
 make up        # the cluster and the platform under the services
 make deploy    # the image, the database, the six services, the wordings
-make smoke     # 54 lines; PASS, or SKIP (below)
+make smoke     # 56 lines; PASS, or SKIP (below)
 ```
 
 `make smoke` prints a SKIP, and still exits 0, where a line cannot be

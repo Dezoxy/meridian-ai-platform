@@ -269,11 +269,22 @@ The step is `make up` after a certificate's `notBefore` moves (at day 60 for
 the four leaf certificates, about month eight for the authority). `make up`
 gives Tempo's pod the fingerprints of its certificate and its CA, each
 gateway's pod the fingerprint of its CA (Prometheus's also the digest of its
-own manifest, so a changed configuration rolls it), Grafana's pod the
+own manifest, so a changed configuration rolls it, and the cluster address of
+the Prometheus Service, which nginx resolves once when it starts: after the
+Service was made again, for instance a stack uninstalled and installed in place,
+the next `make up` rolls the gateway, and without it the gateway would answer
+502 or time out until someone restarted it), Grafana's pod the
 fingerprint of the authority's certificate and, since contract M4, the
 collector's pod the fingerprints of its client certificate and of the
 authority's, as pod annotations: when one changed the pod template changes and
-Kubernetes rolls the pod, so no restart by hand is needed. A warm `make up`
+Kubernetes rolls the pod, so no restart by hand is needed. `make up` waits for
+each roll: Helm's `--wait` for the releases (Loki's gateway, Tempo, Grafana and
+the collector), and for Prometheus's gateway, which is no release, `rollout
+status` of its Deployment, which returns when the NEW pod is Ready (the
+Deployment's Available condition stays true while the old pod serves, so it
+would not notice a new pod that crash-loops on a changed configuration or CA;
+`make up` stops with a sentence that says the old pod may still serve the old
+file). A warm `make up`
 that rolls Tempo drops the traces of the minute before the collector's release,
 as any `make up` that moves the stores does.
 `make smoke`'s twelfth check ends in lines that compare the certificate

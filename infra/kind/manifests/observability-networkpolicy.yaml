@@ -1,6 +1,10 @@
 # NetworkPolicies of the `observability` namespace (S063): Prometheus and its
 # operator, kube-state-metrics, Grafana, Tempo, Loki and the OpenTelemetry
-# Collector. kind's platform, not the Meridian chart's. `make up` applies this
+# Collector, and since S072 the two gateways in front of Prometheus and Loki (their
+# own policies, and the stores' ports they close, are in two files beside this one:
+# observability-loki-networkpolicy.yaml and
+# observability-prometheus-networkpolicy.yaml). kind's platform, not the Meridian
+# chart's. `make up` applies this
 # before the first release of the namespace is installed, with the node's
 # address in place of the placeholder (see Egress below), as it does the
 # database's and cert-manager's policies. Pod labels and ports are those `helm
@@ -242,7 +246,8 @@
 # show: every pod Ready, every target up on Prometheus's Targets page (the
 # kubelet's three paths, the API server, CoreDNS, cert-manager's controller,
 # Grafana, kube-state-metrics, the operator and Prometheus's two), certificates
-# issued, and smoke's 46 lines passing, with no pod's log naming a connection
+# issued, and smoke's lines passing (56 after a deploy, since S072; it was 46 when
+# this paragraph was written), with no pod's log naming a connection
 # that was refused but the usage report. Four reads besides: the order in which a
 # wrong premise about the webhooks would show (cert-manager's release first,
 # approver-policy's apply, the database's install, then, silently, this

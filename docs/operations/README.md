@@ -383,7 +383,7 @@ applied to one. The session that owns the cluster checks, on `main`:
    alert table, nothing. `make smoke` reads that Grafana serves it under
    that uid with the file's queries and that every query runs in
    Prometheus; whether a panel shows data stays by hand.
-7. `make smoke` passes, 54 of 54 lines (S072 eight, check 12: from a probe Pod
+7. `make smoke` passes, 56 of 56 lines (S072 ten, check 12: from a probe Pod
    with the collector's label, Loki's gateway refuses a push with no client
    certificate and serves a read, Tempo's receiver ends a connection with none
    in the alert "certificate required", Loki's own port times out for a pod
@@ -391,9 +391,12 @@ applied to one. The session that owns the cluster checks, on `main`:
    in its Secret; and, from contract M4, Prometheus's gateway refuses the OTLP
    receiver's path, remote write and `/-/reload` with no client certificate and
    serves a query, Prometheus's own port times out for a pod that is not the
-   gateway, and the gateway serves the certificate that is in its Secret;
-   tested with stand-ins and run in a container of the pinned
-   nginx image, not yet on the cluster; S073 one, for the database's own
+   gateway, and the gateway serves the certificate that is in its Secret; and,
+   from contract M4b, the same read written with a doubled slash, a
+   per-cent-encoded letter or a dot segment is refused beside the plain one,
+   and a POSTed form body reaches Prometheus; tested with stand-ins and run
+   in a container of the pinned nginx image, not yet on the cluster; S073
+   one, for the database's own
    certificates, which fails when the earliest ends within 84 hours: tested
    with a stand-in, and seen to pass on kind on 2026-10-07, 46 PASS in run R4d,
    not seen failing; S055 added three, for service
