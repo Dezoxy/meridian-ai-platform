@@ -14,10 +14,13 @@ import httpx
 import pytest
 from servicesupport import REPO_ROOT, synthetic_claims
 
-from meridian.workloads.claims_triage import triaging
+from meridian.workloads.claims_triage import claimant_name, triaging
 from meridian.workloads.claims_triage.lifecycle import AGENT
 from meridian.workloads.claims_triage.models import ClaimFacts, ClaimSubmission
-from meridian.workloads.claims_triage.posted_text import POSTED_TEXT_FLAG
+from meridian.workloads.claims_triage.posted_text import (
+    POSTED_TEXT_FLAG,
+    input_for_run,
+)
 
 
 def golden_submission() -> ClaimSubmission:
@@ -105,3 +108,94 @@ def test_a_clean_claim_reaches_the_runtime_with_the_flag_false() -> None:
             POSTED_TEXT_FLAG: False,
         },
     }
+
+
+# ── the two parts (S070): what the submission alone gives, then the documents ─
+def submission_named(name: str, description: str) -> ClaimSubmission:
+    return ClaimSubmission.model_validate(
+        {
+            **synthetic_claims()[0],
+            "claimant": {"name": name, "email": "who.ever@example.net"},
+            "description": description,
+        }
+    )
+
+
+SUBMISSIONS = {
+    "golden": golden_submission,
+    "name-replaced": lambda: submission_named(
+        "Bence Novak", "Bence Novak (who.ever@example.net) reports a storm."
+    ),
+    "name-in-a-form": lambda: submission_named(
+        "Kovács János", "Kovács Jánosnak a tetőt vitte a vihar."
+    ),
+    "no-part-long-enough": lambda: submission_named("Mr Wu", "Mr Wu reports a storm."),
+    "posted-text-addresses-the-model": lambda: name_masked_submission("CLM-1053"),
+    "posted-text-of-the-second-case": lambda: name_masked_submission("CLM-1054"),
+}
+ARRIVALS = {
+    "none": (),
+    "two-new": ("invoice.pdf", "estimate.pdf"),
+    "one-the-submission-has": ("photos", "invoice.pdf", "invoice.pdf"),
+}
+
+
+@pytest.mark.parametrize("arrived", ARRIVALS.values(), ids=ARRIVALS.keys())
+@pytest.mark.parametrize("submission", SUBMISSIONS.values(), ids=SUBMISSIONS.keys())
+def test_the_two_parts_give_the_run_input_the_one_step_gave_byte_for_byte(
+    submission: Any, arrived: tuple[str, ...]
+) -> None:
+    claim = submission()
+    # ``input_for_run`` of ``facts_for_run`` is the one step as it was.
+    one_step = input_for_run(claim, triaging.facts_for_run(claim, arrived))
+
+    prepared = triaging.prepare_run_input(claim)
+    two_steps = triaging.run_input_with_documents(prepared, arrived)
+
+    assert json.dumps(two_steps) == json.dumps(one_step)
+    assert json.dumps(triaging.triage_run_input(claim, arrived)) == json.dumps(one_step)
+
+
+def test_the_part_that_needs_the_documents_compiles_no_pattern(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compiled: list[str] = []
+    real = claimant_name._compile_uncached
+
+    def spy(pattern: str, flags: Any) -> Any:
+        compiled.append(pattern)
+        return real(pattern, flags)
+
+    monkeypatch.setattr(claimant_name, "_compile_uncached", spy)
+    claim = submission_named("Bence Novak", "Bence Novak reports a storm.")
+
+    prepared = triaging.prepare_run_input(claim)
+    after_the_first_part = len(compiled)
+    triaging.run_input_with_documents(prepared, ("invoice.pdf",))
+
+    assert after_the_first_part == 1
+    assert len(compiled) == after_the_first_part
+
+
+def test_the_first_part_can_be_finished_for_different_documents_without_changing() -> (
+    None
+):
+    claim = golden_submission()
+    prepared = triaging.prepare_run_input(claim)
+    before = json.dumps(prepared.facts)
+
+    first = triaging.run_input_with_documents(prepared, ("first.pdf",))
+    second = triaging.run_input_with_documents(prepared, ())
+
+    assert json.dumps(prepared.facts) == before
+    assert first["claim"]["documents"] == ["photos", "first.pdf"]
+    assert second["claim"]["documents"] == ["photos"]
+
+
+def test_the_first_part_holds_the_posted_text_flag_the_run_is_sent() -> None:
+    clean = triaging.prepare_run_input(golden_submission())
+    masked = triaging.prepare_run_input(name_masked_submission("CLM-1053"))
+
+    assert clean.posted_text_flag is False
+    assert masked.posted_text_flag is True
+    assert triaging.run_input_with_documents(masked, ())[POSTED_TEXT_FLAG] is True

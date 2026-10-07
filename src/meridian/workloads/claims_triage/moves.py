@@ -70,13 +70,15 @@ from meridian.workloads.claims_triage.triaging import (
     TRIAGE_AGE_SQL,
     TRIAGE_CAP_DETAIL,
     TRIAGE_LEASE_SECONDS,
+    PreparedRunInput,
     arrived_documents,
     claim_database_failure,
     end_run,
     invalid_fields,
+    prepare_run_input,
+    run_input_with_documents,
     run_taken_triage,
     take_over_lapsed_triage,
-    triage_run_input,
 )
 
 logger = logging.getLogger(__name__)
@@ -92,6 +94,11 @@ LOCK_CLAIM_SQL = (
     "WHERE claim_id = %s AND tenant = %s FOR NO KEY UPDATE"
 )
 SUBMISSION_SQL = "SELECT submission FROM claims.claims WHERE claim_id = %s"
+# The submission as read before the claim is locked: filtered by tenant, as the
+# lock is, so another tenant's claim is read by no one.
+UNLOCKED_SUBMISSION_SQL = (
+    "SELECT submission FROM claims.claims WHERE claim_id = %s AND tenant = %s"
+)
 # One row per run, so an outcome is recorded once for it; ``run_id`` is NULL only
 # for the adjuster's decision on a claim that has no paused run.
 RECORD_OUTCOME_SQL = (
@@ -145,6 +152,39 @@ def _submission(conn: psycopg.Connection, claim_id: str) -> ClaimSubmission:
         raise StoredSubmissionInvalid("the stored submission is not valid") from None
 
 
+def _prepare_before_lock(
+    conn: psycopg.Connection, tenant: str, claim_id: str
+) -> PreparedRunInput | None:
+    """The part of the run's input that the submission alone decides, built
+    before the claim's row is locked (S070): it compiles a pattern from the
+    claimant's name, about 55 ms for the largest name, which a row lock must not
+    wait for. A stored submission cannot change (no role may update it, T-76), so
+    what is built here is what a read under the lock would give. Nothing is
+    decided from this read: the claim's state, its tenant's 404 and every check
+    still come from ``_lock_claim``. ``None`` where the tenant has no such claim
+    or its submission is not valid: the lock then refuses the first, and
+    ``_prepared`` refuses the second where it always did (and logs it there)."""
+    row = conn.execute(UNLOCKED_SUBMISSION_SQL, (claim_id, tenant)).fetchone()
+    if row is None:
+        return None
+    try:
+        submission = ClaimSubmission.model_validate(row[0])
+    except ValidationError:
+        return None
+    return prepare_run_input(submission)
+
+
+def _prepared(
+    conn: psycopg.Connection, claim_id: str, before_lock: PreparedRunInput | None
+) -> PreparedRunInput:
+    """The run input's first part, under the lock: the one built before it, or
+    (none could be: the claim was not there or its submission is not valid) the
+    read of ``_submission``, which refuses an invalid one."""
+    if before_lock is not None:
+        return before_lock
+    return prepare_run_input(_submission(conn, claim_id))
+
+
 def _move_answer(
     result: ClaimResponse | DecisionFailure,
 ) -> ClaimMoveResponse | DecisionFailure:
@@ -186,9 +226,11 @@ def _take_from_state(
     state: LifecycleState,
     run_id: UUID | None,
     triages: int,
+    before_lock: PreparedRunInput | None,
 ) -> _Taken:
     """Take the triage of a claim that is not ``triaging``: sent back from
-    ``awaiting_adjuster`` or tried again from ``triage_failed``."""
+    ``awaiting_adjuster`` or tried again from ``triage_failed``.
+    ``before_lock`` is the run input's first part (``_prepare_before_lock``)."""
     if state not in TRIAGEABLE_AGAIN:
         raise HTTPException(409, NOT_TRIAGEABLE_DETAIL)
     if triages >= MAX_TRIAGES_PER_CLAIM:
@@ -209,8 +251,8 @@ def _take_from_state(
         move_claim(conn, transition, claim_id=claim_id, tenant=tenant, run_id=old_run),
         NOT_TRIAGEABLE_DETAIL,
     )
-    submission = _submission(conn, claim_id)
-    run_input = triage_run_input(submission, arrived_documents(conn, claim_id))
+    prepared = _prepared(conn, claim_id, before_lock)
+    run_input = run_input_with_documents(prepared, arrived_documents(conn, claim_id))
     return _Taken(old_run, taken_at, run_input)
 
 
@@ -220,12 +262,14 @@ def _take_over(
     claim_id: str,
     run_id: UUID | None,
     triages: int,
+    before_lock: PreparedRunInput | None,
 ) -> _Taken | str:
     """Take a ``triaging`` claim's triage over if its lease lapsed, exactly as
     ``POST /claims`` does; otherwise, or at the cap (where the claim was moved to
     ``triage_failed``, to be committed), the detail of the 409 that refuses it.
     The run the claim holds is the send-back's, whose request died before it
-    ended it or could not: it is returned to be ended after the commit."""
+    ended it or could not: it is returned to be ended after the commit.
+    ``before_lock`` is the run input's first part (``_prepare_before_lock``)."""
     row = conn.execute(
         TRIAGE_AGE_SQL, (TRIAGE_LEASE_SECONDS, claim_id, tenant)
     ).fetchone()
@@ -245,19 +289,22 @@ def _take_over(
             if triages >= MAX_TRIAGES_PER_CLAIM
             else BEING_TRIAGED_DETAIL
         )
-    submission = _submission(conn, claim_id)
-    run_input = triage_run_input(submission, arrived_documents(conn, claim_id))
+    prepared = _prepared(conn, claim_id, before_lock)
+    run_input = run_input_with_documents(prepared, arrived_documents(conn, claim_id))
     return _Taken(lapsed.old_run, lapsed.taken_at, run_input)
 
 
 def _take_again(dsn: str, tenant: str, claim_id: str, page_run: str | None) -> _Taken:
     with connect(dsn, SERVICE_NAME) as conn:
+        before_lock = _prepare_before_lock(conn, tenant, claim_id)
         state, run_id, triages = _lock_claim(conn, tenant, claim_id)
         refuse_stale_page(page_run, run_id)
         taken = (
-            _take_over(conn, tenant, claim_id, run_id, triages)
+            _take_over(conn, tenant, claim_id, run_id, triages, before_lock)
             if state == "triaging"
-            else _take_from_state(conn, tenant, claim_id, state, run_id, triages)
+            else _take_from_state(
+                conn, tenant, claim_id, state, run_id, triages, before_lock
+            )
         )
     # Raised after the block, which commits: a triage that died at the cap is
     # failed for good, whatever the answer.
@@ -399,9 +446,12 @@ def _store_arrival(
     state is a 409; one referred because its documents did not arrive leaves an
     event of it (see ``_record_late_documents``)."""
     with connect(dsn, SERVICE_NAME) as conn:
+        before_lock = _prepare_before_lock(conn, tenant, claim_id)
         state, old_run, triages = _lock_claim(conn, tenant, claim_id)
         if state == "documents_requested":
-            return _take_documents(conn, tenant, claim_id, documents, old_run, triages)
+            return _take_documents(
+                conn, tenant, claim_id, documents, old_run, triages, before_lock
+            )
         try:
             _record_late_documents(conn, tenant, claim_id, state)
         except psycopg.Error as exc:
@@ -450,11 +500,14 @@ def _take_documents(
     documents: Sequence[str],
     old_run: UUID | None,
     triages: int,
+    before_lock: PreparedRunInput | None,
 ) -> _Arrival:
     """The names stored and the claim moved, in the caller's transaction, for a
-    claim locked in ``documents_requested``."""
-    submission = _submission(conn, claim_id)
-    held = {*submission.documents, *arrived_documents(conn, claim_id)}
+    claim locked in ``documents_requested``. ``before_lock`` is the run input's
+    first part (``_prepare_before_lock``); the documents that arrived are read
+    here, under the lock."""
+    prepared = _prepared(conn, claim_id, before_lock)
+    held = {*prepared.submission.documents, *arrived_documents(conn, claim_id)}
     if len(held | set(documents)) > MAX_DOCUMENTS:
         raise HTTPException(409, TOO_MANY_DOCUMENTS_DETAIL)
     for name in documents:
@@ -469,7 +522,7 @@ def _take_documents(
         move_claim(conn, DOCUMENTS_ARRIVED, claim_id=claim_id, tenant=tenant),
         NOT_AWAITING_DOCUMENTS_DETAIL,
     )
-    run_input = triage_run_input(submission, arrived_documents(conn, claim_id))
+    run_input = run_input_with_documents(prepared, arrived_documents(conn, claim_id))
     return _Arrival(old_run, (taken_at, run_input))
 
 
