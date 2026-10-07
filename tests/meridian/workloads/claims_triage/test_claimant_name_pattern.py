@@ -21,6 +21,7 @@ noun phrase", which gives the plural -k; the linking vowels of the plural (-ok,
 """
 
 import gc
+import importlib
 import itertools
 import re
 import weakref
@@ -155,6 +156,20 @@ def test_the_check_for_the_re_cache_can_fail() -> None:
     gc.collect()
 
     assert reference() is not None
+
+
+def test_the_private_compiler_the_pattern_is_built_with_is_in_this_python() -> None:
+    compiler = importlib.import_module("re._compiler")
+
+    assert isinstance(compiler.compile("a", re.IGNORECASE.value), re.Pattern)
+
+
+@pytest.mark.parametrize("table", ["VOWEL_FORMS", "ARCHAIC_SOUNDS"])
+def test_the_closed_tables_of_the_name_cannot_be_assigned_into(table: str) -> None:
+    mapping = getattr(claimant_name, table)
+
+    with pytest.raises(TypeError):
+        mapping["x"] = "y"
 
 
 def test_the_pattern_is_the_one_the_re_module_would_compile() -> None:

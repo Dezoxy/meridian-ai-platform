@@ -313,7 +313,7 @@ def test_a_fake_model_records_and_replays_the_whole_golden_set(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The recording run and the CI run end to end, with a fake behind the
-    recording instead of Azure: the 40 claims, the judge, the ledger and the
+    recording instead of Azure: every golden claim, the judge, the ledger and the
     tool calls, once recorded and once replayed on a fresh database; then the
     variant prompt's run and its comparison."""
     clock = FakeClock()
