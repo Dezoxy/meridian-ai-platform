@@ -9,19 +9,24 @@
 
 # The Regions of Google Cloud in EU member states, written from Google's page
 # "Regions and zones" (https://docs.cloud.google.com/compute/docs/regions-zones,
-# read 2026-10-07): Warsaw, Hamina, Stockholm, Madrid, St. Ghislain, Frankfurt,
+# read 2026-10-07): Warsaw, Stockholm, Madrid, St. Ghislain, Frankfurt,
 # Eemshaven, Milan, Paris, Berlin and Turin. The repository had no such list.
 # europe-west2 (London) and europe-west6 (Zurich) are in Google's "Europe" and
-# not in the EU (ADR 7), and a test holds both out by name. Update the list from
-# the page, in a committed change, when Google adds a Region in a member state.
+# not in the EU (ADR 7), and a test holds both out by name. europe-north1
+# (Hamina) is an EU Region and is left out for another reason: this module keeps
+# a regional secret (identity.tf), and the page "Secret Manager locations"
+# (https://cloud.google.com/secret-manager/docs/locations, read 2026-10-07,
+# updated 2026-09-30) says Secret Manager keeps no regional secret there; a test
+# holds it out by name. Update the list from the pages, in a committed change,
+# when Google adds a Region in a member state.
 variable "region" {
-  description = "Google Cloud Region of the module's regional resources: a Region of an EU member state (hard rule 3: EU residency)."
+  description = "Google Cloud Region of the module's regional resources: a Region of an EU member state in which Secret Manager keeps regional secrets (hard rule 3: EU residency)."
   type        = string
   default     = "europe-west3"
 
   validation {
-    condition     = contains(["europe-central2", "europe-north1", "europe-north2", "europe-southwest1", "europe-west1", "europe-west3", "europe-west4", "europe-west8", "europe-west9", "europe-west10", "europe-west12"], var.region)
-    error_message = "region must be a Google Cloud Region of an EU member state: europe-central2, europe-north1, europe-north2, europe-southwest1, europe-west1, europe-west3, europe-west4, europe-west8, europe-west9, europe-west10 or europe-west12. Not europe-west2 (London) or europe-west6 (Zurich): they are in Google's Europe and not in the EU (hard rule 3: EU residency)."
+    condition     = contains(["europe-central2", "europe-north2", "europe-southwest1", "europe-west1", "europe-west3", "europe-west4", "europe-west8", "europe-west9", "europe-west10", "europe-west12"], var.region)
+    error_message = "region must be a Google Cloud Region of an EU member state in which Secret Manager keeps regional secrets: europe-central2, europe-north2, europe-southwest1, europe-west1, europe-west3, europe-west4, europe-west8, europe-west9, europe-west10 or europe-west12. Not europe-north1 (no regional secrets there), and not europe-west2 (London) or europe-west6 (Zurich): they are in Google's Europe and not in the EU (hard rule 3: EU residency)."
   }
 }
 
