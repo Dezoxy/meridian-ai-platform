@@ -514,8 +514,10 @@ node image, Kubernetes components and the platform).
    roles, never a row. Every `psql` smoke runs has a statement timeout of 5
    seconds and a lock timeout of 3 seconds (`PGOPTIONS` in the exec), so a
    migration that holds a lock while smoke runs fails that line with psql's
-   message instead of hanging it (the two pgvector lines keep no message: they
-   say the extension is not installed). Those reads passed on the cluster on
+   message instead of hanging it (the two pgvector lines keep the first line
+   of it since S073, K4, cleaned and cut like the others: a read that failed
+   says "could not read pg_extension", not "not installed"; tested with
+   stand-ins, not yet seen on a cluster). Those reads passed on the cluster on
    2026-10-06, so `env` exists in the database's container; the migrations
    line named `0019_audit_trail_seq.sql`, "the newest of this checkout", after
    the deploy applied migrations 0017 to 0019 to the cluster's database. A
@@ -680,7 +682,8 @@ node image, Kubernetes components and the platform).
    changes no claim. Before `make deploy` this check prints SKIP.
 7. **Sweep.** Two lines, read-only (the second is S064's, below). The first:
    the CronJob `meridian-sweep` exists, and
-   the last of its Jobs to finish, scheduled or made by hand, succeeded; the
+   the last of its Jobs that the schedule made to finish succeeded (a Job made
+   by hand is not one: see below); the
    line says when it finished. It fails when the CronJob is missing, when the
    last finished Job failed (the line gives its reason, and `describe` and
    `logs` commands: a Job that hit its deadline or whose pod never started has
@@ -704,6 +707,23 @@ node image, Kubernetes components and the platform).
    and while it is suspended (`.spec.suspend`: it makes no runs, so none is
    overdue), this line prints SKIP. A PASS does not say the sweep did its
    work, only that a Job finished.
+   A Job made by hand (`kubectl create job --from=cronjob/...`) has the
+   CronJob as its owner like a scheduled one, so by the owner alone a recent one
+   would pass for the schedule's success (S073, K4). The verdict tells them
+   apart by two annotations seen on kind: a by-hand Job carries
+   `cronjob.kubernetes.io/instantiate: manual` and a scheduled one carries
+   `batch.kubernetes.io/cronjob-scheduled-timestamp`. Only a Job that has the
+   first and not the second is left out (the scheduled timestamp is the
+   positive fact and wins); a Job with neither, as on an older cluster, counts
+   as before and the line says the annotation was absent. When the newest
+   finished Job of all was made by hand the line says so, with its name and
+   time, and that a by-hand run is not a run of the schedule: a recent by-hand
+   success beside a schedule that stopped is the stopped verdict, and a by-hand
+   failure beside a healthy schedule is a PASS. Someone who edits a Job's
+   annotations can pass for the schedule, and the alert `MeridianSweepStale`
+   reads the CronJob's last successful time, which a by-hand success is
+   believed to set too (not read). Tested with stand-ins, not yet seen on a
+   cluster.
    The second line (S064) asks Prometheus, through Grafana's datasource proxy
    as check 5 does, whether the six findings of the pass have arrived: the
    gauge `meridian_sweep_last_pass` for job `claims-sweep`, each of
@@ -825,8 +845,19 @@ node image, Kubernetes components and the platform).
    are tested against stub commands and were not seen on a cluster. What it
    does not prove, and stays by hand (S019): that a pod of another namespace
    cannot reach the database, and that an address outside the machine is
-   unreachable (smoke sends nothing there); and it does not read the
-   policies, which the chart's tests render and compare.
+   unreachable (smoke sends nothing there); and it does not read what the
+   policies say, which the chart's tests render and compare. It does read
+   whether each one is there (S073, K4): the check lists the Meridian
+   Deployments as checks 3, 5 and 7 do and, from one listing of the
+   NetworkPolicies of `meridian`, prints one FAIL line that names each service
+   whose policy of the same name is missing (the chart makes one per
+   Deployment, the rate store's included, and prints no new line when all are
+   there). The probes are as before, from the Claims API's pod and one probe
+   pod: what the policies do is proved for the Claims API's egress and for the
+   database's, the collector's and the rate store's ingress only. When
+   Deployments exist and the Claims API's is not among them, the check fails,
+   because the probes run in its pod. Tested with stand-ins, not yet seen on a
+   cluster.
 9. **Service identity.** Five lines, run with Python in the Agent Runtime's
    pod against the Model Gateway (the image has no curl; the Claims API's pod
    would be the better caller to refuse, but the policy of line 8 blocks it
@@ -968,7 +999,24 @@ node image, Kubernetes components and the platform).
     group and rule names are the file's, in both directions, so a cluster
     that runs an older rule file says which groups and rules differ (the
     file's names are read with `awk` by their indentation, and a test keeps
-    that equal to a YAML parser's reading). And no alert of the Meridian
+    that equal to a YAML parser's reading), and so are each rule's expression
+    and an alert's `for` (S073, K4: the second line again; the FAIL names the
+    rule and which of the two differs, never an expression's text, and says
+    to run `make deploy` or `make up`). Prometheus returns the parsed
+    expression, not the file's text, with the matchers of a selector sorted by
+    name and a duration in its largest units (`[24h]` comes back as `[1d]`:
+    seen on 2026-10-07 with the pinned Prometheus image, the cluster's own,
+    running the file's rules in a container on the development machine, not on
+    the cluster), so both sides go through one
+    `jq` filter that collapses whitespace, writes every duration in
+    milliseconds, removes all whitespace and sorts the matchers between a pair
+    of braces; it is not a PromQL parser. It does not see a change that only
+    moves whitespace (also inside a string literal), a label value or regular
+    expression that holds a comma, a brace or a word like `1h`, an
+    expression written another way that is the same one (a quote that is not
+    a double quote; expected, not tried), the rule's labels and annotations, or
+    a `keep_firing_for`. Tested with stand-ins, not yet seen on the cluster.
+    And no alert of the Meridian
     groups is firing: a firing alert is a FAIL that names it, and a pending
     one is not a failure, so the line names it and passes. With no group of
     the Meridian prefix loaded the third line fails: there is nothing to be
@@ -2046,9 +2094,12 @@ kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meridian \
   logs job/meridian-sweep-by-hand-1
 ```
 
-The by-hand Job counts as the sweep's last Job for `make smoke`. To stop the
-schedule, patch `suspend` to `true` on the CronJob; `make smoke` then prints
-SKIP for the sweep until it is `false` again.
+`make smoke` does not take the by-hand Job for the schedule's: it carries the
+annotation `cronjob.kubernetes.io/instantiate: manual`, so the seventh line
+leaves it out of its verdict and says, when it is the newest Job of all, that
+it was made by hand (tested with stand-ins, not yet seen on a cluster). To
+stop the schedule, patch `suspend` to `true` on the CronJob; `make smoke` then
+prints SKIP for the sweep until it is `false` again.
 
 ## The cost dashboard
 

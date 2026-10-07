@@ -94,6 +94,12 @@ def tree_groups() -> list[dict]:
     return spec["groups"]
 
 
+def for_seconds(text: str) -> int:
+    """A rule's ``for`` ("2m", "1h", "0m") in seconds, as the API's ``duration``."""
+    units = {"s": 1, "m": 60, "h": 3600}
+    return sum(int(n) * units[u] for n, u in re.findall(r"(\d+)([smh])", text))
+
+
 def prometheus_answer(
     *,
     unhealthy: dict[str, str] | None = None,
@@ -104,13 +110,18 @@ def prometheus_answer(
     extra_rules: tuple[tuple[str, str], ...] = (),
     extra_groups: tuple[str, ...] = (),
     unknown: str = "",
+    queries: dict[str, str] | None = None,
+    durations: dict[str, int] | None = None,
 ) -> dict:
     """What Prometheus answers for ``/api/v1/rules`` when it runs the rule file
     of the tree: its groups and rules, healthy and quiet, beside a group of
     another origin whose rules are broken and firing (which the check must
     ignore). ``unhealthy`` maps a rule to its ``lastError``; ``firing`` and
     ``pending`` name alerting rules; ``extra_rules`` are ``(group, rule)``
-    pairs the file does not have; ``unknown`` names a rule not yet evaluated."""
+    pairs the file does not have; ``unknown`` names a rule not yet evaluated.
+    Each rule has a ``query`` (the file's expression on one line; ``queries``
+    overrides by rule name) and an alert a ``duration`` in seconds (the file's
+    ``for``; ``durations`` overrides)."""
     groups = []
     for group in tree_groups():
         if group["name"] == drop_group:
@@ -126,9 +137,13 @@ def prometheus_answer(
                 "type": "alerting" if "alert" in rule else "recording",
                 "health": "ok",
                 "lastError": "",
+                "query": (queries or {}).get(name, " ".join(rule["expr"].split())),
             }
             if "alert" in rule:
                 entry["alerts"] = [{"state": state}] if state else []
+                entry["duration"] = (durations or {}).get(
+                    name, for_seconds(rule.get("for", "0s"))
+                )
             if name in (unhealthy or {}):
                 entry.update(health="err", lastError=(unhealthy or {})[name])
             if name == unknown:
@@ -302,8 +317,10 @@ def run_alert_rules(
                 for name in (
                     "tree_groups",
                     "tree_rules",
+                    "tree_exprs",
                     "cluster_groups",
                     "cluster_rules",
+                    "rules_changed",
                     "name_list",
                     "check_rules_object",
                     "fetch_rules",
@@ -379,7 +396,7 @@ def test_the_check_prints_three_rule_lines_and_the_dashboard_line_when_all_is_we
         "PASS  alert rules: the 5 groups of infra/kind/alerts/meridian.yaml are "
         f"loaded in Prometheus and all {RULE_COUNT} rules in them are healthy",
         "PASS  alert rules: the loaded rules are the file's: the same 5 groups "
-        f"and {RULE_COUNT} rule names",
+        f"and {RULE_COUNT} rule names, each with its expression and its for",
         "PASS  alert rules: no Meridian alert is firing (none pending)",
     ]
     assert lines[3].startswith(
@@ -434,7 +451,7 @@ def test_a_group_missing_on_the_cluster_is_named_by_the_loaded_and_the_names_lin
     assert verdicts(lines[:3]) == ["FAIL", "FAIL", "PASS"]
     assert "meridian.certificates" in lines[0] and "not loaded" in lines[0]
     assert "meridian.certificates/MeridianCertificateNotReady" in lines[1]
-    assert "run make up" in lines[1]
+    assert "run make deploy or make up" in lines[1]
 
 
 @requires_jq

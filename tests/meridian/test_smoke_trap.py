@@ -47,7 +47,14 @@ case "$*" in
       read -r _ <"${NEVER}"  # blocks until the signal kills this process
     fi ;;
   *" get deployment claims-api -o json"*) cat "${DEPLOYMENT}" ;;
-  *" get deployment claims-api -o name"*) echo deployment.apps/claims-api ;;
+  # The Meridian Deployments (checks 3, 5, 7, 8 and 9 list them by label) are
+  # found only while check 8 runs: its first call lists the probe Pods, and its
+  # probe Pod's delete ends it. So every check but 8 still finds nothing here.
+  *" get pod -l meridian-smoke=network-probe"*) touch "${STATE}/in-check-8" ;;
+  *" get deployment -l "*)
+    if [[ -e "${STATE}/in-check-8" ]]; then echo deployment.apps/claims-api; fi ;;
+  *" get networkpolicy -o name"*)
+    printf '%s\n' networkpolicy/default-deny networkpolicy/claims-api ;;
   *" get networkpolicy default-deny"*) echo networkpolicy/default-deny ;;
   *" exec smoke-network-"*)
     if [[ -e "${STATE}/labelled" ]]; then echo reached; else echo blocked; fi ;;
@@ -56,6 +63,7 @@ case "$*" in
   *" label "*) touch "${STATE}/labelled" ;;
   *" create "*) cat >/dev/null ;;
   *" delete pod "*)
+    rm -f "${STATE}/in-check-8"
     if [[ "${FIRST_DELETE_FAILS}" == 1 && ! -e "${STATE}/first-delete" ]]; then
       touch "${STATE}/first-delete"
       echo "Error from server (Forbidden): deleting pods is not allowed" >&2
