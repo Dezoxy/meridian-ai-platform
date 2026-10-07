@@ -14268,8 +14268,11 @@ each before a fix.
   local backend and `providers schema` on a scratch copy outside every
   checkout (no state file was made and no credential was in play). The scan ran
   in a container with no network.
-- **The whole suite on the final tree, run by the main session:**
-  FINAL-SUITE-RESULT
+- **The whole suite on the final tree, run by the main session** (`main` with
+  S069, S036, S074 and S068 merged in; 20e0023): `make test` (343 tests),
+  `make docs` (14 checks) and `make lint` ended 0; the whole suite at six
+  workers beside the kind cluster and no other run with a database: 17,162
+  passed, 8 skipped (3 min 32 s). The commit after it fills this line.
 - **What the implementers reported (claims, not the main session's runs):**
   G1: the four test files `846 passed in 16.14s`, `make gcp-validate` and
   `make aws-validate` ending 0 with "Success! The configuration is valid.",
