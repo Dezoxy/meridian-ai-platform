@@ -35,6 +35,11 @@ FILES = ("tls.crt", "tls.key", "ca.crt")
 # architecture Meridian runs on.
 TICKS = 100
 HELPERS_MAXIMUM = 800
+# The shell the rendered scripts run under here. The image's `sh` is busybox's
+# ash, which has `wait -n`; this machine's `sh` may be dash, which has not, so the
+# tests that run a script with a stand-in redis-cli use bash. The script itself
+# runs under the image's own shell in test_helm_rate_store_leaves_no_process.py.
+SCRIPT_SHELL = "bash"
 MOVED = (
     "meridian.rateStorePort",
     "meridian.rateStoreRule",
@@ -98,9 +103,12 @@ def test_the_liveness_script_still_does_what_the_readiness_probe_does() -> None:
     script = liveness_script()
 
     assert (
-        "answer=$(timeout 2 redis-cli --tls"
-        ' --cacert "$1/ca.crt" --cert "$1/tls.crt" --key "$1/tls.key"'
-        " -h 127.0.0.1 -p \"$2\" --user probe --pass '' --no-auth-warning ping)"
+        "answer=$(\n"
+        '  redis-cli --tls --cacert "$1/ca.crt" --cert "$1/tls.crt"'
+        ' --key "$1/tls.key"'
+        " -h 127.0.0.1 -p \"$2\" --user probe --pass '' --no-auth-warning ping &\n"
+        '  client=$!\n  sleep 2 &\n  timer=$!\n  wait -n\n  kill "$client" "$timer"'
+        " 2>/dev/null\n  wait\n)"
     ) in script
     # The answer is read, not the exit status: it is 0 for NOAUTH and for BUSY.
     assert '[ "$answer" = PONG ]' in script
@@ -138,6 +146,8 @@ def test_the_script_expands_only_its_two_arguments_and_the_numbers_it_reads() ->
         "(",
         "((",
         "answer",
+        "client",
+        "timer",
         "n",
         "boot",
         "ticks",
@@ -161,11 +171,13 @@ def test_the_liveness_probe_is_read_only_and_writes_nothing() -> None:
     assert container["securityContext"]["readOnlyRootFilesystem"] is True
     assert {v["name"] for v in pod["volumes"]} == {"tls", "acl", "config"}
     assert all("emptyDir" not in v for v in pod["volumes"])
-    # The only redirection is the message to standard error.
+    # The only redirections are the messages to standard error and the `kill`'s
+    # complaint about a client that already ended, sent to /dev/null: the
+    # device, not a file of the root file system.
     redirections = {
         found.rstrip(";") for found in re.findall(r">\S*", liveness_script())
     }
-    assert redirections <= {">&2"}
+    assert redirections <= {">&2", ">/dev/null"}
 
 
 # ── how long after a renewal ─────────────────────────────────────────────────
@@ -247,7 +259,7 @@ def probe(tmp_path: Path):
     """Run the rendered liveness command in this process's own shell with a
     stand-in ``redis-cli`` first on the path, against ``tmp_path/tls``. Returns
     (exit status, the redis-cli arguments, standard error)."""
-    shell = shutil.which("sh")
+    shell = shutil.which(SCRIPT_SHELL)
     assert shell is not None
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()

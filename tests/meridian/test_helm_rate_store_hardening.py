@@ -30,6 +30,7 @@ from chartsupport import SERVICES, helm_arguments, render, run_helm
 from test_helm_rate_store_restart import (
     IMAGE,
     PORT,
+    SCRIPT_SHELL,
     TEMPLATES,
     TLS_DIRECTORY,
     enabled_chart,
@@ -39,9 +40,9 @@ from test_helm_rate_store_restart import (
 PROBE_USER = "probe"
 VARIABLE = "MERIDIAN_GATEWAY_RATE_STORE_URL"
 PONG_LINE = (
-    'answer=$(timeout 2 redis-cli --tls --cacert "$1/ca.crt" --cert "$1/tls.crt"'
+    'redis-cli --tls --cacert "$1/ca.crt" --cert "$1/tls.crt"'
     ' --key "$1/tls.key" -h 127.0.0.1 -p "$2"'
-    f" --user {PROBE_USER} --pass '' --no-auth-warning ping)"
+    f" --user {PROBE_USER} --pass '' --no-auth-warning ping &"
 )
 ANSWER_RULE = '[ "$answer" = PONG ] ||'
 
@@ -120,25 +121,38 @@ def test_redis_cli_has_a_time_limit_of_its_own_inside_the_kubelets(probe: str) -
 
     # A frozen process (a paused or stopped server) never answers, and the
     # kubelet's timeout fails the probe without ending what it started: a
-    # client would be left behind for every probe. busybox's `timeout SECONDS
-    # COMMAND` ends it first.
-    seconds = re.search(r"answer=\$\(timeout (\d+) redis-cli ", script)
+    # client would be left behind for every probe. The script starts redis-cli
+    # and `sleep SECONDS` beside each other, waits for the first to end and ends
+    # the other. Not `timeout`: the image's leaves a process behind per run, and
+    # not redis-cli's `-t`, which does not bound a stopped server (K7).
+    seconds = re.search(r"\n  sleep (\d+) &\n", script)
     assert seconds, script
     assert 0 < int(seconds.group(1)) < limit
     assert script.count("redis-cli") == 1
+    assert "\n  wait -n\n" in script
+    assert "timeout" not in script
+    assert " -t " not in script
 
 
-def test_the_time_limit_wraps_redis_cli_and_nothing_else(tmp_path: Path) -> None:
-    shell = shutil.which("sh")
+def test_the_bound_is_a_sleep_started_beside_redis_cli_and_nothing_else(
+    tmp_path: Path,
+) -> None:
+    shell = shutil.which(SCRIPT_SHELL)
     assert shell is not None
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    record = tmp_path / "timeout-arguments"
-    (bin_dir / "timeout").write_text(
-        '#!/bin/sh\nprintf "%s\\n" "$1" "$2" > "$RECORD"\nshift\nexec "$@"\n'
+    record = tmp_path / "sleep-arguments"
+    # A stand-in sleep that records its arguments and then really sleeps, so the
+    # script has to end it.
+    (bin_dir / "sleep").write_text(
+        '#!/bin/sh\nprintf "%s\\n" "$@" > "$RECORD"\nexec "$REAL_SLEEP" 30\n'
     )
-    (bin_dir / "timeout").chmod(0o755)
-    (bin_dir / "redis-cli").write_text('#!/bin/sh\nprintf "PONG\\n"\n')
+    (bin_dir / "sleep").chmod(0o755)
+    # The client answers once the sleep has recorded its arguments, so that the
+    # script cannot end the sleep before it has started.
+    (bin_dir / "redis-cli").write_text(
+        '#!/bin/sh\nwhile [ ! -s "$RECORD" ]; do :; done\nprintf "PONG\\n"\n'
+    )
     (bin_dir / "redis-cli").chmod(0o755)
     command = command_of("readinessProbe")
 
@@ -147,22 +161,36 @@ def test_the_time_limit_wraps_redis_cli_and_nothing_else(tmp_path: Path) -> None
         capture_output=True,
         text=True,
         check=False,
-        env={"PATH": f"{bin_dir}:{os.environ['PATH']}", "RECORD": str(record)},
+        env={
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "RECORD": str(record),
+            "REAL_SLEEP": shutil.which("sleep") or "sleep",
+        },
     )
 
     assert (done.returncode, done.stderr) == (0, "")
-    assert record.read_text().splitlines() == ["2", "redis-cli"]
+    assert record.read_text().splitlines() == ["2"]
 
 
-def test_a_redis_cli_that_the_time_limit_ended_is_not_ready(tmp_path: Path) -> None:
-    shell = shutil.which("sh")
+def test_a_redis_cli_that_the_bound_ended_is_not_ready_and_is_not_left_running(
+    tmp_path: Path,
+) -> None:
+    shell = shutil.which(SCRIPT_SHELL)
     assert shell is not None
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    # What busybox's `timeout` does to a client that does not answer: it ends
-    # it, and the command substitution is empty.
-    (bin_dir / "timeout").write_text("#!/bin/sh\nexit 143\n")
-    (bin_dir / "timeout").chmod(0o755)
+    record = tmp_path / "client-pid"
+    # A client that never answers (a stopped server), and a bound that is over as
+    # soon as the client has written its process number: the script must end the
+    # client, say that nothing was answered and leave no client behind.
+    (bin_dir / "redis-cli").write_text(
+        '#!/bin/sh\necho $$ > "$RECORD"\nexec "$REAL_SLEEP" 30\n'
+    )
+    (bin_dir / "redis-cli").chmod(0o755)
+    (bin_dir / "sleep").write_text(
+        '#!/bin/sh\nwhile [ ! -s "$RECORD" ]; do :; done\nexit 0\n'
+    )
+    (bin_dir / "sleep").chmod(0o755)
     command = command_of("readinessProbe")
 
     done = subprocess.run(
@@ -170,11 +198,19 @@ def test_a_redis_cli_that_the_time_limit_ended_is_not_ready(tmp_path: Path) -> N
         capture_output=True,
         text=True,
         check=False,
-        env={"PATH": f"{bin_dir}:{os.environ['PATH']}"},
+        env={
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "RECORD": str(record),
+            "REAL_SLEEP": shutil.which("sleep") or "sleep",
+        },
     )
 
     assert done.returncode == 1
     assert "answered '', not PONG" in done.stderr
+    # The script ended the client and waited for it: the process is gone. A
+    # client left running, or defunct under an exited shell, would still be there.
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(record.read_text()), 0)
 
 
 def test_the_liveness_script_asks_for_the_pong_before_the_certificates_time() -> None:
@@ -189,7 +225,7 @@ def readiness(tmp_path: Path):
     ``redis-cli`` first on the path. The stand-in prints ``ANSWER`` and exits with
     ``STATUS`` and records its arguments. Returns (exit status, arguments,
     standard error)."""
-    shell = shutil.which("sh")
+    shell = shutil.which(SCRIPT_SHELL)
     assert shell is not None
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()

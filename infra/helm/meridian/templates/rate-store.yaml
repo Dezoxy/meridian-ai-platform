@@ -235,22 +235,48 @@ port are the script's arguments ($1 and $2), always in double quotes. The exit
 status of redis-cli is not read: it is 0 for an answer of NOAUTH (the user is
 missing or the ACL file is not the one `make up` writes) and of BUSY (a script
 that never ends) alike, and neither is a healthy store. A refused connection or a
-failed handshake prints nothing, which is not PONG either. `timeout 2` (busybox's,
-in the image) ends redis-cli after two seconds, inside the kubelet's three: a server
-that is paused or frozen below the protocol never answers, the kubelet fails the
-probe at its own timeout without ending what the probe started, and a client would
-be left behind for every probe (measured on the pinned image against a paused
-container: without it the script was still waiting when it was ended from outside
-after eight seconds, and a redis-cli stayed behind; with it the script printed its
-refusal after two seconds and left none). `--pass ''` is there
+failed handshake prints nothing, which is not PONG either. `--pass ''` is there
 because redis-cli sends no AUTH without one, and `nopass` accepts any password,
 so the pod's spec holds no credential; `--no-auth-warning` keeps the warning about
 a password on the command line out of the answer. The message names the answer,
 which the kubelet records in the pod's events. Takes the root (it names no value
 of the chart: the script has no template expression).
+
+The bound, and what a probe leaves behind (S073, K7). A server that is frozen
+below the protocol (a stopped process) never answers, and the kubelet fails the
+probe at its own three seconds without ending what the probe started, so redis-cli
+must end itself inside them: the script starts it and `sleep 2` in the background
+as its own two children, `wait -n` returns when the first of them ends, and the
+script ends the other and waits for both. Every process the probe starts is then a
+child of the probe's own shell and is reaped by it. It does not use `timeout`: the
+image's (busybox's) leaves a watcher process behind per run, which becomes an
+orphan of PID 1, the Redis server, and the server never reaps a child that is not
+its own. On kind that was 2,024 defunct `timeout` processes after about two hours,
+then "can't fork" in every probe, the pod not Ready and the gateway's 503s.
+Measured on the pinned image with `redis-server` as PID 1 and a read-only root file
+system: the old script left one process per run, in the readiness and in the
+liveness script alike, for an answer of PONG, for another answer and for a stopped
+server; this one leaves none in any of the three
+(tests/meridian/test_helm_rate_store_leaves_no_process.py runs each many times and
+lists the container's processes), and against a server stopped with SIGSTOP it
+printed its refusal after 2.05 seconds. `wait -n` is busybox ash's (the image's
+`sh`; the pinned 1.37 has it) and bash's, not dash's. redis-cli's own `-t` was
+measured and does not do this: against a stopped server it was still waiting after
+two minutes, the TLS handshake being outside it. The freeze was SIGSTOP on PID 1,
+not `docker pause`, which stops `docker exec` too. No file is written (the root
+file system is read-only), and the only redirection is `2>/dev/null` on the
+`kill`, which complains of a client that already ended.
 */ -}}
 {{- define "meridian.rateStorePing" -}}
-answer=$(timeout 2 redis-cli --tls --cacert "$1/ca.crt" --cert "$1/tls.crt" --key "$1/tls.key" -h 127.0.0.1 -p "$2" --user probe --pass '' --no-auth-warning ping)
+answer=$(
+  redis-cli --tls --cacert "$1/ca.crt" --cert "$1/tls.crt" --key "$1/tls.key" -h 127.0.0.1 -p "$2" --user probe --pass '' --no-auth-warning ping &
+  client=$!
+  sleep 2 &
+  timer=$!
+  wait -n
+  kill "$client" "$timer" 2>/dev/null
+  wait
+)
 [ "$answer" = PONG ] || { echo "rate-store: the probe user's PING was answered '$answer', not PONG" >&2; exit 1; }
 {{- end -}}
 

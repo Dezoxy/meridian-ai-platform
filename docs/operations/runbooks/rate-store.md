@@ -167,6 +167,20 @@ its own). The price is that this one pod stands in front of every model call.
   notifies no one (S028).
 - The gateway stays ready: `/healthz` does not touch the store, so no pod
   restarts.
+- **The store not Ready about two hours after its start**, with no restart
+  before it, the pod's events saying `Readiness probe failed: rate-store-readiness:
+  line 0: can't fork: Resource temporarily unavailable` (and `failed to exec in
+  container`), and the 503 `the rate store is unavailable` above for as long as
+  it lasts. The container's process limit was used up: its probes had left one
+  defunct `timeout` process each, and a node's process list showed 2,024 of them
+  with the Redis server as their parent. Seen on kind on 2026-10-06 and fixed by
+  S073, K7 (the probes no longer use `timeout` and leave no process behind: see
+  the comment of `meridian.rateStorePing` in the chart's `rate-store.yaml`); the
+  fix tested on the pinned image, not yet seen on a cluster. The liveness probe
+  fails the same way, so the kubelet restarts the container after the six
+  failures and the count starts again at zero: a chart from before the fix shows
+  a restart about every two hours, and every window is handed out again each
+  time.
 
 ## Confirm
 
@@ -332,11 +346,15 @@ probe was run on the pinned image against a looping script and the restart
 that ended it; the kubelet's restart of a frozen store has not been seen on a
 cluster, though its restart on a renewed certificate has: see below.) A store
 that is frozen below the protocol (the process stopped, not a script) answers
-nothing at all: the probe's `redis-cli` runs under `timeout 2`, inside the
-kubelet's 3 seconds, so the probe fails with `answered '', not PONG` and leaves
-no client behind (on the pinned image against a paused container, the script
-printed that after 2 seconds and left none; without the limit it was still
-waiting when ended from outside after 8 seconds, and a `redis-cli` stayed).
+nothing at all: the probe starts `redis-cli` and `sleep 2` side by side and ends
+the one that is left when the other ends, inside the kubelet's 3 seconds, so the
+probe fails with `answered '', not PONG` and leaves no client behind (on the
+pinned image, with the server stopped by SIGSTOP on its PID 1, the script
+printed that after 2.05 seconds and left no process; without a limit it was
+still waiting when ended from outside after 8 seconds, and a `redis-cli`
+stayed). The limit was `timeout 2` until S073, K7: busybox's `timeout` left one
+process behind per probe, which the Redis server never reaped (see "What you
+see").
 To end it sooner, delete the store's pod:
 
 ```sh
