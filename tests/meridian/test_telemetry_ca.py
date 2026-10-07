@@ -41,6 +41,7 @@ from certpolicysupport import (
 from certscriptsupport import POLICIES, SECONDS
 from test_certificate_deploy import run_deploy, without_the_record
 from test_certificate_policy_up import (
+    UP_SH,
     line_containing,
     line_index,
     script_lines,
@@ -261,8 +262,12 @@ def test_the_collectors_client_certificate_asks_to_present_and_never_to_serve() 
     assert spec["duration"] == server["duration"] == NINETY_DAYS
     assert spec["privateKey"] == server["privateKey"]
     assert spec["privateKey"]["rotationPolicy"] == "Always"
-    for absent in ("uris", "ipAddresses", "emailAddresses", "commonName", "isCA"):
+    for absent in ("uris", "ipAddresses", "emailAddresses", "isCA"):
         assert absent not in spec, absent
+    # The one certificate with a subject (S072, contract M3b): the common name that
+    # Loki's gateway admits a write from, and that the policy allows and requires.
+    assert spec["commonName"] == "otel-collector-client"
+    assert "commonName" not in server  # the server certificates have none
     assert "renewBefore" not in spec  # renewal as the server certificate has it
 
 
@@ -362,6 +367,7 @@ def test_the_collectors_client_policy_allows_one_name_two_usages_and_nothing_els
 
     assert spec["allowed"] == {
         "dnsNames": {"values": COLLECTOR_CLIENT_NAMES, "required": True},
+        "commonName": {"value": "otel-collector-client", "required": True},
         "usages": ["digital signature", "client auth"],
     }
     assert sorted(spec["allowed"]["usages"]) == CLIENT_USAGES
@@ -419,7 +425,10 @@ def test_the_collectors_server_policy_is_as_s063_made_it() -> None:
         ("server auth instead", {"usages": ["digital signature", "server auth"]}),
         ("cert sign", {"usages": ["digital signature", "client auth", "cert sign"]}),
         ("a CA", {"isCA": True}),
-        ("a common name", {"commonName": "otel-collector"}),
+        # The subject the gateway admits a write from is required, and no other.
+        ("another common name", {"commonName": "otel-collector"}),
+        ("a longer common name", {"commonName": "otel-collector-client-2"}),
+        ("no common name", {"commonName": None}),
         ("an address", {"ipAddresses": ["10.0.0.1"]}),
         ("a lifetime over 90 days", {"duration": "2161h"}),
     ],
@@ -717,19 +726,23 @@ def manifest_header() -> str:
 def test_the_header_names_who_can_read_and_overwrite_the_authoritys_key() -> None:
     header = manifest_header()
 
-    # The readers the threat model's T-88 names are all here: cert-manager's
-    # controller and cainjector, the CloudNativePG operator and Prometheus's
-    # operator (kube-state-metrics is named as no longer one of them); the two
-    # operators can write the Secret too, so the key is replaceable as well.
+    # The readers of the key today are named: cert-manager's controller and
+    # cainjector and Prometheus's operator (kube-state-metrics is named as no longer
+    # one of them); the two can write the Secret too, so the key is replaceable as
+    # well. The CloudNativePG operator is named as NO LONGER one: since S072
+    # (contract C) it works through a Role in `meridian`, and the header said it
+    # still read the Secret until contract M3b.
     for reader in (
         "cert-manager's controller",
         "cainjector",
-        "CloudNativePG operator",
         "Prometheus's operator",
         "kube-state-metrics",
     ):
         assert reader in header, reader
     assert "overwrite" in header
+    assert "The CloudNativePG operator no longer does either" in header
+    assert "cert-manager and Prometheus's operator can also write Secrets" in header
+    assert "the CloudNativePG operator, and in the rendered" not in header
 
 
 def test_the_collector_closes_4317_in_the_service_and_the_container_too() -> None:
@@ -975,6 +988,90 @@ def test_the_eight_policy_names_are_the_same_in_the_four_places() -> None:
         TEMPO_RECEIVER_POLICY,
         LOKI_GATEWAY_POLICY,
     } <= in_manifest
+
+
+def test_lokis_policies_are_applied_just_before_its_release_not_at_the_start() -> None:
+    lines = script_lines()
+    start = line_containing('apply_api_server_policy "${OBSERVABILITY_POLICY_FILE}"')
+    tempo = line_index("install_release tempo ")
+    applied = line_containing('-f "${LOKI_POLICY_FILE}"')
+    loki = line_index("install_release loki ")
+    collector = line_index("install_release otel-collector ")
+
+    # The namespace's file is applied at the start (with the node's address), and
+    # Loki's and the gateway's own file just before Loki's release (S072, contract
+    # M3b): between the two only the fingerprint of the CA and the failure note.
+    assert start < tempo < applied < loki < collector
+    assert loki - applied <= 3
+    assert lines[applied].startswith("kctl apply --server-side --force-conflicts -f ")
+    assert "observability-loki-networkpolicy.yaml" in "\n".join(lines)
+    assert "observability-loki-networkpolicy.yaml" not in lines[start]
+
+
+def test_a_failed_release_says_the_window_stays_open_until_a_rerun() -> None:
+    lines = script_lines()
+    note = line_containing('release_failure_note="telemetry stays refused')
+    loki = line_index("install_release loki ")
+    collector = line_index("install_release otel-collector ")
+    empty = [i for i, line in enumerate(lines) if line == 'release_failure_note=""']
+    body = up_function("install_release")
+
+    # Empty at the top of the script, set before Loki's release and emptied again
+    # once the collector's release has run: the note belongs to those two only.
+    assert len(empty) == 2
+    assert empty[0] < note < loki < collector < empty[1]
+    for words in ("refused and dropped", "Grafana's Loki reads fail", "re-run"):
+        assert words in lines[note], words
+    assert "converges" in lines[note]
+    assert "${release_failure_note:+: ${release_failure_note}}" in body
+
+
+def test_the_authority_is_published_to_observability_before_the_stack() -> None:
+    lines = script_lines()
+    published = lines.index("publish_telemetry_ca")
+    grafana_ca = line_containing("grafana_ca_sha=")
+    stack = line_index("install_release kube-prometheus-stack ")
+
+    # Grafana reads the ConfigMap telemetry-ca into its environment at start: the
+    # pod cannot start before the ConfigMap exists.
+    assert published < grafana_ca < stack
+
+
+def test_each_pod_that_reads_a_certificate_at_start_gets_its_fingerprint() -> None:
+    lines = script_lines()
+    stack = lines[line_index("install_release kube-prometheus-stack ")]
+    tempo = lines[line_index("install_release tempo ")]
+    loki = lines[line_index("install_release loki ")]
+
+    # Grafana: the CA (its environment variable). Tempo: its certificate and the
+    # CA (start only; no reload_interval is established). The gateway: the CA only,
+    # because its certificate is a variable that nginx reads at each handshake.
+    assert '--set-string "grafana.podAnnotations.meridian-ca-sha256=' in stack
+    assert '--set-string "podAnnotations.meridian-cert-sha256=' in tempo
+    assert '--set-string "podAnnotations.meridian-ca-sha256=' in tempo
+    assert '--set-string "gateway.podAnnotations.meridian-ca-sha256=' in loki
+    assert "meridian-cert-sha256" not in loki
+    call = r"^(\w+)=\"\$\(object_fingerprint (\w+) (\S+) '([^']+)'\)\"$"
+    calls = re.findall(call, "\n".join(lines), re.M)
+    assert sorted((variable, name, field) for variable, _, name, field in calls) == [
+        ("grafana_ca_sha", "telemetry-ca", r"ca\.crt"),
+        ("loki_ca_sha", "loki-gateway-tls", r"ca\.crt"),
+        ("tempo_ca_sha", "tempo-receiver-tls", r"ca\.crt"),
+        ("tempo_cert_sha", "tempo-receiver-tls", r"tls\.crt"),
+    ]
+
+
+def test_the_fingerprint_function_reads_public_fields_only_and_prints_a_digest() -> (
+    None
+):
+    body = up_function("object_fingerprint")
+    sites = re.findall(r"object_fingerprint \w+ \S+ '([^']+)'", UP_SH)
+
+    assert sites
+    assert set(sites) <= {r"tls\.crt", r"ca\.crt"}
+    assert "tls.key" not in body and r"tls\.key" not in body
+    assert "sha256sum" in body
+    assert "-o yaml" not in body and "-o json" not in body
 
 
 def run_publish(

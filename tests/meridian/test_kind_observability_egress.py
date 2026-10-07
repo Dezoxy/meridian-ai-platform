@@ -51,6 +51,7 @@ from test_kind_namespace_policies import (
     VALUES,
     dns_rule,
     header_of,
+    observability_policies,
     pods,
     policies_of,
     selected,
@@ -111,7 +112,7 @@ EXPECTED_PORTS = {
 def egress_policies() -> dict[str, dict]:
     return {
         name: policy
-        for name, policy in policies_of(OBSERVABILITY_FILE).items()
+        for name, policy in observability_policies().items()
         if "Egress" in policy["spec"]["policyTypes"]
     }
 
@@ -156,7 +157,7 @@ def test_egress_is_denied_for_every_pod_of_the_namespace_by_default() -> None:
 
 
 def test_each_policy_of_the_file_has_one_direction_and_the_set_is_known() -> None:
-    policies = policies_of(OBSERVABILITY_FILE)
+    policies = observability_policies()
 
     assert set(egress_policies()) == {
         "default-deny-egress",
@@ -167,6 +168,7 @@ def test_each_policy_of_the_file_has_one_direction_and_the_set_is_known() -> Non
         "egress-otel-collector",
         "egress-loki-gateway",
         "egress-loki",
+        "smoke-telemetry-probe",
     }
     for name, policy in policies.items():
         assert policy["metadata"]["namespace"] == "observability", name
@@ -280,7 +282,7 @@ def prometheus_rule_to(namespace: str | None, labels: dict[str, str]) -> list[di
 
 
 def test_prometheus_may_reach_each_pod_that_its_ingress_rule_lets_it_scrape() -> None:
-    policies = policies_of(OBSERVABILITY_FILE)
+    policies = observability_policies()
     prometheus = egress_policies()["egress-prometheus"]
     assert selected(prometheus) == PROMETHEUS
 
@@ -500,7 +502,7 @@ def test_loki_may_reach_its_own_pods_on_the_memberlist_port_it_joins_through() -
 
 
 def test_each_egress_rule_to_a_pod_of_the_namespace_meets_an_ingress_rule() -> None:
-    policies = policies_of(OBSERVABILITY_FILE)
+    policies = observability_policies()
     ingress = {
         name: policy
         for name, policy in policies.items()
@@ -508,6 +510,12 @@ def test_each_egress_rule_to_a_pod_of_the_namespace_meets_an_ingress_rule() -> N
     }
     checked = 0
     for name, policy in egress_policies().items():
+        if name == "smoke-telemetry-probe":
+            # The one egress rule that has NO ingress half, on purpose: it gives
+            # smoke's probe Pod a path to Loki's own port so that the refusal it
+            # sees is Loki's ingress rule, not the sender's egress (the rate-store
+            # line's lesson). Its test is in test_telemetry_loki_gateway.py.
+            continue
         source = policy["spec"]["podSelector"].get("matchLabels")
         for rule in rules(policy, "egress"):
             for entry in entries_of(rule):

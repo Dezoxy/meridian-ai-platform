@@ -46,10 +46,24 @@ tempo:
   # `protocols: {}`: the chart's port templates (templates/_ports.tpl) read
   # `.Values.tempo.receivers.jaeger.protocols.*` unguarded, so `jaeger: null`
   # fails the render. So the rendered config holds NO Jaeger protocol and no OTLP
-  # HTTP, but it does hold an empty `jaeger` receiver; whether Tempo 3.1.0 starts
-  # with it is NOT established from files and is seen only on the cluster. The
-  # Service still lists 9411, 55680 and 55681: the chart hardcodes those ports,
-  # and no receiver listens behind them.
+  # HTTP, but it does hold an empty `jaeger` receiver; Tempo 3.1.0 STARTS with it
+  # (seen on kind, run R14). The Service still lists 9411, 55680 and 55681: the
+  # chart hardcodes those ports, and no receiver listens behind them.
+  #
+  # What this receiver does NOT do (S072, contract M3b). It checks the chain and
+  # nothing more: any certificate the telemetry authority signs for client use is
+  # a writer's to Tempo, whatever its name (Loki's gateway, which can read the
+  # subject, admits only `CN=otel-collector-client`; Tempo's receiver has no such
+  # setting). Today the authority's policy signs exactly one client certificate.
+  # It does not re-read a renewed certificate: no `reload_interval` is set here
+  # because nothing in the chart (it carries no reference for the receiver's TLS
+  # settings) or in the files of this repository establishes that Tempo 3.1.0
+  # passes one through to the receiver, and a key it did not know could stop the
+  # pod. So `make up` gives the pod the fingerprints of its certificate and of the
+  # CA as annotations (up.sh), and a renewal is taken up by the next `make up`,
+  # which rolls the pod; until then the pod serves the file it loaded. Smoke
+  # compares the certificate it serves with the Secret's (smoke.d/12-
+  # telemetry-stores.sh), which is what finds a pod that was not rolled.
   receivers:
     jaeger:
       protocols:

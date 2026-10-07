@@ -80,14 +80,26 @@
 #                           otel-collector.client.observability.meridian
 #                           (required, and no other), the usages digital
 #                           signature and client auth, at most 90 days, which
-#                           the request must name. No URI, no address, no common
-#                           name and no CA. A policy of its own, and the one
-#                           above is not widened: a request to the telemetry
-#                           authority for `client auth` under any OTHER name is
-#                           denied, and so is one for this name that adds
-#                           `server auth`. Both policies select the same Issuer
-#                           and each is judged alone, so a request is approved
-#                           only when one of them permits all of it
+#                           the request must name. The common name
+#                           otel-collector-client, required and no other
+#                           (S072, contract M3b: Loki's gateway admits a write
+#                           only from a client certificate whose subject is that
+#                           name). No URI, no address and no CA. A policy of its
+#                           own, and the one above is not widened: a request to
+#                           the telemetry authority for `client auth` under any
+#                           OTHER name is denied, and so is one for this name
+#                           that adds `server auth`. Both policies select the
+#                           same Issuer and each is judged alone, so a request is
+#                           approved only when one of them permits all of it.
+#                           What this policy cannot do: `allowed.usages` is a
+#                           ceiling ("must be a subset", approver-policy's CRD)
+#                           and the schema has no way to REQUIRE a usage, so a
+#                           request for this name and common name WITHOUT `client
+#                           auth` is approved, and its certificate has no
+#                           extended key usage, which nginx accepts as a client
+#                           (seen). Who may create a Certificate in
+#                           `observability` is what stops that request, not this
+#                           policy
 #   tempo-receiver          the server certificate of Tempo's OTLP receiver (S072,
 #                           manifests/telemetry-ca.yaml): the same issuer and
 #                           namespace again, the DNS names tempo.observability.svc
@@ -97,7 +109,11 @@
 #                           name. No URI, no address, no common name and no CA. A
 #                           policy of its own: `client auth` under Tempo's names
 #                           is denied, and so is `server auth` under the
-#                           collector's client name
+#                           collector's client name. A request for Tempo's names
+#                           with only `digital signature` is approved (usages
+#                           are a ceiling): its certificate has no extended key
+#                           usage, which a server that verifies a client accepts
+#                           (nginx: seen; Tempo's receiver: not seen)
 #   loki-gateway            the server certificate of Loki's gateway (S072,
 #                           manifests/telemetry-ca.yaml): the same issuer and
 #                           namespace again, the DNS names
@@ -107,8 +123,15 @@
 #                           signature and server auth, at most 90 days, which
 #                           the request must name. No URI, no address, no common
 #                           name and no CA. A policy of its own: `client auth`
-#                           under the gateway's names is denied, so the
-#                           gateway's name cannot be presented as a writer's
+#                           under the gateway's names is denied. That does not
+#                           make the gateway's certificate unusable as a client's
+#                           in every case: a certificate for these names with
+#                           only `digital signature` is approved (usages are a
+#                           ceiling) and nginx accepts one with no extended key
+#                           usage as a client (seen), so the gateway's second
+#                           check, the subject `CN=otel-collector-client`, is what
+#                           stops it from writing (a certificate with these names
+#                           has no such common name: the policy allows none)
 #
 # The policies of S063 select one namespaced Issuer each, in `observability`
 # only, and that is also what denies: a request for either Issuer that its policy
@@ -352,6 +375,9 @@ spec:
     dnsNames:
       values:
         - otel-collector.client.observability.meridian
+      required: true
+    commonName:
+      value: otel-collector-client
       required: true
     usages:
       - digital signature

@@ -143,7 +143,9 @@ def test_smoke_runs_the_network_policy_check_after_the_sweep_check() -> None:
     assert calls[8] == "check_service_identity"
     assert calls[9] == "check_certificate_policy"
     assert calls[10] == "check_alert_rules"
-    assert calls[11].startswith("if ((failures")
+    # And, since S072 (contract M3b), the telemetry stores' check.
+    assert calls[11] == "check_telemetry_stores"
+    assert calls[12].startswith("if ((failures")
 
 
 STUB = r"""

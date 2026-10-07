@@ -36,13 +36,16 @@
 # untouched. The authority's private key is the Secret `telemetry-ca` in
 # `observability`: no Meridian pod and no Role in `meridian` can read it. It is
 # readable by whatever holds a read of Secrets in `observability` or
-# cluster-wide: cert-manager's controller and its cainjector, the CloudNativePG
-# operator, and in the rendered kube-prometheus-stack chart Prometheus's
-# operator (kube-state-metrics no longer does: its collector for Secrets is
-# excluded, values/kube-prometheus-stack.yaml). The two operators can also
-# write Secrets cluster-wide, so each can overwrite the authority's Secret, not
-# only read it. Whoever reads the key can issue a certificate for the
-# collector's name, and so can intercept the services' telemetry.
+# cluster-wide: cert-manager's controller and its cainjector, and in the rendered
+# kube-prometheus-stack chart Prometheus's operator (kube-state-metrics no longer
+# does: its collector for Secrets is excluded, values/kube-prometheus-stack.yaml).
+# The CloudNativePG operator no longer does either: since S072 (contract C) it
+# works through a Role in `meridian` and not through a ClusterRole over every
+# namespace. cert-manager and Prometheus's operator can also write Secrets
+# cluster-wide, so each can overwrite the authority's Secret, not only read it.
+# Whoever reads the key can issue a certificate for the collector's name, and so
+# can intercept the services' telemetry, and one for the collector's client
+# name, and so can write to the stores that ask for it (below).
 #
 # Who can ask for a certificate: approver-policy decides, by the policies
 # `telemetry-ca` and `otel-collector` in certificate-policy.yaml, each of which
@@ -133,15 +136,29 @@ spec:
 # certificate above: the server policy stays as S063 made it, and a request to
 # this authority for client auth under any other name is denied. The one DNS name
 # says what the certificate is and resolves nowhere (`.meridian` is not the
-# cluster's domain, and no Service or pod has it); a server that verifies a client
-# checks the chain, not the name. Lifetime, renewal and key as the server
-# certificate has them: 90 days, a new ECDSA P-256 key at every renewal.
+# cluster's domain, and no Service or pod has it). Its subject is the fixed
+# common name `otel-collector-client` (S072, contract M3b), and the policy allows
+# that one common name and no other: Loki's gateway, which checks the subject of
+# the client certificate it verified (`$ssl_client_s_dn`, seen as
+# `CN=otel-collector-client` on the pinned nginx), admits a write only from this
+# name, so a certificate this authority signs for another client name does not
+# write to Loki. Tempo's receiver cannot check a name (it checks the chain and
+# nothing more), so for Tempo any certificate this authority signs for client use
+# is a writer's: the policy lets it sign exactly this one. Neither the policy nor
+# the schema of approver-policy can REQUIRE a usage: `allowed.usages` is a ceiling
+# ("must be a subset", its CRD), so a request without `client auth` is approved
+# too, and it makes a certificate with no extended key usage, which nginx accepts
+# as a client (seen). What keeps a request like that from being made is who may
+# create a Certificate in `observability`, not this policy. Lifetime, renewal and
+# key as the server certificate has them: 90 days, a new ECDSA P-256 key at every
+# renewal.
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
   name: otel-collector-client
   namespace: observability
 spec:
+  commonName: otel-collector-client
   secretName: otel-collector-client-tls
   duration: 2160h # 90 days, named: the policy caps it and cannot read a missing one
   privateKey:

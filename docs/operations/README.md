@@ -383,7 +383,13 @@ applied to one. The session that owns the cluster checks, on `main`:
    alert table, nothing. `make smoke` reads that Grafana serves it under
    that uid with the file's queries and that every query runs in
    Prometheus; whether a panel shows data stays by hand.
-7. `make smoke` passes, 46 of 46 lines (S073 one, for the database's own
+7. `make smoke` passes, 51 of 51 lines (S072 five, check 12: from a probe Pod
+   with the collector's label, Loki's gateway refuses a push with no client
+   certificate and serves a read, Tempo's receiver ends a connection with none
+   in the alert "certificate required", Loki's own port times out for a pod
+   that is not the gateway, and each of the two serves the certificate that is
+   in its Secret; tested with stand-ins and run in a container of the pinned
+   nginx image, not yet on the cluster; S073 one, for the database's own
    certificates, which fails when the earliest ends within 84 hours: tested
    with a stand-in, and seen to pass on kind on 2026-10-07, 46 PASS in run R4d,
    not seen failing; S055 added three, for service
@@ -404,13 +410,14 @@ applied to one. The session that owns the cluster checks, on `main`:
    in the third run (the first two runs had 41 lines); S066 one for the rate
    store, which only the Model Gateway's pods may reach, which passed on kind
    on 2026-10-06 in S066's third run (S064's third run had 44 lines, before it):
-   the 35 below are S062's count); 33 after `make up` alone, with
+   the 35 below are S062's count); 34 after `make up` alone, with
    SKIP lines for
    what `make deploy` brings (counted from the script's own skip lines, and
    seen on 2026-10-06 before S063: 24 lines, 17 PASS and 7 SKIP, no FAIL). The
-   33 is edge 1, database 4, tools 1, telemetry 9, cost panel 4, adjuster
-   pages 1, sweep 2, network policy 1, service identity 1, certificate policy 5
-   and alert rules 4. Items 3, 5 and 6 above are what the eleventh check reads,
+   34 is edge 1, database 4, tools 1, telemetry 9, cost panel 4, adjuster
+   pages 1, sweep 2, network policy 1, service identity 1, certificate policy 5,
+   alert rules 4 and telemetry stores 1 (one SKIP: the probe Pod borrows the
+   Claims API's image). Items 3, 5 and 6 above are what the eleventh check reads,
    so they need no hand check now that the session that owns the cluster
    has seen it pass (35 PASS on 2026-10-06, 44 PASS in S064's third run, and 45
    PASS in S066's third run, five minutes after a cold `make deploy` that had

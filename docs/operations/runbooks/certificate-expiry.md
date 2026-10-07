@@ -102,9 +102,10 @@ k get certificaterequestpolicy
 - The pods of cert-manager and of approver-policy are in the namespace
   `cert-manager`. One that is not Running explains a request nobody
   decides.
-- The five CertificateRequestPolicies are `meridian-services`,
-  `meridian-services-ca`, `meridian-deny-unlisted`, `telemetry-ca` and
-  `otel-collector` (`infra/kind/manifests/certificate-policy.yaml`); each
+- The eight CertificateRequestPolicies are `meridian-services`,
+  `meridian-services-ca`, `meridian-deny-unlisted`, `telemetry-ca`,
+  `otel-collector`, `otel-collector-client`, `tempo-receiver` and
+  `loki-gateway` (`infra/kind/manifests/certificate-policy.yaml`); each
   should be Ready. A request for either Meridian ClusterIssuer that no other
   policy permits is denied by `meridian-deny-unlisted`; a request for either
   of the collector's two Issuers in `observability` that its own policy does
@@ -242,7 +243,38 @@ certificate or of its authority, and a cold start.
 | Certificate | Secret | Lasts | Renewed | What reads it |
 |---|---|---|---|---|
 | `otel-collector` | `otel-collector-tls` | 90 days | at 60 days, a new key | the collector, from a mounted directory |
-| `telemetry-ca` | `telemetry-ca` | one year | about eight months in, the same key (`rotationPolicy: Never`) | cert-manager; its public certificate is copied by `make up` into the ConfigMap `telemetry-ca` in `meridian` |
+| `otel-collector-client` | `otel-collector-client-tls` | 90 days | at 60 days, a new key | the collector's exporters to Tempo and to Loki's gateway (its pair, and `ca.crt` to verify them), from a mounted directory |
+| `tempo-receiver` | `tempo-receiver-tls` | 90 days | at 60 days, a new key | Tempo's OTLP receiver (its certificate, and `ca.crt` as the client CA), from a mounted directory |
+| `loki-gateway` | `loki-gateway-tls` | 90 days | at 60 days, a new key | Loki's gateway, nginx (its certificate, and `ca.crt` as the client CA), from a mounted directory |
+| `telemetry-ca` | `telemetry-ca` | one year | about eight months in, the same key (`rotationPolicy: Never`) | cert-manager; its public certificate is copied by `make up` into the ConfigMap `telemetry-ca` in `meridian`, in `logging` and in `observability` (Grafana's environment reads that one) |
+
+Who re-reads a renewed file, and what to do (S072, contract M3b; the first row
+is from the collector's source, the second and the fourth were SEEN in a
+container of the pinned nginx image with the rendered configuration, the rest
+is reasoned from the files and not seen on the cluster, where no renewal of
+these certificates has happened):
+
+| Reader | The certificate it serves or presents | The CA it trusts |
+|---|---|---|
+| the collector | re-reads, every 5 minutes at a handshake | re-reads (the same setting) |
+| Loki's gateway (nginx) | re-reads at each handshake: `ssl_certificate` is a variable, and a pair replaced under the mount was served at the next handshake with no reload | does NOT: `ssl_client_certificate` is read at start (a file replaced under it changed nothing until the container restarted) |
+| Tempo's receiver | does NOT: no `reload_interval` is set, because Tempo 3.1.0 passing one through is not established | does NOT |
+| Grafana | presents none | does NOT: the CA is an environment variable, read at start |
+
+The step is `make up` after a certificate's `notBefore` moves (at day 60 for
+the three leaf certificates, about month eight for the authority). `make up`
+gives Tempo's pod the fingerprints of its certificate and its CA, the
+gateway's pod the fingerprint of its CA, and Grafana's pod the fingerprint of
+the authority's certificate, as pod annotations: when one changed the pod
+template changes and Kubernetes rolls the pod, so no restart by hand is
+needed. A warm `make up` that rolls Tempo drops the traces of the minute
+before the collector's release, as any `make up` that moves the stores does.
+`make smoke`'s twelfth check ends in two lines that compare the certificate
+Loki's gateway and Tempo's receiver SERVE with the one in their Secret: a
+difference is a pod that was not rolled, and the line says which. If `make up`
+cannot be run, restart the pod by hand (the owner's to run on any cluster but
+the local kind one): `rollout restart deployment/loki-gateway`, `rollout
+restart statefulset/tempo`, `rollout restart deployment/kube-prometheus-stack-grafana`.
 
 The collector re-reads its pair itself: at a handshake, once five minutes have
 passed since it last read the files (`reload_interval`; the name and the
@@ -259,7 +291,11 @@ When the authority `telemetry-ca` is renewed, its certificate changes and its
 key does not, so the ConfigMap `telemetry-ca` holds the old certificate until
 `make up` runs again, which publishes the new one (it applies the ConfigMap on
 every run and changes nothing when it is the same). Run `make up` after the
-authority's `notBefore` moves, and nothing more: the six services mount the
+authority's `notBefore` moves. That is all for the six services (and, since
+S072 contract M3b, for Loki's gateway, Tempo and Grafana, which `make up` rolls
+itself, as the section above says; before then this sentence said "and nothing
+more" and was false for them, because they read the authority's certificate
+once, at start): the six services mount the
 ConfigMap as a directory, the kubelet refreshes the mounted file within about a
 minute, and their exporters read the file at each new connection, not once at
 start, so the next new connection uses the new certificate and no restart is

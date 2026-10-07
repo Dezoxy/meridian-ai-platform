@@ -522,7 +522,7 @@ node image, Kubernetes components and the platform).
 | `make cluster-holder` | Print who holds the cluster: the holder, its commit, the time its last `make up` or `make deploy` started or ended and the state, `ok` or `changing` with a sentence that says to look at what failed (S075); or that there is no record, or no cluster. It changes nothing on the cluster and refreshes the gitignored credentials file as `make up` does. A cluster that does not answer is an error. See "Who holds the cluster" below. |
 | `make down` | Delete the `meridian` cluster and its credentials file. Destructive; refuses any other cluster name. Since S075 it reads the record of who holds the cluster first and stops when another holder has it, unless `TAKE_CLUSTER=1` is in front of it; a cluster that does not answer stops it too (who holds it cannot be told, and another step's `make up` may be restarting the node), and `TAKE_CLUSTER=1 make down` deletes a broken cluster all the same. The record goes with the cluster. |
 
-`make smoke` checks eleven things:
+`make smoke` checks twelve things:
 
 1. **Edge.** `curl http://127.0.0.1:8088/` returns 404, and Envoy's own
    request counter went up. That covers laptop, kind port mapping, NodePort
@@ -1097,7 +1097,8 @@ node image, Kubernetes components and the platform).
     lifetime is one day), and a renewal by the operator. It tells
     nothing between two runs of smoke: no alert rule watches these dates (see
     [the certificate expiry runbook](../../docs/operations/runbooks/certificate-expiry.md)).
-11. **Alert rules and health dashboard.** Four lines, read-only, run last.
+11. **Alert rules and health dashboard.** Four lines, read-only, run after the
+    first ten (check 12 follows it).
     The first three read Prometheus' `/api/v1/rules` through Grafana's
     datasource proxy, for the `PrometheusRule` `meridian` that `make up`
     applies. The five groups of `alerts/meridian.yaml` are loaded and every
@@ -1161,10 +1162,25 @@ node image, Kubernetes components and the platform).
     renewal watch's short certificates were in place and the alert fired; a
     firing alert is a FAIL of the third line, so it would have failed (see
     "How long a certificate lasts" below).
+12. **Telemetry stores.** Five lines (S072, contract M3b), run after the other
+    eleven, from one probe Pod in `observability` (the Claims API's image, the
+    collector's name label and smoke's own; a label impersonation, said, not
+    solved: T-84): a push to Loki's gateway with no client certificate is 403
+    and a read is 200; Tempo's receiver ends a connection with none in the TLS
+    alert "certificate required"; Loki's own port times out for the Pod (kind's
+    policy `smoke-telemetry-probe` lets it send there, so the timeout is Loki's
+    ingress rule) and the same Pod with the gateway's labels reaches it; and
+    the gateway and Tempo's receiver each serve the certificate that is in
+    their Secret, which finds a pod that was not rolled after a renewal.
+    Skipped, one line, while no Meridian Deployment exists. Tested with
+    stand-ins, and the probes' Python run against nginx of the pinned image in
+    a container; not yet run on the cluster. The paragraph of the script
+    (`smoke.d/12-telemetry-stores.sh`) says what the lines do not prove.
 
 `make smoke` creates three Jobs in `observability`. Kubernetes removes each one
 15 minutes after it finishes. It creates one Pod in `meridian` for the network
-check (line 8) and one `CertificateRequest` in `default` for the certificate
+check (line 8), one Pod in `observability` for the telemetry stores (line 12)
+and one `CertificateRequest` in `default` for the certificate
 policy check (line 10), and deletes each as soon as its check is done and again
 when the script ends. The tool check leaves at most one refused `tool.call` row
 per server in the audit log per throttle window, and the identity check one

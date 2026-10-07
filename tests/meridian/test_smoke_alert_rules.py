@@ -68,8 +68,10 @@ RULE_COUNT = 21
 # the Model Gateway's cannot reach the rate store): 40 before S064 and S066, 44
 # with S064's four, 45 with both. S073 (K5) added the fifth line of the
 # certificate policy check (the database's own certificates are not close to
-# their end): 46.
-SMOKE_LINES_AFTER_DEPLOY = 46
+# their end): 46. S072 (M3b) added check 12, the telemetry stores': five lines,
+# the refusals of Loki's gateway, Tempo's receiver and Loki's own port and the
+# certificates the gateway and the receiver serve: 51.
+SMOKE_LINES_AFTER_DEPLOY = 51
 # Counted from the checks' own skip lines, not measured: edge 1, database 3 and
 # one SKIP for its stores, tools 1 SKIP, telemetry 7, cost panel 3 and one SKIP
 # for the series, adjuster pages 1 SKIP, sweep 2 SKIP (the Job's line and the
@@ -90,8 +92,9 @@ SMOKE_LINES_AFTER_DEPLOY = 46
 # streams line is a SKIP (the Claims API's line above it did not pass, so an
 # empty answer would prove nothing). S073's certificate line makes it 33: the
 # Cluster platform-db exists after `make up` alone, and its certificates are
-# the operator's, made with it.
-SMOKE_LINES_AFTER_UP = 33
+# the operator's, made with it. S072's check 12 makes it 34: one SKIP after `make
+# up` alone (the probe Pod borrows the Claims API's image).
+SMOKE_LINES_AFTER_UP = 34
 
 
 def tree_groups() -> list[dict]:
@@ -733,7 +736,7 @@ def test_the_health_dashboard_constants_are_the_files() -> None:
     assert path == '"${KIND_DIR}/dashboards/platform-health.json"'
 
 
-def test_the_alert_rules_check_runs_last_after_the_certificate_policy_check() -> None:
+def test_the_alert_rules_check_runs_after_the_certificate_policy_check() -> None:
     lines = SMOKE_SH.splitlines()
     calls = [line for line in lines[lines.index("check_edge") :] if line]
 
@@ -750,7 +753,9 @@ def test_the_alert_rules_check_runs_last_after_the_certificate_policy_check() ->
         "check_certificate_policy",
     ]
     assert calls[10] == "check_alert_rules"
-    assert calls[11].startswith("if ((failures")
+    # The telemetry stores' check (S072, contract M3b) runs after it, and last.
+    assert calls[11] == "check_telemetry_stores"
+    assert calls[12].startswith("if ((failures")
 
 
 def test_the_cost_panel_still_prints_its_three_lines_through_the_shared_function() -> (
@@ -805,7 +810,7 @@ def test_the_documents_count_the_lines_and_the_checks_after_this_step() -> None:
     assert re.findall(r"make smoke +# (\d+) lines", demo) == [
         str(SMOKE_LINES_AFTER_DEPLOY)
     ]
-    assert "`make smoke` checks eleven things:" in kind
+    assert "`make smoke` checks twelve things:" in kind
     assert "**Alert rules and health dashboard.** Four lines" in kind
     assert "checks ten things" not in kind
 

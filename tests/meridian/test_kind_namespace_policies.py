@@ -38,6 +38,7 @@ from kindsupport import (
 MANIFESTS = KIND_DIR / "manifests"
 CERT_MANAGER_FILE = MANIFESTS / "cert-manager-networkpolicy.yaml"
 OBSERVABILITY_FILE = MANIFESTS / "observability-networkpolicy.yaml"
+LOKI_POLICY_FILE = MANIFESTS / "observability-loki-networkpolicy.yaml"
 SMOKE_FILE = MANIFESTS / "smoke-networkpolicy.yaml"
 NAMESPACES_FILE = MANIFESTS / "namespaces.yaml"
 VALUES = KIND_DIR / "values"
@@ -92,6 +93,13 @@ def policies_of(path: Path) -> dict[str, dict]:
     documents = load_documents(path)
     assert documents, path
     return network_policies(documents)
+
+
+def observability_policies() -> dict[str, dict]:
+    """Every NetworkPolicy of ``observability``: the namespace's file and, since
+    S072 (contract M3b), the file of Loki's pods and its gateway's, which ``make up``
+    applies just before Loki's release."""
+    return {**policies_of(OBSERVABILITY_FILE), **policies_of(LOKI_POLICY_FILE)}
 
 
 def header_of(path: Path) -> str:
@@ -383,7 +391,7 @@ def collector_labels() -> dict[str, str]:
 
 
 def test_observability_denies_ingress_and_egress_and_says_so() -> None:
-    policies = policies_of(OBSERVABILITY_FILE)
+    policies = observability_policies()
     ingress_names = {
         "default-deny-ingress",
         "otel-collector",
@@ -514,7 +522,7 @@ def test_the_collectors_policy_and_the_charts_egress_name_one_path() -> None:
 
 
 def test_each_pod_of_observability_admits_the_peers_that_call_it() -> None:
-    policies = policies_of(OBSERVABILITY_FILE)
+    policies = observability_policies()
     collector = pods(collector_labels())
     grafana = pods(GRAFANA)
     prometheus = pods(PROMETHEUS)
@@ -572,7 +580,7 @@ def test_each_pod_of_observability_admits_the_peers_that_call_it() -> None:
 
 
 def test_the_ports_the_policies_open_are_the_ones_the_values_call() -> None:
-    policies = policies_of(OBSERVABILITY_FILE)
+    policies = observability_policies()
     stack = stack_values()
     sources = {
         source["name"]: urlsplit(source["url"]).port
@@ -603,7 +611,7 @@ def test_the_ports_the_policies_open_are_the_ones_the_values_call() -> None:
 
 
 def test_every_observability_ingress_rule_names_a_peer_and_a_port() -> None:
-    policies = policies_of(OBSERVABILITY_FILE)
+    policies = observability_policies()
 
     open_rules = {
         name
