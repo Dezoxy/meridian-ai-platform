@@ -56,6 +56,7 @@ from psycopg import sql
 from psycopg.conninfo import make_conninfo
 from redissupport import RateKeys
 
+from meridian.platform.common.certlife import forget_handed_over_certificate
 from meridian.platform.common.logformat import HELD_AT_WARNING, UVICORN_LOGGERS
 from meridian.platform.toolserver import wire
 from meridian.runtime import tool_client
@@ -93,6 +94,17 @@ def jq_installed() -> None:
     """What ``requires_jq`` names (``jqsupport.py``): a missing ``jq`` skips the
     test on a developer's machine and fails it under ``GITHUB_ACTIONS=true``."""
     stop_without_jq()
+
+
+@pytest.fixture(autouse=True)
+def _forget_the_handed_over_certificate() -> Iterator[None]:
+    """The TLS start module hands its certificate to ``certlife`` for the whole
+    process (S069); a test that starts a service through it must not leave that
+    behind for the next test of the same worker. Cleared before and after every
+    test, so no test file has to remember it."""
+    forget_handed_over_certificate()
+    yield
+    forget_handed_over_certificate()
 
 
 @pytest.fixture(autouse=True)
