@@ -136,7 +136,9 @@ LOG = (
 # The answer number N of a series of files <prefix>.0, <prefix>.1 ... is the
 # one for the Nth call, and the last one answers every later call. The number of
 # files is in <prefix>.total. A file <prefix>.N.err is what that call prints on
-# its error stream, and <prefix>.N.fail makes the call exit with status 255.
+# its error stream, <prefix>.N.fail makes the call exit with status 255, and
+# <prefix>.N.status makes it exit with the status the file holds (124 is what
+# `timeout` exits with when it cut the command off).
 PICK = """
 pick() {{
   local prefix="{scratch}/$1" n=0 total
@@ -146,6 +148,7 @@ pick() {{
   (( n >= total )) && n=$((total - 1))
   [[ -e $prefix.$n.err ]] && cat "$prefix.$n.err" >&2
   [[ -e $prefix.$n.fail ]] && return 255
+  [[ -e $prefix.$n.status ]] && return "$(<"$prefix.$n.status")"
   cat "$prefix.$n"
 }}
 """
@@ -154,6 +157,13 @@ pick() {{
 # lock that a first boot's own updater may be holding.
 APT_LOCK = ("-o", "DPkg::Lock::Timeout=300")
 KERNEL_MODULES = ("overlay", "br_netfilter")
+# What `ctr version` prints: a Client section and a Server section, each with a
+# Version line. The values are invented.
+SERVER_VERSION = "v9.9.9-stand-in"
+CTR_VERSION_ANSWER = (
+    "Client:\n  Version: v1.1.1-client\n  Revision: 0000\n  Go version: go0\n\n"
+    f"Server:\n  Version: {SERVER_VERSION}\n  Revision: 0000\n  UUID: 0\n"
+)
 SYSCTL_FILE = (
     "net.bridge.bridge-nf-call-iptables = 1\n"
     "net.bridge.bridge-nf-call-ip6tables = 1\n"
@@ -269,7 +279,9 @@ fi
 : >"{scratch}/loaded.$1"
 """,
     # Only the two lock-timeout forms the scripts use, each with the option first
-    # and the exact package list: a typo in a flag or a package is exit 99.
+    # and the exact package list: a typo in a flag or a package is exit 99. A
+    # file <scratch>/apt-get-failures holding N makes the first N calls (of any
+    # verb) fail with apt's status for a lock it could not take.
     "apt-get": """
 if [[ $1 != -o || $2 != DPkg::Lock::Timeout=300 ]]; then
   echo "stub apt-get: no lock timeout in: $*" >&2; exit 99
@@ -281,8 +293,30 @@ case "$*" in
   "install -y kubelet kubeadm kubectl") ;;
   *) echo "stub apt-get: unexpected $*" >&2; exit 99 ;;
 esac
+failures=0
+file="{scratch}/apt-get-failures"
+[[ -f $file ]] && failures=$(<"$file")
+n=0; [[ -f "{scratch}/apt-get.count" ]] && n=$(<"{scratch}/apt-get.count")
+echo $((n + 1)) >"{scratch}/apt-get.count"
+if (( n < failures )); then
+  echo "E: Could not get lock /var/lib/apt/lists/lock" >&2; exit 100
+fi
 """,
-    "apt-mark": "",
+    # Only the one call the scripts make; a file <scratch>/apt-mark-failures
+    # holding N makes the first N calls fail.
+    "apt-mark": """
+if [[ "$*" != "hold kubelet kubeadm kubectl" ]]; then
+  echo "stub apt-mark: unexpected $*" >&2; exit 99
+fi
+failures=0
+file="{scratch}/apt-mark-failures"
+[[ -f $file ]] && failures=$(<"$file")
+n=0; [[ -f "{scratch}/apt-mark.count" ]] && n=$(<"{scratch}/apt-mark.count")
+echo $((n + 1)) >"{scratch}/apt-mark.count"
+if (( n < failures )); then
+  echo "E: Could not get lock /var/lib/dpkg/lock-frontend" >&2; exit 100
+fi
+""",
     # Three calls. A restart makes the socket appear under the boot root, unless
     # the test left <scratch>/no-socket there; the socket is a copy (cp -a) of
     # the one make_scratch made.
@@ -383,7 +417,7 @@ def make_scratch(tmp_path: Path) -> Scratch:
     (tmp_path / "containerd.toml").write_text(CONTAINERD_CONFIG, encoding="utf-8")
     scratch.series("imds", [ADDRESS])
     scratch.series("param", [VALID + "\n"])
-    scratch.series("ctr", ["Client:\n  Version: stand-in\n"])
+    scratch.series("ctr", [CTR_VERSION_ANSWER])
     os.mknod(tmp_path / "containerd.sock", stat.S_IFSOCK | 0o600)
     return scratch
 
@@ -407,6 +441,7 @@ def run_script(
         "PUBLISH_ATTEMPTS": "3",
         "JOIN_ATTEMPTS": "3",
         "CONTAINERD_ATTEMPTS": "3",
+        "APT_ATTEMPTS": "3",
         **settings,
     }
     return subprocess.run(

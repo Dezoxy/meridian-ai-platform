@@ -850,10 +850,47 @@ def test_a_new_image_does_not_replace_a_node_on_a_second_apply(name: str) -> Non
 
 
 @pytest.mark.parametrize("name", ["control_plane", "worker"])
-def test_a_node_runs_in_standard_credit_mode_not_unlimited(name: str) -> None:
+def test_a_node_runs_in_unlimited_credit_mode_because_a_t3_has_no_launch_credits(
+    name: str,
+) -> None:
     (credits_,) = nested(instances()[name], "credit_specification")
 
-    assert value_of(credits_, "cpu_credits") == '"standard"'
+    assert value_of(credits_, "cpu_credits") == '"unlimited"'
+
+
+def comments_of(*parts: str) -> str:
+    """The comment lines of a file of the module, as one line of single spaces."""
+    lines = read(MODULE_DIR.joinpath(*parts)).splitlines()
+    text = " ".join(
+        re.sub(r"^\s*# ?", "", line) for line in lines if line.lstrip().startswith("#")
+    )
+    return " ".join(text.split())
+
+
+def test_the_credit_comment_cites_its_pages_and_what_the_surplus_charge_follows() -> (
+    None
+):
+    comments = comments_of("nodes.tf")
+
+    for page in (
+        "burstable-credits-baseline-concepts.html",
+        "burstable-performance-instances-standard-mode-concepts.html",
+        "burstable-performance-instances-unlimited-mode-concepts.html",
+    ):
+        assert f"docs.aws.amazon.com/AWSEC2/latest/UserGuide/{page}" in comments
+    assert "do not receive launch credits" in comments
+    assert "surplus credits" in comments
+    assert "flat additional rate per vCPU-hour" in comments
+    assert "stopped or terminated" in comments
+
+
+def test_the_apt_comment_names_its_pages_and_what_they_leave_out() -> None:
+    comments = comments_of("templates", "node-common.sh.tftpl")
+
+    assert "apt.conf(5)" in comments
+    assert "configure-index" in comments
+    assert "dpkg::lock::timeout" in comments
+    assert "which lock the option covers: not read" in comments
 
 
 @pytest.mark.parametrize("name", ["control_plane", "worker"])
@@ -1288,6 +1325,51 @@ def test_the_readme_says_what_the_infrastructure_review_asked_it_to_say(
     sentence: str,
 ) -> None:
     assert sentence in readme_prose()
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        # The control plane is created last, and why.
+        "The control plane is created last.",
+        "it reads the workers' public addresses",
+        "a worker cannot wait for it",
+        # The apply is longer than two minutes (an estimate).
+        "The apply takes longer than two minutes",
+        "Both figures are an estimate from reading the boot scripts, not seen",
+        "240 tries of ten seconds",
+        "`kubeadm init` has no bound in the script and is not in that sum",
+        # The quota, before the apply.
+        "Before the apply: the account's vCPU quota",
+        "quota for Running On-Demand Standard instances",
+        "six vCPUs",
+        "fails after two instances are already billing",
+        # A different build of Terraform.
+        "A different build of Terraform could also compress the user data differently",
+        "one more reason a second apply is never done",
+        # The credit mode, and what bills.
+        "run in `unlimited` CPU credit mode",
+        "do not receive launch credits because they support Unlimited mode",
+        "surplus credits",
+        "flat additional rate per vCPU-hour",
+        "when the instance is stopped or terminated",
+        # The package lock and the retry.
+        "Which lock the option is documented to cover: not read",
+        "is tried again, ten tries in all",
+    ],
+)
+def test_the_readme_says_what_the_second_infrastructure_review_asked_it_to_say(
+    sentence: str,
+) -> None:
+    assert sentence in readme_prose()
+
+
+def test_the_quota_item_comes_before_the_apply_items_and_the_wait_section() -> None:
+    text = read(MODULE_DIR / "README.md")
+
+    quota = text.index("## Before the apply: the account's vCPU quota")
+    assert quota < text.index("## How long to wait, and how to look")
+    assert quota < text.index("## What only an apply settles")
 
 
 def test_no_comment_or_text_of_the_module_states_a_price() -> None:

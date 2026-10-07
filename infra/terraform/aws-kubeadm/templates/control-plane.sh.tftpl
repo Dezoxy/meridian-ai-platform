@@ -8,8 +8,11 @@
 # on this node, after boot, and leaves it only through one Parameter Store
 # parameter (the placeholder that Terraform made, overwritten here).
 #
-# The three settings below the "Bounds" heading have defaults and may be set in
-# the environment: a test shortens them. cloud-init sets none of them.
+# Five settings have defaults and may be set in the environment: a test shortens
+# them, and cloud-init sets none of them. Three are below the "Bounds" heading
+# (ADDRESS_ATTEMPTS, PUBLISH_ATTEMPTS and POLL_SECONDS: BOOT_ROOT, the root prefix
+# a test points elsewhere, is the fourth line there), two are in the text shared
+# with the workers (CONTAINERD_ATTEMPTS and APT_ATTEMPTS).
 #
 # Terraform renders this file: every shell parameter expansion is written with
 # a doubled dollar sign, and no percent sign is followed by a brace.
@@ -139,7 +142,7 @@ publish_the_join_command() {
   die "gave up after $PUBLISH_ATTEMPTS tries: the join command was not written to $JOIN_PARAMETER_NAME"
 }
 
-for setting in ADDRESS_ATTEMPTS PUBLISH_ATTEMPTS POLL_SECONDS CONTAINERD_ATTEMPTS; do
+for setting in ADDRESS_ATTEMPTS PUBLISH_ATTEMPTS POLL_SECONDS CONTAINERD_ATTEMPTS APT_ATTEMPTS; do
   require_number "$setting"
 done
 

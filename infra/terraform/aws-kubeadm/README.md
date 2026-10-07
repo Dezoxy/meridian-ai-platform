@@ -31,16 +31,45 @@ Manager, and for the comparison with the managed cluster, written from what was
 built. A cluster that runs the platform needs a volume driver, a load balancer
 controller and an ingress controller on top of this, and that is not built.
 
+## Before the apply: the account's vCPU quota
+
+Look at the account's quota for **Running On-Demand Standard instances** before
+the apply: Service Quotas in the console, in the region of the apply. It is a
+read and costs nothing. At the defaults the nodes need six vCPUs (three
+instances; both allowed types, `t3.medium` and `t3.large`, have two vCPUs each
+on the EC2 User Guide's page "Key concepts for burstable performance
+instances", read 2026-10-07), and eight with three workers. A new account's
+quota may be lower than that: five is a figure from memory, **not seen** for
+this account. The control plane is created last (next section), so with a
+quota of five the request for the third instance fails after two instances are
+already billing, and the way out is the removal.
+
 ## How long to wait, and how to look
 
-The apply ends in about two minutes, when the instances exist; it does not wait
-for the cluster. The cluster is ready about ten to twelve minutes after the
-apply ends (the control plane installs, runs `kubeadm init` and applies Calico,
-and each worker waits for the join command). These figures are an estimate from
-reading the boot scripts, **not seen**. A worker polls for the join command for
-a bound set in `templates/worker.sh.tftpl` (`JOIN_ATTEMPTS` tries,
-`POLL_SECONDS` apart: about twenty minutes at the defaults of this writing)
-after its own install, and then gives up with one line in its log.
+The control plane is created last. Terraform creates the workers first, then the
+rule that admits the workers' public addresses to the API server on port 6443,
+then the control plane, then the association of the Elastic IP. The reason is in
+that rule: it reads the workers' public addresses, so it exists only once the
+workers do, and the control plane waits for it (a worker cannot wait for it: it
+would wait for itself). The workers poll for the join command, so booting before
+the control plane costs them nothing. Code, **tested with stand-ins** as a text
+check, not seen.
+
+The apply takes longer than two minutes: the instances are created one stage
+after another (workers, rule, control plane, association), and it ends when the
+instances exist; it does not wait for the cluster. The cluster is ready about
+ten to twelve minutes after the apply ends (the control plane installs, runs
+`kubeadm init` and applies Calico, and each worker waits for the join command).
+Both figures are an estimate from reading the boot scripts, **not seen**. A
+worker polls for the join command for a bound set in `templates/worker.sh.tftpl`
+(`JOIN_ATTEMPTS` tries, `POLL_SECONDS` apart: 240 tries of ten seconds, forty
+minutes of pauses and a few more of reads, at the defaults of this writing)
+after its own install, and then gives up with one line in its log. The window
+is longer than a worker needs because the control plane starts after it: a test
+holds the window above the sum of the control plane's own bounds that a worker
+does not also pay (the wait for the Elastic IP, the Calico download's tries, the
+publish's tries and one wait for the package lock). `kubeadm init` has no bound
+in the script and is not in that sum.
 
 To look, open a Session Manager session on the control plane (its instance id
 is the `control_plane_instance_id` output; there is no port 22 and no key) and
@@ -63,6 +92,13 @@ for the first control plane, a well-formed one the new control plane does not
 know, make one attempt and stop. A change to a boot script replaces the
 instances too (`user_data_replace_on_change`), for the same reason. So the way
 to change anything is the removal, then a fresh apply.
+
+A different build of Terraform could also compress the user data differently
+(`base64gzip` is the compression library of the build's own language runtime,
+from memory, **not seen**): the text of `user_data_base64` would then differ
+with no change to the scripts, and with `user_data_replace_on_change` a second
+plan would replace all three nodes. That is one more reason a second apply is
+never done.
 
 ## What checks this module
 
@@ -111,8 +147,22 @@ No price is stated in this directory. The figure for an hour in the step's
 design is an estimate, and it stays one until the owner's billing console
 confirms it. What bills, with no figure: three instances by the second, three
 root volumes, the public IPv4 addresses (the Elastic IP and the nodes' own),
-and data transfer between the nodes through their public addresses. The budget
-alerts after money is spent and stops nothing.
+data transfer between the nodes through their public addresses, and surplus
+CPU credits (next paragraph). The budget alerts after money is spent and stops
+nothing.
+
+The nodes run in `unlimited` CPU credit mode. The EC2 User Guide's pages on
+burstable instances (read 2026-10-07; `nodes.tf` names the three) say that T3
+instances "do not receive launch credits because they support Unlimited mode",
+so a T3 instance in standard mode would start the boot, which is CPU-heavy,
+without credits and be held to its baseline (20 percent of each vCPU for a
+`t3.medium`) once its small balance is spent. What `unlimited` can bill: surplus
+credits, the CPU use above the baseline that earned credits did not pay for,
+charged at a flat additional rate per vCPU-hour when the spent surplus credits
+exceed what the instance can earn in 24 hours, when the instance is stopped or
+terminated, or when it is switched to standard. So the charge follows CPU use
+above the baseline at the time the nodes are removed. The rate is on AWS's
+pricing page and is not written here.
 
 ## The state, and what not to do by hand
 
@@ -269,10 +319,19 @@ where it shows. None is seen.
   preflight needs them is not known: the Kubernetes page on container runtimes
   (read 2026-10-07) lists IP forwarding only. Whether the image has both
   modules is not seen; a module that does not load ends the boot with one line.
-- **The package lock and containerd's socket:** `apt-get` waits up to 300
-  seconds for the lock (an option no page this module read documents), and the
-  script waits for containerd to answer before kubeadm runs. Neither wait has
-  been seen to be needed or to be enough.
+- **The package lock, the package retry and containerd's socket:** every
+  `apt-get` call waits for the package lock (`DPkg::Lock::Timeout`, up to 300
+  seconds) and, if it still fails, is tried again, ten tries in all with
+  `POLL_SECONDS` between them, and then the script ends with one line that names
+  the verb; `apt-mark hold` is tried again the same way. Which lock the option
+  is documented to cover: **not read**. `apt.conf(5)` of noble and of Debian
+  unstable (read 2026-10-07) do not mention the option, and apt's own
+  `configure-index` lists its name and type and nothing more. The review's
+  belief (from memory) is that it covers dpkg's lock and not the lists lock
+  that `apt-get update` takes, which is what the retry is for. The script also
+  waits for containerd to answer before kubeadm runs, and logs the server
+  version that answered. None of these waits or retries has been seen to be
+  needed or to be enough.
 - **`ip_protocol = "4"`:** whether the provider and the API accept the IP-in-IP
   rules with the protocol number and no ports.
 - **containerd's configuration:** whether its default text has exactly one

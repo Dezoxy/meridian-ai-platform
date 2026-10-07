@@ -78,12 +78,27 @@ resource "aws_instance" "control_plane" {
     calico_manifest_sha256 = var.calico_manifest_sha256
   }))
 
-  # `standard` stops the t3 family's default (unlimited) from billing surplus
-  # CPU credits on top of the hourly price; these nodes are idle most of the
-  # hour. The provider page says T3 instances are launched as unlimited by
-  # default.
+  # `unlimited`, because the boot is CPU-heavy (package installs, image pulls,
+  # `kubeadm init`) and a T3 instance in standard mode has no launch credits to
+  # start it with. Three pages of the EC2 User Guide, read 2026-10-07:
+  # https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/burstable-performance-instances-standard-mode-concepts.html
+  # says T8i, T4g, T3a and T3 instances "do not receive launch credits because
+  # they support Unlimited mode" (T2 instances do get them);
+  # https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/burstable-credits-baseline-concepts.html
+  # says the same, that these instances launch as unlimited by default, and lists
+  # the t3.medium at a baseline of 20 percent of each of its two vCPUs, which is
+  # what a standard-mode instance without credits is held to once its balance is
+  # spent; and
+  # https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/burstable-performance-instances-unlimited-mode-concepts.html
+  # says what unlimited can bill: surplus credits (CPU used above the baseline
+  # that earned credits do not pay for) are charged at a flat additional rate per
+  # vCPU-hour, when the spent surplus credits exceed what the instance can earn in
+  # 24 hours (charged at the end of the hour), when the instance is stopped or
+  # terminated, or when it is switched to standard. So the charge is tied to CPU
+  # use above the baseline that was not paid down by the time the node is removed.
+  # No figure is given here: the rate is on AWS's pricing page.
   credit_specification {
-    cpu_credits = "standard"
+    cpu_credits = "unlimited"
   }
 
   metadata_options {
@@ -159,8 +174,9 @@ resource "aws_instance" "worker" {
     join_parameter_name   = aws_ssm_parameter.join_command.name
   }))
 
+  # Unlimited, like the control plane's (the comment there says why).
   credit_specification {
-    cpu_credits = "standard"
+    cpu_credits = "unlimited"
   }
 
   metadata_options {

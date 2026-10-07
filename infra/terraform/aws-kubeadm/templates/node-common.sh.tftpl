@@ -3,8 +3,8 @@
 # The rendered text of this file sits inside the control plane's script and
 # inside the worker's. It needs ROLE, REGION, API_PORT, BOOT_ROOT and
 # POLL_SECONDS to be set before it, and it defines the log lines, the bounded
-# download, the strict reading of a join command and the installation of
-# containerd and kubeadm.
+# download, the package calls with their retry, the strict reading of a join
+# command and the installation of containerd and kubeadm.
 #
 # The script that holds this text also sets LC_ALL=C beside its `set -euo
 # pipefail`, above it: the classes of JOIN_PATTERN ([0-9], [a-z]) are ASCII only
@@ -20,9 +20,19 @@ KUBERNETES_MINOR='${kubernetes_minor}'
 KUBERNETES_APT_KEY_FINGERPRINT='${kubernetes_apt_key_fingerprint}'
 
 # The bound on the wait for containerd after its restart: a number of tries, one
-# POLL_SECONDS apart (20 tries are 100 seconds on the control plane and 200 on a
-# worker). A test shortens it; cloud-init sets none.
+# POLL_SECONDS apart. A try can take its own 10-second cut-off (`timeout 10 ctr`)
+# plus the pause, so the worst case is 20 tries of 15 seconds on the control plane
+# (300 seconds) and 20 tries of 20 seconds on a worker (400), not the 100 and 200
+# that the pauses alone make. A test shortens it; cloud-init sets none.
 CONTAINERD_ATTEMPTS="$${CONTAINERD_ATTEMPTS:-20}"
+
+# The bound on every package call (apt_retry below): a number of tries, one
+# POLL_SECONDS apart. The pauses between 10 tries are 9 times POLL_SECONDS: 45
+# seconds on the control plane and 90 on a worker, under five minutes. That is the
+# total of the pauses only: a try may wait up to 300 seconds for the dpkg lock
+# (the option of apt_get), and a lock that is held on every try spends that on each
+# of them. A test shortens it; cloud-init sets none.
+APT_ATTEMPTS="$${APT_ATTEMPTS:-10}"
 
 # What a join command looks like: kubeadm join <IPv4 address>:<port> --token
 # <6 characters, a dot, 16 characters> --discovery-token-ca-cert-hash sha256:
@@ -84,6 +94,52 @@ install_aws_cli() {
   timeout 300 snap install aws-cli --classic || die "the AWS CLI snap did not install within 300 seconds"
 }
 
+# Runs the command $2... up to APT_ATTEMPTS times, POLL_SECONDS apart, and then
+# ends the script with one line. $1 is what the lines call the command: the
+# program and its verb. A package call can fail for a reason that passes (the
+# distribution's own updater holds a lock, a mirror is busy), and the script runs
+# under `set -e`, which would end it at the first such failure with no line of its
+# own.
+apt_retry() {
+  local name=$1
+  local attempt
+  shift
+  for ((attempt = 1; attempt <= APT_ATTEMPTS; attempt++)); do
+    if "$@"; then
+      return 0
+    fi
+    log "$name failed (try $attempt of $APT_ATTEMPTS)"
+    if ((attempt < APT_ATTEMPTS)); then
+      sleep "$POLL_SECONDS"
+    fi
+  done
+  die "$name failed on each of $APT_ATTEMPTS tries"
+}
+
+# apt-get with a wait for the package lock: `-o DPkg::Lock::Timeout=300` gives a
+# call up to 300 seconds for the lock, where the default is to give up at once (on
+# a first boot the distribution's own updater may hold it); a call that still
+# fails goes through apt_retry. $1 is the verb. What the pages say, all read
+# 2026-10-07: apt.conf(5) of noble
+# (https://manpages.ubuntu.com/manpages/noble/en/man5/apt.conf.5.html) and of
+# Debian unstable (https://manpages.debian.org/unstable/apt/apt.conf.5.en.html)
+# do not mention the option; apt's own doc/examples/configure-index
+# (https://salsa.debian.org/apt-team/apt/-/raw/main/doc/examples/configure-index)
+# lists `dpkg::lock::timeout "<INT>"` and says nothing more. So the option's name
+# and its type are read, and which lock the option covers: not read. The review
+# that asked for the retry believed (from memory, about 70 percent) that it covers
+# dpkg's lock and not the lists lock (/var/lib/apt/lists/lock) that `apt-get
+# update` takes, which is the reason the retry is here and not the option alone.
+apt_get() {
+  apt_retry "apt-get $1" apt-get -o DPkg::Lock::Timeout=300 "$@"
+}
+
+# apt-mark holds a package at its version. The review found it has no wait for a
+# lock of its own (from memory), so it is only tried again, with no option.
+apt_mark_hold() {
+  apt_retry "apt-mark hold" apt-mark hold "$@"
+}
+
 # A directory only this script can read (mktemp -d, mode 700). The downloaded
 # signing key and the keyring made from it stay here until they are checked,
 # and so do the control plane's manifest and join command. Removed at the end.
@@ -136,10 +192,19 @@ make_the_pinned_keyring() {
 # and needs an endpoint. Each ask is cut off at 10 seconds.
 wait_for_containerd() {
   local socket="$BOOT_ROOT/run/containerd/containerd.sock"
-  local attempt
+  local attempt answer server
   for ((attempt = 1; attempt <= CONTAINERD_ATTEMPTS; attempt++)); do
-    if [[ -S $socket ]] && timeout 10 ctr version >/dev/null 2>&1; then
-      log "containerd answers on $socket"
+    if [[ -S $socket ]] && answer=$(timeout 10 ctr version 2>/dev/null); then
+      # The version of the server that answered, once: a kubelet that refuses
+      # the container runtime is then diagnosed from the log. Only the
+      # characters a version is made of are kept, and at most 40 of them.
+      server=$(awk '$1 == "Server:" { in_server = 1; next } in_server && $1 == "Version:" { print $2; exit }' <<<"$answer")
+      server=$${server//[^A-Za-z0-9._+-]/}
+      if [[ -n $server ]]; then
+        log "containerd answers on $socket, server version $${server:0:40}"
+      else
+        log "containerd answers on $socket; no server version in the answer"
+      fi
       return 0
     fi
     log "containerd does not answer yet (try $attempt of $CONTAINERD_ATTEMPTS)"
@@ -176,13 +241,11 @@ install_node() {
     >"$BOOT_ROOT/etc/sysctl.d/k8s.conf"
   sysctl --system >/dev/null
 
-  # Every apt-get call waits up to 300 seconds for the package lock: on a first
-  # boot the distribution's own updater may hold it, and the default is to give
-  # up at once (from memory: neither apt-get(8) nor apt.conf(5) of noble, both
-  # read 2026-10-07, mentions the option).
+  # Every package call goes through apt_get (or apt_mark_hold): each waits for
+  # the package lock and, when it still fails, is tried again, then one line.
   log "installing the packages"
-  apt-get -o DPkg::Lock::Timeout=300 update
-  apt-get -o DPkg::Lock::Timeout=300 install -y apt-transport-https ca-certificates curl gpg containerd
+  apt_get update
+  apt_get install -y apt-transport-https ca-certificates curl gpg containerd
 
   fetch "https://pkgs.k8s.io/core:/stable:/v$KUBERNETES_MINOR/deb/Release.key" "$WORK_DIR/release.key"
   make_the_pinned_keyring "$WORK_DIR/release.key" "$WORK_DIR/keyring.gpg"
@@ -192,9 +255,9 @@ install_node() {
   chmod 644 "$BOOT_ROOT$keyring"
   printf 'deb [signed-by=%s] https://pkgs.k8s.io/core:/stable:/v%s/deb/ /\n' \
     "$keyring" "$KUBERNETES_MINOR" >"$BOOT_ROOT/etc/apt/sources.list.d/kubernetes.list"
-  apt-get -o DPkg::Lock::Timeout=300 update
-  apt-get -o DPkg::Lock::Timeout=300 install -y kubelet kubeadm kubectl
-  apt-mark hold kubelet kubeadm kubectl
+  apt_get update
+  apt_get install -y kubelet kubeadm kubectl
+  apt_mark_hold kubelet kubeadm kubectl
 
   # containerd's own default configuration, with the systemd cgroup driver the
   # Kubernetes page "Container Runtimes" asks for. The setting is one line of

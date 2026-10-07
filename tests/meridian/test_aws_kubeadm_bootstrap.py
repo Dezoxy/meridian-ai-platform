@@ -27,6 +27,7 @@ from awskubeadmsupport import (
     CALICO_VERSION,
     COMMON_VALUES,
     CONTROL_PLANE_VALUES,
+    CTR_VERSION_ANSWER,
     FINGERPRINT,
     KERNEL_MODULES,
     MANIFEST,
@@ -42,6 +43,7 @@ from awskubeadmsupport import (
     REGION,
     ROLES,
     SECONDS,
+    SERVER_VERSION,
     SYSCTL_FILE,
     TEMPLATES,
     USER_DATA_LIMIT,
@@ -224,7 +226,7 @@ def test_neither_script_evaluates_text_or_pipes_a_fetched_text_into_a_shell(
             "control-plane",
             {"ADDRESS_ATTEMPTS": "60", "PUBLISH_ATTEMPTS": "10", "POLL_SECONDS": "5"},
         ),
-        ("worker", {"JOIN_ATTEMPTS": "120", "POLL_SECONDS": "10"}),
+        ("worker", {"JOIN_ATTEMPTS": "240", "POLL_SECONDS": "10"}),
     ],
 )
 def test_the_rendered_user_data_sets_no_test_variable_and_its_defaults_are_real(
@@ -234,10 +236,65 @@ def test_the_rendered_user_data_sets_no_test_variable_and_its_defaults_are_real(
 
     found = dict(re.findall(r'^(\w+)="\$\{\1:-([^}]*)\}"$', code, re.MULTILINE))
 
-    assert found == {"BOOT_ROOT": "", "CONTAINERD_ATTEMPTS": "20", **defaults}
+    assert found == {
+        "BOOT_ROOT": "",
+        "CONTAINERD_ATTEMPTS": "20",
+        "APT_ATTEMPTS": "10",
+        **defaults,
+    }
     # None of them is exported or assigned a literal anywhere else.
     for name in found:
         assert len(re.findall(rf"^(export )?{name}=", code, re.MULTILINE)) == 1
+
+
+def default_of(code: str, name: str) -> int:
+    """The default a script gives the setting ``name`` (``NAME="${NAME:-N}"``)."""
+    (value,) = re.findall(rf'^{name}="\$\{{{name}:-(\d+)\}}"$', code, re.MULTILINE)
+    return int(value)
+
+
+def test_a_workers_poll_outlasts_what_only_the_control_plane_spends_first() -> None:
+    """The control plane is created after the workers, and a worker polls from the
+    end of its own install, which is the end of the control plane's install too:
+    what both pay (the package installs, the containerd wait) cancels. What only the
+    control plane pays is summed here from the defaults and the download flags of
+    the rendered scripts, and the worker's window (tries times seconds between
+    tries) must cover it.
+
+    Summed: the wait for the Elastic IP (tries times pause), the Calico manifest's
+    download (curl's tries, each of at most --max-time seconds, and the pauses
+    between them), the publish (tries times pause: the put-parameter call itself has
+    no cut-off here) and one wait for the package lock, which only the control
+    plane can meet alone. NOT summed because the script has no bound on them:
+    `kubeadm init` (image pulls, kubeadm's own wait for the control plane) and
+    `kubeadm token create`; and the time Terraform takes to create the control plane
+    after the workers, which is no script's bound. The margin left over is what pays
+    for those."""
+    control_plane = code_of(rendered("control-plane"))
+    worker = code_of(rendered("worker"))
+    pause = default_of(control_plane, "POLL_SECONDS")
+    download = re.search(
+        r"--retry (\d+) --retry-delay (\d+) --connect-timeout \d+ --max-time (\d+)",
+        control_plane,
+    )
+    assert download is not None
+    retries, retry_delay, max_time = (int(n) for n in download.groups())
+    (lock_wait,) = {
+        int(n) for n in re.findall(r"DPkg::Lock::Timeout=(\d+)", control_plane)
+    }
+    parts = {
+        "the wait for the Elastic IP": default_of(control_plane, "ADDRESS_ATTEMPTS")
+        * pause,
+        "the Calico manifest's download": (retries + 1) * max_time
+        + retries * retry_delay,
+        "the publish of the join command": default_of(control_plane, "PUBLISH_ATTEMPTS")
+        * pause,
+        "one wait for the package lock": lock_wait,
+    }
+    window = default_of(worker, "JOIN_ATTEMPTS") * default_of(worker, "POLL_SECONDS")
+
+    assert all(seconds > 0 for seconds in parts.values()), parts
+    assert window >= sum(parts.values()), (window, parts)
 
 
 @pytest.mark.parametrize("role", ROLES)
@@ -756,10 +813,100 @@ def test_every_apt_get_call_waits_up_to_300_seconds_for_the_package_lock(
     for call in calls:
         assert ("-o", "DPkg::Lock::Timeout=300") in pairwise(call)
         assert call[1:3] == list(APT_LOCK)  # before the verb, as apt-get reads it
-    # And in the text: no apt-get line of the script is without the option.
-    lines = re.findall(r"^\s*apt-get .*$", code_of(rendered(role)), re.MULTILINE)
-    assert len(lines) == 4
-    assert all(" -o DPkg::Lock::Timeout=300 " in line for line in lines)
+    # And in the text: the one place that starts apt-get is the function that adds
+    # the option, and every other line goes through that function.
+    code = code_of(rendered(role))
+    assert re.findall(r"^\s*(?:apt-get|apt-mark)\b.*$", code, re.MULTILINE) == []
+    (start,) = re.findall(r"^.*\bapt-get -o DPkg::Lock::Timeout=300 .*$", code, re.M)
+    assert start.strip().startswith("apt_retry ")
+    assert len(re.findall(r"^\s*apt_get \S+", code, re.MULTILINE)) == 4
+    assert len(re.findall(r"^\s*apt_mark_hold ", code, re.MULTILINE)) == 1
+
+
+def apt_lines(stderr: str) -> list[str]:
+    return [line for line in stderr.splitlines() if line.startswith("E: ")]
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_an_apt_get_that_fails_twice_is_tried_again_and_the_script_goes_on(
+    tmp_path: Path, role: str
+) -> None:
+    scratch = make_scratch(tmp_path)
+    (tmp_path / "apt-get-failures").write_text("2", encoding="utf-8")
+
+    done = run_script(scratch, role)  # three tries is the bound of this run
+
+    assert done.returncode == 0, done.stderr
+    calls = scratch.called("apt-get")
+    assert [call[3] for call in calls] == ["update"] * 3 + [
+        "install",
+        "update",
+        "install",
+    ]
+    for call in calls:  # the option is on every try, the repeated ones too
+        assert call[1:3] == list(APT_LOCK)
+    assert len(apt_lines(done.stderr)) == 2  # apt's own words, once per failure
+    assert done.stdout.count("apt-get update failed") == 2
+    assert len(scratch.called("kubeadm")) >= 1
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_an_apt_get_that_never_succeeds_ends_the_script_after_the_bound_with_one_line(
+    tmp_path: Path, role: str
+) -> None:
+    scratch = make_scratch(tmp_path)
+    (tmp_path / "apt-get-failures").write_text("99", encoding="utf-8")
+
+    done = run_script(scratch, role)
+
+    assert done.returncode == 1
+    errors = [line for line in done.stderr.splitlines() if "ERROR" in line]
+    assert len(errors) == 1  # one line of the script's own, and it is the last
+    assert done.stderr.splitlines()[-1] == errors[0]
+    assert errors[0].startswith(f"{role}: ERROR: ")
+    assert "apt-get update" in errors[0]  # the verb that failed
+    assert "3 tries" in errors[0]
+    assert len(scratch.called("apt-get")) == 3  # the bound, and not one try more
+    # Nothing after it ran: no key, no repository, no containerd, no kubeadm.
+    for command in ("gpg", "systemctl", "ctr", "kubeadm", "kubectl", "apt-mark"):
+        assert scratch.called(command) == [], command
+    assert not (tmp_path / "root" / "etc" / "apt").exists()
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_an_apt_mark_that_fails_twice_is_tried_again_and_the_script_goes_on(
+    tmp_path: Path, role: str
+) -> None:
+    scratch = make_scratch(tmp_path)
+    (tmp_path / "apt-mark-failures").write_text("2", encoding="utf-8")
+
+    done = run_script(scratch, role)
+
+    assert done.returncode == 0, done.stderr
+    assert (
+        scratch.called("apt-mark")
+        == [["apt-mark", "hold", "kubelet", "kubeadm", "kubectl"]] * 3
+    )
+    assert len(scratch.called("kubeadm")) >= 1
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_an_apt_mark_that_never_succeeds_ends_the_script_naming_it(
+    tmp_path: Path, role: str
+) -> None:
+    scratch = make_scratch(tmp_path)
+    (tmp_path / "apt-mark-failures").write_text("99", encoding="utf-8")
+
+    done = run_script(scratch, role)
+
+    assert done.returncode == 1
+    errors = [line for line in done.stderr.splitlines() if "ERROR" in line]
+    assert len(errors) == 1
+    assert done.stderr.splitlines()[-1] == errors[0]
+    assert "apt-mark hold" in errors[0]
+    assert len(scratch.called("apt-mark")) == 3
+    assert scratch.called("containerd") == []  # the configuration never started
+    assert scratch.called("kubeadm") == []
 
 
 @pytest.mark.parametrize("role", ROLES)
@@ -831,6 +978,37 @@ def test_the_script_waits_for_containerd_to_answer_and_goes_on_at_the_third_try(
 
 
 @pytest.mark.parametrize("role", ROLES)
+def test_the_servers_version_is_logged_once_when_containerd_answers(
+    tmp_path: Path, role: str
+) -> None:
+    scratch = make_scratch(tmp_path)
+    scratch.series("ctr", ["", "", CTR_VERSION_ANSWER])
+    (tmp_path / "ctr.0.fail").touch()
+    (tmp_path / "ctr.1.fail").touch()
+
+    done = run_script(scratch, role)
+
+    assert done.returncode == 0, done.stderr
+    # The server's version, and not the client's: one line, after the third try.
+    assert done.stdout.count(SERVER_VERSION) == 1
+    assert "v1.1.1-client" not in done.stdout
+    assert "server version" in done.stdout
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_an_answer_with_no_server_section_is_logged_as_having_no_version(
+    tmp_path: Path, role: str
+) -> None:
+    scratch = make_scratch(tmp_path)
+    scratch.series("ctr", ["Client:\n  Version: v1.1.1-client\n"])
+
+    done = run_script(scratch, role)
+
+    assert done.returncode == 0, done.stderr
+    assert "no server version in the answer" in done.stdout
+
+
+@pytest.mark.parametrize("role", ROLES)
 def test_a_containerd_that_never_answers_ends_the_script_after_the_bound_with_one_line(
     tmp_path: Path, role: str
 ) -> None:
@@ -885,9 +1063,11 @@ def test_a_socket_that_never_appears_is_never_asked_and_ends_the_script(
         ("control-plane", "ADDRESS_ATTEMPTS"),
         ("control-plane", "POLL_SECONDS"),
         ("control-plane", "CONTAINERD_ATTEMPTS"),
+        ("control-plane", "APT_ATTEMPTS"),
         ("worker", "JOIN_ATTEMPTS"),
         ("worker", "POLL_SECONDS"),
         ("worker", "CONTAINERD_ATTEMPTS"),
+        ("worker", "APT_ATTEMPTS"),
     ],
 )
 @pytest.mark.parametrize("value", ["ten", "-1", "1e3", "5; touch x", "1234567"])
@@ -1234,13 +1414,13 @@ def test_a_failed_read_that_printed_nothing_is_said_to_have_printed_nothing(
     assert "printed no message" in line
 
 
-def test_the_error_is_cut_to_200_characters(tmp_path: Path) -> None:
+def test_the_error_is_cut_to_400_characters(tmp_path: Path) -> None:
     error = b"E" + b"x" * 5000 + b"\n"
 
     line, _ = gave_up(tmp_path, error)
 
-    assert "E" + "x" * 199 in line
-    assert "x" * 200 not in line
+    assert "E" + "x" * 399 in line
+    assert "x" * 400 not in line
 
 
 def test_the_error_is_cut_even_when_it_has_no_newline(tmp_path: Path) -> None:
@@ -1248,8 +1428,36 @@ def test_the_error_is_cut_even_when_it_has_no_newline(tmp_path: Path) -> None:
 
     line, _ = gave_up(tmp_path, error)
 
-    assert "E" + "x" * 199 in line
-    assert "x" * 200 not in line
+    assert "E" + "x" * 399 in line
+    assert "x" * 400 not in line
+
+
+# What AWS prints for a refused read, in its own shape (an AccessDenied message
+# names the caller, the action, the resource and the reason), with the
+# documentation's example account number and instance id. About 350 characters:
+# the reason clause is at the end, past where the old cut of 200 fell.
+REALISTIC_ACCESS_DENIED = (
+    "An error occurred (AccessDeniedException) when calling the GetParameter "
+    "operation: User: arn:aws:sts::123456789012:assumed-role/"
+    "meridian-aws-kubeadm-worker/i-0123456789abcdef0 is not authorized to "
+    "perform: ssm:GetParameter on resource: "
+    "arn:aws:ssm:eu-central-1:123456789012:parameter/meridian-aws-kubeadm/"
+    "join-command because no identity-based policy allows the ssm:GetParameter "
+    "action"
+)
+THE_REASON = "because no identity-based policy allows the ssm:GetParameter action"
+
+
+def test_a_realistic_access_denied_message_keeps_its_reason_clause(
+    tmp_path: Path,
+) -> None:
+    assert 300 < len(REALISTIC_ACCESS_DENIED) <= 400
+
+    line, _ = gave_up(tmp_path, (REALISTIC_ACCESS_DENIED + "\n").encode())
+
+    assert THE_REASON in line
+    assert REALISTIC_ACCESS_DENIED in line
+    assert "withheld" not in line  # none of it has the shape of a join command
 
 
 def test_every_character_outside_printable_ascii_is_replaced_in_the_line(
@@ -1297,10 +1505,110 @@ def test_an_error_line_that_holds_the_shape_of_a_join_command_is_withheld(
         assert part not in output
 
 
+def test_a_token_with_a_non_ascii_character_inside_it_is_withheld_not_shown_by_its_tail(
+    tmp_path: Path,
+) -> None:
+    # The re-read's bypass: the byte replacement turned the character into
+    # question marks, and what was left no longer had the shape of a token.
+    error = (
+        f"An error occurred: bad value {BOOTSTRAP_ID[:7]}{E_ACUTE}{BOOTSTRAP_ID[7:]}"
+    )
+
+    line, output = gave_up(tmp_path, (error + "\n").encode())
+
+    assert "withheld" in line
+    assert BOOTSTRAP_ID[7:] not in output
+
+
 def test_the_masking_does_not_hide_an_ordinary_service_error(tmp_path: Path) -> None:
     line, _ = gave_up(tmp_path, (ACCESS_DENIED + "\n").encode())
 
     assert "withheld" not in line
+
+
+def test_the_parameter_is_read_under_a_cut_off_of_30_seconds() -> None:
+    code = code_of(rendered("worker"))
+
+    reads = re.findall(r"^.*\baws ssm get-parameter\b.*$", code, re.MULTILINE)
+
+    assert len(reads) == 1
+    assert re.search(r"\btimeout 30 aws ssm get-parameter\b", reads[0])
+
+
+def test_a_read_that_timed_out_is_not_there_yet_and_the_last_line_says_so(
+    tmp_path: Path,
+) -> None:
+    scratch = make_scratch(tmp_path)
+    scratch.series("param", ["", "", VALID + "\n"])
+    for number in range(2):  # timeout exits 124 when it cut the command off
+        (tmp_path / f"param.{number}.status").write_text("124", encoding="utf-8")
+
+    done = run_script(scratch, "worker")
+
+    assert done.returncode == 0, done.stderr  # a timed-out try is a try
+    assert len(scratch.called("aws", "ssm", "get-parameter")) == 3
+
+
+def test_a_read_that_timed_out_last_is_named_as_such_when_the_worker_gives_up(
+    tmp_path: Path,
+) -> None:
+    scratch = make_scratch(tmp_path)
+    scratch.series("param", [""])
+    (tmp_path / "param.0.status").write_text("124", encoding="utf-8")
+
+    done = run_script(scratch, "worker")
+
+    line = one_error_line(done, "worker")
+    assert "gave up after 3 tries" in line
+    assert "did not answer within 30 seconds" in line
+    assert "printed no message" not in line
+
+
+def test_the_error_is_logged_the_first_time_and_not_again_while_it_stays_the_same(
+    tmp_path: Path,
+) -> None:
+    error = ACCESS_DENIED.encode() + b"\n"
+
+    _, output = gave_up(tmp_path, error, error, error)
+
+    assert output.count(ACCESS_DENIED) == 2  # the log line once, the last line once
+    first = output.index(ACCESS_DENIED)
+    assert "the AWS CLI reported" in output[first - 40 : first]
+
+
+def test_a_changed_error_is_logged_again(tmp_path: Path) -> None:
+    refused = ACCESS_DENIED.encode() + b"\n"
+    throttled = THROTTLED.encode() + b"\n"
+
+    _, output = gave_up(tmp_path, refused, throttled, throttled)
+
+    assert output.count(ACCESS_DENIED) == 1  # logged when it was the error
+    assert output.count(THROTTLED) == 2  # logged once, and the last line again
+
+
+def test_an_error_that_comes_back_after_a_good_read_is_logged_again(
+    tmp_path: Path,
+) -> None:
+    scratch = make_scratch(tmp_path)
+    scratch.series("param", ["", PLACEHOLDER_VALUE + "\n", ""])
+    for number in (0, 2):
+        (tmp_path / f"param.{number}.fail").touch()
+        (tmp_path / f"param.{number}.err").write_bytes(ACCESS_DENIED.encode() + b"\n")
+
+    done = run_script(scratch, "worker")
+
+    output = done.stdout + done.stderr
+    assert output.count("the AWS CLI reported") == 2
+
+
+def test_the_logged_error_line_is_the_masked_one(tmp_path: Path) -> None:
+    error = f"An error occurred: bad value {VALID}\n".encode()
+
+    _, output = gave_up(tmp_path, error, error)
+
+    assert "the AWS CLI reported: a line that looked like a join command" in output
+    for part in (BOOTSTRAP_ID, CA_DIGEST, "kubeadm join"):
+        assert part not in output
 
 
 def test_a_join_that_fails_says_what_to_do_and_is_not_tried_again(
