@@ -77,7 +77,7 @@ METRICS_FILE = REPO_ROOT / "infra" / "kind" / "manifests" / "cert-manager-metric
 SERVICE_CA_FILE = REPO_ROOT / "infra" / "kind" / "manifests" / "service-ca.yaml"
 # What a gateway series' label can be: the metric attribute keys with each "."
 # as "_" (how Prometheus names a label that came in over OTLP; see
-# test_kind_manifests.py's METRIC_LABELS), and "job" from the collector.
+# test_kind_cost_dashboard.py's METRIC_LABELS), and "job" from the collector.
 GATEWAY_LABELS = {key.replace(".", "_") for key in METRIC_ATTRIBUTE_KEYS} | {"job"}
 # Every word the gateway can put in the reason label of a call: a provider
 # error's kind, a policy refusal, a budget refusal, a rate refusal, the word for

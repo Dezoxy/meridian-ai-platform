@@ -5,7 +5,7 @@ check: through the database's primary pod it reads that the policy store holds
 policies, that the knowledge store holds chunks and that the migrations ledger's
 newest file is the newest one of the checkout the script runs from. These tests
 run the function in bash against a stub ``kctl`` (the harness is the sweep
-check's, in test_kind_manifests.py); the stub answers each query by its text.
+check's, in kindharness.py); the stub answers each query by its text.
 """
 
 import os

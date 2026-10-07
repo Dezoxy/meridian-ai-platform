@@ -321,7 +321,7 @@ def test_a_certificate_names_its_secret_its_uri_and_the_issuer(name: str) -> Non
 def test_every_certificate_gets_a_new_key_at_renewal_by_an_explicit_setting() -> None:
     # cert-manager's default changed from Never to Always in v1.18.0, so neither
     # behaviour rests on a default: the chart sets Always on each Certificate
-    # (the CA's Never is pinned in test_kind_manifests.py).
+    # (the CA's Never is pinned in test_kind_cert_manager.py).
     certificates = of_kind(rendered_chart(), "Certificate")
 
     # The store's too (the eighth): no Certificate escapes the setting.

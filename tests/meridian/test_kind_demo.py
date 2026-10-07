@@ -149,9 +149,17 @@ def decision_answer(state: str = "approved") -> str:
     )
 
 
-# One trace settles (three readings, two pauses) while the other runs into the
-# deadline: six seconds leave the first four to spare.
-SLOW_POLL = {"poll_timeout": 6, "poll_interval": 1}
+# The poll's own constants in these runs (the script's are 120 and 3). The wait
+# between two readings does not sleep: it moves the script's clock (``SECONDS``)
+# by ``POLL_INTERVAL_SECONDS``, so the deadline is a count of readings, not of
+# seconds the machine may not have: a trace that never settles is read
+# ``MAX_READINGS`` times (ten) and the run ends at once, however busy the
+# machine is, and a trace that settles after three readings has used 20 of the
+# 100 seconds, so 80 more of real time may pass before it would fail (S074: a
+# real deadline of 3 or 6 seconds failed twice, unnamed, at a load over 100).
+POLL_TIMEOUT_SECONDS = 100
+POLL_INTERVAL_SECONDS = 10
+MAX_READINGS = POLL_TIMEOUT_SECONDS // POLL_INTERVAL_SECONDS
 
 
 def run_demo(
@@ -163,8 +171,6 @@ def run_demo(
     decision_body: str | None = None,
     triage_services: str = TRIAGE_FIVE + " claims-mcp",
     decision_services: str = DECISION_THREE,
-    poll_timeout: int = 10,
-    poll_interval: int = 0,
     grow_until: int | None = None,
     late_after: int | None = None,
     alternate_until: int | None = None,
@@ -172,11 +178,10 @@ def run_demo(
     silent_services: str = "",
 ) -> tuple[subprocess.CompletedProcess[str], list[list[str]]]:
     """demo.sh run in a scratch copy of ``infra/kind`` against the stubs, with
-    ``poll_interval`` seconds between two readings of a trace (none unless
-    given) and ``poll_timeout`` seconds to wait for it. A test in which one
-    trace must pass and another fail gives both (``SLOW_POLL``): the passing
-    trace needs three readings, and a one-second deadline does not always
-    hold three when the suite's workers share the CPU (S018). ``decision``
+    the poll of ``POLL_TIMEOUT_SECONDS`` and ``POLL_INTERVAL_SECONDS`` whose wait
+    moves the script's clock instead of sleeping (see them): a trace that never
+    settles ends the run after ``MAX_READINGS`` readings, and one that settles
+    is not failed by the time the machine took. ``decision``
     sets the DECISION variable (unset when None).
     ``grow_until``, ``late_after`` and ``alternate_until`` shape what the stub
     Tempo answers (see the stub); ``first_claim_conflict`` is the detail of a
@@ -190,19 +195,30 @@ def run_demo(
     data = tmp_path / "data" / "synthetic"
     for folder in (kind, bin_dir, data):
         folder.mkdir(parents=True)
-    # The timeouts are readonly constants of the script. No pause between
-    # readings keeps the three that settling needs from costing seconds, and a
-    # short timeout keeps a trace that never settles from costing two minutes.
+    # The timeouts are readonly constants of the script. The one wait of the
+    # poll (the others, for the edge and for the port-forward, stay real) adds
+    # the interval to ``SECONDS`` rather than sleeping, as the smoke tests'
+    # stand-ins for ``sleep`` do: no real second is spent between readings, and
+    # a trace that never settles ends the run after a fixed number of them.
     patched, count = re.subn(
         r"^readonly POLL_(TIMEOUT|INTERVAL)=\d+$",
         lambda match: (
             f"readonly POLL_{match[1]}="
-            + str(poll_timeout if match[1] == "TIMEOUT" else poll_interval)
+            + str(
+                POLL_TIMEOUT_SECONDS if match[1] == "TIMEOUT" else POLL_INTERVAL_SECONDS
+            )
         ),
         DEMO_SH,
         flags=re.MULTILINE,
     )
     assert count == 2
+    patched, count = re.subn(
+        r'^(\s*)sleep "\$\{POLL_INTERVAL\}"$',
+        r"\1SECONDS=$((SECONDS + POLL_INTERVAL))",
+        patched,
+        flags=re.MULTILINE,
+    )
+    assert count == 1
     (kind / "demo.sh").write_text(patched, encoding="utf-8")
     for name in ("common.sh", "pins.env"):
         (kind / name).write_text((KIND_DIR / name).read_text(encoding="utf-8"))
@@ -359,9 +375,7 @@ def test_a_claim_that_is_not_referred_posts_no_decision_and_passes_on_its_trace(
 def test_the_decision_trace_check_fails_when_claims_mcp_has_no_span(
     tmp_path: Path,
 ) -> None:
-    done, _ = run_demo(
-        tmp_path, decision_services="claims-api agent-runtime", **SLOW_POLL
-    )
+    done, _ = run_demo(tmp_path, decision_services="claims-api agent-runtime")
 
     lines = done.stdout.splitlines()
     assert done.returncode != 0
@@ -379,9 +393,7 @@ def test_the_decision_trace_check_fails_when_claims_mcp_has_no_span(
 def test_the_triage_trace_check_fails_without_hiding_the_decision_traces_result(
     tmp_path: Path,
 ) -> None:
-    done, _ = run_demo(
-        tmp_path, triage_services="claims-api agent-runtime", **SLOW_POLL
-    )
+    done, _ = run_demo(tmp_path, triage_services="claims-api agent-runtime")
 
     lines = done.stdout.splitlines()
     assert done.returncode != 0
@@ -472,6 +484,22 @@ def test_a_trace_that_has_every_service_at_once_passes_after_three_readings(
 
 
 @requires_demo_tools
+def test_a_trace_that_never_settles_is_read_a_fixed_number_of_times(
+    tmp_path: Path,
+) -> None:
+    done, calls = run_demo(tmp_path, grow_until=1_000_000)
+
+    assert done.returncode != 0
+    reads = list(trace_reads(calls).values())
+    assert len(reads) == 2  # both traces
+    # The deadline is counted by the script's clock, which the wait between two
+    # readings moves: never more readings than the count says, however fast the
+    # machine is, and not fewer than half of it unless the machine took half the
+    # timeout of real time over them.
+    assert all(MAX_READINGS // 2 <= count <= MAX_READINGS for count in reads), reads
+
+
+@requires_demo_tools
 def test_a_trace_that_grows_and_then_stays_the_same_passes_with_its_final_counts(
     tmp_path: Path,
 ) -> None:
@@ -507,7 +535,7 @@ def test_a_service_that_arrives_late_restarts_the_count_of_unchanged_readings(
 def test_a_trace_that_keeps_growing_until_the_deadline_fails_as_still_growing(
     tmp_path: Path,
 ) -> None:
-    done, calls = run_demo(tmp_path, grow_until=1_000_000, poll_timeout=3)
+    done, calls = run_demo(tmp_path, grow_until=1_000_000)
 
     lines = done.stdout.splitlines()
     assert done.returncode != 0
@@ -515,8 +543,9 @@ def test_a_trace_that_keeps_growing_until_the_deadline_fails_as_still_growing(
     triage, decision = [line for line in lines if line.startswith("FAIL")]
     reads = trace_reads(calls)
     triage_id, decision_id = reads  # the order the script read them in
-    assert triage == f"FAIL  trace {triage_id} was still growing after 3s"
-    assert decision == f"FAIL  decision trace {decision_id} was still growing after 3s"
+    still_growing = f"was still growing after {POLL_TIMEOUT_SECONDS}s"
+    assert triage == f"FAIL  trace {triage_id} {still_growing}"
+    assert decision == f"FAIL  decision trace {decision_id} {still_growing}"
     # Every service was there, so the old "no trace with spans from all of"
     # line would be wrong; what Tempo last returned is listed, with the counts
     # of the last reading (2 spans, and one more with each reading).
@@ -537,7 +566,7 @@ def test_a_trace_whose_readings_alternate_fails_saying_they_alternated(
     # Readings 1 and 3 have every service, 2 and 4 lack one, and so does every
     # later reading: two complete in a row never happens, and the last reading
     # is partial although the trace was complete twice.
-    done, calls = run_demo(tmp_path, alternate_until=4, poll_timeout=3)
+    done, calls = run_demo(tmp_path, alternate_until=4)
 
     lines = done.stdout.splitlines()
     assert done.returncode != 0
@@ -548,7 +577,7 @@ def test_a_trace_whose_readings_alternate_fails_saying_they_alternated(
     assert triage == (
         f"FAIL  trace {triage_id}: readings alternated between complete and "
         f"partial (2 complete, {reads[triage_id] - 2} partial or missing) "
-        "over 3s, Tempo was still settling"
+        f"over {POLL_TIMEOUT_SECONDS}s, Tempo was still settling"
     )
     assert decision.startswith(f"FAIL  decision trace {decision_id}: readings alt")
     # It says what to do: look the trace up by its ID in a moment.
@@ -572,7 +601,7 @@ def test_one_complete_reading_and_then_only_partial_ones_is_worded_as_alternated
     # Reading 1 has every service, every later one lacks one. The script never
     # saw complete, partial, complete: "alternated" is its inference from one
     # complete reading and the partial ones after it, and demo.sh says so.
-    done, calls = run_demo(tmp_path, alternate_until=1, poll_timeout=3)
+    done, calls = run_demo(tmp_path, alternate_until=1)
 
     lines = done.stdout.splitlines()
     triage_id, _ = trace_reads(calls)
@@ -587,16 +616,15 @@ def test_one_complete_reading_and_then_only_partial_ones_is_worded_as_alternated
 def test_a_trace_missing_a_service_still_fails_with_the_line_it_had_before(
     tmp_path: Path,
 ) -> None:
-    done, _ = run_demo(
-        tmp_path, triage_services="claims-api agent-runtime", **SLOW_POLL
-    )
+    done, _ = run_demo(tmp_path, triage_services="claims-api agent-runtime")
 
     (failure,) = [line for line in done.stdout.splitlines() if "FAIL" in line]
     assert done.returncode != 0
     assert failure.startswith("FAIL  no trace ")
     assert failure.endswith(
         " with spans from all of: "
-        "claims-api agent-runtime policy-mcp knowledge-mcp model-gateway after 6s"
+        "claims-api agent-runtime policy-mcp knowledge-mcp model-gateway "
+        f"after {POLL_TIMEOUT_SECONDS}s"
     )
     assert "still growing" not in done.stdout
 
@@ -607,12 +635,12 @@ def test_a_service_in_the_trace_with_no_span_does_not_count_as_present(
 ) -> None:
     # Tempo's answer names model-gateway (a resource) but carries no span of it:
     # the per-service list says "model-gateway 0", which is not "spans from".
-    done, _ = run_demo(tmp_path, silent_services="model-gateway", **SLOW_POLL)
+    done, _ = run_demo(tmp_path, silent_services="model-gateway")
 
     (failure,) = [line for line in done.stdout.splitlines() if "FAIL" in line]
     assert done.returncode != 0
     assert failure.startswith("FAIL  no trace ")
-    assert failure.endswith(" after 6s")
+    assert failure.endswith(f" after {POLL_TIMEOUT_SECONDS}s")
     assert "PASS  trace " not in done.stdout
     # Every reading was partial, so none counts as complete or as alternating.
     assert "alternated" not in done.stdout
@@ -627,7 +655,7 @@ def test_a_service_in_the_trace_with_no_span_does_not_count_as_present(
 def test_the_decisions_trace_fails_too_when_one_of_its_services_has_no_span(
     tmp_path: Path,
 ) -> None:
-    done, _ = run_demo(tmp_path, silent_services="claims-mcp", **SLOW_POLL)
+    done, _ = run_demo(tmp_path, silent_services="claims-mcp")
 
     # claims-mcp is in the decision trace's three and in the triage's optional
     # sixth, which is not required: the triage passes, the decision fails.

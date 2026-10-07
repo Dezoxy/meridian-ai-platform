@@ -1,7 +1,7 @@
 """The platform-health dashboard as a file (S024).
 
 Offline tests on ``infra/kind/dashboards/platform-health.json``, the way
-``test_kind_manifests.py`` tests ``gateway-cost.json``: no cluster is read.
+``test_kind_cost_dashboard.py`` tests ``gateway-cost.json``: no cluster is read.
 Every series and label in a query is tied to a pinned set or to the gateway's
 metric allowlist in ``src/``, so a rename fails here and not as an empty panel.
 """
