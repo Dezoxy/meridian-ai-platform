@@ -974,10 +974,15 @@ node image, Kubernetes components and the platform).
    thing read, and it tells three endings apart. `refused` is the TLS alert for
    an unknown CA (Python's `ssl` reports `TLSV1_ALERT_UNKNOWN_CA`); `reset` is
    a connection that ended with no alert before any request was sent.
-   uvicorn, which the services run
-   under, ends an unknown CA's connection without delivering the alert (a
-   reset under TLS 1.3 and an EOF under 1.2, measured against the test server
-   that has the services' flags), so `reset` is the ending expected of the
+   uvicorn ends an unknown CA's connection without delivering the alert (a
+   reset under TLS 1.3 and an EOF under 1.2, measured on 2026-10-06 against a
+   test server on a plain `uvicorn.Config` with the services' flags). The five
+   services that serve TLS have since started through `python -m
+   meridian.platform.common.tlsstart`, which hands uvicorn its own context
+   (a test holds the two equal); the ending was not measured against the
+   module, and smoke's 46 lines passed after the deploy that brought it, with
+   the ending that line read not in that run's record (S069, run K2). So
+   `reset` is the ending expected of the
    gateway, and the line passes it, in other words than `refused`. On the
    cluster on 2026-10-06 the answer was `reset` on every run (the connection
    ended with no TLS alert, before any request was sent) and `refused`, the
@@ -1171,8 +1176,8 @@ eleven calls and the summary, and a pair of lines for each part it sources. A
 check is a file in `smoke.d/`, `NN-name.sh` (`shared.sh` holds what several
 checks and the trap use), and it holds definitions only: its paragraph from the
 header, its constants and its functions, so that sourcing it runs nothing.
-Checks 8 and 10 are still in the entry, and move when the cluster batch that
-edits them has landed. To add a check:
+All eleven checks are parts now (twelve files with `shared.sh`, each under 800
+lines), and the entry is 88 lines. To add a check:
 
 - write `smoke.d/NN-name.sh` with no execute bit: the first line `# shellcheck
   shell=bash`, the paragraph (its first line `#   N. name:`, as the others),
@@ -1487,9 +1492,10 @@ pinned image with the server stopped by `SIGSTOP`, not `docker pause`, which
 stops `docker exec` too). Seen on kind on 2026-10-07 (run R2): the store's
 new pod held no defunct process at five readings a minute apart and after
 smoke, six minutes in (the old probes had left about 90 by then), Ready with
-no restart. Not seen: the store over the two hours the fault took, a store
-frozen below the protocol on kind, and the probes at `timeoutSeconds: 5`
-(a later change). Its
+no restart. Seen on kind on 2026-10-07 (run R4e): the store's new pod with
+both probes at `timeoutSeconds: 5`, Ready, 0 restarts, and 0 defunct processes
+on the node. Not seen: the store over the two hours the fault took, and a store
+frozen below the protocol on kind. Its
 NetworkPolicy admits the Model Gateway's pods on 6379 and nobody
 else, and gives it no egress; it is the store's only control before
 authentication, so the chart refuses the store with `networkPolicy.enabled`
@@ -1505,8 +1511,11 @@ kind on 2026-10-06 (third run): the store running under this configuration
 with the gateway's calls counted by it, its probes passing, its certificate's
 renewal followed by one restart, and the policy's ingress rule enforced on a
 pod without the gateway's label. Not seen on a cluster: a store frozen by a
-script and restarted by its probe, a TLS 1.2 client or an oversized bulk
-refused, and the 503 of a store that is down.
+script and restarted by its probe, and a TLS 1.2 client or an oversized bulk
+refused. Seen on kind on 2026-10-07 (run R11): the 503 of a store that is down
+(scaled to 0 for 10 seconds): an ingest Job ended on it with the word
+`rate-store-unavailable`, the gateway stayed Ready with no restart, and it
+admitted calls again with the same pod once the store answered.
 
 The namespace denies all traffic by default: the NetworkPolicy
 `default-deny` selects every pod in `meridian`, whatever its labels, and
@@ -1989,15 +1998,25 @@ creates, besides what `make up` made (cert-manager v1.21.2 and the CA above):
 
 The values `identity.trustDomain` (`meridian.kind`) and `identity.issuer` are
 required and have no off switch; a service with `tls: true` in the chart's
-values serves TLS, and the template adds uvicorn's flags, the HTTPS probes and
-the prefix its callers' URIs start with. Nothing else of the five's commands
-is repeated in the values. The chart fails for a service that another workload
-calls (a `serviceUrl` or a `serviceMap` entry, the Jobs' included) and does not
-set `tls: true`; only the Claims API, which nobody inside the chart calls,
-stays plain HTTP.
+values serves TLS, and the template adds the TLS flags (`--ssl-certfile`,
+`--ssl-keyfile`, `--ssl-ca-certs`, `--ssl-cert-reqs 1`, `--http` with the
+protocol class and `--ws none`: the words uvicorn's command line takes), the
+HTTPS probes and the prefix its callers' URIs start with. The five commands in
+the values start `python -m meridian.platform.common.tlsstart --factory <app>
+--host 0.0.0.0 --port 8000` (S069: that module takes the same words, reads the
+certificate once for uvicorn's context and for the health check, and ends a
+start it cannot make safely with one `tlsstart:` line and exit status 3, which
+the operations page lists), and the Claims API's stays `uvicorn --factory ...`.
+Nothing else of the five's commands is repeated in the values. A values
+override that sets `tls: true` on a command that starts `uvicorn` serves TLS
+but reads the certificate twice, and the chart does not refuse it (a comment
+in `values.yaml` says so, and a test holds the default values). The chart
+fails for a service that another workload calls (a `serviceUrl` or a
+`serviceMap` entry, the Jobs' included) and does not set `tls: true`; only the
+Claims API, which nobody inside the chart calls, stays plain HTTP.
 
 **How long a certificate lasts (S062).** Two chart values set the lifetime of
-every one of the seven Certificates; the defaults render what the chart
+every one of the eight Certificates; the defaults render what the chart
 rendered before they existed (`duration: 2160h`, no `renewBefore`, so
 cert-manager renews at a third of the lifetime, 60 days in):
 
@@ -2026,7 +2045,7 @@ certificate:
   renewBefore: 30m
 ```
 
-then run `make deploy`, which reissues the seven certificates and waits for
+then run `make deploy`, which reissues the eight certificates and waits for
 them to be Ready. The services still hold the 90-day certificates they loaded,
 and a service looks at its file again only near the end of the one it loaded,
 so restart the Deployments once (the owner's command, as in the runbook
@@ -2081,8 +2100,14 @@ than before. Two replicas of one service would still restart together, because
 they mount one Secret (not built: each service has one replica on kind). The
 spread is implemented and tested with the chart rendered and the clock
 injected. Seen on kind on 2026-10-07 (run R2): the shares on the six services,
-0, 1/6, 2/6, 3/6, 4/6 and 5/6 in name order, and none on the rate store. Not
-seen: the restarts at a renewal (the watch above, run again, shows them). And
+0, 1/6, 2/6, 3/6, 4/6 and 5/6 in name order, and none on the rate store. Seen
+on kind on 2026-10-07 (run R7, the watch above run again, one replica of each
+service): the six services' containers each stopped once at a renewal, 99 or
+100 seconds apart, in the reverse order of the shares, and in no reading were
+fewer than five of the six Ready. Not seen: two replicas of one service, a
+`renewBefore` shorter than one and five sixths of the margin, and the alert
+`MeridianCertificateNotRenewed` in that run (it was given the values back
+before the alert's hour). And
 while the
 short certificates are in place `make smoke` fails on check 11, because a
 Meridian alert is firing (smoke itself was not run then: the failure follows
@@ -2141,9 +2166,14 @@ renewal, the DNS names `otel-collector.observability.svc` and
   endpoint. A service whose endpoint is `https` and whose variable is unset, or
   names a file that cannot be loaded as a CA certificate, does not start: the
   factory raises a `SettingsError` that names the variable and never the path
-  (the last line of the traceback `uvicorn --factory` logs), and the container
-  restarts, as it does for a certificate it cannot read (not seen on a
-  cluster). That is better than starting with telemetry that fails on every
+  (the last line of the traceback in the pod's log, with exit status 1, for
+  the Claims API under `uvicorn --factory` and for the five under the start
+  module alike, since the module does not catch an app factory's error), and
+  the container restarts (not seen on a cluster). A certificate the five
+  services cannot read or build is not that: the start module ends it before
+  any factory runs with one `tlsstart:` line and exit status 3, no traceback
+  (tested with the real `python -m`, not seen on a cluster; the operations
+  page lists the forms). That is better than starting with telemetry that fails on every
   export. The Jobs set no endpoint and get none of this; the sweep gets it
   (S064; its six findings arrived in Prometheus through this path on kind on
   2026-10-06). Status: tested without a cluster.
@@ -2625,8 +2655,11 @@ and the `exec` bound on their calls (run R2, 2026-10-07, and the runs after
 it), which passed. `make deploy` and `make smoke` also ran under the outer
 bound on `wait`, `rollout status` and Helm on the path where nothing goes wrong
 (run R4e); no bound has fired on kind. A frozen API server (the node paused
-with `docker pause`) was not seen with any of these bounds: only the tests'
-stand-ins and the review's silent listener have met one.
+with `docker pause` for thirty seconds) was met once (run R5b, 2026-10-07):
+every call ended after 10 seconds at the client's own handshake timeout and
+never reached these bounds. A bound of the wrapper ending a call is not seen:
+only the tests' stand-ins and the review's silent listener have met a server
+that accepts and never answers.
 
 ## Memory
 

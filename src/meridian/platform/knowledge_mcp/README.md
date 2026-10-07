@@ -20,7 +20,14 @@ stored, and a body longer than 256 bytes is not parsed. The search tool logs
 the same word (`embedding call failed: status 503, kind <word>`) and tells an
 agent nothing more than it did: the answer stays `gateway-unavailable`.
 
-Status: **implemented; tested with scripted replies; not seen on a cluster.**
+Status: **implemented; tested with scripted replies; the word
+`rate-store-unavailable` seen on kind on 2026-10-07 (run R11); the other three
+words not seen on a cluster.** In run R11 the rate store was scaled to 0 for
+10 seconds and an ingest Job made against the gateway ended with exactly the
+line above: the audit log held the gateway's refusal (`rate-store-unavailable`)
+and the ingestion's (`gateway-failed`) with one run ID, the gateway stayed
+Ready with no restart, the chunks stayed as they were, and a second ingestion
+made once the store was back succeeded with the same gateway pod.
 
 | Word | The gateway's text | What to look at |
 |---|---|---|

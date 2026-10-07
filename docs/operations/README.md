@@ -194,7 +194,51 @@ that is not a 200 is.
 
 Not JSON: what a process prints before its factory ran, a start-up error
 (a missing setting is uvicorn's traceback on standard error, exit status 1,
-with nothing on standard output) and a crash of the interpreter. The edge's
+with nothing on standard output) and a crash of the interpreter. That holds
+for what an app factory reads and raises, in all six services, including the
+five that serve TLS and start through `python -m
+meridian.platform.common.tlsstart` (S069; the module's own test holds it for
+a factory that raises). For those five a start the module cannot make safely
+ends differently: ONE line on standard error that begins `tlsstart:`, exit
+status 3, nothing on standard output and nothing listening. It is a plain
+print and not a log record, so it is one of the lines this paragraph calls
+not JSON. The forms, each with no value and no file's content, only a flag or
+a variable and an error's class:
+
+- `tlsstart: --ssl-certfile cannot be read (FileNotFoundError)`: the served
+  certificate's file cannot be opened (the class is the operating system's
+  error for it).
+- `tlsstart: the TLS context cannot be built from --ssl-certfile,
+  --ssl-keyfile and --ssl-ca-certs (SSLError: KEY_VALUES_MISMATCH)`: one of
+  the three files cannot be made into a context. For an `SSLError` the
+  OpenSSL reason is added when it is a fixed token, here a key that does not
+  match the certificate; for any other class (`FileNotFoundError`,
+  `ValueError`) only the class is printed, so the three files are not told
+  apart by the line.
+- `tlsstart: --ssl-certfile changed during each of 5 loads; not started`: the
+  file never held still across the module's two reads of it in five loads.
+- `tlsstart: the served certificate (--ssl-certfile) cannot be read as a
+  certificate (SettingsError)`: the bytes the context was loaded from are no
+  certificate.
+- `tlsstart: MERIDIAN_TLS_RESTART_SHARE must be a number from zero up to, but
+  not including, one (SettingsError)`: a bad restart share (the Claims API's
+  start ends in a traceback and exit status 1 for the same value).
+- `tlsstart: the command line is not one this start takes`: a word the module
+  does not take, an abbreviated flag, a missing certificate, key or CA flag, or
+  a client-certificate setting that is not 1 or 2; the line names no flag. The
+  chart's commands never do this, and a test parses every rendered command, so
+  it means a changed command or a by-hand start.
+
+The kubelet sees a container that exits, as it did for exit status 1: the
+Deployment's pod restarts with a back-off and is never Ready, and no alert
+reads the exit status (`KubePodCrashLooping` reads the restart count). The
+line is in the pod's output and, since the log agent keeps a line that is not
+JSON whole, in Loki under the query for such lines below, `{service_name="..."}
+| logger=""` (read from the agent's configuration, not seen: no start was
+refused on kind). The module's success was seen on kind
+(2026-10-07, K2): the first log lines of the five were the services' own JSON
+and no line began `tlsstart:`; its refusal, with exit status 3, was not seen
+on a cluster (the tests run the real `python -m` and hold it). The edge's
 own log is not ours to format, and it keeps what the services' lines do not:
 its line for a request has the whole request target, query string included,
 and a client address (seen on kind on 2026-10-06). It stays in the edge's
