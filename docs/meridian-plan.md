@@ -14077,8 +14077,45 @@ own and carried to the branch by the session; the counts are the reports'):
   time in the order 3, 6, 2, 5, 11, 7, 9, 4, each followed by `bash -n` and the
   layout and trap tests, then the index's second sentence and the empty line by
   the main session.
-- **The infrastructure review of the split:** out; the session sends
-  `infra-reviewer` to the result. SPLIT-REVIEW-RESULT
+- **The infrastructure review of the split** (`infra-reviewer`, on 804a6e7):
+  yes after fixes; nothing critical. What it ran, beyond the proofs: it
+  sourced the script from `main` and the entry with its parts under `set
+  -euo pipefail` in a clean environment and compared `declare -f` and
+  `declare -p`: the functions byte for byte the same (2,519 lines each), the
+  variables the same; each part sourced alone ends 0, so no part reads a name
+  when it is defined that another file provides; a multiset of the lines of
+  the old file against the eleven new ones shows nothing lost or changed;
+  and the three proofs from a clone at each cut's commit, each holding.
+  - **High, fixed (SF1, 948e4b7).** `shellcheck infra/kind/smoke.sh` reports
+    findings only for the files on its command line, so after the cuts the
+    by-hand run that every report cited linted 1,185 lines of 3,900. The
+    parts carry thirteen directives with their reasons, for seventeen places
+    where a part reads or sets a name another file holds (the review counted
+    nineteen; the implementer found seventeen), and `shellcheck
+    infra/kind/smoke.sh infra/kind/smoke.d/*.sh` ends 0 (the main session's
+    run) and 1 for a mistake put into a scratch copy. That commit is NOT a
+    move: with comment, blank and directive lines removed every file is what
+    it was, and the definitions the entry sources compare equal before and
+    after.
+  - **Medium, fixed (SF2, 5fd071b).** The proof script said `PROOF HOLDS` for
+    lines copied out of a file outside its scopes, for a target outside
+    them, and for a manifest that opens no target: each fails now (29 tests,
+    22 before). The definitions-only reader let five shapes through that run
+    at source time, and a constant that runs a command (none of the 106
+    does): it reads them now. Two layouts the rules did not catch are rules:
+    a part's leading comment block is its numbered paragraph or nothing,
+    with a blank line after it (the harness hoists that block into the
+    header), and the entry holds no branch around its source lines. The
+    three landed manifests do not use what was closed (every range names the
+    one old file, every target is under the scopes: read by the review).
+  - **Low.** Fixed by SF1: three comments in `deploy.sh` and
+    `foundation.sh` that named where a thing lives; the index says checks 08
+    and 10 are still in the entry; a blank line before seven banners. By
+    SF2: the entry's executable bit and the parts' lack of one are held by a
+    test. Stated, not changed: a missing part gives bash's own message and
+    exit 1, with no word about `smoke.d/`; `common.sh` line 24 and about 35
+    test docstrings still say "smoke.sh" for a function that moved (they
+    mean the script).
 - **Scratch the harness would not let the implementers remove** (the hook
   refused `rm -r`; no backlog row, they are not part of the repository):
   `~/.cache/meridian-scratch/agent-s074-sa/` (a repository copy with a scratch
@@ -14230,6 +14267,12 @@ branch for this record; the SC3 report's 1,181 predates the index lines):
    196 infra/kind/smoke.d/shared.sh
   3900 total
 ```
+
+These are the sizes the three cuts left, and the tree the cluster run used.
+The review's follow-up (SF1: thirteen directives, seven blank lines, one more
+line of index) made them 1,186, 37, 237, 36, 647, 303, 98, 488, 350, 340 and
+199 lines, 3,921 in all (`wc -l` by the main session on 5fd071b); where this
+record says 1,185 for the entry it means the tree before that commit.
 
 Nine checks and the shared code are parts, each under 800 lines (36 to 644).
 The entry holds two checks, 8 and 10, with their paragraphs, constants and
