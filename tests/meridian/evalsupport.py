@@ -406,9 +406,12 @@ class Evaluation:
 def candidates_of(claim_id: str) -> tuple[Clause, ...]:
     """The clauses the model is shown for a claim: the candidate exclusions the
     rules pick from the whole wording of the policy's product, which is what a
-    search that loses nothing finds."""
+    search that loses nothing finds. A claim on a policy number no policy has
+    has no candidate: the model is not asked about it."""
     claim = CLAIMS[claim_id]
-    policy = POLICIES[claim["policy_number"]]
+    policy = POLICIES.get(claim["policy_number"])
+    if policy is None:
+        return ()
     terms = select_terms(
         claim["peril"],
         whole_wording(policy["product"]),

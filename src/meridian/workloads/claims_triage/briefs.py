@@ -454,7 +454,10 @@ def start_brief(
             mark_error(span, exc)
             return DecisionFailure(500, INTERNAL_ERROR)
         try:
-            run = start_run(http, tenant, claim_id, taken.facts, agent=BRIEF_AGENT)
+            # The workflow reads the input's ``claim`` (``facts.read_claim``).
+            run = start_run(
+                http, tenant, claim_id, {"claim": taken.facts}, agent=BRIEF_AGENT
+            )
             output = _output_of(run, resumed=False)
         except RuntimeCallError as exc:
             return _fail_first_leg(dsn, span, claim_id, taken.brief_id, exc)

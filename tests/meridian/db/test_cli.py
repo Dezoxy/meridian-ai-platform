@@ -109,10 +109,10 @@ def test_seed_policies_prints_the_two_counts_and_commits(
     second = runner.invoke(app, ["db", "seed-policies", "--from", source])
 
     assert first.exit_code == 0, first.output
-    assert first.stdout.splitlines() == ["policies: 50", "claim history: 44"]
-    assert second.stdout.splitlines() == ["policies: 50", "claim history: 44"]
+    assert first.stdout.splitlines() == ["policies: 56", "claim history: 51"]
+    assert second.stdout.splitlines() == ["policies: 56", "claim history: 51"]
     with connect(fresh_database.dsn(OWNER), "test") as conn:
-        assert conn.execute("SELECT count(*) FROM policy.policies").fetchone() == (50,)
+        assert conn.execute("SELECT count(*) FROM policy.policies").fetchone() == (56,)
     assert fresh_database.passwords[SEED_ROLE] not in first.output + second.output
 
 
@@ -125,7 +125,7 @@ def test_seed_policies_defaults_to_data_synthetic(
     result = runner.invoke(app, ["db", "seed-policies"])
 
     assert result.exit_code == 0, result.output
-    assert result.stdout.splitlines() == ["policies: 50", "claim history: 44"]
+    assert result.stdout.splitlines() == ["policies: 56", "claim history: 51"]
 
 
 def test_seed_policies_refuses_a_source_that_is_not_synthetic_and_writes_nothing(

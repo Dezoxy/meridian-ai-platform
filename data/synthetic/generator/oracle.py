@@ -8,6 +8,7 @@ checked against it and never the other way round.
 
 Precedence, first match wins:
 
+0. no policy has the claim's number (nothing else is decided);
 1. the policy was not in force on the loss date;
 2. the peril is not covered, or an exclusion applies;
 3. a required document is missing;
@@ -33,7 +34,7 @@ Record = Mapping[str, Any]
 
 def derive_outcome(
     claim: Record,
-    policy: Record,
+    policy: Record | None,
     history: Sequence[Record],
     circumstance: str | None = None,
 ) -> dict[str, Any]:
@@ -41,10 +42,21 @@ def derive_outcome(
 
     ``circumstance`` is the exclusion code the claim's facts fall under, if any.
     It is a fact behind the description and is never part of the claim record.
+    ``policy`` is None when no policy has the claim's number: the claim goes to
+    an adjuster with nothing else decided, as the triage rules decide it.
     Raises ValueError for records the rules cannot judge.
     """
     if _day(claim, "reported_on") < _day(claim, "loss_date"):
         raise ValueError(f"{claim['claim_id']}: reported before the loss")
+    if policy is None:
+        return _record(
+            claim["claim_id"],
+            None,
+            [],
+            route="adjuster",
+            reason="policy_not_found",
+            clauses=[],
+        )
     case = _Case(
         claim=claim,
         policy=policy,
@@ -234,7 +246,7 @@ def _day(record: Record, key: str) -> date:
 
 def _record(
     claim_id: str,
-    product: Product,
+    product: Product | None,
     indicators: list[str],
     *,
     route: str,
@@ -255,6 +267,8 @@ def _record(
         "fraud_indicators": list(indicators),
         "missing_documents": list(missing or []),
         "citations": [
-            {"wording": product.code, "clause": clause} for clause in clauses
+            {"wording": product.code, "clause": clause}
+            for clause in clauses
+            if product is not None
         ],
     }

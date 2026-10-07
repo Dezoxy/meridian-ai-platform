@@ -116,5 +116,21 @@ def outcomes() -> list[dict]:
 
 
 @pytest.fixture(scope="session")
+def policy_claims(claims: list[dict], policies: list[dict]) -> list[dict]:
+    """The claims whose policy number a policy has: all but the one claim on a
+    policy number no policy has, which a test that joins claims to policies
+    cannot join."""
+    numbers = {policy["policy_number"] for policy in policies}
+    return [claim for claim in claims if claim["policy_number"] in numbers]
+
+
+@pytest.fixture(scope="session")
+def policy_outcomes(outcomes: list[dict], policy_claims: list[dict]) -> list[dict]:
+    """The outcomes of ``policy_claims``."""
+    ids = {claim["claim_id"] for claim in policy_claims}
+    return [outcome for outcome in outcomes if outcome["claim_id"] in ids]
+
+
+@pytest.fixture(scope="session")
 def manifest() -> dict:
     return json.loads((SYNTHETIC / "manifest.json").read_text(encoding="utf-8"))
