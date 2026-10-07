@@ -17293,7 +17293,12 @@ files and `shellcheck` on the entry and the parts ended 0, and the 869 tests
 that read the script passed. And on the cluster the cold run made (run R10,
 11:30 UTC): `make smoke` from cadf82b, the first tree where the split and
 the batch meet: 46 PASS, 0 FAIL, 0 SKIP, its lines equal to the cold run's
-with the numbers and the trace ID masked.
+with the numbers and the trace ID masked. After `main` b132ee1 was merged in
+as well (S070's second half so far): `make test` (372 tests), `make docs`
+and `make lint` ended 0 on 58d6046, and the whole suite, started at 11:47
+UTC on the working tree of cd3af5e (58d6046 and one commit that moves a
+block of the plan and changes no other file; `make docs` was run again by
+hand on it): 18,299 passed, 8 skipped (3 min 20 s).
 
 **The cold run, R9** (the main session's, 2026-10-07, 11:08 to 11:17 UTC,
 from the batch's commit 4050156, which is W, E, C, N, S and F2; the
