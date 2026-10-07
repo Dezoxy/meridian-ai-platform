@@ -19186,8 +19186,13 @@ run closed):
   configuration stopping `make up` with the new sentence was not tried.
 - A renewal of the gateway's certificate or of the authority; a Service made
   again (the annotation's roll); a cold `make up` with this branch.
-- The move of `up.sh`'s functions (contract M5) is after R17: the final tip
-  gets a warm `make up` and smoke of its own.
+- The move of `up.sh`'s functions (contract M5) came after R17 and was then
+  seen: run R18 (2026-10-07, 19:09 to 19:12 UTC, from `675b102`, the branch's
+  tip with M5 and these documents) ran `make up` with the split script, rc 0
+  in 36 s; its log has the two lines for Prometheus's policies and gateway, in
+  their place after the stack's release; no pod was rolled (nothing in the
+  manifests had changed since R17, so the rollout wait had nothing to wait
+  for); nine policies Ready; smoke 56 PASS, 0 FAIL, 0 SKIP.
 - From the earlier runs, still open: a certificate of the authority with
   another subject or with no extended key usage presented to a gateway or to
   Tempo (seen only in the implementer's container); that the collector
@@ -19260,9 +19265,9 @@ text, with the dated pointers above:
 | The optional render test of Loki's location list is skipped in every run | S074 |
 | One row that is not this step's: the download's permit | S080 |
 
-**What is left of the third part:** the main session's runs on the tip
-(`make up` and smoke once more with M5 in), the whole suite, the secret scan,
-and the pull request; the contract D3's documents are these. The step stays
+**What is left of the third part:** the whole suite, the secret scan and the
+pull request (the run on the tip with M5 in is R18, under "Not seen" above);
+the contract D3's documents are these. The step stays
 `doing` (the row says why).
 
 ### S079 — Self-managed Kubernetes: applied once on AWS, a scaffold on Google Cloud
