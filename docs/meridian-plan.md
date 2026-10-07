@@ -12533,7 +12533,10 @@ the step's branch by the session; the counts are the reports'):
   behind `cputime`'s retry: the floor did not keep a ratio of two short CPU
   times steady under load, and H4's `measure_growth` retakes it. The design
   does not record the commit that run tested.
-- **The whole suite on the final tree:** FINAL-SUITE-RESULT
+- **The whole suite on the final tree:** `15640 passed, 8 skipped, 8 warnings
+  in 218.65s` at six workers beside the cluster, on 92377c0 (H7), 2026-10-07
+  04:22 to 04:26 UTC, with `make test`, `make docs` and `make lint` ending 0
+  before it; the commits after it change Markdown only.
 - **Each load-sensitive test, 25 runs beside one whole suite:**
   MEASUREMENT-RESULT (not run yet; the main session's). The run is S057's:
   each test named below 25 times in a loop beside one whole suite at six
