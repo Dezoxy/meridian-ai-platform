@@ -1,0 +1,275 @@
+# ---- shared by both boot scripts (templates/node-common.sh.tftpl) ----------
+#
+# The rendered text of this file sits inside the control plane's script and
+# inside the worker's. It needs ROLE, REGION, API_PORT, BOOT_ROOT and
+# POLL_SECONDS to be set before it, and it defines the log lines, the bounded
+# download, the package calls with their retry, the strict reading of a join
+# command and the installation of containerd and kubeadm.
+#
+# The script that holds this text also sets LC_ALL=C beside its `set -euo
+# pipefail`, above it: the classes of JOIN_PATTERN ([0-9], [a-z]) are ASCII only
+# in that alphabet, and in a UTF-8 locale they match fullwidth digits, accented
+# letters and Arabic-Indic digits. It sets HOME=/root on the next line: cloud-init
+# may start a user-data script without a HOME (from memory, no page was read),
+# and gpg and snap look for it.
+#
+# Terraform renders this file: every shell parameter expansion is written with
+# a doubled dollar sign here, and no percent sign is followed by a brace.
+
+KUBERNETES_MINOR='${kubernetes_minor}'
+KUBERNETES_APT_KEY_FINGERPRINT='${kubernetes_apt_signer_fingerprint}'
+
+# The bound on the wait for containerd after its restart: a number of tries, one
+# POLL_SECONDS apart. A try can take its own 10-second cut-off (`timeout 10 ctr`)
+# plus the pause, so the worst case is 20 tries of 15 seconds on the control plane
+# (300 seconds) and 20 tries of 20 seconds on a worker (400), not the 100 and 200
+# that the pauses alone make. A test shortens it; cloud-init sets none.
+CONTAINERD_ATTEMPTS="$${CONTAINERD_ATTEMPTS:-20}"
+
+# The bound on every package call (apt_retry below): a number of tries, one
+# POLL_SECONDS apart. The pauses between 10 tries are 9 times POLL_SECONDS: 45
+# seconds on the control plane and 90 on a worker, under five minutes. That is the
+# total of the pauses only: a try may wait up to 300 seconds for the dpkg lock
+# (the option of apt_get), and a lock that is held on every try spends that on each
+# of them. A test shortens it; cloud-init sets none.
+APT_ATTEMPTS="$${APT_ATTEMPTS:-10}"
+
+# What a join command looks like: kubeadm join <IPv4 address>:<port> --token
+# <6 characters, a dot, 16 characters> --discovery-token-ca-cert-hash sha256:
+# <64 hexadecimal digits>, and nothing before, between or after (one trailing
+# space at most). The text is only ever matched against this pattern and read
+# through its groups: it is never run, evaluated or piped into a shell.
+JOIN_PATTERN='^kubeadm join ([0-9]{1,3}(\.[0-9]{1,3}){3}):([0-9]{1,5}) --token ([a-z0-9]{6}\.[a-z0-9]{16}) --discovery-token-ca-cert-hash sha256:([0-9a-f]{64}) ?$'
+
+log() {
+  printf '%s: %s\n' "$ROLE" "$*"
+}
+
+# One clear line on the error stream, then the end of the script. cloud-init
+# keeps both streams in /var/log/cloud-init-output.log.
+die() {
+  printf '%s: ERROR: %s\n' "$ROLE" "$*" >&2
+  exit 1
+}
+
+# A bound is a number of attempts, not a clock: $1 is the name of a setting.
+require_number() {
+  local name=$1
+  local value=$${!name}
+  [[ $value =~ ^[0-9]{1,6}$ ]] || die "$name must be a whole number, found '$value'"
+}
+
+# Download $1 to $2 over HTTPS only (redirects too), with a bound on the time
+# of each try and on the number of tries.
+fetch() {
+  curl --fail --silent --show-error --location \
+    --proto '=https' --proto-redir '=https' --tlsv1.2 \
+    --retry 5 --retry-delay 3 --connect-timeout 10 --max-time 120 \
+    --output "$2" "$1" || die "could not download $1"
+}
+
+# Succeeds, and sets JOIN_TOKEN and JOIN_HASH, only when $1 is exactly a join
+# command for the API server at $2 (address:port). The address in the text has
+# to be the expected one: whoever may write the parameter can then choose a
+# token and a hash but not the server the node joins.
+parse_join_command() {
+  local text=$1
+  local expected=$2
+  JOIN_TOKEN=''
+  JOIN_HASH=''
+  [[ $text =~ $JOIN_PATTERN ]] || return 1
+  [[ "$${BASH_REMATCH[1]}:$${BASH_REMATCH[3]}" == "$expected" ]] || return 1
+  JOIN_TOKEN=$${BASH_REMATCH[4]}
+  JOIN_HASH=$${BASH_REMATCH[5]}
+}
+
+# The AWS command line, from the snap that AWS documents for it ("Installing or
+# updating to the latest version of the AWS CLI", read 2026-10-07). The snap
+# daemon seeds its own packages at first boot, so the script waits for that,
+# with a bound. `snap wait system seed.loaded` is from the session's general
+# knowledge of snapd and cloud-init: no page for it was read.
+install_aws_cli() {
+  log "installing the AWS CLI"
+  timeout 300 snap wait system seed.loaded || die "snapd did not finish seeding within 300 seconds"
+  timeout 300 snap install aws-cli --classic || die "the AWS CLI snap did not install within 300 seconds"
+}
+
+# Runs the command $2... up to APT_ATTEMPTS times, POLL_SECONDS apart, and then
+# ends the script with one line. $1 is what the lines call the command: the
+# program and its verb. A package call can fail for a reason that passes (the
+# distribution's own updater holds a lock, a mirror is busy), and the script runs
+# under `set -e`, which would end it at the first such failure with no line of its
+# own.
+apt_retry() {
+  local name=$1
+  local attempt
+  shift
+  for ((attempt = 1; attempt <= APT_ATTEMPTS; attempt++)); do
+    if "$@"; then
+      return 0
+    fi
+    log "$name failed (try $attempt of $APT_ATTEMPTS)"
+    if ((attempt < APT_ATTEMPTS)); then
+      sleep "$POLL_SECONDS"
+    fi
+  done
+  die "$name failed on each of $APT_ATTEMPTS tries"
+}
+
+# apt-get with a wait for the package lock: `-o DPkg::Lock::Timeout=300` gives a
+# call up to 300 seconds for the lock, where the default is to give up at once (on
+# a first boot the distribution's own updater may hold it); a call that still
+# fails goes through apt_retry. $1 is the verb. What the pages say, all read
+# 2026-10-07: apt.conf(5) of noble
+# (https://manpages.ubuntu.com/manpages/noble/en/man5/apt.conf.5.html) and of
+# Debian unstable (https://manpages.debian.org/unstable/apt/apt.conf.5.en.html)
+# do not mention the option; apt's own doc/examples/configure-index
+# (https://salsa.debian.org/apt-team/apt/-/raw/main/doc/examples/configure-index)
+# lists `dpkg::lock::timeout "<INT>"` and says nothing more. So the option's name
+# and its type are read, and which lock the option covers: not read. The review
+# that asked for the retry believed (from memory, about 70 percent) that it covers
+# dpkg's lock and not the lists lock (/var/lib/apt/lists/lock) that `apt-get
+# update` takes, which is the reason the retry is here and not the option alone.
+apt_get() {
+  apt_retry "apt-get $1" apt-get -o DPkg::Lock::Timeout=300 "$@"
+}
+
+# apt-mark holds a package at its version. The review found it has no wait for a
+# lock of its own (from memory), so it is only tried again, with no option.
+apt_mark_hold() {
+  apt_retry "apt-mark hold" apt-mark hold "$@"
+}
+
+# A directory only this script can read (mktemp -d, mode 700). The downloaded
+# signing key and the keyring made from it stay here until they are checked,
+# and so do the control plane's manifest and join command. Removed at the end.
+make_work_dir() {
+  WORK_DIR=$(mktemp -d)
+  trap 'rm -f "$WORK_DIR/release.key" "$WORK_DIR/keyring.gpg" "$WORK_DIR/calico.yaml" "$WORK_DIR/join-command" "$WORK_DIR/aws-error"; rmdir "$WORK_DIR" || true' EXIT
+}
+
+# Makes the keyring $2 from the downloaded signing key $1, and refuses (one
+# line) unless that keyring holds exactly one primary key, the pinned one, and
+# the key has not expired. What is checked is the file that apt will trust, not
+# the file that was downloaded, and no second keyring is needed: the file is
+# either exactly the pinned key (with its own subkeys and signatures) or it is
+# never copied under /etc/apt. A listing of the first key only would let a file
+# with the pinned key and another one through, and dearmoring writes both.
+#
+# The expiry check is an early, clear line and nothing more: an expired key
+# still has its fingerprint, so the pin alone passes, and `apt-get update`
+# would then fail with apt's own signature error.
+make_the_pinned_keyring() {
+  local downloaded=$1
+  local keyring=$2
+  local listing keys fingerprint expiry
+  gpg --dearmor --yes --output "$keyring" "$downloaded" || die "could not read the package signing key"
+  listing=$(gpg --show-keys --with-colons "$keyring") || die "could not read the package signing key"
+  keys=$(awk -F: '$1 == "pub" { n++ } END { print n + 0 }' <<<"$listing")
+  [[ $keys == 1 ]] ||
+    die "the package signing key file holds $keys primary keys, not exactly one; refusing to trust it"
+  fingerprint=$(awk -F: '$1 == "fpr" { print $10; exit }' <<<"$listing")
+  [[ $fingerprint == "$KUBERNETES_APT_KEY_FINGERPRINT" ]] ||
+    die "the package signing key is not the pinned one (found '$fingerprint'); refusing to trust it"
+  # Field 7 of the pub line: seconds since the epoch, empty for a key that does
+  # not expire. Digits only before any arithmetic: the listing comes from a
+  # downloaded file.
+  expiry=$(awk -F: '$1 == "pub" { print $7 }' <<<"$listing")
+  [[ $expiry =~ ^[0-9]{0,15}$ ]] ||
+    die "the package signing key has an expiry date that is not a number of seconds; refusing to trust it"
+  if [[ -n $expiry ]] && ((10#$expiry <= $(printf '%(%s)T' -1))); then
+    die "the package signing key $fingerprint expired on $(printf '%(%Y-%m-%d)T' "$((10#$expiry))"): apt-get update would fail with its own signature error, so the pinned key has to be replaced"
+  fi
+}
+
+# `systemctl restart` can return before containerd's socket takes connections
+# (from memory), and kubeadm's preflight runs a moment later. So: until the
+# socket exists and `ctr version` answers on it, a bounded number of tries, then
+# one line. ctr, and not crictl: ctr is in the distribution's containerd package
+# itself ("File list of package containerd in noble", packages.ubuntu.com, read
+# 2026-10-07: /usr/bin/ctr), it needs no configuration file, and its default
+# address is this socket; crictl comes with the kubeadm repository's cri-tools
+# and needs an endpoint. Each ask is cut off at 10 seconds.
+wait_for_containerd() {
+  local socket="$BOOT_ROOT/run/containerd/containerd.sock"
+  local attempt answer server
+  for ((attempt = 1; attempt <= CONTAINERD_ATTEMPTS; attempt++)); do
+    if [[ -S $socket ]] && answer=$(timeout 10 ctr version 2>/dev/null); then
+      # The version of the server that answered, once: a kubelet that refuses
+      # the container runtime is then diagnosed from the log. Only the
+      # characters a version is made of are kept, and at most 40 of them.
+      server=$(awk '$1 == "Server:" { in_server = 1; next } in_server && $1 == "Version:" { print $2; exit }' <<<"$answer")
+      server=$${server//[^A-Za-z0-9._+-]/}
+      if [[ -n $server ]]; then
+        log "containerd answers on $socket, server version $${server:0:40}"
+      else
+        log "containerd answers on $socket; no server version in the answer"
+      fi
+      return 0
+    fi
+    log "containerd does not answer yet (try $attempt of $CONTAINERD_ATTEMPTS)"
+    sleep "$POLL_SECONDS"
+  done
+  die "gave up after $CONTAINERD_ATTEMPTS tries: containerd's socket $socket did not answer"
+}
+
+# containerd from the distribution, kubeadm, kubelet and kubectl from the
+# Kubernetes project's package repository for ONE minor version, whose signing
+# key must be the pinned one. Needs WORK_DIR (make_work_dir).
+install_node() {
+  export DEBIAN_FRONTEND=noninteractive
+  local keyring_dir="$BOOT_ROOT/etc/apt/keyrings"
+  local keyring="/etc/apt/keyrings/kubernetes-apt-keyring.gpg"
+  local config="$BOOT_ROOT/etc/containerd/config.toml"
+
+  # IPv4 forwarding is what the Kubernetes page "Container Runtimes" (read
+  # 2026-10-07, v1.37) asks for, and it is the only setting that page lists: it
+  # names no kernel module and no bridge setting. The two modules and the two
+  # bridge settings are here on the review's word ("from memory"): kubeadm's
+  # preflight has long checked bridge-nf-call-iptables, which exists only while
+  # br_netfilter is loaded. They are harmless where a kernel needs none. The
+  # modules load before the settings are applied (a bridge key does not exist
+  # until br_netfilter is there), and they are listed for every later boot.
+  # modprobe takes ONE module per call: names after the first are parameters.
+  log "loading the kernel modules and enabling IPv4 forwarding"
+  mkdir -p "$BOOT_ROOT/etc/modules-load.d" "$BOOT_ROOT/etc/sysctl.d"
+  printf 'overlay\nbr_netfilter\n' >"$BOOT_ROOT/etc/modules-load.d/k8s.conf"
+  for module in overlay br_netfilter; do
+    modprobe "$module" || die "could not load the kernel module $module"
+  done
+  printf 'net.bridge.bridge-nf-call-iptables = 1\nnet.bridge.bridge-nf-call-ip6tables = 1\nnet.ipv4.ip_forward = 1\n' \
+    >"$BOOT_ROOT/etc/sysctl.d/k8s.conf"
+  sysctl --system >/dev/null
+
+  # Every package call goes through apt_get (or apt_mark_hold): each waits for
+  # the package lock and, when it still fails, is tried again, then one line.
+  log "installing the packages"
+  apt_get update
+  apt_get install -y apt-transport-https ca-certificates curl gpg containerd
+
+  fetch "https://pkgs.k8s.io/core:/stable:/v$KUBERNETES_MINOR/deb/Release.key" "$WORK_DIR/release.key"
+  make_the_pinned_keyring "$WORK_DIR/release.key" "$WORK_DIR/keyring.gpg"
+  mkdir -p "$keyring_dir" "$BOOT_ROOT/etc/apt/sources.list.d"
+  chmod 755 "$keyring_dir"
+  cp "$WORK_DIR/keyring.gpg" "$BOOT_ROOT$keyring"
+  chmod 644 "$BOOT_ROOT$keyring"
+  printf 'deb [signed-by=%s] https://pkgs.k8s.io/core:/stable:/v%s/deb/ /\n' \
+    "$keyring" "$KUBERNETES_MINOR" >"$BOOT_ROOT/etc/apt/sources.list.d/kubernetes.list"
+  apt_get update
+  apt_get install -y kubelet kubeadm kubectl
+  apt_mark_hold kubelet kubeadm kubectl
+
+  # containerd's own default configuration, with the systemd cgroup driver the
+  # Kubernetes page "Container Runtimes" asks for. The setting is one line of
+  # the runc options table; the check makes a changed layout stop the script.
+  log "configuring containerd"
+  mkdir -p "$BOOT_ROOT/etc/containerd"
+  containerd config default >"$config"
+  sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' "$config"
+  [[ $(grep -c 'SystemdCgroup = true' "$config") -eq 1 ]] ||
+    die "containerd's default configuration has no single SystemdCgroup setting to change"
+  systemctl enable containerd
+  systemctl restart containerd
+  wait_for_containerd
+  systemctl enable kubelet
+}

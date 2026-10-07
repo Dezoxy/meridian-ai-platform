@@ -117,7 +117,7 @@ every `.md` file in that folder.
 | Narrative (opens the tab and the PDF) | [01 overview](overview/01-meridian-ai-platform.md) · [02 scope](overview/02-scope.md) · [03 glossary](overview/03-glossary.md) |
 | Requirements | [constraints](requirements/constraints.md) · [quality attributes](requirements/quality-attributes.md) |
 | Security | [threat model](security/threat-model.md) · [data classification](security/data-classification.md) |
-| Deployment | [Azure platform](deployment/azure-platform.md): every Azure service the platform uses or designs, and the residency rule in words no cloud owns |
+| Deployment | [Azure platform](deployment/azure-platform.md): every Azure service the platform uses or designs, the residency rule in words no cloud owns, and, in its last section, a comparison of a managed and a self-managed cluster (not a plan) |
 
 Only `overview/` is imported into the model by `!docs`. Registers reach it by
 symlink (`overview/10-constraints.md`, `11-quality-attributes.md`,

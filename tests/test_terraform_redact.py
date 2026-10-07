@@ -13,6 +13,7 @@ Run: python3 -m unittest discover -s tests
 """
 
 import base64
+import gzip
 import re
 import subprocess
 import unittest
@@ -510,6 +511,314 @@ class AwsPersonalData(unittest.TestCase):
         out = redact("released 1.2.3.4 yesterday\n")
 
         self.assertEqual(out, "released <ip> yesterday\n")
+
+
+PREFIXES = (
+    "i",
+    "ami",
+    "vpc",
+    "subnet",
+    "sg",
+    "sgr",
+    "rtb",
+    "rtbassoc",
+    "igw",
+    "eipalloc",
+    "eipassoc",
+    "eni",
+    "eni-attach",
+    "vol",
+)
+LONG_HEX = "0123456789abcdef0"  # seventeen: the form since 2016
+SHORT_HEX = "0123abcd"  # eight: the form before it
+INSTANCE_ID = f"i-{LONG_HEX}"
+PRIVATE_HOST = "ip-10-0-1-23.eu-central-1.compute.internal"
+PUBLIC_HOST = "ec2-198-51-100-23.eu-central-1.compute.amazonaws.com"
+PROFILE_ARN = (
+    f"arn:aws:iam::{ACCOUNT}:instance-profile/meridian-aws-kubeadm-control-plane"
+)
+PARAMETER_ARN = (
+    f"arn:aws:ssm:eu-central-1:{ACCOUNT}:parameter/meridian-aws-kubeadm/join-command"
+)
+
+
+def user_data_blob() -> str:
+    """What `base64gzip(...)` makes of a boot script: a gzip stream, base64."""
+    script = b"#!/bin/bash\nkubeadm init --apiserver-cert-extra-sans 198.51.100.23\n"
+    return base64.b64encode(gzip.compress(script * 8)).decode()
+
+
+class AwsInstanceShapes(unittest.TestCase):
+    """What a plan of instances prints and a plan of the managed module did not:
+    identifiers of instances, images and networks, a host written with dashes
+    that embeds an address, compressed user data. The self-managed module's plan
+    (S079) is the first to print them."""
+
+    def test_each_identifier_is_removed_in_both_its_forms(self) -> None:
+        for prefix in PREFIXES:
+            for digits in (LONG_HEX, SHORT_HEX):
+                with self.subTest(prefix=prefix, digits=digits):
+                    identifier = f"{prefix}-{digits}"
+
+                    out = redact(
+                        f'  + id = "{identifier}"\n'
+                        f"x: Refreshing state... [id={identifier}]\n"
+                        f"worker/{identifier} is not authorized\n"
+                    )
+
+                    self.assertEqual(
+                        out,
+                        '  + id = "<resource-id>"\n'
+                        "x: Refreshing state... [id=<resource-id>]\n"
+                        "worker/<resource-id> is not authorized\n",
+                    )
+
+    def test_identifiers_side_by_side_are_each_removed(self) -> None:
+        a, b, c = f"i-{LONG_HEX}", f"vol-{LONG_HEX}", f"sg-{SHORT_HEX}"
+        for text, expected in (
+            (f"{a},{b},{c}", "<resource-id>,<resource-id>,<resource-id>"),
+            (f"{a} {b} {c}", "<resource-id> <resource-id> <resource-id>"),
+            (f'["{a}","{b}"]', '["<resource-id>","<resource-id>"]'),
+            (f"{a}\n{b}", "<resource-id>\n<resource-id>"),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(redact(f"{text}\n"), f"{expected}\n")
+
+    def test_a_string_that_only_looks_like_an_identifier_is_left(self) -> None:
+        lines = (
+            "node_instance_type = t3-medium\n"
+            f"i-{LONG_HEX}0\n"  # eighteen hex digits
+            f"i-{LONG_HEX[:-1]}\n"  # sixteen
+            "i-0123abc\n"  # seven
+            f"i-{LONG_HEX.upper()}\n"  # upper case: AWS writes lower case
+            "i-0123456789abcdeg0\n"  # not hex
+            f"multi-{LONG_HEX}\n"  # a longer word that ends in i
+            f"xvpc-{LONG_HEX}x\n"
+            "ami-\n"
+            "ami-0123\n"
+            "subnet-group\n"
+            "vpc-endpoint-service\n"
+            "sg-\n"
+            "vol111111111111\n"
+            "version-0123456789abcdef0abc\n"
+        )
+
+        self.assertEqual(redact(lines), lines)
+
+    def test_an_instance_profile_and_a_role_and_a_parameter_arn_are_removed(
+        self,
+    ) -> None:
+        lines = (
+            f'  + arn  = "{PROFILE_ARN}"\n'
+            f'  + role = "{ROLE_ARN}"\n'
+            f'  + arn  = "{PARAMETER_ARN}"\n'
+            f'"Resource": "{PARAMETER_ARN}"\n'
+        )
+
+        out = redact(lines)
+
+        self.assertEqual(
+            out,
+            '  + arn  = "<arn>"\n  + role = "<arn>"\n  + arn  = "<arn>"\n'
+            '"Resource": "<arn>"\n',
+        )
+        self.assertNotIn(ACCOUNT, out)
+        self.assertNotIn("join-command", out)
+
+    def test_a_host_written_with_dashes_is_removed_with_its_domain(self) -> None:
+        lines = (
+            f'  + private_dns = "{PRIVATE_HOST}"\n'
+            f'  + public_dns  = "{PUBLIC_HOST}"\n'
+            "node ip-10-0-1-23 is Ready\n"
+            "ec2-203-0-113-7.compute-1.amazonaws.com\n"
+            "ip-172-31-5-9.ec2.internal.\n"
+        )
+
+        out = redact(lines)
+
+        self.assertEqual(
+            out,
+            '  + private_dns = "<host>"\n'
+            '  + public_dns  = "<host>"\n'
+            "node <host> is Ready\n"
+            "<host>\n"
+            "<host>\n",
+        )
+
+    def test_a_dashed_host_ends_where_its_domain_ends(self) -> None:
+        for text, expected in (
+            (f'["{PRIVATE_HOST}", "x"]', '["<host>", "x"]'),
+            (f"({PUBLIC_HOST})", "(<host>)"),
+            (f"host={PRIVATE_HOST} port=6443", "host=<host> port=6443"),
+            (f"{PRIVATE_HOST},{PUBLIC_HOST}", "<host>,<host>"),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(redact(f"{text}\n"), f"{expected}\n")
+
+    def test_words_that_only_look_like_a_dashed_host_are_left(self) -> None:
+        lines = (
+            "zip-1-2-3-4 and tip-1-2-3-4\n"
+            "ip-address-of-the-node\n"
+            "ec2-instance-connect\n"
+            "ip-10-0-1\n"  # three parts
+            "ip-10-0-1-x\n"
+            "ec2-1234-0-1-2\n"  # four digits in a part
+            "eip-10-0-1-23\n"
+        )
+
+        self.assertEqual(redact(lines), lines)
+
+    def test_a_private_and_a_public_address_are_removed(self) -> None:
+        out = redact(
+            '  + private_ip = "10.0.1.23"\n  + public_ip  = "198.51.100.23"\n'
+            '  + cidr_ipv4  = "203.0.113.7/32"\n'
+        )
+
+        self.assertEqual(
+            out,
+            '  + private_ip = "<ip>"\n  + public_ip  = "<ip>"\n'
+            '  + cidr_ipv4  = "<ip>"\n',
+        )
+
+    def test_compressed_user_data_is_removed_whole(self) -> None:
+        blob = user_data_blob()
+        self.assertTrue(blob.startswith("H4sI"))  # the premise: gzip, base64
+
+        for text, expected in (
+            (
+                f'  + user_data_base64 = "{blob}"',
+                '  + user_data_base64 = "<user-data>"',
+            ),
+            (
+                f"  ~ user_data_base64 = {blob} -> null",
+                "  ~ user_data_base64 = <user-data> -> null",
+            ),
+            (f'"UserData": "{blob}"', '"UserData": "<user-data>"'),
+        ):
+            with self.subTest(text=text[:40]):
+                self.assertEqual(redact(f"{text}\n"), f"{expected}\n")
+
+    def test_short_or_other_base64_is_not_taken_for_user_data(self) -> None:
+        lines = (
+            "H4sI\n"
+            "H4sIshort\n"
+            f"sha256:{'ab12' * 16}\n"
+            f"{base64.b64encode(bytes(range(60))).decode()}\n"
+        )
+
+        self.assertEqual(redact(lines), lines)
+
+    def test_a_whole_plan_excerpt_of_the_self_managed_module_comes_out_clean(
+        self,
+    ) -> None:
+        blob = user_data_blob()
+        plan = f"""\
+data.aws_ssm_parameter.ubuntu_image: Read complete after 0s [id=/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id]
+aws_vpc.main: Refreshing state... [id=vpc-{LONG_HEX}]
+aws_internet_gateway.main: Refreshing state... [id=igw-{LONG_HEX}]
+aws_subnet.public: Refreshing state... [id=subnet-{LONG_HEX}]
+aws_route_table.public: Refreshing state... [id=rtb-{LONG_HEX}]
+aws_route_table_association.public: Refreshing state... [id=rtbassoc-{LONG_HEX}]
+aws_security_group.control_plane: Refreshing state... [id=sg-{LONG_HEX}]
+aws_vpc_security_group_ingress_rule.api_from_operator: Refreshing state... [id=sgr-{LONG_HEX}]
+aws_eip.control_plane: Refreshing state... [id=eipalloc-{LONG_HEX}]
+aws_eip_association.control_plane: Refreshing state... [id=eipassoc-{LONG_HEX}]
+aws_instance.control_plane: Refreshing state... [id={INSTANCE_ID}]
+
+  # aws_instance.control_plane will be updated in-place
+  ~ resource "aws_instance" "control_plane" {{
+        id                                   = "{INSTANCE_ID}"
+      ~ ami                                  = "ami-{LONG_HEX}" -> "ami-{SHORT_HEX}"
+      ~ user_data_base64                     = "{blob}" -> (known after apply)
+        arn                                  = "arn:aws:ec2:eu-central-1:{ACCOUNT}:instance/{INSTANCE_ID}"
+        iam_instance_profile                 = "meridian-aws-kubeadm-control-plane"
+        instance_type                        = "t3.medium"
+        primary_network_interface_id         = "eni-{LONG_HEX}"
+        private_dns                          = "{PRIVATE_HOST}"
+        private_ip                           = "10.0.1.23"
+        public_dns                           = "{PUBLIC_HOST}"
+        public_ip                            = "198.51.100.23"
+        subnet_id                            = "subnet-{LONG_HEX}"
+        vpc_security_group_ids               = [
+            "sg-{LONG_HEX}",
+        ]
+
+      ~ root_block_device {{
+            volume_id             = "vol-{LONG_HEX}"
+            volume_size           = 30
+        }}
+    }}
+
+  # aws_iam_instance_profile.control_plane will be created
+  + resource "aws_iam_instance_profile" "control_plane" {{
+      + arn         = "{PROFILE_ARN}"
+      + role        = "meridian-aws-kubeadm-control-plane"
+    }}
+
+  # aws_iam_role_policy.control_plane_write_join_command will be created
+  + resource "aws_iam_role_policy" "control_plane_write_join_command" {{
+      + policy = jsonencode(
+            {{
+              + Statement = [
+                  + {{
+                      + Action   = "ssm:PutParameter"
+                      + Resource = "{PARAMETER_ARN}"
+                    }},
+                ]
+            }}
+        )
+      + role   = "{ROLE_ARN}"
+    }}
+
+  # aws_vpc_security_group_ingress_rule.api_from_operator will be created
+  + resource "aws_vpc_security_group_ingress_rule" "api_from_operator" {{
+      + cidr_ipv4         = "203.0.113.7/32"
+      + security_group_id = "sg-{LONG_HEX}"
+    }}
+
+  # aws_vpc.main will be created
+  + resource "aws_vpc" "main" {{
+      + cidr_block = "10.0.0.0/16"
+      + owner_id   = "{ACCOUNT}"
+    }}
+
+Plan: 22 to add, 1 to change, 0 to destroy.
+"""  # noqa: E501 (a plan's lines are as long as Terraform prints them)
+
+        out = redact(plan)
+
+        leaked = (
+            blob[:24],
+            LONG_HEX,
+            SHORT_HEX,
+            ACCOUNT,
+            "10.0.1.23",
+            "198.51.100.23",
+            "203.0.113.7",
+            "ip-10-0-1-23",
+            "ec2-198-51-100-23",
+            "join-command",
+            "instance-profile/",
+        )
+        for item in leaked:
+            self.assertNotIn(item, out)
+        self.assertIsNone(
+            re.search(
+                r"\b(i|ami|vpc|subnet|sg|sgr|rtb|rtbassoc|igw|eipalloc|eipassoc|eni|"
+                r"vol)-[0-9a-f]{8}",
+                out,
+            )
+        )
+        # What a reader needs is still there.
+        for kept in (
+            "aws_instance.control_plane",
+            'instance_type                        = "t3.medium"',
+            "volume_size           = 30",
+            "Plan: 22 to add, 1 to change, 0 to destroy.",
+            "meridian-aws-kubeadm-control-plane",
+        ):
+            self.assertIn(kept, out)
+        self.assertEqual(out.count("<resource-id>"), 18)
 
 
 if __name__ == "__main__":

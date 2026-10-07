@@ -1,0 +1,158 @@
+#!/bin/bash
+# The control-plane node's boot script (cloud-init user data), rendered by
+# nodes.tf. It has never run on a real node: tests/meridian/
+# test_aws_kubeadm_bootstrap.py runs it against stand-in programs.
+#
+# It holds NO secret. User data can be read through the instance metadata
+# service and by anyone who may describe the instance, so the join token is made
+# on this node, after boot, and leaves it only through one Parameter Store
+# parameter (the placeholder that Terraform made, overwritten here).
+#
+# Five settings have defaults and may be set in the environment: a test shortens
+# them, and cloud-init sets none of them. Three are below the "Bounds" heading
+# (ADDRESS_ATTEMPTS, PUBLISH_ATTEMPTS and POLL_SECONDS: BOOT_ROOT, the root prefix
+# a test points elsewhere, is the fourth line there), two are in the text shared
+# with the workers (CONTAINERD_ATTEMPTS and APT_ATTEMPTS).
+#
+# Terraform renders this file: every shell parameter expansion is written with
+# a doubled dollar sign, and no percent sign is followed by a brace.
+set -euo pipefail
+# The alphabet of the join pattern (node-common) is bytes: see the note there.
+export LC_ALL=C
+export HOME=/root
+export PATH="$PATH:/snap/bin"
+
+ROLE='control-plane'
+REGION='${region}'
+PUBLIC_ADDRESS='${public_address}'
+API_PORT='${api_port}'
+POD_NETWORK_CIDR='${pod_network_cidr}'
+JOIN_PARAMETER_NAME='${join_parameter_name}'
+CALICO_VERSION='${calico_version}'
+CALICO_MANIFEST_SHA256='${calico_manifest_sha256}'
+
+# Bounds: a number of tries and the seconds between two of them.
+BOOT_ROOT="$${BOOT_ROOT:-}"
+ADDRESS_ATTEMPTS="$${ADDRESS_ATTEMPTS:-60}"
+PUBLISH_ATTEMPTS="$${PUBLISH_ATTEMPTS:-10}"
+POLL_SECONDS="$${POLL_SECONDS:-5}"
+
+${common}
+
+# The metadata service at version 2: a session token first, then the value.
+imds() {
+  local token
+  token=$(curl --fail --silent --show-error --max-time 5 -X PUT \
+    -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' \
+    http://169.254.169.254/latest/api/token) || return 1
+  curl --fail --silent --show-error --max-time 5 \
+    -H "X-aws-ec2-metadata-token: $token" \
+    "http://169.254.169.254/latest/meta-data/$1"
+}
+
+# The node boots with the address the subnet gave it, and the Elastic IP
+# replaces that address when Terraform attaches it, a little after the instance
+# starts. kubeadm writes the control-plane endpoint into the certificates and
+# every kubeconfig, so it must not start before the address is the one named.
+wait_for_the_elastic_ip() {
+  local attempt address
+  for ((attempt = 1; attempt <= ADDRESS_ATTEMPTS; attempt++)); do
+    address=$(imds public-ipv4) || address=''
+    if [[ $address == "$PUBLIC_ADDRESS" ]]; then
+      log "the public address is the Elastic IP $PUBLIC_ADDRESS"
+      return 0
+    fi
+    log "waiting for the Elastic IP (the node reports '$address', try $attempt of $ADDRESS_ATTEMPTS)"
+    sleep "$POLL_SECONDS"
+  done
+  die "gave up after $ADDRESS_ATTEMPTS tries: the public address never became the Elastic IP $PUBLIC_ADDRESS"
+}
+
+# Once per node, and the first thing the script does, before it installs or
+# restarts anything. A bootstrap that failed is removed and applied again, not
+# repaired by hand (the README says so), so a node that already has an admin
+# kubeconfig is refused, and nothing on it is touched.
+refuse_a_second_run() {
+  local admin_conf="$BOOT_ROOT/etc/kubernetes/admin.conf"
+  [[ ! -e $admin_conf ]] || die "this node already has $admin_conf: kubeadm init runs once per node"
+}
+
+initialise_the_control_plane() {
+  local admin_conf="$BOOT_ROOT/etc/kubernetes/admin.conf"
+  log "running kubeadm init"
+  # --skip-token-print: init would print its own bootstrap token, and cloud-init
+  # keeps this script's output in a log on the node for the node's life.
+  #
+  # Two tokens exist for the hour: init still creates its default one (unused,
+  # and not printed), and publish_the_join_command makes a second. The first is
+  # left because the workers' discovery reads the cluster-info ConfigMap, which
+  # init's bootstrap-token phase writes: skipping that phase would remove the
+  # ConfigMap along with the token. No page of kubeadm's documentation was read
+  # for this, and the module knows of no flag that drops only the token. Both
+  # tokens die at the end of the hour.
+  kubeadm init \
+    --control-plane-endpoint "$PUBLIC_ADDRESS:$API_PORT" \
+    --apiserver-cert-extra-sans "$PUBLIC_ADDRESS" \
+    --pod-network-cidr "$POD_NETWORK_CIDR" \
+    --token-ttl 1h \
+    --skip-token-print || die "kubeadm init failed"
+  [[ -r $admin_conf ]] || die "kubeadm init finished but $admin_conf is not there"
+}
+
+# The network plugin, from the manifest of one release. The digest is checked
+# before anything is applied.
+apply_the_network_plugin() {
+  local admin_conf="$BOOT_ROOT/etc/kubernetes/admin.conf"
+  local manifest="$WORK_DIR/calico.yaml"
+  local actual
+  log "fetching the network plugin manifest $CALICO_VERSION"
+  fetch "https://raw.githubusercontent.com/projectcalico/calico/$CALICO_VERSION/manifests/calico.yaml" "$manifest"
+  actual=$(sha256sum "$manifest") || die "could not compute the manifest's SHA-256"
+  actual=$${actual%% *}
+  [[ $actual == "$CALICO_MANIFEST_SHA256" ]] ||
+    die "the network plugin manifest has SHA-256 $actual, not the pinned $CALICO_MANIFEST_SHA256; nothing was applied"
+  log "applying the network plugin"
+  kubectl --kubeconfig "$admin_conf" apply --server-side -f "$manifest" || die "could not apply the network plugin"
+}
+
+# A token that lives one hour, printed as a join command, read back through the
+# same strict pattern the workers use, and only then written. The parameter's
+# value goes to the CLI through a file in a private temporary directory (made
+# by mktemp -d, mode 700), not through the argument list. The file:// prefix is
+# the AWS CLI's general way of loading a parameter from a file (the page
+# "Loading a parameter from a file in the AWS CLI", read 2026-10-07); that page
+# shows it for other commands, and that put-parameter's --value takes it is the
+# session's reading, which an apply confirms.
+publish_the_join_command() {
+  local line value_file="$WORK_DIR/join-command" attempt
+  line=$(kubeadm token create --ttl 1h --print-join-command) || die "kubeadm could not make a join command"
+  parse_join_command "$line" "$PUBLIC_ADDRESS:$API_PORT" ||
+    die "what kubeadm printed is not a join command for $PUBLIC_ADDRESS:$API_PORT; nothing was published"
+  printf 'kubeadm join %s:%s --token %s --discovery-token-ca-cert-hash sha256:%s' \
+    "$PUBLIC_ADDRESS" "$API_PORT" "$JOIN_TOKEN" "$JOIN_HASH" >"$value_file"
+  for ((attempt = 1; attempt <= PUBLISH_ATTEMPTS; attempt++)); do
+    if aws ssm put-parameter --region "$REGION" --name "$JOIN_PARAMETER_NAME" \
+      --type SecureString --overwrite --value "file://$value_file" >/dev/null; then
+      log "wrote the join command to the parameter $JOIN_PARAMETER_NAME"
+      return 0
+    fi
+    log "could not write the parameter (try $attempt of $PUBLISH_ATTEMPTS)"
+    sleep "$POLL_SECONDS"
+  done
+  die "gave up after $PUBLISH_ATTEMPTS tries: the join command was not written to $JOIN_PARAMETER_NAME"
+}
+
+for setting in ADDRESS_ATTEMPTS PUBLISH_ATTEMPTS POLL_SECONDS CONTAINERD_ATTEMPTS APT_ATTEMPTS; do
+  require_number "$setting"
+done
+
+refuse_a_second_run
+make_work_dir
+
+wait_for_the_elastic_ip
+install_aws_cli
+install_node
+initialise_the_control_plane
+apply_the_network_plugin
+publish_the_join_command
+log "done"
