@@ -35,6 +35,11 @@
 #                 that is not in its form is one FAIL; a failed read of the
 #                 database keeps its message, cleaned and cut to 160 characters,
 #                 in the FAIL line (names of relations and roles, never a row).
+#                 A pgvector read that itself fails (the pod, the connection or
+#                 the statement's deadline) is a FAIL that says it could not
+#                 read pg_extension and gives the first line of what psql or
+#                 kubectl wrote, cleaned and cut the same way (S073, K4); it was
+#                 an empty answer, "not installed", before.
 #                 What the lines do not prove: a count above zero says
 #                 the seed and the ingestion wrote something, not what or how
 #                 much (the claims and runs tables are not read: `make demo`
@@ -211,8 +216,9 @@
 #                 while the Meridian services are not deployed (`make deploy`).
 #   7. sweep:     two lines, read-only (the second is below). The first: the
 #                 CronJob meridian-sweep exists, and the
-#                 last of its Jobs to finish (the scheduled ones and any made by
-#                 hand) succeeded; the line prints when it finished. It fails
+#                 last of its Jobs that the schedule made to finish (not one made
+#                 by hand: see below) succeeded; the line prints when it
+#                 finished. It fails
 #                 when the last one failed (with its reason), when the CronJob
 #                 was last scheduled more than three periods (15 minutes) after
 #                 that Job finished with nothing running, when that Job finished
@@ -240,6 +246,52 @@
 #                 with the timestamps alone. What it does not prove: that the
 #                 sweep did its work (only that a Job finished), and a database
 #                 whose clock is wrong would be believed.
+#                 The Jobs are listed by the sweep's label
+#                 (app.kubernetes.io/name=meridian-sweep, which the CronJob's
+#                 jobTemplate gives every Job it makes, scheduled or by hand),
+#                 not the namespace's: seen on kind on 2026-10-07 (S073, K8),
+#                 smoke's own four Jobs a run, kept 15 minutes, made the list
+#                 227,658 bytes and jq refused it as one argument (131,072
+#                 bytes: "Argument list too long"). The verdict still filters
+#                 by owner; a Job the CronJob owns without the label is not
+#                 listed (the chart makes none). No cluster or Prometheus
+#                 answer is a jq argument anywhere in this script: they go in
+#                 on standard input or as --slurpfile of a process substitution
+#                 (a test reads the script's text for it).
+#                 A Job made by hand (`kubectl create job --from=cronjob/...`)
+#                 has the CronJob as its owner too, so by the owner alone a
+#                 recent one would read as the schedule's success (S073, K4).
+#                 It is told apart by its annotations, seen on kind: it carries
+#                 cronjob.kubernetes.io/instantiate=manual, and a scheduled Job
+#                 carries batch.kubernetes.io/cronjob-scheduled-timestamp. The
+#                 verdict leaves out a Job only when it has the first and not
+#                 the second (the presence of the scheduled timestamp is the
+#                 positive fact, and wins); a Job with neither is an older
+#                 cluster's and counts as before, and the line says that the
+#                 annotation was absent. When the newest finished Job of all is
+#                 a by-hand one, the line says so, by name and time, and that
+#                 a by-hand run is not a run of the schedule: a by-hand success
+#                 beside a schedule that stopped is the stopped verdict, and a
+#                 by-hand failure beside a healthy schedule is a PASS. Seen on
+#                 kind on 2026-10-07: with ONE success kept (the chart now
+#                 keeps three), a by-hand success evicted the schedule's own,
+#                 and the verdict, resting on the failed scheduled Job of the
+#                 evening before, failed a healthy schedule. So when the newest
+#                 finished Job the schedule made finished before the CronJob's
+#                 lastScheduleTime and a by-hand Job finished after it, that
+#                 old Job is not judged and lastScheduleTime alone decides:
+#                 older than the bound, the stopped FAIL; within it, a SKIP
+#                 that says a Job of the schedule is running, or that the
+#                 schedule fired at that time, its Job is no longer in the
+#                 history and its outcome was not read (run smoke again after
+#                 the next scheduled run; the findings line then skips too, so
+#                 a by-hand run turns two PASS into two SKIP until the next
+#                 run). What it does not see: a Job made by hand with the
+#                 annotation removed, or with the scheduled one added by hand
+#                 (a person who edits a Job's annotations can pass for the
+#                 schedule), and the alert MeridianSweepStale, which reads the
+#                 CronJob's last successful time, which a by-hand success moves
+#                 too (seen on kind on 2026-10-07).
 #                 The second line (S064, C3) asks Prometheus, through the same
 #                 Grafana forward as check 5, whether the pass that line passed
 #                 sent its findings: the gauge meridian_sweep_last_pass for job
@@ -401,8 +453,22 @@
 #                 fails too. The Pod ends on its own after five minutes, and is
 #                 not created when the control failed. The check fails when the
 #                 policy `default-deny` does not exist.
-#                 Skipped, one line instead of six, while the Claims API is not
-#                 deployed (`make deploy`). What it does not prove: that
+#                 Every service's policy OBJECT is read, and one is probed
+#                 (S073, K4). The check lists the Meridian Deployments as
+#                 checks 3, 5 and 7 do (the label part-of=meridian) and, from
+#                 one listing of the namespace's NetworkPolicies, prints one
+#                 FAIL line that names each service whose policy of the same
+#                 name is not there (the chart makes one per Deployment, the
+#                 rate store's included). The probes stay as they are: the
+#                 Claims API's pod and the one probe Pod each, no Pod per
+#                 service, so what the policies DO is proved for the Claims
+#                 API's egress and the database, the collector and the rate
+#                 store's ingress alone. When the Deployments exist and the
+#                 Claims API's is not among them the check fails, because the
+#                 probes run in its pod. The line prints nothing when all
+#                 policies are there (the count of lines does not move).
+#                 Skipped, one line instead of six, while no Meridian
+#                 Deployment exists (`make deploy`). What it does not prove: that
 #                 every other pair of pods is allowed or denied as the chart
 #                 says (the chart's tests render and compare the rules); that a
 #                 pod of another namespace cannot reach the database, or that an
@@ -481,7 +547,7 @@
 #                 second before it sends, so a gateway slower than that to end
 #                 the connection turns a refusal into this FAIL; it fails
 #                 closed, and a run again tells.
-#  10. certificate policy: four lines (S056, S062), run after the first
+#  10. certificate policy: five lines (S056, S062, S073), run after the first
 #                 nine and never skipped: its objects exist after `make up`, so
 #                 a missing one is a FAIL. The first three lines read only: the
 #                 five CertificateRequestPolicies
@@ -505,12 +571,12 @@
 #                 one request that the issuer must refuse (S062), the one
 #                 change this check makes: a CertificateRequest named
 #                 meridian-smoke-refused-<pid>-<random> in the namespace
-#                 default, for the issuer meridian-services, with a URI under
-#                 the Meridian prefix and a duration that policy allows, so
-#                 that only its namespace refuses it: the namespace selector
-#                 of meridian-services does not list default, and the policy
-#                 meridian-deny-unlisted, which selects the issuer from every
-#                 namespace, permits nothing. It passes when the request is
+#                 default, for the issuer meridian-services, with a URI that
+#                 policy lists (the Claims API's) and a duration and usages it
+#                 allows, so that only its namespace refuses it: the
+#                 namespace selector of meridian-services does not list
+#                 default, and the policy meridian-deny-unlisted, which
+#                 selects the issuer from every namespace, permits nothing. It passes when the request is
 #                 Denied and the approver's whole message, judged before it
 #                 is cut, names meridian-deny-unlisted as a policy that
 #                 evaluated the request and does not name meridian-services
@@ -560,7 +626,32 @@
 #                 those by hand); and a request for an issuer that is not
 #                 Meridian's, which no policy answers, is not made. It adds
 #                 a second or two when the approver is up, 30 s when it does
-#                 not answer.
+#                 not answer. The fifth line (S073, K5) is read-only and
+#                 kind only (on Azure the database and its certificates are the
+#                 provider's): CloudNativePG signs the database's server and
+#                 replication client certificates with an authority of its
+#                 own, cert-manager does not, and Prometheus holds no series
+#                 for them, so nothing else says that a renewal did not
+#                 happen. It reads the Cluster platform-db once and judges the
+#                 earliest of the three expirations of
+#                 .status.certificates.expirations, text in Go's default time
+#                 format ("2027-01-04 18:05:31 +0000 UTC"): it passes with that
+#                 date and the days left when more than half of the
+#                 operator's renewal threshold remains (7 days by default, so
+#                 84 hours), and fails when less remains, naming the
+#                 certificate and the days, when one has ended, when the
+#                 status holds no expiration (an operator that changed its
+#                 status must not make it a pass), and when a date is not in
+#                 exactly that form with a +0000 UTC zone (it cannot tell, and
+#                 says so without repeating the text). The operator renews 7
+#                 days before the end and its lifetime is in whole days, so a
+#                 renewal cannot be seen inside one cluster run. What it does
+#                 not prove: nothing alerts between two runs of smoke; it
+#                 reads the operator's record of the dates, not the
+#                 certificate files the instances serve. It was tested with a
+#                 stand-in and the real jq. Seen on kind on 2026-10-07 (S073,
+#                 run R4d): a pass on the real Cluster, naming platform-db-ca
+#                 with 89 days left. Not seen: the line failing.
 #  11. alert rules and health dashboard: four lines, read-only (S062), run
 #                 last. Three lines read Prometheus' /api/v1/rules through
 #                 Grafana's datasource proxy (the port-forward of check 4) for
@@ -572,7 +663,29 @@
 #                 rule names equal the file's (the file's names are read with
 #                 awk by their indentation, and a test keeps that equal to a
 #                 YAML parser's reading; a cluster that runs an older file
-#                 says which groups and rules differ). No alert of those
+#                 says which groups and rules differ), and so do each rule's
+#                 expression and an alert's `for` (S073, K4: the same line, and
+#                 the FAIL names the rule and which of the two differs, never
+#                 an expression's text; it says to run make deploy or make up).
+#                 Prometheus returns the parsed expression, not the file's
+#                 text, so the two sides go through one filter (rules_changed)
+#                 that collapses whitespace, writes every duration in
+#                 milliseconds ([24h] as Prometheus prints it, [1d], is the
+#                 same), removes all whitespace and sorts the matchers between
+#                 a pair of braces. It is not a PromQL parser. What the
+#                 comparison of expressions does not see: a change that only
+#                 moves whitespace, including inside a string literal (a label
+#                 value "a b" and "ab" are one); a label value or regular
+#                 expression with a comma, a brace or a duration-like word in
+#                 it (the matchers are split at every comma, and a word such as
+#                 "1h" at the start of a word is read as a duration); an
+#                 expression written in another way that is the same one (a
+#                 quote that is not a double quote, or `sum(x) by (a)` for
+#                 `sum by (a) (x)`, which Prometheus is expected to print in
+#                 the second form: neither is in the file, nor was tried, and
+#                 the check would call it a difference); the rule's labels and
+#                 annotations and a `keep_firing_for` (not read); and that the
+#                 expression is right. No alert of those
 #                 groups is firing (a FAIL names it; a pending alert is not a
 #                 failure, and the line names it). The three wait up to 120 s
 #                 for the groups to load and be evaluated (a rule not yet
@@ -610,6 +723,14 @@ readonly ADJUSTER_DECISION_URL=http://claims.meridian.localhost:8088/adjuster/cl
 # The first sentence of the banner every page carries (templates/base.html).
 readonly ADJUSTER_BANNER="Synthetic data only."
 readonly SWEEP_CRONJOB=meridian-sweep
+# The label of the sweep's Jobs: the CronJob's jobTemplate carries it (the chart's
+# meridian.labels), so a Job the schedule made and one made by hand from the
+# CronJob both have it. Check 7 lists the Jobs by it and not the namespace's,
+# which smoke's own Jobs, the migrations and the ingestion fill (S073, K8: a
+# list of 227,658 bytes was more than one argument of jq may hold). A Job the
+# CronJob owns without the label (none the chart makes) is not listed; the
+# verdict still filters by owner.
+readonly SWEEP_JOBS_SELECTOR=app.kubernetes.io/name=meridian-sweep
 # The CronJob's schedule is every five minutes; a run is overdue after three
 # periods (900 s). The period is read from the CronJob's own schedule when it
 # is "*/N * * * *"; SWEEP_PERIOD_SECONDS is what is used for any other form.
@@ -644,8 +765,8 @@ readonly QUERY_ERROR_LENGTH=160
 # print a line of its own): a statement that runs longer than five seconds, or
 # waits longer than three for a lock (a migration that holds one while smoke
 # runs), is cancelled, and psql's message ends in the FAIL line of that check
-# instead of the line hanging (the pgvector lines of check 2 keep no message:
-# they read "not installed").
+# instead of the line hanging (the pgvector lines of check 2 keep the first line
+# of it too since S073, K4: a read that failed is not "not installed").
 readonly PSQL_OPTIONS='-c statement_timeout=5s -c lock_timeout=3s'
 # The connections the network-policy check (8) tries, as host:port. The Agent
 # Runtime is the control: the Claims API's policy and its own name each other. The
@@ -844,11 +965,27 @@ readonly POLICY_ADDON=cert-manager-approver-policy
 readonly POLICY_CONTROLLER=cert-manager
 readonly POLICY_BUILTIN_ROLE=cert-manager-controller-approve:cert-manager-io
 readonly POLICY_BUILTIN_OFF_ARG=--controllers=-certificaterequests-approver
+# The database's own certificates (check 10's fifth line, S073). CloudNativePG
+# signs the server's and the replication client's, with an authority of its own,
+# and writes the three expirations into the Cluster's status as text in Go's
+# default time format ("2027-01-04 18:05:31 +0000 UTC", not RFC 3339). The
+# operator renews a certificate when it is closer to its end than
+# EXPIRING_CHECK_THRESHOLD, in whole days, default 7 (the operator's
+# documentation, "Operator configuration" and "Certificates", at the pinned
+# version 1.30.1; the operator's ConfigMap on kind has no keys, so it is the
+# default). The line fails inside half of that, so it stays silent while the
+# operator still has time and is red when the operator has plainly missed.
+# CERTIFICATE_DURATION, the lifetime (default 90), is in whole days too: the
+# shortest is one day, so a renewal cannot be seen inside one cluster run.
+readonly DATABASE_CERTIFICATE_RENEWAL_DAYS=7
+readonly DATABASE_CERTIFICATE_MARGIN_SECONDS=$((DATABASE_CERTIFICATE_RENEWAL_DAYS * 86400 / 2))
 # The request the issuer must refuse (check 10's fourth line): a
 # CertificateRequest in REFUSED_NAMESPACE for the issuer REFUSED_ISSUER, with a
-# URI that meridian-services allows in `meridian` and a duration it allows, so
-# nothing about the request's shape refuses it, only its namespace (a test keeps
-# these equal to certificate-policy.yaml's). The name is
+# URI that meridian-services lists (the Claims API's own: since S072 the policy
+# lists each URI, so an unlisted one would be refused in `meridian` too) and a
+# duration and usages it allows, so nothing about the request's shape refuses
+# it, only its namespace (a test keeps these equal to certificate-policy.yaml's
+# lists). The name is
 # REFUSED_NAME_PREFIX and a suffix, the label is what the next run finds a
 # leftover by (only one older than REFUSED_LEFTOVER_AGE seconds is deleted), and
 # the answer is read for up to REFUSED_ATTEMPTS tries, REFUSED_INTERVAL seconds
@@ -861,7 +998,7 @@ readonly REFUSED_NAMESPACE=default
 readonly REFUSED_ISSUER=meridian-services
 readonly REFUSED_LABEL=meridian-smoke=refused-request
 readonly REFUSED_NAME_PREFIX=meridian-smoke-refused-
-readonly REFUSED_URI=spiffe://meridian.kind/ns/meridian/sa/meridian-smoke-refused
+readonly REFUSED_URI=spiffe://meridian.kind/ns/meridian/sa/claims-api
 readonly REFUSED_DURATION=1h0m0s
 readonly REFUSED_ATTEMPTS=15
 readonly REFUSED_INTERVAL=2
@@ -1026,7 +1163,25 @@ skip() { printf 'SKIP  %s\n' "$*"; skips=$((skips + 1)); }
 # inject terminal escape sequences or extra lines.
 clean_lines() { printf '%s' "$1" | LC_ALL=C tr -cd '[:print:]\n' | paste -sd ';' -; }
 
-need_tools docker kubectl curl jq base64 openssl
+# show_wait_error TEXT: what a failed `kctl wait` printed on standard error (TEXT,
+# captured by the site), on standard error again, a line at a time and without
+# any byte that is not printable ASCII, except kubectl's own line for a wait that
+# merely ran out of time ("error: timed out waiting for the condition on ..."):
+# the FAIL line that follows says that already. Anything else is shown, so a wait
+# that was ended some other way (for example by the bound of the call, when the
+# API server did not answer, which dies with a sentence of its own) does not stop
+# smoke without a word. It does not read the wrapper's text: it filters the one
+# line it knows to be noise.
+show_wait_error() {
+  local line
+  while IFS= read -r line; do
+    line="$(printf '%s' "${line}" | LC_ALL=C tr -cd '[:print:]')"
+    [[ -n "${line}" && "${line}" != "error: timed out waiting for the condition"* ]] || continue
+    printf '%s\n' "${line}" >&2
+  done <<<"$1"
+}
+
+need_tools docker kubectl curl jq base64 openssl timeout
 require_local_docker
 need_cluster
 
@@ -1204,7 +1359,7 @@ check_database_api_server() {
 # `app` (the platform's own) and `meridian` (the services'), then the stores of
 # `meridian` (check_stores) with the primary found here.
 check_database() {
-  local primary database version
+  local primary database version err_file reason
   check_database_api_server
   primary="$(kctl -n meridian get pod \
     -l cnpg.io/cluster=platform-db,cnpg.io/instanceRole=primary \
@@ -1214,15 +1369,24 @@ check_database() {
     return
   fi
   for database in app meridian; do
-    version="$(kctl -n meridian exec "${primary}" -c postgres -- \
+    err_file="$(mktemp)"
+    if version="$(kctl -n meridian exec "${primary}" -c postgres -- \
       env "PGOPTIONS=${PSQL_OPTIONS}" psql -d "${database}" -tAc "SELECT extversion FROM pg_extension WHERE extname='vector'" \
-      2>/dev/null || true)"
-    version="$(clean_lines "${version}")"
-    if [[ -n "${version}" ]]; then
-      pass "database: pgvector ${version} installed in ${primary}, database ${database}"
+      2>"${err_file}")"; then
+      version="$(clean_lines "${version}")"
+      if [[ -n "${version}" ]]; then
+        pass "database: pgvector ${version} installed in ${primary}, database ${database}"
+      else
+        fail "database: extension vector is not installed in ${primary}, database ${database}"
+      fi
     else
-      fail "database: extension vector is not installed in ${primary}, database ${database}"
+      # The read itself failed (the pod, the connection or the deadline): not
+      # an answer, so not "not installed". The first line of what it wrote.
+      reason="$(clean_lines "$(head -n 1 "${err_file}")")"
+      reason="${reason:-no message}"
+      fail "database: could not read pg_extension in ${primary}, database ${database}: ${reason:0:QUERY_ERROR_LENGTH}"
     fi
+    rm -f "${err_file}"
   done
   check_stores "${primary}"
 }
@@ -1590,7 +1754,7 @@ clear_text_job_spec() {
 # while the collector is not deployed (`make up`); the Meridian services are not
 # needed. What the answer is is cleaned and cut like every answer from a pod.
 check_telemetry_clear_text() {
-  local found job answer code detail
+  local found job answer code detail wait_said
   if ! found="$(kctl -n observability get deployment otel-collector -o name --ignore-not-found)"; then
     fail "telemetry: could not look for deployment/otel-collector in observability (kubectl's error is above)"
     return
@@ -1605,8 +1769,9 @@ check_telemetry_clear_text() {
     fail "telemetry: could not start the clear-text probe ${job} in ${TELEMETRYGEN_NAMESPACE} ($(clean_lines "${detail}")), so the line proves nothing"
     return
   fi
-  if ! kctl -n "${TELEMETRYGEN_NAMESPACE}" wait --for=condition=complete \
-    "job/${job}" --timeout="${JOB_TIMEOUT}" >/dev/null 2>&1; then
+  if ! wait_said="$(kctl -n "${TELEMETRYGEN_NAMESPACE}" wait --for=condition=complete \
+    "job/${job}" --timeout="${JOB_TIMEOUT}" 2>&1 >/dev/null)"; then
+    show_wait_error "${wait_said}"
     fail "telemetry: the clear-text probe ${job} did not complete (kubectl -n ${TELEMETRYGEN_NAMESPACE} logs job/${job}), so the line proves nothing"
     return
   fi
@@ -1788,10 +1953,11 @@ check_telemetry() {
   start_job logs --logs
   start_job metrics --metrics
 
-  local signal
+  local signal wait_said
   for signal in traces logs metrics; do
-    if ! kctl -n "${TELEMETRYGEN_NAMESPACE}" wait --for=condition=complete \
-      "job/smoke-${signal}-${epoch}" --timeout="${JOB_TIMEOUT}" >/dev/null 2>&1; then
+    if ! wait_said="$(kctl -n "${TELEMETRYGEN_NAMESPACE}" wait --for=condition=complete \
+      "job/smoke-${signal}-${epoch}" --timeout="${JOB_TIMEOUT}" 2>&1 >/dev/null)"; then
+      show_wait_error "${wait_said}"
       fail "telemetry: telemetrygen ${signal} job did not complete (kubectl -n ${TELEMETRYGEN_NAMESPACE} logs job/smoke-${signal}-${epoch}; a Job with no egress to the collector, or one that cannot find the ConfigMap ${TELEMETRY_CA_CONFIGMAP}, is the likeliest cause on a cluster that make up has not brought up to date: it applies manifests/smoke-networkpolicy.yaml and manifests/observability-networkpolicy.yaml and makes the ConfigMap)"
       return
     fi
@@ -2216,13 +2382,21 @@ sweep_period() {
   printf '%s' "${SWEEP_PERIOD_SECONDS}"
 }
 
-# sweep_verdict CRONJOB_JSON JOBS_JSON NOW PERIOD: one line, fields separated by
-# "|". NOW is the database's clock in epoch seconds, PERIOD the schedule's in
-# seconds; a run is overdue after SWEEP_STALE_PERIODS of them.
-#   succeeded|JOB|FINISHED_AT          the newest finished Job of the CronJob
-#   failed|JOB|FINISHED_AT|REASON      (scheduled or made by hand with
-#                                      `kubectl create job --from=cronjob/...`,
-#                                      which has the same owner) and how it ended
+# sweep_verdict CRONJOB_JSON JOBS_JSON NOW PERIOD: two lines. The first is the
+# verdict, fields separated by "|"; the second is the note (see below). NOW is
+# the database's clock in epoch seconds, PERIOD the schedule's in seconds; a run
+# is overdue after SWEEP_STALE_PERIODS of them.
+#   succeeded|JOB|FINISHED_AT          the newest finished Job the schedule made
+#   failed|JOB|FINISHED_AT|REASON      and how it ended. A Job made by hand with
+#                                      `kubectl create job --from=cronjob/...`
+#                                      has the same owner, so it is told apart by
+#                                      its annotations: it is left out only when
+#                                      it carries cronjob.kubernetes.io/
+#                                      instantiate=manual and not the scheduled
+#                                      timestamp batch.kubernetes.io/cronjob-
+#                                      scheduled-timestamp (the positive fact,
+#                                      which wins); a Job with neither is an
+#                                      older cluster's and counts as before
 #   stale|SCHEDULED_AT|FINISHED_AT     last scheduled more than three periods
 #                                      after that Job finished, nothing running:
 #                                      the schedule makes no finished runs
@@ -2230,11 +2404,25 @@ sweep_period() {
 #                                      than three periods before NOW, nothing
 #                                      running: the schedule stopped
 #   stopped||SCHEDULED_AT|SECONDS      the same with no Job of the CronJob left
-#                                      (the sweep keeps one success and the
+#                                      (the sweep keeps three successes and the
 #                                      cluster removes a Job a day after it
 #                                      finished): last scheduled more than
 #                                      three periods before NOW, nothing
 #                                      running
+#   The next three are for a history that no longer holds the schedule's
+#   newest run: the newest finished Job the schedule made finished BEFORE the
+#   CronJob's lastScheduleTime and a Job made by hand finished after it (seen
+#   on kind: with one success kept, a by-hand success evicted the schedule's
+#   own, and the verdict then rested on an old failed Job). That Job is not
+#   judged; lastScheduleTime against the bound decides:
+#   stoppedhand|SCHEDULED_AT|SECONDS|JOB  older than three periods, nothing
+#                                      running: the schedule stopped
+#   busy|SCHEDULED_AT                  within the bound, a Job is running
+#   unread|SCHEDULED_AT|JOB            within the bound, nothing running: the
+#                                      outcome of the run at SCHEDULED_AT is not
+#                                      in the history, so it was not read (JOB
+#                                      is the older Job the verdict would have
+#                                      rested on)
 #   young|SECONDS|JOB|FINISHED_AT      the same, but the CronJob was created
 #                                      less than one period before NOW: that Job
 #                                      is an earlier CronJob's, not overdue
@@ -2243,77 +2431,124 @@ sweep_period() {
 #   unscheduled|SECONDS|CREATED_AT     never scheduled, not yet overdue
 #   running                            no Job has finished; one is running
 #   none|SCHEDULED_AT                  no Job has finished, none is running
+# The note is "note:" and then words for report_sweep to end the line with: that
+# the newest finished Job of all, by name and time, was made by hand and is not
+# judged, and that the Job the verdict rests on carries neither annotation. The
+# prefix keeps it from being empty, so that it survives command substitution.
 sweep_verdict() {
-  jq -nr --arg cronjob "${SWEEP_CRONJOB}" --argjson cj "$1" --argjson jobs "$2" \
+  # The CronJob and the Jobs are the cluster's answers and can be any size, so
+  # they go in as files (process substitutions: nothing on disk), not as
+  # arguments, of which one may be 131,072 bytes.
+  jq -nr --arg cronjob "${SWEEP_CRONJOB}" \
+    --slurpfile cj <(printf '%s' "$1") --slurpfile jobs <(printf '%s' "$2") \
     --argjson now "$3" --argjson period "$4" \
     --argjson tolerance "$(($4 * SWEEP_STALE_PERIODS))" '
     def epoch: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
-    ($cj.status.lastScheduleTime // null) as $scheduled
+    $cj[0] as $cj | $jobs[0] as $jobs
+    | ($cj.status.lastScheduleTime // null) as $scheduled
     | (($cj.status.active // []) | length) as $active
     | [$jobs.items[]
         | select(any(.metadata.ownerReferences[]?; .kind == "CronJob" and .name == $cronjob))
         | . as $job
         | ([$job.status.conditions[]? | select(.status == "True" and (.type == "Complete" or .type == "Failed"))] | first // empty) as $done
+        | ($job.metadata.annotations // {}) as $notes
         | {name: $job.metadata.name, type: $done.type, reason: ($done.reason // ""),
+           mark: (if $notes["batch.kubernetes.io/cronjob-scheduled-timestamp"] != null then "scheduled"
+                  elif $notes["cronjob.kubernetes.io/instantiate"] == "manual" then "manual"
+                  else "unmarked" end),
            at: ((if $done.type == "Complete" then ($job.status.completionTime // $done.lastTransitionTime) else $done.lastTransitionTime end) // "")}]
-    | (sort_by([.at, .name]) | last) as $newest
+    | . as $finished
+    | (sort_by([.at, .name]) | last) as $latest
+    | ([$finished[] | select(.mark != "manual")] | sort_by([.at, .name]) | last) as $newest
+    | "note:\(if $latest.mark == "manual" then " [the newest finished Job of all, \($latest.name), finished at \($latest.at) and was made by hand (create job --from=cronjob/\($cronjob)): a by-hand run is not a run of the schedule, so this line does not judge it]" else "" end)\(if $newest.mark == "unmarked" then " [the Job this rests on carries neither batch.kubernetes.io/cronjob-scheduled-timestamp nor cronjob.kubernetes.io/instantiate: the annotation was absent, as on an older cluster, so it is counted as a scheduled Job]" else "" end)" as $note
     | ($now - ($cj.metadata.creationTimestamp | epoch)) as $age
-    | if $scheduled == null and $age > $tolerance then "never|\($age)"
+    | ($scheduled != null and $newest != null and ($newest.at | epoch) < ($scheduled | epoch)
+        and any($finished[]; .mark == "manual" and .at != "" and (.at | epoch) > ($scheduled | epoch))) as $evicted
+    | (if $scheduled == null and $age > $tolerance then "never|\($age)"
       elif $newest == null then
         if $active > 0 then "running"
         elif $scheduled == null then "unscheduled|\($age)|\($cj.metadata.creationTimestamp)"
         elif ($now - ($scheduled | epoch)) > $tolerance then "stopped||\($scheduled)|\($now - ($scheduled | epoch))"
         else "none|\($scheduled)" end
+      elif $evicted then
+        if $active > 0 then "busy|\($scheduled)"
+        elif ($now - ($scheduled | epoch)) > $tolerance then "stoppedhand|\($scheduled)|\($now - ($scheduled | epoch))|\($newest.name)"
+        else "unread|\($scheduled)|\($newest.name)" end
       elif $scheduled != null and $active == 0 and (($scheduled | epoch) - ($newest.at | epoch)) > $tolerance then
         "stale|\($scheduled)|\($newest.at)"
       elif $newest.type == "Complete" and $active == 0 and ($now - ($newest.at | epoch)) > $tolerance then
         if $age < $period then "young|\($age)|\($newest.name)|\($newest.at)"
         else "stopped|\($newest.name)|\($newest.at)|\($now - ($newest.at | epoch))" end
       elif $newest.type == "Complete" then "succeeded|\($newest.name)|\($newest.at)"
-      else "failed|\($newest.name)|\($newest.at)|\($newest.reason)" end
+      else "failed|\($newest.name)|\($newest.at)|\($newest.reason)" end) + "\n" + $note
   '
 }
 
-# report_sweep VERDICT PERIOD: the line for a verdict of sweep_verdict, whose
-# fields were cleaned of anything that is not printable ASCII.
+# report_sweep_unjudged KIND FIRST SECOND THIRD PERIOD NOTE: the line for the three
+# verdicts of a history that no longer holds the schedule's newest run
+# (stoppedhand, busy, unread: see sweep_verdict), from report_sweep's fields.
+report_sweep_unjudged() {
+  local bound=$(($5 * SWEEP_STALE_PERIODS))
+  case "$1" in
+    stoppedhand)
+      fail "sweep: the schedule stopped: cronjob/${SWEEP_CRONJOB} was last scheduled at ${2}, ${3} s before the database's clock now, more than the ${bound} s (three periods of ${5} s) allowed, and no Job is running; the newest finished Job it made, ${4}, finished before that, and a Job made by hand after that time is not a run of the schedule${6}"
+      ;;
+    busy)
+      skip "sweep: cronjob/${SWEEP_CRONJOB} was last scheduled at ${2} and a Job of it is running; the newest finished Job it made is older than that, so the outcome of this run is not read yet${6}"
+      ;;
+    unread)
+      skip "sweep: cronjob/${SWEEP_CRONJOB} fired at ${2}, within the ${bound} s it allows, and its Job is no longer in the history (a by-hand Job took its place, or the history's limit did): the newest finished Job it made, ${3}, is older than that, so the outcome of that run was not read; run smoke again after the next scheduled run${6}"
+      ;;
+  esac
+}
+
+# report_sweep VERDICT PERIOD [NOTE]: the line for a verdict of sweep_verdict,
+# whose fields were cleaned of anything that is not printable ASCII, and the
+# verdict's second line, the note, which ends the line (without its "note:"
+# prefix; none is also fine).
 report_sweep() {
-  local kind first second third bound=$(($2 * SWEEP_STALE_PERIODS))
+  local kind first second third bound=$(($2 * SWEEP_STALE_PERIODS)) note
   IFS='|' read -r kind first second third <<<"$1"
   first="$(clean_lines "${first}")"
   second="$(clean_lines "${second}")"
   third="$(clean_lines "${third}")"
+  note="$(clean_lines "${3:-}")"
+  note="${note#note:}"
   case "${kind}" in
     succeeded)
       sweep_job_finished="${first}"
-      pass "sweep: cronjob/${SWEEP_CRONJOB} is not suspended and its last finished Job, ${first}, succeeded at ${second}"
+      pass "sweep: cronjob/${SWEEP_CRONJOB} is not suspended and its last finished Job, ${first}, succeeded at ${second}${note}"
       ;;
     failed)
-      fail "sweep: the last finished Job of cronjob/${SWEEP_CRONJOB}, ${first}, failed at ${second} (${third:-no reason given}); kubectl -n meridian describe job/${first} shows why, and kubectl -n meridian logs job/${first} what its pod printed, if a pod started"
+      fail "sweep: the last finished Job of cronjob/${SWEEP_CRONJOB}, ${first}, failed at ${second} (${third:-no reason given}); kubectl -n meridian describe job/${first} shows why, and kubectl -n meridian logs job/${first} what its pod printed, if a pod started${note}"
       ;;
     stale)
-      fail "sweep: the schedule is not producing finished runs: cronjob/${SWEEP_CRONJOB} was last scheduled at ${first}, more than ${bound} s after its newest finished Job finished at ${second}, and no Job is running"
+      fail "sweep: the schedule is not producing finished runs: cronjob/${SWEEP_CRONJOB} was last scheduled at ${first}, more than ${bound} s after its newest finished Job finished at ${second}, and no Job is running${note}"
       ;;
     stopped)
       if [[ -z "${first}" ]]; then
-        fail "sweep: the schedule stopped: cronjob/${SWEEP_CRONJOB} was last scheduled at ${second}, ${third} s before the database's clock now, more than the ${bound} s (three periods of ${2} s) allowed; no Job of cronjob/${SWEEP_CRONJOB} is left (finished Jobs are removed a day after they finish) and none is running"
+        fail "sweep: the schedule stopped: cronjob/${SWEEP_CRONJOB} was last scheduled at ${second}, ${third} s before the database's clock now, more than the ${bound} s (three periods of ${2} s) allowed; no Job of cronjob/${SWEEP_CRONJOB} is left (finished Jobs are removed a day after they finish) and none is running${note}"
       else
-        fail "sweep: the schedule stopped: the newest finished Job of cronjob/${SWEEP_CRONJOB}, ${first}, succeeded at ${second}, ${third} s before the database's clock now, more than the ${bound} s (three periods of ${2} s) allowed, and no Job is running"
+        fail "sweep: the schedule stopped: the newest finished Job of cronjob/${SWEEP_CRONJOB}, ${first}, succeeded at ${second}, ${third} s before the database's clock now, more than the ${bound} s (three periods of ${2} s) allowed, and no Job is running${note}"
       fi
       ;;
+    stoppedhand | busy | unread)
+      report_sweep_unjudged "${kind}" "${first}" "${second}" "${third}" "$2" "${note}"
+      ;;
     young)
-      skip "sweep: cronjob/${SWEEP_CRONJOB} was deployed ${first} s ago by the database's clock, less than one period (${2} s); its newest finished Job, ${second}, finished at ${third}, which is an earlier CronJob's, so it is not judged yet"
+      skip "sweep: cronjob/${SWEEP_CRONJOB} was deployed ${first} s ago by the database's clock, less than one period (${2} s); its newest finished Job, ${second}, finished at ${third}, which is an earlier CronJob's, so it is not judged yet${note}"
       ;;
     never)
-      fail "sweep: cronjob/${SWEEP_CRONJOB} has never been scheduled, although it was created ${first} s ago by the database's clock (more than three periods, ${bound} s): the schedule is not producing runs"
+      fail "sweep: cronjob/${SWEEP_CRONJOB} has never been scheduled, although it was created ${first} s ago by the database's clock (more than three periods, ${bound} s): the schedule is not producing runs${note}"
       ;;
     unscheduled)
-      skip "sweep: cronjob/${SWEEP_CRONJOB} has not been scheduled yet (created ${second}, ${first} s ago by the database's clock), within the ${bound} s it allows"
+      skip "sweep: cronjob/${SWEEP_CRONJOB} has not been scheduled yet (created ${second}, ${first} s ago by the database's clock), within the ${bound} s it allows${note}"
       ;;
     running)
-      skip "sweep: no Job of cronjob/${SWEEP_CRONJOB} has finished yet; the first one is running"
+      skip "sweep: no Job of cronjob/${SWEEP_CRONJOB} has finished yet; the first one is running${note}"
       ;;
     none)
-      skip "sweep: no Job of cronjob/${SWEEP_CRONJOB} has finished yet (last scheduled at ${first})"
+      skip "sweep: no Job of cronjob/${SWEEP_CRONJOB} has finished yet (last scheduled at ${first})${note}"
       ;;
     *)
       fail "sweep: unexpected verdict from the timestamps"
@@ -2328,7 +2563,7 @@ report_sweep() {
 # whose success it passed in ${sweep_job_finished}, and nothing for any other
 # line.
 check_sweep_job() {
-  local found cronjob jobs verdict now period
+  local found cronjob jobs verdict note now period
   if ! found="$(deployed_services)"; then
     fail "sweep: could not look for the Meridian deployments (kubectl's error is above)"
     return
@@ -2349,7 +2584,7 @@ check_sweep_job() {
     skip "sweep: cronjob/${SWEEP_CRONJOB} is suspended (spec.suspend), so it makes no runs and none can be overdue"
     return
   fi
-  if ! jobs="$(kctl -n meridian get job -o json)"; then
+  if ! jobs="$(kctl -n meridian get job -l "${SWEEP_JOBS_SELECTOR}" -o json)"; then
     fail "sweep: could not read the Jobs in meridian (kubectl's error is above)"
     return
   fi
@@ -2362,7 +2597,9 @@ check_sweep_job() {
     fail "sweep: could not read the CronJob's and the Jobs' timestamps and conditions"
     return
   fi
-  report_sweep "${verdict}" "${period}"
+  note="${verdict#*$'\n'}"
+  verdict="${verdict%%$'\n'*}"
+  report_sweep "${verdict}" "${period}" "${note}"
 }
 
 # sweep_findings_query: the instant query of check 7's second line. `max by`
@@ -2462,7 +2699,7 @@ check_sweep() {
 # ── 8. network policy ────────────────────────────────────────────────────────
 # The tool check above proves the paths the policies allow; this one proves
 # that the paths they do not allow are closed, and that its probe can tell. Skipped
-# like it, when the Claims API is not deployed.
+# like it, when no Meridian Deployment exists.
 
 # network_sweep_leftovers: at the start of check 8, delete by name the Pods with
 # NETWORK_POD_SMOKE_LABEL that are older than NETWORK_LEFTOVER_AGE seconds: what
@@ -2560,7 +2797,7 @@ network_pod_spec() {
 # line (the database line) and 1 when it cannot. ${network_pod} is set before the
 # Pod exists, so the trap deletes it whichever step fails.
 network_start_pod() {
-  local err_file detail
+  local err_file detail wait_said
   network_pod="smoke-network-$(date +%s)"
   err_file="$(mktemp)"
   if ! network_pod_spec "${network_pod}" meridian "${NETWORK_POD_NAME_LABEL}" 2>"${err_file}" |
@@ -2570,14 +2807,17 @@ network_start_pod() {
     fail "network policy: could not start the probe pod ${network_pod} in meridian (${detail})"
     return 1
   fi
-  if ! kctl -n meridian wait --for=condition=Ready "pod/${network_pod}" \
-    --timeout="${NETWORK_POD_READY_TIMEOUT}" >/dev/null 2>"${err_file}"; then
-    detail="$(clean_lines "$(<"${err_file}")")"
-    rm -f "${err_file}"
-    fail "network policy: the probe pod ${network_pod} did not become Ready within ${NETWORK_POD_READY_TIMEOUT} (${detail})"
+  rm -f "${err_file}"
+  # The wait's error is captured and not sent to a file: when the call's bound
+  # ends it, kctl dies with a sentence in the capturing subshell, and the sentence
+  # must reach the terminal (show_wait_error) and the FAIL line, not a file nobody
+  # reads. Smoke goes on: every later call is bounded too.
+  if ! wait_said="$(kctl -n meridian wait --for=condition=Ready "pod/${network_pod}" \
+    --timeout="${NETWORK_POD_READY_TIMEOUT}" 2>&1 >/dev/null)"; then
+    show_wait_error "${wait_said}"
+    fail "network policy: the probe pod ${network_pod} did not become Ready within ${NETWORK_POD_READY_TIMEOUT} ($(clean_lines "${wait_said}"))"
     return 1
   fi
-  rm -f "${err_file}"
 }
 
 # network_database_lines: the database's line, from the probe Pod. Unlabelled it
@@ -2634,7 +2874,7 @@ network_outsider_delete() {
 # FAIL line and 1 when it cannot. ${network_outsider} is set before the Pod
 # exists, so the trap deletes it whichever step fails.
 network_outsider_start() {
-  local err_file detail
+  local err_file detail wait_said
   network_outsider="${NETWORK_OUTSIDER_PREFIX}$(date +%s)"
   err_file="$(mktemp)"
   if ! network_pod_spec "${network_outsider}" "${NETWORK_OUTSIDER_NAMESPACE}" "" 2>"${err_file}" |
@@ -2644,14 +2884,15 @@ network_outsider_start() {
     fail "network policy: could not start the probe pod ${network_outsider} in ${NETWORK_OUTSIDER_NAMESPACE} (${detail})"
     return 1
   fi
-  if ! kctl -n "${NETWORK_OUTSIDER_NAMESPACE}" wait --for=condition=Ready "pod/${network_outsider}" \
-    --timeout="${NETWORK_POD_READY_TIMEOUT}" >/dev/null 2>"${err_file}"; then
-    detail="$(clean_lines "$(<"${err_file}")")"
-    rm -f "${err_file}"
-    fail "network policy: the probe pod ${network_outsider} in ${NETWORK_OUTSIDER_NAMESPACE} did not become Ready within ${NETWORK_POD_READY_TIMEOUT} (${detail})"
+  rm -f "${err_file}"
+  # Captured, not sent to a file, as in network_start_pod: a bound's sentence
+  # reaches the terminal and the FAIL line.
+  if ! wait_said="$(kctl -n "${NETWORK_OUTSIDER_NAMESPACE}" wait --for=condition=Ready "pod/${network_outsider}" \
+    --timeout="${NETWORK_POD_READY_TIMEOUT}" 2>&1 >/dev/null)"; then
+    show_wait_error "${wait_said}"
+    fail "network policy: the probe pod ${network_outsider} in ${NETWORK_OUTSIDER_NAMESPACE} did not become Ready within ${NETWORK_POD_READY_TIMEOUT} ($(clean_lines "${wait_said}"))"
     return 1
   fi
-  rm -f "${err_file}"
 }
 
 # check_network_collector: the fifth line of check 8 (S063). A pod outside
@@ -2776,15 +3017,41 @@ check_network_rate_store() {
   network_delete_pod || true # the Pod stays named: the EXIT trap tries again
 }
 
+# check_network_service_policies FOUND: one FAIL line naming each service of
+# FOUND (the lines of deployed_services, "deployment.apps/NAME") whose
+# NetworkPolicy object of the same name is not in meridian, from one listing of
+# the namespace's policies. Prints nothing when every service has its own. It
+# reads objects only: the probes below prove what the policies do, for the
+# Claims API's pod, and a service whose policy is missing is covered by
+# default-deny alone, which no probe from the Claims API would show.
+check_network_service_policies() {
+  local policies service missing=""
+  if ! policies="$(kctl -n meridian get networkpolicy -o name)"; then
+    fail "network policy: could not list the NetworkPolicies in meridian (kubectl's error is above)"
+    return
+  fi
+  while IFS= read -r service; do
+    [[ -n "${service}" ]] || continue
+    service="${service##*/}"
+    grep -qx "[^/]*/${service}" <<<"${policies}" || missing+="${missing:+, }${service}"
+  done <<<"$1"
+  [[ -z "${missing}" ]] ||
+    fail "network policy: no networkpolicy object for $(clean_lines "${missing}") in meridian, whose Deployment exists: the pods of a service without its own policy have no rule at all, so default-deny leaves them with no path in or out (make deploy applies the chart's policies)"
+}
+
 check_network_policy() {
   local found policy
   network_sweep_leftovers
-  if ! found="$(kctl -n meridian get deployment claims-api -o name --ignore-not-found)"; then
-    fail "network policy: could not look for deployment/claims-api (kubectl's error is above)"
+  if ! found="$(deployed_services)"; then
+    fail "network policy: could not look for the Meridian deployments (kubectl's error is above)"
     return
   fi
   if [[ -z "${found}" ]]; then
     skip "network policy: the Meridian services are not deployed (make deploy)"
+    return
+  fi
+  if ! grep -qx '[^/]*/claims-api' <<<"${found}"; then
+    fail "network policy: deployment/claims-api is not deployed, and the probes run in its pod"
     return
   fi
   if ! policy="$(kctl -n meridian get networkpolicy default-deny -o name --ignore-not-found)"; then
@@ -2795,6 +3062,7 @@ check_network_policy() {
     fail "network policy: networkpolicy/default-deny does not exist in meridian: the chart was installed with networkPolicy.enabled=false, or not at all (make deploy)"
     return
   fi
+  check_network_service_policies "${found}"
   # The control first: when the probe cannot reach what a policy allows, a
   # "blocked" below would mean nothing, so none is printed.
   network_expect reached deploy/claims-api "${NETWORK_RUNTIME}" \
@@ -3023,9 +3291,11 @@ check_builtin_approver_off() {
 # a request that the issuer must refuse. It is a CertificateRequest, not a
 # Certificate, so that the key is made here, with openssl, and never leaves this
 # machine (a Certificate has cert-manager make it, in a Secret in the cluster).
-# The request is for the issuer meridian-services with a URI that issuer signs in
-# `meridian`; it is made in REFUSED_NAMESPACE, which no policy but the denying
-# one selects, so it must be Denied. Approved, or carrying a certificate, is a
+# The request is for the issuer meridian-services with a URI that policy lists
+# (the Claims API's, and no DNS name, as that service's own Certificate), so
+# that the policy would approve it in `meridian`; it is made in
+# REFUSED_NAMESPACE, which no policy but the denying one selects, so it must be
+# Denied. Approved, or carrying a certificate, is a
 # FAIL: the issuer signed a request it must refuse. The request is deleted
 # right after it is read, by the EXIT trap when the run ends first, and, when a
 # run was killed, at the start of the next one by name, from a list of the
@@ -3218,11 +3488,83 @@ check_refused_request() {
   refused_err_file=""
 }
 
+# database_certificates_verdict CLUSTER_JSON NOW: one line, fields separated by
+# "|", from the Cluster's answer and the clock (NOW, epoch seconds; the caller
+# gives it, nothing here reads a clock). The cluster's answer goes in as a file
+# (a process substitution), never as an argument. Every expiration of
+# .status.certificates.expirations must be exactly "YYYY-MM-DD hh:mm:ss +0000
+# UTC" (Go's default format for a UTC instant); the seconds are then read as
+# UTC from the first 19 characters. The earliest of them is judged.
+#   none                              no expiration in the status
+#   shape|NAME                        NAME's expiration is not in that form
+#                                     (another zone, RFC 3339, a fraction, not
+#                                     text): nothing is judged
+#   date|NAME                         NAME's expiration has that form and is no
+#                                     date (month 13, hour 25): nothing is judged
+#   ended|NAME|DAYS|DATE|COUNT        the earliest ended DAYS whole days ago
+#   close|NAME|DAYS|DATE|COUNT        DAYS whole days left, margin or less
+#   far|NAME|DAYS|DATE|COUNT          more than the margin left
+database_certificates_verdict() {
+  jq -nr --slurpfile status <(printf '%s' "$1") --argjson now "$2" \
+    --argjson margin "${DATABASE_CERTIFICATE_MARGIN_SECONDS}" '
+    def shaped: type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} \\+0000 UTC$");
+    def epoch: .[0:19] | strptime("%Y-%m-%d %H:%M:%S") | mktime;
+    (try $status[0].status.certificates.expirations catch null) as $raw
+    | (if ($raw | type) == "object" then $raw | to_entries else [] end) as $found
+    | if ($found | length) == 0 then "none"
+      elif any($found[]; (.value | shaped) | not) then
+        "shape|\(first($found[] | select((.value | shaped) | not)).key)"
+      elif any($found[]; (.value | try epoch catch null) == null) then
+        "date|\(first($found[] | select((.value | try epoch catch null) == null)).key)"
+      else
+        ($found | map({name: .key, date: .value, at: (.value | epoch)}) | sort_by([.at, .name]) | first) as $first
+        | ($first.at - $now) as $left
+        | (if $left <= 0 then "ended|\($first.name)|\((0 - $left) / 86400 | floor)"
+           else "\(if $left <= $margin then "close" else "far" end)|\($first.name)|\($left / 86400 | floor)" end)
+          + "|\($first.date)|\($found | length)"
+      end'
+}
+
+# check_database_certificates [NOW]: the fifth line of check 10, kind only (on
+# Azure the database and its certificates are the provider's). It reads the
+# Cluster platform-db once and fails when the earliest of the operator's three
+# expirations is DATABASE_CERTIFICATE_MARGIN_SECONDS or less away, when one
+# cannot be read as a UTC date and when there is none: an operator that changed
+# its status must not turn the line into a pass. NOW defaults to this machine's
+# clock (kind's node shares it, and the margin is days); a test gives its own.
+# What it does not do: it tells nothing between two runs of smoke.
+check_database_certificates() {
+  local now="${1:-$(date +%s)}" cluster_status verdict
+  local what result name days ends_at unit count
+  what="certificate policy: the database's certificates (CloudNativePG's own)"
+  if ! cluster_status="$(kctl -n meridian get clusters.postgresql.cnpg.io platform-db -o json 2>/dev/null)"; then
+    fail "${what}: could not read the Cluster platform-db (kubectl failed)"
+    return
+  fi
+  if ! verdict="$(database_certificates_verdict "${cluster_status}" "${now}" 2>/dev/null)"; then
+    fail "${what}: could not read the Cluster platform-db's answer as JSON"
+    return
+  fi
+  IFS='|' read -r result name days ends_at count <<<"$(clean_lines "${verdict}")"
+  unit=days
+  if [[ "${days}" == 1 ]]; then unit=day; fi
+  case "${result}" in
+    far) pass "${what}: the earliest of ${count} is ${name}, with ${days} ${unit} left (ends ${ends_at}); the operator renews at ${DATABASE_CERTIFICATE_RENEWAL_DAYS} days, this line fails inside $((DATABASE_CERTIFICATE_MARGIN_SECONDS / 3600)) hours" ;;
+    close) fail "${what}: ${name} has ${days} ${unit} left (ends ${ends_at}), inside the margin of $((DATABASE_CERTIFICATE_MARGIN_SECONDS / 3600)) hours: the operator renews at ${DATABASE_CERTIFICATE_RENEWAL_DAYS} days and has not; read its log in cnpg-system" ;;
+    ended) fail "${what}: ${name} has ended ${days} ${unit} ago (${ends_at}) and was not renewed; read the operator's log in cnpg-system" ;;
+    none) fail "${what}: the status of the Cluster platform-db holds no expiration (.status.certificates.expirations), so nothing is judged: the operator may have changed its status" ;;
+    shape) fail "${what}: cannot tell when ${name} ends: its expiration is not in the form 'YYYY-MM-DD hh:mm:ss +0000 UTC' (another zone or another shape), so nothing is judged: has the operator changed its status?" ;;
+    date) fail "${what}: cannot tell when ${name} ends: its expiration has the form 'YYYY-MM-DD hh:mm:ss +0000 UTC' but is not a date, so nothing is judged: has the operator changed its status?" ;;
+    *) fail "${what}: cannot tell: the verdict was not in a form this line reads" ;;
+  esac
+}
+
 check_certificate_policy() {
   check_policies_ready
   check_approver_addon
   check_builtin_approver_off
   check_refused_request
+  check_database_certificates
 }
 
 # ── 11. alert rules and health dashboard ─────────────────────────────────────
@@ -3250,6 +3592,63 @@ cluster_rules() {
   jq -r --arg prefix "${ALERT_GROUP_PREFIX}" \
     '.data.groups[] | select(.name | startswith($prefix)) | .name as $group
       | .rules[] | $group + "\t" + .name' <<<"$1" | LC_ALL=C sort
+}
+
+# tree_exprs: what the file holds for the comparison of expressions, read by the
+# same indentation: "<group><TAB><rule><TAB><for><TAB><expression>" per alert and
+# recording rule, in the file's order, the `for` as written ("" when there is
+# none) and the expression (a literal block, `expr: |`) on one line, its lines
+# joined by a space.
+tree_exprs() {
+  awk '
+    function flush() { if (rule != "") printf "%s\t%s\t%s\t%s\n", group, rule, hold, expr; rule = "" }
+    /^    - name: / { flush(); group = $3; next }
+    /^        - (alert|record): / { flush(); rule = $3; hold = ""; expr = ""; in_expr = 0; next }
+    /^          expr: [|]$/ { in_expr = 1; next }
+    /^          for: / { in_expr = 0; hold = $2; next }
+    in_expr && /^            / { line = $0; sub(/^ +/, "", line); expr = expr (expr == "" ? "" : " ") line; next }
+    in_expr && /^$/ { next }
+    { in_expr = 0 }
+    END { flush() }
+  ' "${ALERT_RULES_FILE}"
+}
+
+# rules_changed BODY: "<group><TAB><rule> (expression)", "(for)" or "(expression
+# and for)" for each rule that is in both the file and the meridian.* groups of
+# Prometheus' answer BODY and differs in its expression or, for an alert, its
+# `for`; the names only. Prometheus returns the parsed expression, not the file's
+# text: on one line, the matchers of a selector sorted by label name, a duration
+# in its largest units ([24h] as [1d]). So both sides go through the same
+# canon: whitespace collapsed (so a duration is told from the end of a word),
+# every duration literal at the start of a word as milliseconds, all whitespace
+# removed, and the matchers between each pair of braces sorted. A rule absent
+# on one side is the names' business (check_rules_names), not named here. A
+# rule of the file with no `for` is 0, as the API says.
+rules_changed() {
+  local tree
+  tree="$(tree_exprs | jq -Rsc 'split("\n") | map(select(. != "") | split("\t")
+    | {group: .[0], rule: .[1], hold: .[2], expr: .[3]})')" || return 1
+  jq -r --arg prefix "${ALERT_GROUP_PREFIX}" --slurpfile tree <(printf '%s' "${tree}") '
+    def canon:
+      gsub("\\s+"; " ")
+      | gsub("(?<![\\w.])(?<d>(?:[0-9]+(?:ms|[smhdwy]))+)(?![\\w])";
+          (.d | [scan("([0-9]+)(ms|[smhdwy])")]
+            | map((.[0] | tonumber) * ({"ms": 1, "s": 1000, "m": 60000, "h": 3600000,
+                "d": 86400000, "w": 604800000, "y": 31536000000}[.[1]]))
+            | add | tostring) + "ms")
+      | gsub("\\s+"; "")
+      | gsub("\\{(?<m>[^{}]*)\\}"; "{" + (.m | split(",") | sort | join(",")) + "}");
+    [.data.groups[] | select(.name | startswith($prefix)) | .name as $group | .rules[]
+      | {key: ($group + "\t" + .name), query: (.query // ""), alerting: (.type == "alerting"),
+         seconds: (.duration // 0)}] as $cluster
+    | $tree[0][] | . as $file
+    | ($cluster[] | select(.key == ($file.group + "\t" + $file.rule))) as $loaded
+    | [(if ($file.expr | canon) != ($loaded.query | canon) then "expression" else empty end),
+       (if $loaded.alerting
+          and (($file.hold | if . == "" then "0s" else . end | canon) != (($loaded.seconds * 1000 | tostring) + "ms"))
+        then "for" else empty end)] as $differs
+    | select($differs != [])
+    | "\($file.group)\t\($file.rule) (\($differs | join(" and ")))"' <<<"$1"
 }
 
 # name_list: the lines of stdin as one line of names ("group/rule" for a tab),
@@ -3353,10 +3752,11 @@ check_rules_loaded() {
 }
 
 # check_rules_names BODY: the loaded meridian.* groups and their rules are the
-# file's, by name, in both directions. A cluster that runs another rule file
-# says which groups and rules differ.
+# file's, by name, in both directions, and each rule's expression and `for` are
+# the file's (rules_changed says how they are compared). A cluster that runs
+# another rule file says which groups and rules differ, by name.
 check_rules_names() {
-  local body=$1 not_loaded not_in_file differences="" total
+  local body=$1 not_loaded not_in_file changed differences="" total
   if rules_missing_groups "${body}" "whether the loaded rules are the file's"; then
     return
   fi
@@ -3368,14 +3768,19 @@ check_rules_names() {
     LC_ALL=C comm -13 <(tree_groups) <(cluster_groups "${body}")
     LC_ALL=C comm -13 <(tree_rules) <(cluster_rules "${body}")
   } | name_list)"
+  changed="$(rules_changed "${body}" | name_list)" || {
+    fail "alert rules: could not compare the expressions and the for of the loaded rules with infra/kind/alerts/meridian.yaml (jq could not read one side)"
+    return
+  }
   [[ -z "${not_loaded}" ]] || differences="not loaded: ${not_loaded}"
   [[ -z "${not_in_file}" ]] || differences+="${differences:+; }not in the file: ${not_in_file}"
+  [[ -z "${changed}" ]] || differences+="${differences:+; }expression or for differs: ${changed}"
   if [[ -n "${differences}" ]]; then
-    fail "alert rules: the rules Prometheus runs are not infra/kind/alerts/meridian.yaml's (a cluster that runs an older file: run make up): ${differences}"
+    fail "alert rules: the rules Prometheus runs are not infra/kind/alerts/meridian.yaml's (a cluster that runs an older file: run make deploy or make up): ${differences}"
     return
   fi
   total="$(tree_rules | wc -l)"
-  pass "alert rules: the loaded rules are the file's: the same $(tree_groups | wc -l | tr -d ' ') groups and ${total//[[:space:]]/} rule names"
+  pass "alert rules: the loaded rules are the file's: the same $(tree_groups | wc -l | tr -d ' ') groups and ${total//[[:space:]]/} rule names, each with its expression and its for"
 }
 
 # alerts_in_state STATE BODY: the names of the rules of the meridian.* groups

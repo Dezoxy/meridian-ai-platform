@@ -19,12 +19,17 @@ QUEUE_LIMIT = 100
 # ``proposal_id`` as the decided-claims view does (0013); the lateral ``r`` is the
 # move that referred a waiting claim, what REASON_SQL reads for the claim's page,
 # and is looked up for a waiting claim only. A page costs at most two lateral
-# lookups per row.
+# lookups per row. The same lookup of ``p`` also reads the two fields that say
+# what the recommendation rests on (S070), as the text ``->>`` gives; no new
+# index or lookup, and the page's marker is derived from them in ``proposal.py``.
 _QUEUE_SELECT = (
     "SELECT c.claim_id, c.state, c.state_changed_at, c.submission ->> 'peril', "
-    "c.submission -> 'claimed_amount', p.reason, r.reason "
+    "c.submission -> 'claimed_amount', p.reason, r.reason, "
+    "p.recommendation, p.assessment "
     "FROM claims.claims AS c "
-    "LEFT JOIN LATERAL (SELECT reason FROM claims.triage_proposals "
+    "LEFT JOIN LATERAL (SELECT reason, proposal ->> 'recommendation' "
+    "AS recommendation, proposal ->> 'assessment' AS assessment "
+    "FROM claims.triage_proposals "
     "WHERE claim_id = c.claim_id ORDER BY created_at DESC, proposal_id LIMIT 1) "
     "AS p ON true "
     "LEFT JOIN LATERAL (SELECT reason FROM audit.claim_trail "
@@ -49,6 +54,10 @@ class QueueRow(NamedTuple):
     # The reason of the move that referred a waiting claim; ``None`` for a claim
     # in another state and for a move with no reason.
     referral_reason: str | None
+    # The latest proposal's recommendation and assessment, as stored text;
+    # ``None`` for a claim with no proposal or a row that lacks either.
+    recommendation: str | None = None
+    assessment: str | None = None
 
 
 class QueueCursor(NamedTuple):

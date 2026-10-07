@@ -38,7 +38,7 @@ git clone https://github.com/Dezoxy/meridian-ai-platform.git
 cd meridian-ai-platform
 make up        # the cluster and the platform under the services
 make deploy    # the image, the database, the six services, the wordings
-make smoke     # 45 lines; PASS, or SKIP (below)
+make smoke     # 46 lines; PASS, or SKIP (below)
 ```
 
 `make smoke` prints a SKIP, and still exits 0, where a line cannot be
@@ -195,7 +195,12 @@ Reload the adjuster's queue: the claim is there, with the reason
 - **The proposal**: route `adjuster`, recommendation `approve`, payable
   EUR 4,500 (the claim less the policy's deductible), two citations of the
   policy wording by clause, and "Drafted by: no model call". The rules
-  needed no model here; an automatic approval stops at EUR 2,500.
+  needed no model here, and the row "Recommendation rests on" says so ("The
+  rules decided this recommendation; no model was asked"); where a model
+  was asked, that row says the recommendation rests on its reading. An
+  automatic approval stops at EUR 2,500. The claim's dates carry labels
+  ("as stated in the claim, not checked") and two gaps in days (S070:
+  tested in the page's own tests, not yet looked at on the cluster).
 - **The audit trail**: every row names the database role that wrote it.
   Each service has a role of its own, and the audit table takes inserts
   only.

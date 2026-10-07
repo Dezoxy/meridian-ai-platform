@@ -65,7 +65,11 @@ from meridian.workloads.claims_triage.models import (
     Route,
     invalid_fields,
 )
-from meridian.workloads.claims_triage.posted_text import input_for_run
+from meridian.workloads.claims_triage.posted_text import (
+    POSTED_TEXT_FLAG,
+    input_for_run,
+    posted_text_addresses_the_model,
+)
 from meridian.workloads.claims_triage.proposal import TriageProposal
 
 # The calls to the runtime moved to ``runtime_calls`` (S037); this module still
@@ -135,21 +139,32 @@ def claim_database_failure(exc: psycopg.Error, claim_id: str) -> tuple[int, str]
     return database_failure(exc)
 
 
-def facts_for_run(
-    submission: ClaimSubmission, arrived: Sequence[str] = ()
-) -> dict[str, Any]:
-    """The facts a triage run is sent: for every triage, whatever starts it. The
-    documents are the submission's, then each name that arrived, each name once
-    and in order of first appearance (S048): the submission's bound counts
-    names and does not require them to differ, and the documents route checks
-    the bound over the distinct names, so the list must be that set."""
+def _facts_of_submission(submission: ClaimSubmission) -> dict[str, Any]:
+    """The facts that the submission alone decides: everything but the arrived
+    documents. The description is the replaced copy, which compiles a pattern
+    from the claimant's name (the slowest pure computation of the Claims API)."""
     # The runtime gets what the graph needs, not the claimant's name or email,
     # and a description with neither of them in it (S047).
     facts = submission.model_dump(mode="json", exclude={"claimant"})
     facts["description"] = description_for_run(
         submission.description, submission.claimant
     )
-    facts["documents"] = list(dict.fromkeys([*submission.documents, *arrived]))
+    return facts
+
+
+def _facts_with_documents(
+    submission: ClaimSubmission, facts: dict[str, Any], arrived: Sequence[str]
+) -> dict[str, Any]:
+    """``facts`` (a copy is returned; ``facts`` is not changed) with the
+    documents the run is sent, which the submission's facts leave as they were
+    stored. The documents are the submission's, then each name that arrived, each
+    name once and in order of first appearance (S048): the submission's bound
+    counts names and does not require them to differ, and the documents route
+    checks the bound over the distinct names, so the list must be that set."""
+    facts = {
+        **facts,
+        "documents": list(dict.fromkeys([*submission.documents, *arrived])),
+    }
     # The graph validates these as ``ClaimFacts`` at every node. Facts that
     # would not validate fail the run as they always did; the log says why.
     try:
@@ -164,14 +179,60 @@ def facts_for_run(
     return facts
 
 
+def facts_for_run(
+    submission: ClaimSubmission, arrived: Sequence[str] = ()
+) -> dict[str, Any]:
+    """The facts a triage run is sent: for every triage, whatever starts it. The
+    documents are the submission's, then each name that arrived, each name once
+    and in order of first appearance (S048)."""
+    return _facts_with_documents(submission, _facts_of_submission(submission), arrived)
+
+
 def triage_run_input(
     submission: ClaimSubmission, arrived: Sequence[str] = ()
 ) -> dict[str, Any]:
     """The whole input of a triage run, built here and nowhere else: the claim's
     facts (``facts_for_run``) and, beside them, the screen of the description as
     posted (``posted_text.input_for_run``, S067). ``start_run`` sends it as it
-    is, so the claim is under ``claim`` once."""
+    is, so the claim is under ``claim`` once. The moves that hold a claim's row
+    build the same input in two parts (``prepare_run_input`` and
+    ``run_input_with_documents``); a test holds the two to the same bytes."""
     return input_for_run(submission, facts_for_run(submission, arrived))
+
+
+class PreparedRunInput(NamedTuple):
+    """What a run is sent that the stored submission alone decides (S070): the
+    submission, its facts without the arrived documents (the description already
+    replaced) and the screen of the description as posted. A stored submission
+    never changes, so this can be built before a claim's row is locked."""
+
+    submission: ClaimSubmission
+    facts: dict[str, Any]
+    posted_text_flag: bool
+
+
+def prepare_run_input(submission: ClaimSubmission) -> PreparedRunInput:
+    """The first part of ``triage_run_input``: everything that needs only the
+    submission, including the pattern built from the claimant's name. Called
+    before the claim's row is locked."""
+    return PreparedRunInput(
+        submission,
+        _facts_of_submission(submission),
+        posted_text_addresses_the_model(submission.description),
+    )
+
+
+def run_input_with_documents(
+    prepared: PreparedRunInput, arrived: Sequence[str] = ()
+) -> dict[str, Any]:
+    """The second part of ``triage_run_input``: the documents that arrived, read
+    where the caller holds the claim's row, and the input a run is sent. The same
+    bytes as ``triage_run_input(prepared.submission, arrived)``; ``prepared`` is
+    not changed, so one may be finished for different documents."""
+    return {
+        "claim": _facts_with_documents(prepared.submission, prepared.facts, arrived),
+        POSTED_TEXT_FLAG: prepared.posted_text_flag,
+    }
 
 
 def arrived_documents(conn: psycopg.Connection, claim_id: str) -> tuple[str, ...]:
@@ -181,12 +242,15 @@ def arrived_documents(conn: psycopg.Connection, claim_id: str) -> tuple[str, ...
     return tuple(name for (name,) in rows)
 
 
+# Whether the claim moved to its state longer ago than the triage lease (one
+# parameter: the lease in seconds): the definition of a lapsed triage, which
+# ``TRIAGE_AGE_SQL`` and the read the moves make before they lock a claim share.
+LEASE_LAPSED_SQL = "state_changed_at < clock_timestamp() - make_interval(secs => %s)"
 # When the claim moved to its state and whether that is longer ago than the
 # triage lease (the same test ``take_triage`` makes in its one ``SELECT``); read
 # by the triage-again route, which has locked the claim without its age.
 TRIAGE_AGE_SQL = (
-    "SELECT state_changed_at, "
-    "state_changed_at < clock_timestamp() - make_interval(secs => %s) "
+    f"SELECT state_changed_at, {LEASE_LAPSED_SQL} "  # noqa: S608 (a constant)
     "FROM claims.claims WHERE claim_id = %s AND tenant = %s"
 )
 

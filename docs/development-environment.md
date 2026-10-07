@@ -317,9 +317,10 @@ known.
   three runs of ten would be thirty processes on twelve cores. While the
   cluster is up the session passes six and tells implementers three (a
   suite beside four implementers' test runs and a fresh cluster pushed the
-  machine into swap twice on 2026-10-06), and before a whole suite it counts
-  the test databases that are running and waits until at most one
-  implementer is testing with a database.
+  machine into swap twice on 2026-10-06), and before a whole suite it checks
+  the room, which is not the same as counting test databases: see "The rule
+  for the machine while the cluster is up" below, which holds since 2026-10-07
+  and is stricter.
 - **Reviewers at once, and early.** A step's reviewers read the same
   commits and change nothing, so they run together, and they start when
   the last contract that changes product code is in, not when the last
@@ -345,10 +346,66 @@ known.
   agent while others could start is where the first night's six hours
   went, with a session that stood still while its client was away.
 
+### The rule for the machine while the cluster is up
+
+Written on 2026-10-07 after four overloads in two days (two on 2026-10-06,
+two on 2026-10-07), all of them the session's own doing; the notes of S073
+hold the figures of three. It is what the machine carries, and it is not a
+reason to ask for a larger one.
+
+- **What the cluster holds.** The kind node alone is 3.3 GiB, and the cluster
+  with six services and five agents at work left 5.7 GB available (above). A
+  test database keeps its PostgreSQL data in memory.
+- **`/tmp` is memory.** On the development machine `/tmp` is a tmpfs, so
+  every file there is RAM. Found on 2026-10-07 at 06:26 UTC, after the four
+  overloads: the session's scratch directory there held 2.9 GB that finished
+  agents had left (one copy of a Terraform module with its provider was 1.6
+  GB), and pytest's temporary directories 0.8 GB more. Removing five leftover
+  directories gave 2.2 GB back at once (the swap in use fell from 4.1 to 2.5
+  GB), and the next whole suite ran at six workers in 3 min 29 s with 5 GB
+  still available. So large scratch (a provider's download, a virtual
+  environment, a schema dump) goes on disk, an agent removes what it made
+  when it ends, and `df -h /tmp` is read before a suite. The overloads below
+  were measured before this was found; how much of them it explains was not
+  measured.
+- **What an overload did to it.** At 04:51 UTC on 2026-10-07 the load was 156
+  (177 over five minutes), the swap was full (4,095 of 4,095 MB) and 134 MB
+  were free. Eight pods of the cluster were not Ready, among them
+  cert-manager, the CloudNativePG operator and the edge, and the control
+  plane's own pods had restarted 8 and 9 times. Every pod came back on its
+  own, between 04:52 and 05:00 UTC, eight minutes after the load fell, with
+  nothing restarted by hand. At 05:42 UTC, after the next overload, the
+  CloudNativePG operator stood at 17 restarts and Envoy Gateway at 18. What
+  restarts the control plane is the memory, not the probes' values: no probe
+  value was changed for it.
+- **One run with a test database at a time.** While the cluster is up, one
+  whole suite, one loop of database tests or one implementer's database gate
+  runs, and nothing else that uses a test database, whatever the room check
+  says: two do not fit beside the cluster in 12 GB, and the second one
+  swapped the machine within three runs (S074's measurement, 2026-10-07, the
+  suite's six workers and a loop of three).
+- **Counting pytest containers misses a run.** The count of
+  `docker ps` names that contain `pytest` sees only a run with a database. A
+  run without one (a script's tests, or `pytest tests/meridian -k "smoke or
+  kind or certificate"`, which loads the whole tree) is a pytest process and
+  no container, and two of them beside a suite and four implementers put the
+  load at 156. The check counts the pytest processes of any kind.
+- **The room check before a whole suite.** The one-minute load is under 8, at
+  least 4,000 MB are available and no other pytest run of any kind is going;
+  it prints the facts and changes nothing, and a suite does not start unless
+  it passes. While a suite runs the session starts no new implementer, and
+  no more than six agents are out at once while the cluster is up.
+- **A result from a machine that is swapping is no result.** A suite that
+  ended with 15 failures in 14 minutes 41 seconds, and script tests with a
+  60-second subprocess bound that failed (18 and 12 of 687 in two runs) at a
+  load of 149 and all passed on a rerun, showed timeouts and lost leases and
+  nothing about the code. Run it again on a quiet machine and do not read the
+  failures as a verdict.
+
 ### What to keep to
 
-- One whole suite at a time beside the cluster, with six workers, and an
-  implementer's run beside it with three.
+- One run with a test database at a time while the cluster is up (above),
+  with six workers for a whole suite and three for any other run.
 - A test database's port outside Linux's ephemeral range (32768 to
   60999). On 2026-10-06 a run on port 55638 failed to bind because another
   process had been given that port as a source port; this session's later

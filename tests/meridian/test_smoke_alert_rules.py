@@ -48,10 +48,11 @@ GROUPS = [
     "meridian.certificates",
     "meridian.telemetry",
 ]
-# The file holds 17 alert rules and 3 recording rules (S064: two of them are in
+# The file holds 18 alert rules and 3 recording rules (S064: two of them are in
 # the group `meridian.telemetry`, with four alerts, the fourth (G1) about the log
-# agent's DaemonSet; S066 added one alert, on the gateway's group).
-RULE_COUNT = 20
+# agent's DaemonSet; S066 added one alert, on the gateway's group; S072 one, on
+# the workloads').
+RULE_COUNT = 21
 # Tied to the script in test_smoke_line_count.py: the sum of the lines each
 # check prints when all is well, so a ``pass`` beyond this count fails that test. S063
 # added the fifth line of the network policy check (the collector), the two
@@ -65,8 +66,10 @@ RULE_COUNT = 20
 # shape, before the Claims API's line) and the streams Loki must not hold (after
 # it). S066 added the sixth line of the network policy check (a pod that is not
 # the Model Gateway's cannot reach the rate store): 40 before S064 and S066, 44
-# with S064's four, 45 with both.
-SMOKE_LINES_AFTER_DEPLOY = 45
+# with S064's four, 45 with both. S073 (K5) added the fifth line of the
+# certificate policy check (the database's own certificates are not close to
+# their end): 46.
+SMOKE_LINES_AFTER_DEPLOY = 46
 # Counted from the checks' own skip lines, not measured: edge 1, database 3 and
 # one SKIP for its stores, tools 1 SKIP, telemetry 7, cost panel 3 and one SKIP
 # for the series, adjuster pages 1 SKIP, sweep 2 SKIP (the Job's line and the
@@ -85,13 +88,21 @@ SMOKE_LINES_AFTER_DEPLOY = 45
 # SKIP (no pass of the sweep has finished). G1's two make it 32: the agent's
 # DaemonSet exists after `make up`, so its shape is read and passes, and the
 # streams line is a SKIP (the Claims API's line above it did not pass, so an
-# empty answer would prove nothing).
-SMOKE_LINES_AFTER_UP = 32
+# empty answer would prove nothing). S073's certificate line makes it 33: the
+# Cluster platform-db exists after `make up` alone, and its certificates are
+# the operator's, made with it.
+SMOKE_LINES_AFTER_UP = 33
 
 
 def tree_groups() -> list[dict]:
     spec = yaml.safe_load(RULES_FILE.read_text(encoding="utf-8"))["spec"]
     return spec["groups"]
+
+
+def for_seconds(text: str) -> int:
+    """A rule's ``for`` ("2m", "1h", "0m") in seconds, as the API's ``duration``."""
+    units = {"s": 1, "m": 60, "h": 3600}
+    return sum(int(n) * units[u] for n, u in re.findall(r"(\d+)([smh])", text))
 
 
 def prometheus_answer(
@@ -104,13 +115,18 @@ def prometheus_answer(
     extra_rules: tuple[tuple[str, str], ...] = (),
     extra_groups: tuple[str, ...] = (),
     unknown: str = "",
+    queries: dict[str, str] | None = None,
+    durations: dict[str, int] | None = None,
 ) -> dict:
     """What Prometheus answers for ``/api/v1/rules`` when it runs the rule file
     of the tree: its groups and rules, healthy and quiet, beside a group of
     another origin whose rules are broken and firing (which the check must
     ignore). ``unhealthy`` maps a rule to its ``lastError``; ``firing`` and
     ``pending`` name alerting rules; ``extra_rules`` are ``(group, rule)``
-    pairs the file does not have; ``unknown`` names a rule not yet evaluated."""
+    pairs the file does not have; ``unknown`` names a rule not yet evaluated.
+    Each rule has a ``query`` (the file's expression on one line; ``queries``
+    overrides by rule name) and an alert a ``duration`` in seconds (the file's
+    ``for``; ``durations`` overrides)."""
     groups = []
     for group in tree_groups():
         if group["name"] == drop_group:
@@ -126,9 +142,13 @@ def prometheus_answer(
                 "type": "alerting" if "alert" in rule else "recording",
                 "health": "ok",
                 "lastError": "",
+                "query": (queries or {}).get(name, " ".join(rule["expr"].split())),
             }
             if "alert" in rule:
                 entry["alerts"] = [{"state": state}] if state else []
+                entry["duration"] = (durations or {}).get(
+                    name, for_seconds(rule.get("for", "0s"))
+                )
             if name in (unhealthy or {}):
                 entry.update(health="err", lastError=(unhealthy or {})[name])
             if name == unknown:
@@ -273,7 +293,7 @@ def run_alert_rules(
             f'        [[ -e "${{file}}" ]] || file="{sequence}/last.json"',
             '        cat "${file}"',
             "      else",
-            "        printf '%s' \"${RULES_ANSWER}\"",
+            f'        cat "{tmp_path}/rules-answer.json"',
             "      fi ;;",
             f"    *api/dashboards/uid/{HEALTH_UID}*)",
             '      printf "%s" "${HEALTH_SERVED}" ;;',
@@ -302,8 +322,10 @@ def run_alert_rules(
                 for name in (
                     "tree_groups",
                     "tree_rules",
+                    "tree_exprs",
                     "cluster_groups",
                     "cluster_rules",
+                    "rules_changed",
                     "name_list",
                     "check_rules_object",
                     "fetch_rules",
@@ -324,6 +346,11 @@ def run_alert_rules(
         ]
     )
     rules = answer if answer is not None else prometheus_answer()
+    # A file, not the environment: an answer over 131,072 bytes cannot be one
+    # string of it (test_smoke_argument_limit.py builds one).
+    (tmp_path / "rules-answer.json").write_text(
+        rules if isinstance(rules, str) else json.dumps(rules)
+    )
     done = subprocess.run(
         ["bash", "-c", script],
         capture_output=True,
@@ -333,7 +360,6 @@ def run_alert_rules(
             "RULE_OBJECT": rule_object,
             "NOT_FOUND": NOT_FOUND,
             "FORBIDDEN": FORBIDDEN,
-            "RULES_ANSWER": rules if isinstance(rules, str) else json.dumps(rules),
             "PROMETHEUS_DOWN": "yes" if prometheus_down else "no",
             "GRAFANA_OPENS": "yes" if grafana_opens else "no",
             "QUERY_ANSWER": query_answer,
@@ -379,7 +405,7 @@ def test_the_check_prints_three_rule_lines_and_the_dashboard_line_when_all_is_we
         "PASS  alert rules: the 5 groups of infra/kind/alerts/meridian.yaml are "
         f"loaded in Prometheus and all {RULE_COUNT} rules in them are healthy",
         "PASS  alert rules: the loaded rules are the file's: the same 5 groups "
-        f"and {RULE_COUNT} rule names",
+        f"and {RULE_COUNT} rule names, each with its expression and its for",
         "PASS  alert rules: no Meridian alert is firing (none pending)",
     ]
     assert lines[3].startswith(
@@ -434,7 +460,7 @@ def test_a_group_missing_on_the_cluster_is_named_by_the_loaded_and_the_names_lin
     assert verdicts(lines[:3]) == ["FAIL", "FAIL", "PASS"]
     assert "meridian.certificates" in lines[0] and "not loaded" in lines[0]
     assert "meridian.certificates/MeridianCertificateNotReady" in lines[1]
-    assert "run make up" in lines[1]
+    assert "run make deploy or make up" in lines[1]
 
 
 @requires_jq
@@ -747,7 +773,7 @@ def test_the_header_numbers_the_eleventh_check_and_says_what_it_does_not_prove()
     eleventh = header.split("11. alert rules and health dashboard: four lines")[1]
     flat = " ".join(line.removeprefix("#").strip() for line in eleventh.splitlines())
 
-    assert "10. certificate policy: four lines" in header
+    assert "10. certificate policy: five lines" in header
     assert "What it does not prove" in flat
     assert "series" in flat and "by hand" in flat
     assert "every query" in flat and "No query is left out" in flat
@@ -791,9 +817,9 @@ def test_the_readmes_say_what_the_files_hold_and_that_smoke_reads_them() -> None
     )
 
     assert "five alerts on it and three on the workloads" not in kind
-    assert "six on the gateway, three on the workloads and four on the" in kind
+    assert "six on the gateway, four on the workloads and four on the" in kind
     assert "four on missing telemetry" in kind
-    assert "17 alert rules and three recording rules" in kind
+    assert "18 alert rules and three recording rules" in kind
     assert "Neither the rules nor the health dashboard has been applied" not in kind
     assert "`make smoke` checks neither" not in kind
     assert "It does not check the rules or the new dashboard" not in operations

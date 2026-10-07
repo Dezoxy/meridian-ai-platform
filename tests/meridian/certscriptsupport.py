@@ -13,7 +13,10 @@ from servicesupport import REPO_ROOT
 
 KIND_DIR = REPO_ROOT / "infra" / "kind"
 CALLER = "agent-runtime"
-SECONDS = 60
+# A hang guard for a subprocess, never a speed assertion: a healthy run takes a
+# few seconds, and 60 was too short at a load of 150 (three tests failed), where
+# a script that forks stand-in programs by the hundred is slow and not stuck.
+SECONDS = 300
 
 POLICIES = (
     "meridian-services",

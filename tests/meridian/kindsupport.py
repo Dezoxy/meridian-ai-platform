@@ -6,7 +6,6 @@ or a constant out of a script, and the dashboard's readers. It holds no test.
 
 import json
 import re
-import shutil
 from pathlib import Path
 
 import pytest
@@ -23,6 +22,7 @@ from meridian.platform.cli.db import (
     MIGRATIONS_DATABASE_URL_ENV,
     SEED_DATABASE_URL_ENV,
 )
+from meridian.platform.common.certlife import RESTART_SHARE_ENV
 from meridian.platform.common.db import DATABASE_URL_ENV
 from meridian.platform.common.telemetry import OTLP_CERTIFICATE_ENV, OTLP_ENDPOINT_ENV
 from meridian.platform.gateway.settings import (
@@ -92,6 +92,7 @@ IDENTITY_PREFIX_ENV = "MERIDIAN_IDENTITY_PREFIX"
 # Every variable a manifest may set is one the code reads, named by its constant.
 KNOWN_ENV = {
     *TLS_ENV,
+    RESTART_SHARE_ENV,
     IDENTITY_PREFIX_ENV,
     DATABASE_URL_ENV,
     MIGRATIONS_DATABASE_URL_ENV,
@@ -270,9 +271,10 @@ GATEWAY_SERIES = {
 
 # The epoch second of the first settled attempt, as the stub ledger answers it.
 FIRST_SETTLED = "1790000000"
-requires_jq = pytest.mark.skipif(
-    shutil.which("jq") is None, reason="jq is not installed"
-)
+# A missing jq skips on a developer's machine and fails under
+# GITHUB_ACTIONS=true: the rule is the fixture's (jqsupport.py), since a skipif
+# mark cannot fail.
+requires_jq = pytest.mark.usefixtures("jq_installed")
 
 
 def dashboard() -> dict:

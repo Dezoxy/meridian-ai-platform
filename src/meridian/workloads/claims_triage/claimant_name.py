@@ -63,8 +63,9 @@ copy can still lose an ordinary word to ``[name]`` when it is capitalised (a
 sentence's first word, "Time was short"; text in capitals; a proper noun such as
 "Seat Leon" for a claimant named Leo) and the name with an ending spells it.
 Counted over the golden descriptions and the four wordings for twenty common
-English given names, that is one word ("Leon"), where taking every ending in any
-case took seventeen. The price is meaning in the run's copy: a claimant can
+English given names, that is one word, "Leon" in "Seat Leon" (in two of the golden
+descriptions, CLM-0020 and CLM-0044), where taking every ending in any case took
+seventeen words. The price is meaning in the run's copy: a claimant can
 also choose a name made of the words an exclusion turns on, and every such word
 in the description becomes ``[name]`` before the model reads it (so before S067
 for any part of three letters); a bound on how much a name may replace is a
@@ -84,7 +85,9 @@ and descriptions are personal data, and nothing here logs.
 
 import re
 import unicodedata
+from collections.abc import Mapping
 from re import _compiler
+from types import MappingProxyType
 
 from meridian.platform.guardrails import EMAIL_PLACEHOLDER, PLACEHOLDERS, redact
 from meridian.workloads.claims_triage.models import Claimant
@@ -114,13 +117,15 @@ PLACEHOLDER_PATTERN = "|".join(
 # Latin-1 look-alikes õ and û (ISO 8859-1 puts them where ISO 8859-2 has ő and ű),
 # and ö and ü for a partly stripped ő and ű. A vowel of the name also matches its
 # own letter, so a vowel not listed here ("ä") still matches itself.
-VOWEL_FORMS = {
-    "a": "aá",
-    "e": "eé",
-    "i": "ií",
-    "o": "oóöőõ",
-    "u": "uúüűû",
-}
+VOWEL_FORMS: Mapping[str, str] = MappingProxyType(
+    {
+        "a": "aá",
+        "e": "eé",
+        "i": "ií",
+        "o": "oóöőõ",
+        "u": "uúüűû",
+    }
+)
 # The case endings (English Wikipedia, "Hungarian noun phrase"), every variant
 # vowel harmony allows (no source says which one a given name takes), then the
 # possessive -é. The assimilated -val/-vel and -vá/-vé are not here: they depend on
@@ -160,7 +165,9 @@ ASSIMILATED_ENDINGS = ("al", "el", "á", "é")
 DIGRAPHS = ("dzs", "cs", "dz", "gy", "ly", "ny", "sz", "ty", "zs")
 # Archaic final letter groups: the letter pronounced is doubled (AkH §163b:
 # "Kossuthtal", "Móriczcal", "Rátzcal", "Babitscsal").
-ARCHAIC_SOUNDS = {"th": "t", "cz": "c", "tz": "c", "ts": "cs"}
+ARCHAIC_SOUNDS: Mapping[str, str] = MappingProxyType(
+    {"th": "t", "cz": "c", "tz": "c", "ts": "cs"}
+)
 
 
 def _lower(text: str) -> str:

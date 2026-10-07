@@ -256,12 +256,51 @@ def test_the_policy_for_the_services_names_kinds_issuer_and_the_release_namespac
     }
 
 
-def test_the_services_uri_pattern_is_the_charts_identity_prefix_and_a_star() -> None:
+def asked_for(field: str) -> set[str]:
+    """Every value of ``field`` (``uris`` or ``dnsNames``) that any Certificate
+    the chart renders asks for."""
+    return {
+        value
+        for certificate in chart_certificates().values()
+        for value in certificate["spec"].get(field, [])
+    }
+
+
+def test_the_services_policy_lists_the_uris_the_chart_asks_for_and_no_other() -> None:
+    rule = policies()[SERVICES_POLICY]["spec"]["allowed"]["uris"]
+    asks = asked_for("uris")
+
+    # Both ways: a URI no Certificate asks for fails, and so does a Certificate
+    # whose URI the policy lacks. Each is the identity prefix and a service ID.
+    assert identity_prefix() == "spiffe://meridian.kind/ns/meridian/sa/"
+    assert len(asks) == len(chart_certificates())
+    assert all(uri.startswith(identity_prefix()) for uri in asks)
+    assert set(rule["values"]) == asks
+    assert len(rule["values"]) == len(asks)
+    assert rule["required"] is True
+    assert not any("*" in value for value in rule["values"])
+
+
+def test_the_services_policy_lists_the_dns_names_the_chart_asks_for_and_no_other() -> (
+    None
+):
+    rule = policies()[SERVICES_POLICY]["spec"]["allowed"]["dnsNames"]
+    asks = asked_for("dnsNames")
+
+    # A service that serves TLS has a name; the clients (the Claims API and the
+    # ingestion Job) have none, so the rule is not required.
+    assert asks
+    assert len(asks) < len(chart_certificates())
+    assert set(rule["values"]) == asks
+    assert len(rule["values"]) == len(asks)
+    assert all(name.endswith(f".{NAMESPACE}.svc") for name in asks)
+    assert not any("*" in value for value in rule["values"])
+    assert "required" not in rule
+
+
+def test_the_services_policy_allows_the_three_usages_and_nothing_else() -> None:
     allowed = policies()[SERVICES_POLICY]["spec"]["allowed"]
 
-    assert identity_prefix() == "spiffe://meridian.kind/ns/meridian/sa/"
-    assert allowed["uris"] == {"values": [f"{identity_prefix()}*"], "required": True}
-    assert allowed["dnsNames"] == {"values": [f"*.{NAMESPACE}.svc"]}
     assert set(allowed["usages"]) == SERVER_USAGES
     # Left out, so denied: a CA, a common name, an address, an e-mail address.
     assert not {"isCA", "commonName", "ipAddresses", "emailAddresses"} & set(allowed)
@@ -318,10 +357,18 @@ def test_the_same_certificate_from_another_namespace_is_denied(name: str) -> Non
             "a URI of another namespace",
             {"uris": ["spiffe://meridian.kind/ns/other/sa/model-gateway"]},
         ),
+        (
+            "a URI of the namespace under a service ID the chart does not render",
+            {"uris": ["spiffe://meridian.kind/ns/meridian/sa/someone-new"]},
+        ),
         ("no URI", {"uris": None}),
         ("a CA", {"isCA": True}),
         ("a common name", {"commonName": "model-gateway"}),
         ("a DNS name outside the namespace", {"dnsNames": ["model-gateway.other.svc"]}),
+        (
+            "a DNS name of the namespace the chart does not render",
+            {"dnsNames": ["someone-new.meridian.svc"]},
+        ),
         ("a usage outside the three", {"usages": ["digital signature", "cert sign"]}),
         ("a code signing usage", {"usages": ["code signing"]}),
         ("an address", {"ipAddresses": ["10.0.0.1"]}),

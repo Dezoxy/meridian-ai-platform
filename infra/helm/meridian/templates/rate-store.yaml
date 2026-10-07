@@ -56,8 +56,9 @@ and liveness fails six times in a row (ten seconds apart), so the kubelet
 restarts the container within about a minute, which hands every tenant its
 windows again (the ledger is not a window). No credential is in the pod's spec:
 a user with `nopass` accepts any password, so redis-cli sends an empty one.
-Liveness then also fails when the certificate on the volume was written after
-the server process started (meridian.rateStoreLiveness, which says how). Redis
+Liveness then also fails when the certificate on the volume was written more
+than two seconds after the server process started (meridian.rateStoreLiveness,
+which says how and why two). Redis
 reads its certificate once, at start; cert-manager renews it at
 60 of its 90 days and the kubelet rewrites the files, but the server would go on
 serving the old one, and when that ended every gateway call would be a 503 (no
@@ -79,10 +80,11 @@ lets reach the port fail the probes and restart the store for as long as they
 last (the policy is the control; a smaller maxclients would not help), and so
 does a certificate that expired unrenewed (redis-cli then fails to verify it).
 And the server's start is the boot time plus the process's start, read when the
-probe runs: a wall clock that stepped back by more than the gap between the
-files' write and the process's start (a virtual machine resumed, then set by NTP)
-makes a certificate look newer than the server and restarts it until the clock
-catches up, at most every five minutes (the kubelet's back-off); a step forward
+probe runs: a wall clock that stepped back (a virtual machine resumed, then set
+by NTP) makes a certificate look newer than the server and restarts it until the
+clock catches up, at most every five minutes (the kubelet's back-off). The
+threshold lies between the gap from the process's start to the files' write and
+that gap plus two seconds, depending on how the two cuts fell; a step forward
 hides a renewal. No small fix exists without writable state.
 
 The directives of redis.conf, each from the documentation of Redis 8.10 (the
@@ -235,22 +237,54 @@ port are the script's arguments ($1 and $2), always in double quotes. The exit
 status of redis-cli is not read: it is 0 for an answer of NOAUTH (the user is
 missing or the ACL file is not the one `make up` writes) and of BUSY (a script
 that never ends) alike, and neither is a healthy store. A refused connection or a
-failed handshake prints nothing, which is not PONG either. `timeout 2` (busybox's,
-in the image) ends redis-cli after two seconds, inside the kubelet's three: a server
-that is paused or frozen below the protocol never answers, the kubelet fails the
-probe at its own timeout without ending what the probe started, and a client would
-be left behind for every probe (measured on the pinned image against a paused
-container: without it the script was still waiting when it was ended from outside
-after eight seconds, and a redis-cli stayed behind; with it the script printed its
-refusal after two seconds and left none). `--pass ''` is there
+failed handshake prints nothing, which is not PONG either. `--pass ''` is there
 because redis-cli sends no AUTH without one, and `nopass` accepts any password,
 so the pod's spec holds no credential; `--no-auth-warning` keeps the warning about
 a password on the command line out of the answer. The message names the answer,
 which the kubelet records in the pod's events. Takes the root (it names no value
 of the chart: the script has no template expression).
+
+The bound, and what a probe leaves behind (S073, K7). A server that is frozen
+below the protocol (a stopped process) never answers, and the kubelet fails the
+probe at its own five seconds without ending what the probe started, so redis-cli
+must end itself inside them: the script starts it and `sleep 2` in the background
+as its own two children, `wait -n` returns when the first of them ends, and the
+script ends the other and waits for both. Every process the probe starts is then a
+child of the probe's own shell and is reaped by it. It does not use `timeout`: the
+image's (busybox's) leaves a watcher process behind per run, which becomes an
+orphan of PID 1, the Redis server, and the server never reaps a child that is not
+its own. On kind that was 2,024 defunct `timeout` processes after about two hours,
+then "can't fork" in every probe, the pod not Ready and the gateway's 503s.
+Measured on the pinned image with `redis-server` as PID 1 and a read-only root file
+system: the old script left one process per run, in the readiness and in the
+liveness script alike, for an answer of PONG, for another answer and for a stopped
+server; this one leaves none in any of the three
+(tests/meridian/test_helm_rate_store_leaves_no_process.py runs each many times and
+lists the container's processes), and against a server stopped with SIGSTOP it
+printed its refusal after 2.05 seconds. `wait -n` is busybox ash's (the image's
+`sh`; the pinned 1.37 has it) and bash's, not dash's. redis-cli's own `-t` was
+measured and does not do this: against a stopped server it was still waiting after
+two minutes, the TLS handshake being outside it. The freeze was SIGSTOP on PID 1,
+not `docker pause`, which stops `docker exec` too. No file is written (the root
+file system is read-only), and the only redirection is `2>/dev/null` on the
+`kill`, which complains of a client that already ended.
+What is still left (S073, review): the probe's own bound (2 seconds) fires before
+the kubelet's (`timeoutSeconds: 5`), so a hung redis-cli never reaches it. Only a
+shell that is itself slower than the kubelet's timeout (a node so overloaded that
+`sh` has not run for five seconds) is killed by the kubelet, and the `$( )`
+subshell it leaves is reparented to PID 1: one defunct process, once per such
+overload, not one per probe.
 */ -}}
 {{- define "meridian.rateStorePing" -}}
-answer=$(timeout 2 redis-cli --tls --cacert "$1/ca.crt" --cert "$1/tls.crt" --key "$1/tls.key" -h 127.0.0.1 -p "$2" --user probe --pass '' --no-auth-warning ping)
+answer=$(
+  redis-cli --tls --cacert "$1/ca.crt" --cert "$1/tls.crt" --key "$1/tls.key" -h 127.0.0.1 -p "$2" --user probe --pass '' --no-auth-warning ping &
+  client=$!
+  sleep 2 &
+  timer=$!
+  wait -n
+  kill "$client" "$timer" 2>/dev/null
+  wait
+)
 [ "$answer" = PONG ] || { echo "rate-store: the probe user's PING was answered '$answer', not PONG" >&2; exit 1; }
 {{- end -}}
 
@@ -272,7 +306,7 @@ exec:
     - rate-store-readiness
     - {{ include "meridian.tlsDirectory" . }}
     - {{ include "meridian.rateStorePort" . | quote }}
-timeoutSeconds: 3
+timeoutSeconds: 5
 {{- end -}}
 
 {{- /*
@@ -289,22 +323,49 @@ Takes the root.
                    which is the server (the container runs `redis-server`
                    itself), in clock ticks since boot (field 22 of
                    /proc/1/stat, a hundred a second: the kernel's fixed USER_HZ),
-                   cut to the second. Not the time of the /proc/1 directory: the
-                   kernel sets that when the inode is first looked up, not when
-                   the process started. sed and cut cut the fields out after the
-                   `)` that ends the command's name, so a name with a space
-                   cannot move them
+                   cut to the second. Both numbers are cut, and both cuts go
+                   the same way, down: btime drops the fraction of the boot
+                   second (under one second), and the start is cut to a tick by
+                   the kernel (under 0.01 second) and to a second by the
+                   division (under one second). So the computed start is the
+                   real one less something under 2.01 seconds, and never above
+                   it, as long as the wall clock holds: btime is derived from
+                   the wall clock, so neither number changes for the life of the
+                   container only while the clock holds. 2.01 is a bound; 150
+                   starts on one machine measured 0.006 to 0.997 seconds, with
+                   a boot fraction near zero. Not the time of the /proc/1
+                   directory: the kernel sets that when the inode is first
+                   looked up, not when the process started. sed and cut cut
+                   the fields out after the `)` that ends the command's name,
+                   so a name with a space cannot move them
   file's time      stat -L -c %Y on tls.crt: -L follows the link tls.crt ->
                    ..data/tls.crt to the file itself. The kubelet writes a
                    Secret's files into a new directory ..<timestamp>, then
                    replaces the link ..data with one rename; the new file's own
                    time is the moment it was written
-  the rule         unhealthy when the file's second is later than the server's.
-                   Equal is healthy: the kubelet writes the volume before the
-                   container starts, so every start has a file no newer than the
-                   process, and a container restart (not a new pod) leaves the
-                   process newer than the files, so a restart that loaded the
-                   renewed certificate is not followed by another. A time that
+  the rule         unhealthy when the file's second is more than two later than
+                   the computed start (written > started + 2: the 2 is written
+                   once, in the script, as a literal, because the script is one
+                   literal that the tests pin and holds no other named
+                   number). Two, because the computed start can lie under 2.01
+                   seconds below the real one: a file written before the real
+                   start has a second no later than the computed start plus two,
+                   so the two cuts alone never make the probe fail, on any
+                   node. The kubelet writes the volume before the container
+                   starts, so every start has a file no newer than the process,
+                   and a container restart (not a new pod) leaves the process
+                   newer than the files, so a restart that loaded the renewed
+                   certificate is not followed by another. Without the two,
+                   a file written less than two seconds before a start could
+                   read as newer than the server, on every probe for the
+                   container's life (a test in CI saw it: all twenty runs of
+                   the probe failed). What the rule's numbers predict for a
+                   cluster, and was NOT seen there (two runs on kind had no
+                   restart): six failures in a row restart the container about
+                   70 seconds after its pod starts, once).
+                   The bound does not cover a
+                   step of the wall clock: a step moves btime by its size (the
+                   header says what a clock set backwards does). A time that
                    cannot be read or is not a number is unhealthy and says so on
                    standard error (the kubelet records it in the pod's events):
                    a probe that cannot tell must not pass for ever and leave a
@@ -321,7 +382,22 @@ Takes the root.
                    server takes to start every model call is a 503 (the
                    gateway has no fallback: the owner's decision). The services
                    restart themselves on a renewed certificate the same way
-                   (meridian.platform.common.certlife)
+                   (meridian.platform.common.certlife). The rule's own cost: a
+                   certificate written within two seconds AFTER a start is not
+                   seen as newer. Renewals are sixty days apart and the restart
+                   one causes comes minutes after it, so nothing but a by-hand
+                   `make cert-renew CERT=rate-store` typed as the pod starts
+                   can meet it. The server then keeps the certificate it loaded
+                   at start, the one before the renewal, and nothing restarts
+                   it until the next renewal's files arrive (cert-manager
+                   renews the by-hand one at its own 60 days) or the store
+                   restarts for another reason; that restart loads the newest
+                   files. The one in between ends 90 days after its own
+                   issue, so when the pod had started more than 30 days after
+                   that, it ends before the next renewal and every model call
+                   is a 503 from then until a restart (the runbook's rollout
+                   restart; its section on a renewed certificate says how to
+                   see it)
   what it cannot   say that the server SERVES the new certificate (the image has
                    no tool that prints a peer's certificate): it says the files
                    are newer than the process, and the restart is what loads
@@ -346,14 +422,14 @@ exec:
         esac
       done
       started=$((boot + ticks / 100))
-      if [ "$written" -gt "$started" ]; then
+      if [ "$written" -gt $((started + 2)) ]; then
         echo "rate-store: the certificate on disk is newer than the server (written $written, server started $started): restarting to serve it" >&2
         exit 1
       fi
     - rate-store-liveness
     - {{ include "meridian.tlsDirectory" . }}
     - {{ include "meridian.rateStorePort" . | quote }}
-timeoutSeconds: 3
+timeoutSeconds: 5
 {{- end -}}
 
 {{- if .Values.rateStore.enabled }}
@@ -395,6 +471,7 @@ metadata:
     {{- include "meridian.labels" "rate-store" | nindent 4 }}
 spec:
   replicas: 1
+  revisionHistoryLimit: {{ include "meridian.revisionHistoryLimit" . }}
   strategy:
     type: Recreate
   selector:

@@ -219,6 +219,14 @@ def run_check(
     )
 
 
+def duration_seconds(text: str) -> int:
+    """A Go duration of hours, minutes and seconds ("1h0m0s", "2160h")."""
+    parts = re.fullmatch(r"(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?", text)
+    assert parts and any(parts.groups()), text
+    hours, minutes, seconds = (int(part or 0) for part in parts.groups())
+    return hours * 3600 + minutes * 60 + seconds
+
+
 def deletes(run: Run) -> list[str]:
     return [call for call in run.asked if f"delete certificaterequest {PREFIX}" in call]
 
@@ -249,7 +257,7 @@ def test_a_denied_request_is_a_pass_that_names_the_reason_and_is_deleted_after_t
     assert run.temporary_files == []
 
 
-def test_the_request_is_one_the_meridian_policy_would_approve_in_meridian_but_not_here(
+def test_the_request_is_in_a_namespace_the_services_policy_does_not_select(
     tmp_path: Path,
 ) -> None:
     run = run_check(tmp_path)
@@ -280,12 +288,27 @@ def test_the_request_is_one_the_meridian_policy_would_approve_in_meridian_but_no
     assert spec["issuerRef"]["name"] == services["selector"]["issuerRef"]["name"]
     assert set(spec["usages"]) <= set(services["allowed"]["usages"])
     assert spec["duration"] == "1h0m0s"
+    assert duration_seconds(spec["duration"]) <= duration_seconds(
+        services["constraints"]["maxDuration"]
+    )
     assert not spec.get("isCA")
     assert base64.b64decode(spec["request"]).decode() == STUB_CSR + "\n"
-    assert fnmatch(constant("REFUSED_URI"), services["allowed"]["uris"]["values"][0])
-    # So only the namespace selector, not the request's shape, refuses it: the
-    # namespace is not one meridian-services selects, and the policy that
-    # denies selects the issuer from any namespace.
+    # Since S072 the policy lists the URIs the chart renders (no wildcard), so
+    # the request's URI must be one of them: then the namespace is the one
+    # reason the services' policy would not approve it, as the line claims.
+    uris = services["allowed"]["uris"]["values"]
+    assert constant("REFUSED_URI") in uris
+    assert not any("*" in uri for uri in uris)
+    # A request with no DNS name passes: the policy does not require one (the
+    # Claims API's own Certificate has none), and the request sets nothing the
+    # policy leaves out of `allowed` (no common name, subject, address or CA).
+    assert not services["allowed"]["dnsNames"].get("required")
+    assert services["allowed"]["uris"]["required"] is True
+    assert not {"commonName", "subject", "ipAddresses", "emailAddresses", "isCA"} & set(
+        services["allowed"]
+    )
+    # The policy that denies selects the issuer from any namespace, and the
+    # services' policy does not select this namespace.
     assert NAMESPACE not in services["selector"]["namespace"]["matchNames"]
     denying = policies["meridian-deny-unlisted"]["spec"]["selector"]
     assert "namespace" not in denying
@@ -544,7 +567,7 @@ PREFIX_OF_THE_REAL_MESSAGE = "No policy approved this request: "
 REAL_DENIAL = (
     PREFIX_OF_THE_REAL_MESSAGE
     + "[meridian-deny-unlisted: [spec.allowed.uris: Invalid value: "
-    '["spiffe://meridian.kind/ns/meridian/sa/meridian-smoke-refused"]: '
+    '["spiffe://meridian.kind/ns/meridian/sa/claims-api"]: '
     "no URI is allowed]]"
 )
 
@@ -765,6 +788,11 @@ def test_the_real_openssl_makes_a_request_for_the_meridian_uri_and_keeps_no_key(
         constant("REFUSED_URI")
     ]
     assert names.value.get_values_for_type(x509.DNSName) == []
+    # Nothing else the policy leaves out of `allowed`: no address, no e-mail, no
+    # subject, so only the namespace can refuse it.
+    assert names.value.get_values_for_type(x509.IPAddress) == []
+    assert names.value.get_values_for_type(x509.RFC822Name) == []
+    assert len(request.subject) == 0
     assert "PRIVATE KEY" not in done.stdout + done.stderr
     assert list(work.iterdir()) == []
 
@@ -780,8 +808,9 @@ def test_the_fourth_line_of_check_ten_is_the_request_and_smoke_needs_openssl() -
         "check_approver_addon",
         "check_builtin_approver_off",
         "check_refused_request",
+        "check_database_certificates",
     ]
-    assert "10. certificate policy: four lines" in SMOKE_SH
+    assert "10. certificate policy: five lines" in SMOKE_SH
     assert "10. certificate policy: three lines" not in SMOKE_SH
     assert "openssl" in SMOKE_SH.split("need_tools ")[1].splitlines()[0].split()
 
@@ -792,7 +821,7 @@ def test_the_header_says_what_check_ten_creates_removes_and_does_not_prove() -> 
         for line in SMOKE_SH.split("set -euo pipefail")[0].splitlines()
     )
     opening = header.split("1. edge")[0]
-    tenth = header.split("10. certificate policy: four lines")[1].split(
+    tenth = header.split("10. certificate policy: five lines")[1].split(
         "11. alert rules"
     )[0]
 

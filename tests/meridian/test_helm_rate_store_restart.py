@@ -35,6 +35,11 @@ FILES = ("tls.crt", "tls.key", "ca.crt")
 # architecture Meridian runs on.
 TICKS = 100
 HELPERS_MAXIMUM = 800
+# The shell the rendered scripts run under here. The image's `sh` is busybox's
+# ash, which has `wait -n`; this machine's `sh` may be dash, which has not, so the
+# tests that run a script with a stand-in redis-cli use bash. The script itself
+# runs under the image's own shell in test_helm_rate_store_leaves_no_process.py.
+SCRIPT_SHELL = "bash"
 MOVED = (
     "meridian.rateStorePort",
     "meridian.rateStoreRule",
@@ -82,7 +87,7 @@ def test_the_readiness_probe_is_the_handshake_and_the_probe_users_ping_alone() -
     assert command[:2] == ["sh", "-c"]
     assert command[3:] == ["rate-store-readiness", TLS_DIRECTORY, str(PORT)]
     assert liveness_script().startswith(command[2].rstrip("\n"))
-    assert probe["timeoutSeconds"] == 3
+    assert probe["timeoutSeconds"] == 5
     assert probe["periodSeconds"] == 5
 
 
@@ -98,9 +103,12 @@ def test_the_liveness_script_still_does_what_the_readiness_probe_does() -> None:
     script = liveness_script()
 
     assert (
-        "answer=$(timeout 2 redis-cli --tls"
-        ' --cacert "$1/ca.crt" --cert "$1/tls.crt" --key "$1/tls.key"'
-        " -h 127.0.0.1 -p \"$2\" --user probe --pass '' --no-auth-warning ping)"
+        "answer=$(\n"
+        '  redis-cli --tls --cacert "$1/ca.crt" --cert "$1/tls.crt"'
+        ' --key "$1/tls.key"'
+        " -h 127.0.0.1 -p \"$2\" --user probe --pass '' --no-auth-warning ping &\n"
+        '  client=$!\n  sleep 2 &\n  timer=$!\n  wait -n\n  kill "$client" "$timer"'
+        " 2>/dev/null\n  wait\n)"
     ) in script
     # The answer is read, not the exit status: it is 0 for NOAUTH and for BUSY.
     assert '[ "$answer" = PONG ]' in script
@@ -138,6 +146,8 @@ def test_the_script_expands_only_its_two_arguments_and_the_numbers_it_reads() ->
         "(",
         "((",
         "answer",
+        "client",
+        "timer",
         "n",
         "boot",
         "ticks",
@@ -161,11 +171,13 @@ def test_the_liveness_probe_is_read_only_and_writes_nothing() -> None:
     assert container["securityContext"]["readOnlyRootFilesystem"] is True
     assert {v["name"] for v in pod["volumes"]} == {"tls", "acl", "config"}
     assert all("emptyDir" not in v for v in pod["volumes"])
-    # The only redirection is the message to standard error.
+    # The only redirections are the messages to standard error and the `kill`'s
+    # complaint about a client that already ended, sent to /dev/null: the
+    # device, not a file of the root file system.
     redirections = {
         found.rstrip(";") for found in re.findall(r">\S*", liveness_script())
     }
-    assert redirections <= {">&2"}
+    assert redirections <= {">&2", ">/dev/null"}
 
 
 # ── how long after a renewal ─────────────────────────────────────────────────
@@ -187,7 +199,7 @@ def test_a_renewal_is_acted_on_within_a_minute_of_the_kubelet_writing_it() -> No
 def test_a_hung_probe_ends_as_a_failed_one_before_the_next_starts() -> None:
     probe = store_container()["livenessProbe"]
 
-    assert probe["timeoutSeconds"] == 3
+    assert probe["timeoutSeconds"] == 5
     assert probe["timeoutSeconds"] < probe["periodSeconds"]
 
 
@@ -198,6 +210,18 @@ def test_the_header_states_the_time_and_what_a_restart_costs() -> None:
     assert "60 seconds" in header
     assert "every tenant its windows again" in header
     assert "ledger" in header
+
+
+def test_the_template_names_the_one_process_a_slow_shell_still_leaves() -> None:
+    text = (TEMPLATES / "rate-store.yaml").read_text(encoding="utf-8")
+    comment = text.split('{{- define "meridian.rateStorePing" -}}', 1)[0]
+    comment = " ".join(comment.rsplit("/*", 1)[1].split())
+
+    # The shell ends a hung redis-cli at 2 s, inside the kubelet's 5 s. Only a
+    # shell that is itself slower than the kubelet's timeout is killed by it, and
+    # it leaves one defunct process, once per overload.
+    assert "one defunct process" in comment
+    assert "slower than the kubelet's timeout" in comment
 
 
 # ── the rule, run against a directory the way the kubelet builds one ─────────
@@ -247,7 +271,7 @@ def probe(tmp_path: Path):
     """Run the rendered liveness command in this process's own shell with a
     stand-in ``redis-cli`` first on the path, against ``tmp_path/tls``. Returns
     (exit status, the redis-cli arguments, standard error)."""
-    shell = shutil.which("sh")
+    shell = shutil.which(SCRIPT_SHELL)
     assert shell is not None
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -304,23 +328,35 @@ def test_a_certificate_written_before_the_server_started_is_healthy(
     ]
 
 
-def test_a_certificate_written_in_the_second_the_server_started_is_healthy(
-    tmp_path: Path, probe
+# The offsets below are the rule's slack for its own measurement, not "older" and
+# "newer" in the world. process_start() reads the numbers the script reads (the
+# boot time in /proc/stat, field 22 of PID 1's stat, cut to the second), so it IS
+# the start the probe computes, which lies up to about two seconds before the
+# process's real start (the boot second's fraction is dropped, then the start is
+# cut to a tick and to a second). A file written before the real start can
+# therefore have a second up to SLACK later than the computed one, and the rule
+# must call that healthy, on every probe, because neither number changes.
+SLACK = 2
+
+
+@pytest.mark.parametrize("offset", [0, 1, SLACK], ids=["+0", "+1", "+2"])
+def test_a_certificate_written_up_to_the_slack_after_the_computed_start_is_healthy(
+    tmp_path: Path, probe, offset: int
 ) -> None:
     # The kubelet writes the volume before it starts the container, so a file
     # no newer than the process is how every start looks; a false alarm here
     # would restart a healthy store at its first probe, once, and then be quiet.
-    write_secret_volume(tmp_path / "tls", "2026_a", process_start())
+    write_secret_volume(tmp_path / "tls", "2026_a", process_start() + offset)
 
-    status, _, _ = probe()
+    status, _, stderr = probe()
 
-    assert status == 0
+    assert (status, "newer" in stderr) == (0, False), stderr
 
 
-def test_a_certificate_written_after_the_server_started_is_unhealthy(
+def test_a_certificate_written_past_the_slack_after_the_computed_start_is_unhealthy(
     tmp_path: Path, probe
 ) -> None:
-    write_secret_volume(tmp_path / "tls", "2026_a", process_start() + 1)
+    write_secret_volume(tmp_path / "tls", "2026_a", process_start() + SLACK + 1)
 
     status, _, stderr = probe()
 

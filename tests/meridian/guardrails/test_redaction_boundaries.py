@@ -7,6 +7,7 @@ import pytest
 
 from meridian.platform.guardrails import PLACEHOLDERS, Redaction, redact
 from meridian.platform.guardrails import redaction as module
+from meridian.platform.guardrails import redaction_email as email_module
 
 NBSP = chr(0x00A0)
 NARROW_NBSP = chr(0x202F)
@@ -243,6 +244,20 @@ def test_a_card_is_replaced_by_what_the_placeholders_mapping_says(
     result = module.redact("Pay with 4111 1111 1111 1111 today")
 
     assert result.text == "Pay with <card> today"
+
+
+def test_an_email_is_replaced_by_what_the_placeholders_mapping_says(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The e-mail pass lives in its own module and reads the mapping there, as
+    # the card's pass reads it in ``redaction``: the swap names the module of
+    # the pass under test.
+    monkeypatch.setattr(email_module, "PLACEHOLDERS", {"email": "<email>"})
+
+    result = module.redact("Write to anna@example.com now")
+
+    assert result.text == "Write to <email> now"
+    assert dict(result.found) == {"email": 1}
 
 
 @pytest.mark.parametrize("length", [63, 64, 65, 100, 500])

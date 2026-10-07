@@ -10,7 +10,9 @@ the gateway's refusal, the chart's store and its ACL, `make up`'s Secret and
 `make deploy`'s check of it. Seen on kind: the store running under that ACL and
 those probes, a real renewal of its certificate and the restart that followed
 it, the smoke line for its ingress rule and the gateway's calls counted by it
-(what each run showed, and what none did, is below). Tested without a cluster
+(what each run showed, and what none did, is below; S073's runs of
+2026-10-06 and 2026-10-07 saw the fault of the probes and their fix, under
+"What you see"). Tested without a cluster
 and not seen on one: the gateway's refusal as a 503, a frozen store restarted
 by its probe, `make deploy`'s refusal of an old Secret and a rotation. Run
 outside a cluster, against the pinned Redis image: the ACL file that `make up`
@@ -157,16 +159,31 @@ its own). The price is that this one pod stands in front of every model call.
   as the group's others are); it ends when the refusals have left the 15-minute
   window. **What it does not see:** a store that restarts in a loop while few
   calls come (seconds of 503 a minute, every tenant's windows reset each time).
-  That wants a rule on the container's restart count, which is left for another
-  step; until then read the pod's restarts yourself
-  (`k get pod -l app.kubernetes.io/name=rate-store`, the RESTARTS column) when
-  the gateway's 503s come and go. Both alerts are rules checked by `make alerts`
-  (the new condition and its unit tests are not yet loaded on a cluster),
-  `MeridianRateStoreRefusing` as it was before was loaded in Prometheus and
-  healthy on kind (2026-10-06); neither was seen firing there, and kind
-  notifies no one (S028).
+  That is `MeridianRateStoreRestartLoop`'s, on the container's restart count
+  (see "The store restarts again and again" below). Both alerts are rules
+  checked by `make alerts` (the new condition and its unit tests are not yet
+  loaded on a cluster), `MeridianRateStoreRefusing` as it was before was
+  loaded in Prometheus and healthy on kind (2026-10-06); neither was seen
+  firing there, and kind notifies no one (S028).
 - The gateway stays ready: `/healthz` does not touch the store, so no pod
   restarts.
+- **The store not Ready about two hours after its start**, with no restart
+  before it, the pod's events saying `Readiness probe failed: rate-store-readiness:
+  line 0: can't fork: Resource temporarily unavailable` (and `failed to exec in
+  container`), and the 503 `the rate store is unavailable` above for as long as
+  it lasts. The container's process limit was used up: its probes had left one
+  defunct `timeout` process each, and a node's process list showed 2,024 of them
+  with the Redis server as their parent. Seen on kind on 2026-10-06 and fixed by
+  S073, K7 (the probes no longer use `timeout` and leave no process behind: see
+  the comment of `meridian.rateStorePing` in the chart's `rate-store.yaml`); the
+  fix tested on the pinned image, and seen on kind on 2026-10-07 (run R2): the
+  store's new pod held no defunct process at five readings a minute apart and
+  after `make smoke`, six minutes in, Ready and with no restart. Not seen: the
+  store over the two hours the fault took. The liveness probe
+  fails the same way, so the kubelet restarts the container after the six
+  failures and the count starts again at zero: a chart from before the fix shows
+  a restart about every two hours, and every window is handed out again each
+  time.
 
 ## Confirm
 
@@ -302,17 +319,25 @@ app.kubernetes.io/name=rate-store`) say which:
   before the restart count: a count that climbs is not by itself a script.
 
 One more is a clock that stepped back by more than the gap between the
-certificate's write and the process's start (a virtual machine that resumed and
-then set its clock): the liveness rule then sees a certificate newer than the
-server and restarts it until the clock catches up, at most every five minutes
-(the kubelet's back-off). It is accepted: no small fix exists without writable
-state, and it is stated in the template's header.
+certificate's write and the process's start, and two seconds (a virtual machine
+that resumed and then set its clock): the liveness rule then sees a certificate
+newer than the server and restarts it until the clock catches up, at most every
+five minutes (the kubelet's back-off). It is accepted: no small fix exists
+without writable state, and it is stated in the template's header.
 
-No alert fires on a store that restarts in a loop while few calls come (see
-"What you see"): `MeridianRateStoreRefusing` needs at least two refused calls
-in 15 minutes and a share of the calls, and the pod is Available part of each
-cycle, so `MeridianServiceUnavailable` does not hold either. Read the
-RESTARTS column when the gateway's 503s come and go.
+`MeridianRateStoreRestartLoop` (S072, `warning`) fires when the store's
+container has restarted three times in 15 minutes, with no wait. A renewal's
+restart and a start's liveness restart are one each and do not add up to
+three; a loop of held connection slots (every 70 to 90 seconds) or of an
+expired certificate (about every minute) does, and so does the kubelet's
+slowest back-off (every 5 minutes). It exists because the loop can come while
+few calls do: `MeridianRateStoreRefusing` needs at least two refused calls in
+15 minutes and a share of the calls, and the pod is Available part of each
+cycle, so `MeridianServiceUnavailable` does not hold either. Read first the
+pod's events (`k describe pod -l app.kubernetes.io/name=rate-store`) and the
+list above: who holds connections, the Certificate's dates, the clock. The
+rule is applied by `make up` and `make deploy`; not yet seen loaded on a
+cluster and not seen firing (implemented and unit-tested by `make alerts`).
 
 ### A script hangs
 
@@ -332,11 +357,15 @@ probe was run on the pinned image against a looping script and the restart
 that ended it; the kubelet's restart of a frozen store has not been seen on a
 cluster, though its restart on a renewed certificate has: see below.) A store
 that is frozen below the protocol (the process stopped, not a script) answers
-nothing at all: the probe's `redis-cli` runs under `timeout 2`, inside the
-kubelet's 3 seconds, so the probe fails with `answered '', not PONG` and leaves
-no client behind (on the pinned image against a paused container, the script
-printed that after 2 seconds and left none; without the limit it was still
-waiting when ended from outside after 8 seconds, and a `redis-cli` stayed).
+nothing at all: the probe starts `redis-cli` and `sleep 2` side by side and ends
+the one that is left when the other ends, inside the kubelet's 3 seconds, so the
+probe fails with `answered '', not PONG` and leaves no client behind (on the
+pinned image, with the server stopped by SIGSTOP on its PID 1, the script
+printed that after 2.05 seconds and left no process; without a limit it was
+still waiting when ended from outside after 8 seconds, and a `redis-cli`
+stayed). The limit was `timeout 2` until S073, K7: busybox's `timeout` left one
+process behind per probe, which the Redis server never reaped (see "What you
+see").
 To end it sooner, delete the store's pod:
 
 ```sh

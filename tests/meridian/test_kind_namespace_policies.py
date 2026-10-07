@@ -144,9 +144,24 @@ def test_the_namespaces_header_says_what_audit_and_warn_do_on_kind() -> None:
     assert "audit" not in cluster and "admission" not in cluster
     # `warn` reaches the client that creates a workload; a controller drops it.
     assert "warn reaches" in header and "controller drops it" in header
-    # Two namespaces carry neither labels nor a policy, as a stated gap.
+    # Two namespaces carry labels and still no policy, as a stated gap.
     assert "cnpg-system" in header and "envoy-gateway-system" in header
-    assert "neither labels nor a NetworkPolicy" in header
+    assert "carry Pod Security labels and no NetworkPolicy" in header
+    assert "neither labels" not in header
+
+
+def test_the_namespaces_header_says_what_the_two_operator_levels_rest_on() -> None:
+    header = header_of(NAMESPACES_FILE)
+
+    # A render of both charts' pods, by a checker that is not the API server's.
+    assert "cnpg-system: restricted" in header
+    assert "envoy-gateway-system: restricted" in header
+    assert "render of both charts' pods on 2026-10-07" in header
+    assert "not confirmed by the API server" in header
+    # Envoy's proxy pods are made at run time: read in the source, not seen.
+    assert "proxy pods" in header and "read, not seen" in header
+    # What comes with the cluster batch.
+    assert "server-side dry run" in header and "cluster batch" in header
 
 
 # ── node-exporter is off on kind ─────────────────────────────────────────────
@@ -705,7 +720,10 @@ def test_the_readme_says_what_stays_open_and_that_node_exporter_is_off() -> None
     assert "| `observability` | `baseline` |" not in kind
     # What the labels do on kind, and what has none, as the namespaces file says.
     assert "`audit` records nothing" in kind
-    assert "carry neither labels nor a NetworkPolicy" in kind
+    assert "carry Pod Security labels and no NetworkPolicy" in kind
+    assert "neither labels" not in kind
+    assert "| `cnpg-system` | `restricted` |" in kind
+    assert "| `envoy-gateway-system` | `restricted` |" in kind
     # The collector's tag is the one pin that is not its chart's default.
     assert "except the collector's" in kind and "0.161.0" in kind
     # Egress to the API server: its address alone, not "DNS and the API server".

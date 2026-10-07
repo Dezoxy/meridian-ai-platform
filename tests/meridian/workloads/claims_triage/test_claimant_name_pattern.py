@@ -21,8 +21,10 @@ noun phrase", which gives the plural -k; the linking vowels of the plural (-ok,
 """
 
 import gc
+import inspect
 import itertools
 import re
+import sys
 import weakref
 
 import pytest
@@ -155,6 +157,40 @@ def test_the_check_for_the_re_cache_can_fail() -> None:
     gc.collect()
 
     assert reference() is not None
+
+
+@pytest.mark.parametrize("table", ["VOWEL_FORMS", "ARCHAIC_SOUNDS"])
+def test_the_closed_tables_of_the_name_cannot_be_assigned_into(table: str) -> None:
+    mapping = getattr(claimant_name, table)
+
+    with pytest.raises(TypeError):
+        mapping["x"] = "y"
+
+
+def test_the_private_re_compiler_the_module_imports_exists_with_the_call_it_makes() -> (
+    None
+):
+    advice = (
+        "claimant_name._compile_uncached calls re._compiler.compile(pattern, flags), "
+        "a private function of the standard library, and this interpreter "
+        f"({sys.version.split()[0]}) does not have it as the module calls it. Rewrite "
+        "_compile_uncached for this interpreter so that the pattern is still kept out "
+        "of the re module's cache of 512 patterns (see the module's docstring), or "
+        "give the name up and compile with re.compile and accept the cache."
+    )
+
+    compiler = getattr(re, "_compiler", None)
+    compile_function = getattr(compiler, "compile", None)
+
+    assert callable(compile_function), advice
+    try:
+        inspect.signature(compile_function).bind("pattern", 0)
+    except TypeError:
+        pytest.fail(advice)
+    assert claimant_name._compiler is compiler, advice
+    assert isinstance(
+        claimant_name._compile_uncached("a|b", re.IGNORECASE), re.Pattern
+    ), advice
 
 
 def test_the_pattern_is_the_one_the_re_module_would_compile() -> None:

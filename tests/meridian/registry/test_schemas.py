@@ -3,8 +3,11 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from meridian.platform.registry.models import FILE_MODELS
 from meridian.platform.registry.schemas import (
+    SchemaPathIsALink,
     render_schemas,
     stale_schemas,
     write_schemas,
@@ -60,3 +63,37 @@ def test_stale_schema_is_detected_and_write_repairs_it(registry_copy: Path) -> N
     assert stale_schemas(registry_copy) == ("tools.schema.json", "tenants.schema.json")
     assert write_schemas(registry_copy) == ("tools.schema.json", "tenants.schema.json")
     assert stale_schemas(registry_copy) == ()
+
+
+def test_the_write_refuses_a_schemas_directory_that_is_a_link_and_writes_nothing(
+    registry_copy: Path, tmp_path: Path
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    schemas = registry_copy / "schemas"
+    for file in schemas.iterdir():
+        file.unlink()
+    schemas.rmdir()
+    schemas.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(SchemaPathIsALink):
+        write_schemas(registry_copy)
+
+    assert list(outside.iterdir()) == []
+    assert schemas.is_symlink()
+
+
+def test_the_write_refuses_a_schemas_link_to_nothing_and_creates_nothing(
+    registry_copy: Path, tmp_path: Path
+) -> None:
+    missing = tmp_path / "not-there"
+    schemas = registry_copy / "schemas"
+    for file in schemas.iterdir():
+        file.unlink()
+    schemas.rmdir()
+    schemas.symlink_to(missing, target_is_directory=True)
+
+    with pytest.raises(SchemaPathIsALink):
+        write_schemas(registry_copy)
+
+    assert not missing.exists()

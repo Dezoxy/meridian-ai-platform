@@ -70,7 +70,8 @@ flags, in the order they are tried. Not covered:
   `_phrase`): their result is covered, in the patterns, but not their source;
 - which text the screens are applied to, which is the graph's code and the
   judge's (`assessment.py`, `evaluation/judge.py`), and the redaction that
-  runs before them (`guardrails/redaction.py`);
+  runs before them (`guardrails/redaction.py` and the five modules beside it
+  that S070 split it into);
 - the code that runs: the source is read from the file at the time of the
   call, so a process that outlives an edit of `screening.py` fingerprints
   whatever now sits at the old line numbers of the file, while it still runs
@@ -274,6 +275,22 @@ from it (the sums are the carrier table's rows).
 - The golden set grew from 40 to 47 claims (the gate's description above);
   the 94 injection cases are the same, and their `golden_set` fingerprint
   moved with the golden manifest's hash.
+
+### What S070 changed (2026-10-07)
+
+No fingerprint moved and no baseline was made again. The redaction is in no
+fingerprint (the list above names it as not covered), and neither is the
+Claims API's replacement of a claimant's name; both shape the bytes of a
+request, so the check for them is the free replay (`make eval`), which the
+session ran after each landing that touched them: "eval compare: passed"
+twice each time, and no recording was made. S070 split the redaction into six
+modules by a move a script proved, changed the phone matcher (the cut of an
+international number at a space, for the plain shape: the plan's section
+for S070 and T-73 say what it leaves), built the claimant's name pattern
+outside the claim's row lock, and added to the adjuster's pages. None of it
+changed one of the 27 recorded requests, and nothing here is paid. The "not
+covered" bullet of the last section is unchanged: a name made of the words
+an exclusion turns on is still a backlog row (S070), asked of the owner.
 
 ## Commands
 
