@@ -61,3 +61,18 @@ dynamic meridian "ClaimsApproval" "What happens when an adjuster decides on a pa
     meridian.runtime -> meridian.platformDb "Ends the run, writes its audit event and deletes its checkpoints"
     autoLayout lr
 }
+
+// Inside one container. `include *` also draws the arrows between the
+// neighbours, which the Containers view has; they are excluded so that every
+// arrow here starts or ends at a component.
+component meridian.runtime "RuntimeComponents" "Which responsibilities sit inside the Agent Runtime, and which of them is the only way out to a model, a tool and the database?" {
+    include *
+    exclude meridian.registry
+    exclude "meridian.claimsApp -> meridian.platformDb"
+    exclude "meridian.gateway -> meridian.platformDb"
+    exclude "meridian.policyMcp -> meridian.platformDb"
+    exclude "meridian.knowledgeMcp -> meridian.platformDb"
+    exclude "meridian.claimsMcp -> meridian.platformDb"
+    exclude "meridian.knowledgeMcp -> meridian.gateway"
+    autoLayout tb 300 150
+}

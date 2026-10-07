@@ -574,7 +574,9 @@ both readings the same hour ("yes both are right, go on").
 | S076 | CLI, scaffold and loader small ends | No registry entry lets the runtime name an agent that no tenant lists without a check saying so (T-81); `services_edit` refuses an alias or a merge key by itself; the scaffold says which write failed and names the line it refuses in every case; the two entry-point loaders answer a bad entry in the same fixed words; the screen's fingerprint covers what it claims to; the workload's report builders refuse another workload's manifest; `meridian registry schemas` answers an unwritable directory with a message; the scaffold can write an agent with workers, or the plan says why a second graph of subgraphs is not built. Built as: `meridian registry validate` prints one NOTE, exit code unchanged, for each graph agent the runtime may name and no tenant lists, and `load_registry` refuses nothing new, so the owner's S061 decision stands; `services_edit` itself refuses an anchor, an alias or a merge key, naming the line; a refusal about a line of the person's file names the parser's line where the parser gives one; a failed or interrupted write names its kind and the error's class, the undo puts back every file that still holds the command's own bytes and names every path it did not restore (the scaffold's write and undo are in `scaffold_writes.py`); the two loaders word a refusal in one table of fixed sentences that quote no distribution's name and no import error's text, with the registry's agent ID in front for the graphs; the screen's digest is unchanged and the documents say what it covers and does not; both report builders compare the manifest's workload with their own; `meridian registry schemas` answers a directory it cannot update with one line; a second graph of subgraphs is not built, as a decision (the section says why). Implemented and tested, not run on a cluster | done | S037 |
 | S080 | File uploads for a claim, before sign-in | A claimant uploads one PDF, JPEG or PNG of at most 1 MiB to a claim, five and 3 MiB to a claim, through the JSON route or the status page's form; the file is told by its first bytes and never by its declared type or name, and its name is not stored; an upload is not a document arrival and starts no triage; the adjuster lists a claim's files with "not scanned" beside each and, behind a second switch, downloads them as an attachment under a sandbox policy, with an audit row before the first byte; both switches are off by default, and the chart allows either only for a route host name that ends in `.localhost`; the app has brakes of its own besides the edge's second route, buffer and rate limit; nothing scans a file (designed, not built) and nothing deletes one. Built as (2026-10-07; implemented and tested against PostgreSQL and **run once on kind on 2026-10-07 with both switches on for that run only** (run RU1: by script, through the edge, not in a browser), nothing paid, no evaluation fingerprint moved, the owner's "Build now" of the same day for the uploads and "Build now, local-only switch" for the download): migration 0032 (`claims.claim_files`, `claims_api` may insert and select), the route and the form, the ceilings under advisory locks, the edge route and policies in the chart, the adjuster's list and download with brakes of their own, synthetic sample files from the seeded generator, and five reviews (database, security twice, FastAPI, platform boundary). Not built: a scanner, a delete or a retention period, a sign-in, a second host name for downloads | doing: built, reviewed and run twice on kind (RU1, RU2); the pull request is left | S070 |
 | S089 | Import layering page; Mermaid rendered in CI | A page in the Documentation tab and the PDF says which Python package may import which, as the six import-linter contracts enforce it, with one Mermaid diagram of the layers and the output of a run; the `derived diagrams` job renders every Mermaid block on every pull request and fails on one that does not parse. Built as (2026-10-07, the owner's "okay do it and open pr"): `docs/architecture/code/import-layering.md`, symlinked into `overview/` as `40-import-layering.md`, and one step in `.github/workflows/docs.yml`. Implemented as a document and a gate; it is not a component view, which is S090 | done | — |
-| S090 | Component view of the Agent Runtime | A component view in the Structurizr model answers which responsibilities sit inside the Agent Runtime (the two hosts behind one protocol, the model client, the tool client, runs and checkpoints, the sweep): six to nine components grouped by responsibility and not one per file, within the skill's budget, with a register row and a PNG read at full size; the import layering page is brought to S082's contracts if S082 did not; `make mermaid-render` and `make pdf` work under rootless Docker, or the documents still say they do not. The Model Gateway gets a view only when a question needs one. Designed | todo | S083 |
+| S090 | Component view of the Agent Runtime | A component view in the Structurizr model answers which responsibilities sit inside the Agent Runtime and which of them is the only way out to a model, a tool and the database: components by responsibility and not one per file, with a register row and a PNG read at full size, and no other view changed. Built as (2026-10-07, the owner's "Component view (Recommended)", which drew it from today's code and took away the wait for S083): `RuntimeComponents`, six components (Run API, Run Records, LangGraph Host, Agent Framework Host, Model Client, Tool Client) in `docs/architecture/model/components.dsl`, 12 boxes and 15 arrows, embedded in the import layering page. Implemented as a view read from the code; nothing was run for it. The render under rootless Docker went to S092, and S082 brings the page and the view to the code it moves (a backlog row). The Model Gateway gets a view only when a question needs one | done | — |
+| S091 | Data ownership views | Who reads and writes which schema of the Platform Database, as views of the model: the six schemas (`audit`, `claims`, `gateway`, `knowledge`, `policy`, `runtime`) as components of the database, each service with its own schema and the reads that cross a schema in one view, and the audit trail in a second if one view does not read; every arrow checked against the grants the migrations leave and compared with ADR 10's table, a difference recorded and not smoothed; register rows and PNGs read at full size. No ER diagram: S085 and S087 rewrite the tables. The owner, 2026-10-07: "should we add db view too?", then "okay" to this. Designed | todo | S090 |
+| S092 | Mermaid and PDF render under rootless Docker | `make mermaid-render` and `make pdf` finish on a machine whose Docker is rootless, as the virtual machine's is, and still finish in CI; the fix is made in development-base's copy of `scripts/render-mermaid.sh` first and copied here unchanged; with it, the two notes of S089's review (the render container needs no network; the script passes when it finds no block). Until then the documents say the two targets fail there. Designed | todo | — |
 
 ### Toward services: a database each and six images
 
@@ -1107,7 +1109,8 @@ that day; the rest stand as their step recorded them.
 | The multipart parser leans on Starlette internals that are not documented API: the class attribute `spool_max_size`, `UploadFile._max_mem_size` and `_rolled`. Starlette arrives through FastAPI, so a lock refresh can rename one and a part of 1.0 to 1.1 MiB would spill to `/tmp`, which the pod does not have room for. A test with no database feeds a 1,100,000-byte part and fails if the part rolls to disk, and the class's docstring names the coupling; nothing pins the version | S080 (the FastAPI review, L2; F4c) | open; guarded by a test, not pinned | S080, later half |
 | Envoy's handling of an encoded path on the upload route. Run RU1 showed that Envoy normalises the path before the app sees it (`POST /claims/CLM-0001/%66iles` was served as an upload, 201; a GET with the first character of the file identifier encoded was 200; `POST //claims/CLM-0001/files` reached the route, 409), so behind this edge the app's refusal of a raw path with a `%` never fires. What is still not known is whether the normalised request is matched by the uploads route, with its buffer and rate limit, or by the first route: the bodies were under 64 KiB, which either route passes. Run RU2 sent 100 KiB bodies to an encoded and to a double-slashed path: both reached the app, which the first route's 64 KiB would not have let through, and the seventh of seven uploads to the encoded path got the edge's own 429: the uploads route serves the normalised path and its six a minute count it. Not probed: an escaped slash. The app's own brakes do not depend on the answer | S080 (the security review, M-1; F2b; runs RU1 and RU2) | closed for this edge by RU2 (an escaped slash not probed) | S080 |
 | Small ends of S080, none of which changes behaviour: `test_claim_uploads_limits.py::test_the_upload_route_alone_takes_more_than_64_kib` says "alone" and now covers the JSON route only; the shared privilege snapshot (`tests/meridian/sweepmigrationsupport.py`) does not list `MAINTAIN`, which the migration's own test checks for ten roles; the Makefile's help line for `synthetic` does not mention the upload samples; one `UnsupportedFieldAttributeWarning` ('alias' for `claim_id`) appeared once in a directory run of the claims tests, in a test that touches no upload code | S080 (F1, F1b, F4a, F4c, F5 reports) | open | S080, later half |
-| `make mermaid-render` and `make pdf` fail under rootless Docker, which the virtual machine runs: `scripts/render-mermaid.sh` starts the container with the caller's user and group, which rootless Docker maps to another user than the folder's owner, and every PNG ends in "EACCES: permission denied" (five of five, then the PDF's four of four, on 2026-10-07). The same script on a copy of the folder made world-writable rendered all five. CI's Docker is not rootless and renders. The script's canonical copy is development-base's, so the fix goes there first and is copied here. With it, from the review of S089's workflow step (low): the render container needs no network and could run with none, in this job and in the PDF's; and the script passes when it finds no block, which a count in the Makefile's target would catch | S089 (the first local render; the infra review) | open; CI renders, the virtual machine does not | S090 |
+| `make mermaid-render` and `make pdf` fail under rootless Docker, which the virtual machine runs: `scripts/render-mermaid.sh` starts the container with the caller's user and group, which rootless Docker maps to another user than the folder's owner, and every PNG ends in "EACCES: permission denied" (five of five, then the PDF's four of four, on 2026-10-07). The same script on a copy of the folder made world-writable rendered all five. CI's Docker is not rootless and renders. The script's canonical copy is development-base's, so the fix goes there first and is copied here. With it, from the review of S089's workflow step (low): the render container needs no network and could run with none, in this job and in the PDF's; and the script passes when it finds no block, which a count in the Makefile's target would catch | S089 (the first local render; the infra review) | open; CI renders, the virtual machine does not | S092 |
+| The import layering page (`docs/architecture/code/import-layering.md`: its diagram, its table of contracts and its counts) and the `RuntimeComponents` view were read from the code of 2026-10-07. S082 moves the workloads' graphs and the sweep's SQL and adds a contract per service, S083 makes a package per service and S086 cuts the sweep in two: each brings the page, `model/components.dsl` and the view's register row to the code it leaves | S089, S090 | open | S082 |
 
 ## Part C — Step details
 
@@ -20517,6 +20520,101 @@ two lines about which job runs Mermaid.
 after S083). The render under rootless Docker is in the follow-up backlog,
 homed at S090.
 
+### S090 — Component view of the Agent Runtime
+**Status:** done · **Started:** 2026-10-07 · **Finished:** 2026-10-07
+**Goal:** one C4 component view in the Structurizr model that answers which
+responsibilities sit inside the Agent Runtime and which of them is the only
+way out to a model, a tool and the database.
+
+**Decisions:**
+
+- **The owner, 2026-10-07:** after S089's pull request, "when it merged, write
+  the code". Asked which code, with three options, the owner answered
+  "Component view (Recommended)" ("(Recommended)" is the question tool's mark
+  on the option the session recommended, copied as the answer holds it). That
+  option said the view is drawn from today's code and skips the wait for
+  S083, so this row no longer depends on S083. The same day the owner asked
+  "should we add db view too?" and answered the session's proposal (one view
+  of who reads and writes which schema, in Structurizr, as a step of its own;
+  no ER diagram yet) with "okay": that is S091.
+- **The session's own (the owner may overturn any):**
+  - Six components, by responsibility and not by file: Run API (`app.py`,
+    `host_wiring.py`, `graphs.py`, `settling.py`), Run Records (`runs.py`),
+    LangGraph Host (`langgraph_host.py`, `checkpoints.py`, `tracing.py`),
+    Agent Framework Host (`agent_framework_host.py`,
+    `workflow_checkpoints.py`), Model Client (`model_client.py`) and Tool
+    Client (`tool_client.py`, `tool_transport.py`). The cut is the code's own:
+    `hosts.py` speaks of the runtime's neutral code and of hosts. A seventh
+    component for the choice of a host was rejected: three more arrows for
+    something that happens once, at startup.
+  - A component is a part of the running service. `sweep.py` is in the
+    package and runs in the Claims Triage App's scheduled sweep, so it is
+    not drawn; `toolprobe.py` is a command; the meters, the failure words and
+    the settings are not responsibilities a reader looks for. The register
+    names each.
+  - The workload's graph runs inside a host, loaded by entry point, while
+    the Containers view says the Claims Triage App owns that package. Both
+    are true and the register says so; no element was added for the graph.
+  - The neighbours drawn are the caller and what a component reaches: the
+    Model Gateway, the three tool servers and the database. The registry is
+    in the model and out of the view, as in the Containers view. The arrows
+    between neighbours are excluded one by one.
+  - 12 boxes and 15 arrows, over the skill's 10 and 12, kept on the evidence
+    of the render. The view without the tool servers (9 and 12) was not
+    taken: the Tool Client would point at nothing.
+  - The components live in `model/components.dsl`, added to the Agent
+    Runtime with `!element`, so `containers.dsl` is not changed. The file is
+    included after the deployment files: included before them it moved the
+    numbers of every deployment element in the Mermaid exports.
+  - No style for a component was added: the components take their
+    container's layer colour, and the shared style file is the base's.
+  - The view is embedded in the import layering page, which gets a section
+    in place of "What this page is not".
+  - S090's row lost two parts the owner did not choose: the render under
+    rootless Docker is S092, and bringing the page and the view to S082's
+    contracts is a backlog row homed at S082.
+
+**Advisor:** one consultation, 2026-10-07, at the design, before any file was
+written. It changed four things: the registry was counted among the
+neighbours and its omission registered; the three places where today's code
+differs from a clean service (the sweep's module, the graphs loaded into the
+runtime's process, the probe command) are each named in the register and not
+silently left out; the update trigger names S082, S083 and S086, not S083
+alone; and S090's row was narrowed to what the owner chose. Not consulted
+before the pull request: documents and the model alone, with no code.
+
+**Work log:** 2026-10-07, branch `s090-runtime-components` off `main` at
+c3ea202, after pull request 131 was merged and its content read on `main`.
+The model was first tried in a copy of the architecture folder outside the
+repository, while that pull request waited for its checks. Read: each
+module's docstring and imports under `src/meridian/runtime/` (20 files, 5,189
+lines), `app.py`'s routes and its calls of a host, `runs.py`'s writes. Three
+renders: with every arrow of `include *`, 12 boxes and 21 arrows, not
+readable; with the neighbours' arrows excluded, 12 and 15; the same from the
+repository's tree.
+
+**Result / verification:**
+
+- `make check`: exit 0, no ERROR line; `inspect` printed two IGNORE lines,
+  the two it printed before.
+- `make export`: "exported 52 files". The Mermaid exports of the eight other
+  views are byte for byte the ones made before the change.
+- The PNG of RuntimeComponents (4440 by 3892 pixels) was read at full size:
+  every label legible, no arrow through a box. Two flaws: the LangGraph
+  Host's arrow to the Tool Client crosses the Agent Framework Host's arrow to
+  the Model Client, and the Agent Framework Host's arrow to the database
+  passes close under the LangGraph Host and crosses its arrow to the Model
+  Client. The key was read: a component's entry reads "Layer Services" alone.
+- `make mermaid-views`, `make docs`, `make test` and `make secret-scan`: the
+  results are in the pull request.
+- Not seen: the view in Structurizr's own page in a browser; the embedded
+  view in the Documentation tab; the PDF with it (S092: the machine cannot
+  build one by `make pdf`).
+
+**Follow-ups:** S091, the data ownership views. S092, the render under
+rootless Docker. A backlog row homed at S082: the import layering page and
+this view follow the code S082 moves.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -21504,3 +21602,12 @@ homed at S090.
   view of the Agent Runtime. One backlog row is new, homed at S090:
   `make mermaid-render` and `make pdf` fail under rootless Docker, which the
   virtual machine runs.
+- **v0.89, 2026-10-07:** S090, a component view of the Agent Runtime (`done`;
+  the owner's "Component view (Recommended)", which took away the wait for
+  S083): `RuntimeComponents`, six components in `model/components.dsl`, 12
+  boxes and 15 arrows, read from the code and not run, embedded in the import
+  layering page; the eight other views' exports unchanged. S091 is new
+  (`todo`, the owner's "okay"): data ownership views of the database's six
+  schemas. S092 is new (`todo`): the Mermaid and PDF render under rootless
+  Docker, which takes S089's backlog row. One backlog row is new, homed at
+  S082: the page and the view follow the code that step moves.
