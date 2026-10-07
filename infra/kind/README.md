@@ -1134,6 +1134,28 @@ when the script ends. The tool check leaves at most one refused `tool.call` row
 per server in the audit log per throttle window, and the identity check one
 refusal row per reason and minute.
 
+Where a check lives, and how to add one (S074; the split is tested, not yet
+run on a cluster). `smoke.sh` is the entry: the preconditions, the traps, the
+eleven calls and the summary, and a pair of lines for each part it sources. A
+check is a file in `smoke.d/`, `NN-name.sh` (`shared.sh` holds what several
+checks and the trap use), and it holds definitions only: its paragraph from the
+header, its constants and its functions, so that sourcing it runs nothing.
+Checks 8 and 10 are still in the entry, and move when the cluster batch that
+edits them has landed. To add a check:
+
+- write `smoke.d/NN-name.sh` with no execute bit: the first line `# shellcheck
+  shell=bash`, the paragraph (its first line `#   N. name:`, as the others),
+  a blank line, then the constants and the functions;
+- add the pair `# shellcheck source=smoke.d/NN-name.sh` and
+  `. "${KIND_DIR}/smoke.d/NN-name.sh"` to the entry after the last part's pair,
+  and call the check's function in the sequence of calls near the end of the
+  entry (no source line goes among the calls).
+
+`test_smoke_parts.py` fails on a part that is executable, is not sourced once in
+that form, holds a statement or a name another part defines, or holds the text
+`need_tools `; `test_smoke_line_count.py` fails until the check is counted in
+the number of lines a healthy run prints.
+
 ## The services: `make deploy` and `make demo`
 
 One image, built from the [`Dockerfile`](../../Dockerfile) at the repository
@@ -2481,7 +2503,7 @@ that names the bound.
 | An ordinary call (`get`, `apply`, `create`, `patch`, `label`, `logs`, a `delete` with no `--wait`) | `--request-timeout=15s`, a request | `KCTL_REQUEST_TIMEOUT`, for instance `20s` |
 | `exec`, and a `delete` with `--wait` (also `--timeout=60s`) | the system's `timeout`, 90 s, which then prints the line `kctl: kubectl exec ended with status 124 ...` | `KCTL_OUTER_TIMEOUT`, in seconds |
 | `wait` and `rollout status` | their own `--timeout` at every call site, and the system's `timeout` for that value plus 30 s, which then stops the script with a line that says the API server did not answer; a call with no `--timeout` is refused; no request flag, which may end the watch early | the call site; `KCTL_WAIT_MARGIN`, in seconds |
-| `port-forward`, `attach`, `logs -f`, `get -w` | none, they are streams; `port-forward` is started raw (`kubectl ... &`) by `smoke.sh` and `demo.sh`, which kill it and look for its port with a counted loop, and by `grafana.sh` in the foreground, which ends with ^C; no script uses the other three | |
+| `port-forward`, `attach`, `logs -f`, `get -w` | none, they are streams; `port-forward` is started raw (`kubectl ... &`) by `smoke.sh` (in `open_grafana`, which is in `smoke.d/shared.sh`) and `demo.sh`, which kill it and look for its port with a counted loop, and by `grafana.sh` in the foreground, which ends with ^C; no script uses the other three | |
 | `helm get` (`upkeep.sh`), which has no timeout flag | the system's `timeout`, 30 s | `HELM_READ_TIMEOUT`, in seconds |
 | `helm upgrade --install` | `--wait --timeout 10m` for each of `make up`'s ten releases; `--timeout 300s` for the chart in `make deploy`; and the system's `timeout`: for `make up`'s releases (their charts are taken to carry hooks; not rendered to check) three times that value plus 60 s, for the chart in `make deploy` (no hook, no `--wait`) that value plus 60 s; it stops the script with a line that names `helm status` and `helm history`; a call with no `--timeout` is refused | `up.sh`, `deploy.sh`; `HELM_UPGRADE_MARGIN`, in seconds |
 
