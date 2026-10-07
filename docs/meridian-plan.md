@@ -552,7 +552,7 @@ both readings the same hour ("yes both are right, go on").
 | S071 | Measurements that need a live model | Costs money (about fifty chat calls and some embedding calls; the owner says yes before any, and the amount is stated first): a real model's answers to the injection cases the screen lets through, recorded beside the golden recording; a model's refusal of a structured request seen from a real provider; retrieval measured with a real embedding, in the evaluation and in S038's one failing check; the judge compared with labels a person wrote for a sample; a held-out set for the injection screen, and a decision on what a false alarm may cost; CLM-0034's `unsure` settled by a prompt or recorded as the right answer; retrieval over a graph measured again only if the synthetic data gains something relational to find | todo | S067 |
 | S072 | The cluster outside `meridian`, second round | On kind: the Prometheus and CloudNativePG operators' reach into Secrets and ConfigMaps of every namespace is narrowed or recorded as accepted with its reason; DNS and the collector cannot carry data out unseen (T-84), or the residual is stated; writes to Prometheus and Loki pass a policy, and the three hops behind the collector are encrypted or the plan says why not; egress from `observability` and the admission webhooks' port are bounded; `cnpg-system` and `envoy-gateway-system` have Pod Security labels and a policy; the owner decides whether node-exporter stays off; Tempo mounts no API token | doing: four files-only contracts have landed (2026-10-07; implemented and tested, none of it seen on a cluster): Tempo's and Loki's pods mount no service-account token (three keys); `cnpg-system` and `envoy-gateway-system` warn and audit at Pod Security `restricted` from a render, not confirmed by the API server; the certificate policy for the services names the eight URIs and six DNS names the chart renders, not a wildcard; an alert on the rate store's restart loop. The documents record the four accounts that read Secrets in every namespace (not two), the accepted reaches, the residuals and the one measurement (seen on kind: the API server's calls arrive from the node's address on the pod network and pass a default-deny ingress). Left, on the cluster lane after S073's second half: the CloudNativePG operator confined (with a written fall-back), egress from `observability`, the webhooks' port, the policies of the two namespaces, the dry run of the labels, and the corrections the render and the measurement call for; the owner decides the writes clause and node-exporter (stays off) | S064, S066 |
 | S073 | Renewals, upgrades and what smoke cannot see | On kind: a renewal is seen for the collector's certificate and the database's, and something alerts before the database's end; the services do not all restart in the same minute at a renewal; approver-policy is restarted when it hangs, and a repaired policy does not wait an hour for cert-manager's retry; a first install that fails has a way back that was tried; the chart bounds its rollback history and `make images` says what to remove; the scripts' `kubectl` calls have a request timeout; a manual sweep Job does not hide a stopped schedule; the failure paths of smoke's newer lines are seen once on a cluster with something broken on purpose; the line that reads approver-policy's wording says so when it fails; probes that time out under load have a recorded answer for the machine the cluster runs on now | doing: the first half is done (2026-10-07: the builds and the runs R0 to R4e, with the answer for the machine recorded); the second half is open: the ingestion's 503 word on a real refusal, the node paused with three deploys, certificates of one hour with all eight renewed, the cold run and a rotation of the rate store's password (the owner's to run or to accept as not seen); approver-policy's liveness probe is not built | S064, S066 |
-| S074 | Test suite and file sizes | Without the cluster: `infra/kind/smoke.sh`, `test_kind_manifests.py` and the four test files over 800 lines are split along the lines their own tests already cut; the six functions over 50 lines are under it (counted by signature plus body without the docstring, as the section says: by the whole count the row used, four of the six, `assess`, `build_report`, `build_injection_report` and `summarise`, are still over); the template-database fixture survives a test that patches the runner's file list; the tests that failed once under load (a lost connection in a parallel run, a tool server's timeout, the gateway's fallback test) are run repeatedly on the machine the suite runs on now and either hold by construction or are closed as not reproduced, with the numbers; the slowest test of the job is under ten seconds; one CPU-time helper; `unused_port()` on macOS has its answer written down; the owner decides whether CI gates on coverage | doing: the first half is done (2026-10-07; tested, none of it run on a cluster): the two upkeep test files, `test_toolserver_meters.py`, `test_claims_graph.py` and `test_kind_manifests.py` are split by moves a script proves, the template database's builder passes the list it read at import, the stack and demo tests that failed under load no longer rest on the machine's speed (argued; the measurement run, 25 loops of each beside a whole suite, has not run), the counting test takes 0.03 s alone where CI saw 47 s, and one CPU-time helper serves nine files; three questions wait for the owner (coverage in CI, a size check, a pytest-level timeout); the second half is built except what waits (2026-10-07; implemented and tested, none of it run on a cluster): S076's leftovers are closed or accepted row by row (the registry `schemas` link and `--check` line, the services edit's small ends, the scaffold's undo, the import walker's limits pinned, the golden set's workload tied to `Report` by its own validator, the claimant's closed tables read-only and three stale sentences), `run_command`, `build_report` and `render_summary` are under 50 lines by signature plus body (37, 47 and 29) with `--help`, every report and the committed summary byte for byte the same, and two of the half's own commits carried a defect that the review reproduced and a contract fixed; the third part (2026-10-07; moves a script proves, tested; seen on kind once: `make smoke` from the split as it stands printed 46 PASS, 0 FAIL, 0 SKIP, the same lines as the unsplit script's, the trace ID apart): `infra/kind/smoke.sh` is an entry of 1,185 lines and ten files under `infra/kind/smoke.d/` (`shared.sh` and nine checks, 36 to 644 lines), and checks 8 and 10 are still in the entry; what waits: the last cut (checks 8 and 10, after S072's cluster batch), the loaders' helper and the split of `test_redaction_hungarian.py` (S070), and the rows the section's last table keeps | S064, S066, S037 |
+| S074 | Test suite and file sizes | Without the cluster: `infra/kind/smoke.sh`, `test_kind_manifests.py` and the four test files over 800 lines are split along the lines their own tests already cut; the six functions over 50 lines are under it (counted by signature plus body without the docstring, as the section says: by the whole count the row used, four of the six, `assess`, `build_report`, `build_injection_report` and `summarise`, are still over); the template-database fixture survives a test that patches the runner's file list; the tests that failed once under load (a lost connection in a parallel run, a tool server's timeout, the gateway's fallback test) are run repeatedly on the machine the suite runs on now and either hold by construction or are closed as not reproduced, with the numbers; the slowest test of the job is under ten seconds; one CPU-time helper; `unused_port()` on macOS has its answer written down; the owner decides whether CI gates on coverage | doing: the first half is done (2026-10-07; tested, none of it run on a cluster): the two upkeep test files, `test_toolserver_meters.py`, `test_claims_graph.py` and `test_kind_manifests.py` are split by moves a script proves, the template database's builder passes the list it read at import, the stack and demo tests that failed under load no longer rest on the machine's speed (argued; the measurement run, 25 loops of each beside a whole suite, has not run), the counting test takes 0.03 s alone where CI saw 47 s, and one CPU-time helper serves nine files; three questions wait for the owner (coverage in CI, a size check, a pytest-level timeout); the second half is built except what waits (2026-10-07; implemented and tested, none of it run on a cluster): S076's leftovers are closed or accepted row by row (the registry `schemas` link and `--check` line, the services edit's small ends, the scaffold's undo, the import walker's limits pinned, the golden set's workload tied to `Report` by its own validator, the claimant's closed tables read-only and three stale sentences), `run_command`, `build_report` and `render_summary` are under 50 lines by signature plus body (37, 47 and 29) with `--help`, every report and the committed summary byte for byte the same, and two of the half's own commits carried a defect that the review reproduced and a contract fixed; the third part (2026-10-07; moves a script proves, tested; seen on kind once: `make smoke` from the split as it stands printed 46 PASS, 0 FAIL, 0 SKIP, the same lines as the unsplit script's, the trace ID apart): `infra/kind/smoke.sh` is an entry of 1,185 lines and ten files under `infra/kind/smoke.d/` (`shared.sh` and nine checks, 36 to 644 lines), and checks 8 and 10 are still in the entry; the leftovers are done (2026-10-07; tested, none of it run on a cluster): the five loaders of the name-masked cases are one helper, `servicesupport.injection_case_claim`, whose missing case fails by name, and `test_redaction_hungarian.py` (858 lines) is three files and `hungariansupport.py`, the largest 368 lines, by a move a script proves with the collected count unchanged; what waits: the last cut (checks 8 and 10, after S072's cluster batch), and the rows the section's last table keeps | S064, S066, S037 |
 | S075 | Harness, guard and Renovate | `make docs` notices a blank line that splits a table; the command guard's known gaps to a Secret's values and to superuser SQL are closed or listed where a session reads them, and a hook that times out has a known outcome; a rule for an implementer that edits through the shell, and a guard or a rule for `make up` and `make down` from an old checkout (both the owner's); the workflow linter knows the runner label; Renovate's week of waiting is a required check or the plan says why not (the owner's decision), an image is not proposed before the chart that installs it, and the two pgvector versions are one | done (not built: the two pgvector versions are not one, because the newest CloudNativePG image still holds 0.8.6; the owner chose package-manager holds over a required check, and uv's `exclude-newer` cannot go in before 2026-10-10; N4, the guard's own files, is the owner's open question 6; the shell-edit hook is inert until the owner sets `bashEditDiffEnabled`) | — |
 | S076 | CLI, scaffold and loader small ends | No registry entry lets the runtime name an agent that no tenant lists without a check saying so (T-81); `services_edit` refuses an alias or a merge key by itself; the scaffold says which write failed and names the line it refuses in every case; the two entry-point loaders answer a bad entry in the same fixed words; the screen's fingerprint covers what it claims to; the workload's report builders refuse another workload's manifest; `meridian registry schemas` answers an unwritable directory with a message; the scaffold can write an agent with workers, or the plan says why a second graph of subgraphs is not built. Built as: `meridian registry validate` prints one NOTE, exit code unchanged, for each graph agent the runtime may name and no tenant lists, and `load_registry` refuses nothing new, so the owner's S061 decision stands; `services_edit` itself refuses an anchor, an alias or a merge key, naming the line; a refusal about a line of the person's file names the parser's line where the parser gives one; a failed or interrupted write names its kind and the error's class, the undo puts back every file that still holds the command's own bytes and names every path it did not restore (the scaffold's write and undo are in `scaffold_writes.py`); the two loaders word a refusal in one table of fixed sentences that quote no distribution's name and no import error's text, with the registry's agent ID in front for the graphs; the screen's digest is unchanged and the documents say what it covers and does not; both report builders compare the manifest's workload with their own; `meridian registry schemas` answers a directory it cannot update with one line; a second graph of subgraphs is not built, as a decision (the section says why). Implemented and tested, not run on a cluster | done | S037 |
 
@@ -907,7 +907,7 @@ that day; the rest stand as their step recorded them.
 | `meridian knowledge verify` runs in the ingestion Job, which a deploy skips when the image's ingestion has already succeeded and the store is not empty, and nothing runs it on a schedule; a Job that verifies without ingesting is not built, and the runbook says when to run it by hand (T-57) | S067 | open | S073 |
 | `meridian knowledge verify` writes its counts into `audit.events.reason`, a column documented as the reason a call was refused, because it is the one free-text column; its audit row has no tenant | S067 (C4v) | open; the owner may prefer a column of its own. S068 decided to build nothing: the data classification now says that the column holds a refusal's reason and, for this command, the counts it made. The console's audit search (S033) will read the column, so that step is where a column of its own would show | S033 |
 | Tests that failed under load in S067's runs and passed alone: `test_a_scripted_model_gives_the_oracle_s_proposals` (a `wording_search` call timed out), `test_the_decisions_trace_fails_too_when_one_of_its_services_has_no_span`, and, in one final run, three that were not read (`test_sweep.py::test_importing_the_sweep_loads_no_web_stack_no_langgraph_and_no_claims_api`, `test_claims_mcp.py::test_eight_threads_sending_one_key_leave_one_row_and_all_get_its_id[add_claim_note]` and `test_evaluation_http.py::test_loading_the_claims_evaluation_brings_in_no_agent_framework`); and a first database run of C4v's with 1,338 fixture errors that nobody explained | S067 | open in part: the wording search and the decisions-trace test were changed by construction in S074's first half (the stack's tool bound; the demo polls on a virtual clock) and passed 25 of 25 runs of S074's loop alone (2026-10-07, a load up to 9); the two import tests (subprocesses with a limit of 60 s) and the claims MCP test are untouched and passed the same 25 runs, so they are not reproduced short of a machine that swaps, where an import test and the claims MCP test failed again; beside a whole suite nothing is measured (two runs with a test database do not fit beside the cluster); the 1,338 fixture errors were not looked for | S074 |
-| Left by S067's reviews, all low: `redact` is 76 lines with its docstring and `redaction.py` 792, eight under the ceiling, so any growth needs a split (the Hungarian part, in a module of its own); `test_redaction_hungarian.py` is 858 lines and `test_claims_graph.py` about 2,300; five tests load the two name-masked cases each on its own (one helper in `servicesupport` would do); `VOWEL_FORMS` and `ARCHAIC_SOUNDS` are plain dicts; no test names `re._compiler`; `test_assessment.py` asserts the `["CLM-0012", "CLM-0044"]` literal beside a derived check; four docstrings and comments say what was true before: `claimant_name.py` ("one word", where two golden descriptions hold "Leon"), the first lines of `triaging.py` ("the run's facts"), and `evalsupport.py` and `test_evaluation_stack.py` ("the 40 golden claims") | S067 (reviews) | closed in part by S074: `test_claims_graph.py` is split (first half: ten files and `graphsupport.py`); second half (H12, H17): `VOWEL_FORMS` and `ARCHAIC_SOUNDS` are read-only, a test names `re._compiler`, "one word" says that "Leon" is in two golden descriptions, and `evalsupport.py`, `test_evaluation_stack.py` and `test_claims_graph_golden.py` no longer count the golden claims by a number; the redundant literal in `test_assessment.py` is replaced by a guard. S070 split `redaction.py` (292 lines, five modules beside it), which closes `redact`'s place in a file near the ceiling, and its own test of `re._compiler` (the fuller one) replaced the second half's at the merge. Stays: the five loaders of the name-masked cases (four of the five files are free, `test_triage_run_input.py` is S070's), `test_redaction_hungarian.py` at 858 lines (split after S070), `redact`'s length (S070's branches add the modules that take it apart), and the first lines of `triaging.py`, which say "the run's input" on `main` and not the phrase the row quotes (check with S070, whose file it is) | S074 |
+| Left by S067's reviews, all low: `redact` is 76 lines with its docstring and `redaction.py` 792, eight under the ceiling, so any growth needs a split (the Hungarian part, in a module of its own); `test_redaction_hungarian.py` is 858 lines and `test_claims_graph.py` about 2,300; five tests load the two name-masked cases each on its own (one helper in `servicesupport` would do); `VOWEL_FORMS` and `ARCHAIC_SOUNDS` are plain dicts; no test names `re._compiler`; `test_assessment.py` asserts the `["CLM-0012", "CLM-0044"]` literal beside a derived check; four docstrings and comments say what was true before: `claimant_name.py` ("one word", where two golden descriptions hold "Leon"), the first lines of `triaging.py` ("the run's facts"), and `evalsupport.py` and `test_evaluation_stack.py` ("the 40 golden claims") | S067 (reviews) | closed in part by S074: `test_claims_graph.py` is split (first half: ten files and `graphsupport.py`); second half (H12, H17): `VOWEL_FORMS` and `ARCHAIC_SOUNDS` are read-only, a test names `re._compiler`, "one word" says that "Leon" is in two golden descriptions, and `evalsupport.py`, `test_evaluation_stack.py` and `test_claims_graph_golden.py` no longer count the golden claims by a number; the redundant literal in `test_assessment.py` is replaced by a guard. S070 split `redaction.py` (292 lines, five modules beside it), which closes `redact`'s place in a file near the ceiling, and its own test of `re._compiler` (the fuller one) replaced the second half's at the merge. Closed by S074's leftovers (2026-10-07): the five loaders of the name-masked cases are one helper, `servicesupport.injection_case_claim`, and a missing case fails with its name and its file (T2, d4a0c63); `test_redaction_hungarian.py` is three files and a support module, the largest 368 lines (T1, e7128ec). Stays: `redact`'s length (S070's branches add the modules that take it apart), and the first lines of `triaging.py`, which say "the run's input" on `main` and not the phrase the row quotes (check with S070, whose file it is) | S074 |
 | A gateway that sends its response headers a few bytes at a time, each wait under the 30 s read timeout, is bounded by no timeout (httpx has none for a whole request, and the call's deadline is first read once the headers have come), so a leg is not provably under the 600 s lease; the security review's probe, with the deadline at 2 s and the read timeout at 1 s, ran 80.7 s against a server that sent a header every 0.4 s. The gateway is first-party and sends its headers in one write (T-10) | S069 (security and boundary reviews) | open | S069 |
 | A late leg's tool calls still bind by the run's status alone, so a leg that outlived its lease can call tools until it ends; closing it needs the holder of the run at the tool servers, a column on `runtime.runs` with its grants and a migration, which the first half of S069 left out on purpose (design, decision 1; T-10) | S069 (design) | open; the database lane, so S068 is the nearest step that holds it | S068 |
 | The runtime's and the gateway's close writes of the refusal summaries still run on the event loop (the tool servers' do not), a synchronous write at shutdown | S069 (E2, F1, boundary review) | open | S069 |
@@ -984,6 +984,8 @@ that day; the rest stand as their step recorded them.
 | The three manifests that prove S074's third part (`cut-1.manifest`, `cut-2.manifest`, `cut-3.manifest`: line ranges for `scripts/shell_split_proof.py`) are in the session's handoff folder, outside the repository, so no clone can run the proofs again; the plan holds the commands and their output. Cuts 1 and 2 cannot be run again on the tip in any case: the files they name as targets changed after them | S074 (third part) | open: keep the three manifests in the repository beside the proof script (about 200 lines of text in all, each with its `--ref` in a first comment), or accept the recorded output as the evidence; the owner's decision, or the last cut's | S074 |
 | `shellcheck` has no runner, and the split made the by-hand run narrower: the earlier gates' `shellcheck infra/kind/*.sh` does not reach `infra/kind/smoke.d/`; the parts are linted through the entry alone (`shellcheck infra/kind/smoke.sh` follows each `# shellcheck source=` hint through `.shellcheckrc`; exit 0 after each cut), and a part linted by itself warns (SC2034 on `PSQL_OPTIONS`, `COLLECTOR_ENDPOINT` and `poll_error` in `shared.sh`, which checks that are not sourced then read). A runner would be a `make` target or a CI step that lints the entry; S075's row does not name it | S074 (third part) | open: not built; no step owns CI checks for shell, so S074 takes it or closes it as by hand | S074 |
 | `tests/meridian/test_smoke_trap.py` waits 60 s for each of its tests that runs the whole script against stubs when a part fails to source (a part missing from the scratch copy, a misnamed `.` line): the failure is slow, not fast (S074's harness contract SA, with the copy of `smoke.d/` switched off: 5 failed, 1 passed in 181 s) | S074 (third part) | open: a bound on the stub run that a failed source reaches sooner, or a test that sources the parts first; not built | S074 |
+| `INJECTION_CASES` in `tests/meridian/injectionsupport.py` and `INJECTION_CASES_JSON` in `tests/meridian/servicesupport.py` are two definitions of one path, `data/synthetic/injection/cases.json`; `test_claimant_name_capital_rule.py` (near line 159) reads the file a third way | S074 (leftovers, T2) | open: one of the two constants imports the other, or both read one; not built | S074 |
+| `NAME_MASKED = ("CLM-1053", "CLM-1054")` is written out in three test files: defined in `test_run_input_stack.py` and in `test_posted_text_screen.py`, and inline in `test_claims_app.py` (`tests/synthetic/test_injection_cases.py` holds the same two with their names as `NAME_MASKED_CASES`) | S074 (leftovers, T2) | open: one definition in `servicesupport.py` beside `injection_case_claim`; not built | S074 |
 
 ## Part C — Step details
 
@@ -13174,11 +13176,12 @@ first's last question to the owner ("The second half", below): the six
 functions over 50 lines and S076's leftovers are done, closed or accepted row
 by row. A third part, after S073's first half reached `main`, split
 `infra/kind/smoke.sh` into parts under `infra/kind/smoke.d/` (its record
-follows the second half's, "The third part"). What is NOT done, and keeps the
-step at `doing`: the last cut of that split (checks 8 and 10, which S072's
-cluster batch is still editing), the loaders' helper and the split of
-`test_redaction_hungarian.py` (both wait for S070), and the rows the second
-half's last table keeps open.
+follows the second half's, "The third part"). A short fourth part, "The
+leftovers", did the two things that waited for S070: the loaders' helper and
+the split of `test_redaction_hungarian.py`. What is NOT done, and keeps the
+step at `doing`: the last cut of the smoke script's split (checks 8 and 10,
+which S072's cluster batch is still editing), and the rows the second half's
+last table keeps open.
 
 **Decisions** (the main session's unless marked; the owner may overturn any;
 the design was written from a read-only map of `main` at 0064171 before any
@@ -14394,6 +14397,129 @@ S070.
 | `infra/kind/smoke.sh` is about 2,300 lines and `test_kind_manifests.py` about 3,900 | Closed in part by the third part | Nine checks and the shared code are parts under 800 lines; the entry holds two checks and is 1,185 lines until the last cut |
 | `infra/kind/smoke.sh` is near 2,900 lines; a new check would be better as a file of its own | Closed for the mechanism; the size closed in part | A new check is a new file under `smoke.d/` and one source pair (`infra/kind/README.md`); `test_smoke_parts.py` holds the layout; Tempo's half was S072's |
 | Sentences in `infra/` that a render showed inexact (S072's row, the comment in `smoke.sh` near line 205) | Corrected in the row | The comment is in `smoke.d/05-cost-panel.sh` now; the row says so (a one-phrase fix of a place the split made stale) |
+
+**The leftovers** (2026-10-07; tests and one comment only, no file under
+`src/`, no database in T1, none of it run on a cluster). S070's first half had
+merged (828c380), so the files that held the two things the earlier parts left
+for it were free: two contracts, each with an implementer of its own and no
+file in common, landed on this branch as e7128ec (T1) and d4a0c63 (T2); a
+third, T3, wrote this record and corrected one comment.
+
+**T1: `test_redaction_hungarian.py` (858 lines) is three files and a support
+module** (e7128ec). A move, proved by `scripts/split_proof.py`; no test's body,
+name, parameter or comment changed, and no test was written first because
+nothing new was built: the proof and the equal count are the evidence.
+
+- **The line it was cut along.** The production module each group of tests
+  exercises. The phone group (`redaction_phone.py`: the three tables of
+  codes and the phone tests) is one file; the tax number, the domestic account
+  number with its IBAN and card boundary tests, the personal identification
+  number with its weights helpers and the identifiers after their word
+  (`redaction_hungarian_ids.py` and the account part of `redaction_payment.py`)
+  is the second, which keeps the old name; what is about the whole redactor
+  (the new placeholders, every kind in one text, the second pass, a value
+  inside a longer token, JSON escapes, other spaces, linear time) is the
+  third. The account tests are about 80 lines alone, under the floor the
+  contract set (about 150), so they stay with the identifiers: a domestic
+  account number is a Hungarian identifier.
+- **A support module, because two files read the same constants.** `NBSP`,
+  `THIN_SPACE`, `PHONES`, `TAX_NUMBERS`, `ACCOUNTS` and `NATIONAL_IDS` are read
+  by two of the three files each (the lists by their own group's tests and by
+  `OWN_VALUES`; the two spaces by the lists and by the other-spaces test), and
+  one test module does not import from another. They moved to
+  `tests/meridian/hungariansupport.py`, unchanged; `OWN_VALUES` is read by one
+  file and stays in it.
+- **The old name stays** on the largest group (the identifiers), so no tracked
+  file was deleted. A comment in `test_redaction_findings.py` that names the
+  old file's left-alone list is still true; one in
+  `test_redaction_international_cut.py` named the file that held the
+  linear-time test and is corrected by T3 (below).
+- **The proof's whole output** (exit 0):
+
+```
+tests/meridian/guardrails/test_redaction_hungarian.py: 65 units, 65 found once
+  tests/meridian/guardrails/test_redaction_hungarian.py: 26 units, docstring 7 lines
+  tests/meridian/guardrails/test_redaction_hungarian_phone.py: 14 units, docstring 4 lines
+  tests/meridian/guardrails/test_redaction_hungarian_across_kinds.py: 19 units, docstring 6 lines
+  tests/meridian/hungariansupport.py (support): 6 units from the old file
+  new units (the old file had none like them): 0
+PROOF HOLDS: every unit moved once, unchanged
+```
+
+- **Sizes** (`wc -l`): `test_redaction_hungarian.py` 368,
+  `test_redaction_hungarian_phone.py` 231,
+  `test_redaction_hungarian_across_kinds.py` 232, `hungariansupport.py` 65.
+- **Gates, as run by T1.** The collected count of `tests/meridian/guardrails/`
+  before and after, `uv run pytest tests/meridian/guardrails/ --collect-only
+  -q | tail -1`: `1716 tests collected in 0.23s` both times. `uv run pytest
+  tests/meridian/guardrails/ -n 4 -q -p no:cacheprovider`, exit 0:
+  `1716 passed in 15.41s`. `make lint`, exit 0: `All checks passed!`, `808
+  files already formatted`, `Contracts: 6 kept, 0 broken.` No formatter ran.
+
+**T2: five loaders of an injection case's claim are one helper** (d4a0c63).
+Five tests each loaded one of the two name-masked cases (CLM-1053, CLM-1054)
+from `data/synthetic/injection/cases.json` in a function of their own.
+
+- **What the five did.** All five read the same file and selected by the same
+  key, `case["case"]`; four read it again on every call and one
+  (`test_posted_text_screen.py`) once at import into a module `CASES`. They
+  differed only after the lookup: two returned the plain claim dict
+  (`test_run_input_stack.py`, `test_claims_app.py`), two a `ClaimSubmission`
+  (`test_posted_text_screen.py`, `test_triage_run_input.py`) and one the run
+  input (`posted_case` in `test_claims_graph_posted_text.py`). None skipped,
+  and a missing case raised a `ValueError` about unpacking that named neither
+  the case nor the file.
+- **The helper.** `servicesupport.injection_case_claim(case_id)` returns the
+  case's claim dict, read afresh on every call, so a caller may change what it
+  gets. A name that matches no case, or more than one, fails with an
+  `AssertionError` that gives the count, the case ID and the file's path
+  relative to the repository root; it never skips. The name says "injection
+  case" and not "name masked" because it checks no masking and serves any case.
+  `assert` follows the neighbouring helpers, so `servicesupport.py` imports no
+  `pytest`. The constant `INJECTION_CASES_JSON` sits beside it.
+- **The five callers.** `test_run_input_stack.py` and `test_claims_app.py`
+  lost their loaders and call the helper; the other three keep a one-line
+  wrapper that builds what they need (`name_masked_submission`,
+  `name_masked_case`, `posted_case`). The module-level `CASES` is gone, so a
+  missing file now fails the test that asked for it and not the collection. No
+  test function and no parametrize line changed in the five files.
+- **A missing case fails by name.** The new
+  `tests/meridian/test_servicesupport.py` (4 tests, 7 cases, no database) pins
+  the helper: a known case loads as the claim the suite posts, each call
+  returns a claim of its own, an unknown case fails with a message that names
+  it and the file, and a name that is not a case fails and is not skipped. T2
+  saw it fail first, with an `ImportError` for the missing helper.
+- **Gates, as run by T2.** The files without a database, `uv run pytest
+  tests/meridian/test_servicesupport.py` and the three claims-workload files,
+  `-q -n 2 -p no:cacheprovider`: `130 passed in 3.78s` with exit 0 (a first
+  run under `GITHUB_ACTIONS=true` printed `130 passed in 5.12s`, its exit
+  status not read: the harness refused the line that would have read it). The
+  two files with a database, `make pytest-db` on T2's own containers, two
+  workers: `155 passed in 8.85s`; the exit status was not read for the same
+  reason and no `make: *** Error` line was printed. `make lint`, exit 0:
+  `806 files already formatted`, `Contracts: 6 kept, 0 broken.`
+
+**T3: the comment and this record.** The comment above the linear-time test in
+`test_redaction_international_cut.py` now names
+`test_redaction_hungarian_across_kinds`, the file the bound lives in; nothing
+else in that file changed. The backlog rows: the step's row and S067's "left
+by reviews" row say what is closed; two rows are new (T2's two "noticed").
+
+- **Not seen:** nothing here touches a cluster, a model or the live
+  database: the only runs are the tests named above.
+- **The whole suite on the final tree** (the main session fills the next line
+  when it has run):
+
+FINAL-SUITE-RESULT
+
+- **What is left of S074:** the last cut of the smoke script's split, checks 8
+  and 10 (`08-network-policy.sh`, `10-certificate-policy.sh`), which waits for
+  S072's cluster batch to reach `main`, as "What is left of the smoke script's
+  split" above says; the rows the second half's last table keeps open and the
+  three questions to the owner (coverage in CI, a size check, a timeout at the
+  pytest level) are as they were. The sentence above that names the loaders'
+  helper and the split of `test_redaction_hungarian.py` as still waiting on
+  S070 is the third part's record and is out of date: both are done here.
 
 ### S068 — Database upkeep and retention
 **Status:** done · **Started:** 2026-10-06 · **Finished:** 2026-10-07
@@ -17310,3 +17436,15 @@ ClusterRole and Envoy's hook leftovers.
   (the manifests, `shellcheck` with no runner, `test_smoke_trap.py`'s 60 s per
   failed source), one sentence of S072's row corrected. No behaviour change,
   no new threat.
+- **PLAN-VERSION, 2026-10-07:** S074, the leftovers (still `doing`; tested,
+  none of it run on a cluster): `test_redaction_hungarian.py` (858 lines) is
+  three test files, the largest 368 lines, and `hungariansupport.py`, cut
+  along the production module each group exercises by a move
+  `scripts/split_proof.py` proves, with 1,716 tests collected before and after;
+  the five loaders of the name-masked injection cases are one helper,
+  `servicesupport.injection_case_claim`, and a missing case fails with its name
+  and its file. The step's row and S067's "left by reviews" row say what is
+  closed; two rows are new (two definitions of the injection cases' path, and
+  `NAME_MASKED` written out in three files). What is left of S074 is the last
+  cut of the smoke script's split, which waits for S072's cluster batch. No
+  behaviour change, no new threat.
