@@ -97,6 +97,11 @@ from meridian.workloads.claims_triage.adjuster import (
     require_same_origin,
 )
 from meridian.workloads.claims_triage.claim_dates import REPORT_TIME_ZONE
+from meridian.workloads.claims_triage.claim_files import (
+    FileSummary,
+    list_files,
+    size_text,
+)
 from meridian.workloads.claims_triage.claimant_errors import (
     ClaimantErrorMiddleware,
     claim_id_of,
@@ -124,11 +129,18 @@ from meridian.workloads.claims_triage.moves import (
     withdraw,
 )
 from meridian.workloads.claims_triage.triaging import (
+    NUMBER_WORDS,
     arrived_documents,
     claim_database_failure,
     invalid_fields,
     store_claim,
     triage_claim,
+)
+from meridian.workloads.claims_triage.uploads import (
+    FILE_KINDS,
+    MAX_FILE_BYTES,
+    MAX_FILES_PER_CLAIM,
+    MIB,
 )
 
 logger = logging.getLogger(__name__)
@@ -168,6 +180,11 @@ LOSS_AFTER_TODAY = "the date of loss is after today"
 # What the claimant's route lets the first submission keep (``store_claim``).
 STAMPED_KEYS = ("reported_on",)
 DOCUMENTS_LABEL = "Documents"
+# The upload form's limits in words (S070), from the route's own numbers.
+UPLOAD_LIMITS = (
+    f"Send one PDF, JPEG or PNG file at a time, at most {MAX_FILE_BYTES // MIB} MiB, "
+    f"and at most {NUMBER_WORDS[MAX_FILES_PER_CLAIM]} files for a claim."
+)
 # The claim form's fields, in the order of the page, with their labels.
 FIELD_LABELS: Mapping[str, str] = {
     "claim_id": "Claim ID",
@@ -238,7 +255,8 @@ class StatusView:
     """What a claim's status page holds: nothing of the proposal but the names
     of the documents it asked for, nothing of the submission. ``due`` is when the
     documents asked for are due (the sweep then refers the claim to a person), and
-    only for a claim in ``documents_requested``."""
+    only for a claim in ``documents_requested``. ``files``: the claim's files, when
+    uploads are on."""
 
     claim_id: str
     state: LifecycleState
@@ -246,6 +264,7 @@ class StatusView:
     missing: tuple[str, ...]
     arrived: tuple[str, ...]
     due: datetime | None = None
+    files: tuple[FileSummary, ...] = ()
 
 
 def _missing_names(claim_id: str, stored: object) -> tuple[str, ...]:
@@ -264,16 +283,18 @@ def load_status(
     tenant: str,
     claim_id: str,
     deadline_days: int = DOCUMENTS_DEADLINE_DAYS,
+    with_files: bool = False,
 ) -> StatusView | None:
     """The tenant's claim as its status page shows it; ``None`` when there is no
     such claim (another tenant's is none). ``deadline_days`` is how long a claim
-    waits for the documents it asked for."""
+    waits for the documents it asked for. ``with_files`` reads the claim's files."""
     with connect(dsn, SERVICE_NAME) as conn:
         claim = conn.execute(STATUS_SQL, (claim_id, tenant)).fetchone()
         if claim is None:
             return None
         proposal = conn.execute(MISSING_SQL, (claim_id,)).fetchone()
         arrived = arrived_documents(conn, claim_id)
+        files = list_files(conn, tenant, claim_id) if with_files else ()
     state, received_at, changed_at = claim
     return StatusView(
         claim_id=claim_id,
@@ -286,6 +307,7 @@ def load_status(
             if state == "documents_requested"
             else None
         ),
+        files=files,
     )
 
 
@@ -379,7 +401,11 @@ def render_status(
     notice: Notice | None = None,
     errors: Problems = (),
     typed: str = "",
+    uploads: bool = False,
 ) -> str:
+    """The status page. ``uploads`` adds the form that sends a file and the list of
+    the claim's files, each as its kind, size and time: no hash, identifier or
+    type is given to the template."""
     return TEMPLATES.get_template("claimant_claim.html").render(
         claim_id=view.claim_id,
         received_at=_when(view.received_at),
@@ -395,6 +421,12 @@ def render_status(
         notice=notice,
         errors=errors,
         typed=typed,
+        uploads=uploads,
+        files=[
+            (f.kind, size_text(f.size_bytes), _when(f.received_at)) for f in view.files
+        ],
+        kinds=FILE_KINDS,
+        upload_limits=UPLOAD_LIMITS,
     )
 
 
@@ -444,6 +476,7 @@ def add_claimant_pages(
     today: Callable[[], date] | None = None,
     deadline_days: int = DOCUMENTS_DEADLINE_DAYS,
     meters: ClaimsMeters | None = None,
+    uploads_enabled: bool = False,
 ) -> None:
     """Add the start page, the claim form, the status page and the documents and
     withdrawal forms to the Claims API. Called after ``add_adjuster_pages``,
@@ -454,7 +487,9 @@ def add_claimant_pages(
     shared answer. ``today`` is the clock of the report date the claim form's
     submissions are stamped with (the date now in the insurer's time zone by
     default); ``deadline_days`` is how long a claim waits for documents;
-    ``meters`` counts the proposals the pages' triages store."""
+    ``meters`` counts the proposals the pages' triages store. ``uploads_enabled``
+    (S070) puts the file form and the claim's files on the status page; the form
+    posts to ``claimant_uploads``."""
     clock = today or today_in_vienna
     shared_database_error = app.exception_handlers[psycopg.Error]
     shared_audit_error = app.exception_handlers[AuditUnavailable]
@@ -524,7 +559,9 @@ def add_claimant_pages(
                 span, {"meridian.claim_id": claim_id, "meridian.tenant": tenant}
             )
             try:
-                view = load_status(dsn, tenant, claim_id, deadline_days)
+                view = load_status(
+                    dsn, tenant, claim_id, deadline_days, uploads_enabled
+                )
             except psycopg.Error as exc:
                 mark_error(span, exc)
                 failure = claim_database_failure(exc, claim_id)  # logs both
@@ -539,7 +576,9 @@ def add_claimant_pages(
                     else (notice.status, notice.detail)
                 )
             )
-        page = render_status(view, notice=notice, errors=errors, typed=typed)
+        page = render_status(
+            view, notice=notice, errors=errors, typed=typed, uploads=uploads_enabled
+        )
         return HTMLResponse(page, status_code=status)
 
     def triage_stored(claim_id: str, stored: dict[str, Any]) -> bool:

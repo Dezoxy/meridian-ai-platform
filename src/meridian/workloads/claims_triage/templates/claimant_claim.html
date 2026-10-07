@@ -48,6 +48,37 @@
 <button type="submit">Send these documents</button>
 </form>
 {% endif %}
+{% if uploads %}
+<h2>Files you sent</h2>
+{% if files %}
+<table>
+<thead>
+<tr><th scope="col">Kind</th><th scope="col">Size</th><th scope="col">Received</th></tr>
+</thead>
+<tbody>
+{% for kind, size, received in files %}
+<tr><td>{{ kind }}</td><td>{{ size }}</td><td>{{ received }}</td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% else %}
+<p>You have not sent a file for this claim.</p>
+{% endif %}
+<h2>Send a file</h2>
+<p class="banner">Synthetic data only: never upload a real document.</p>
+<p>{{ upload_limits }}</p>
+<form method="post" action="/claimant/claims/{{ claim_id }}/files" enctype="multipart/form-data">
+<p class="field"><label for="kind">What the file is</label>
+<select id="kind" name="kind" required>
+{% for kind in kinds %}
+<option value="{{ kind }}">{{ kind }}</option>
+{% endfor %}
+</select></p>
+<p class="field"><label for="file">The file</label>
+<input id="file" type="file" name="file" accept="application/pdf,image/jpeg,image/png" required></p>
+<button type="submit">Send this file</button>
+</form>
+{% endif %}
 {% if can_withdraw %}
 <form method="post" action="/claimant/claims/{{ claim_id }}/withdrawal">
 <button type="submit">Withdraw this claim</button>

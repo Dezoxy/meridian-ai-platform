@@ -290,3 +290,28 @@ def assert_spans_hold_no_exception_and_no_canary(
             *(str(v) for e in span.events for v in e.attributes.values()),
         ]
         assert canary not in " ".join(carried), span.name
+
+
+# One part of a multipart body: its field name, the file name (``None`` for a
+# text field), the part's own Content-Type header (``None`` for none) and bytes.
+type MultipartPart = tuple[str, str | None, str | None, bytes]
+
+
+def multipart_body(
+    parts: list[MultipartPart], boundary: str = "b"
+) -> tuple[bytes, dict[str, str]]:
+    """A multipart/form-data body by hand, with the smallest envelope the
+    format allows, and its Content-Type header: a test that sits at a body limit
+    needs to say how many bytes the envelope takes, which a client library
+    decides for itself."""
+    body = b""
+    for name, filename, content_type, data in parts:
+        disposition = f'form-data; name="{name}"'
+        if filename is not None:
+            disposition += f'; filename="{filename}"'
+        headers = f"Content-Disposition: {disposition}\r\n"
+        if content_type is not None:
+            headers += f"Content-Type: {content_type}\r\n"
+        body += f"--{boundary}\r\n{headers}\r\n".encode() + data + b"\r\n"
+    body += f"--{boundary}--\r\n".encode()
+    return body, {"Content-Type": f"multipart/form-data; boundary={boundary}"}

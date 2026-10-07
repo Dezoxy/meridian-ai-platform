@@ -174,6 +174,17 @@ generic 500 (or the reason `unexpected`); that stays on purpose, because the
 database is there and a service that left a transaction idle for a minute has a
 fault of its own, and a 503 would send an operator to the database.
 
+The file of S080 is [`0032_claim_files.sql`](0032_claim_files.sql). It has the
+owner guard and starts with `SET LOCAL lock_timeout`, and adds `claims.claim_files`,
+the bytes of a claimant's uploaded file. The table checks the kind, the media
+type (PDF, JPEG or PNG), a size of 1 byte to 1 MiB equal to the content's length
+and that the SHA-256 is the content's; the same hash twice on one claim is
+refused by a unique key; the content is stored uncompressed; and `claims_api`
+holds `SELECT` and `INSERT` and no other role anything, so nothing deletes a
+file and no retention is set. The foreign key to `claims.claims` takes SHARE ROW
+EXCLUSIVE on that table until the file ends. Implemented and tested, applied on
+kind once (run RU1, 2026-10-07; the plan's S080 section says what was seen).
+
 ## Database-level settings and the tests' template
 
 `ALTER DATABASE ... SET` is stored in `pg_db_role_setting`, and `CREATE DATABASE

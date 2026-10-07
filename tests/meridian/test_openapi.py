@@ -46,6 +46,15 @@ def apps() -> dict[str, FastAPI]:
         "claims": create_claims(
             ClaimsSettings(runtime_url="http://runtime.invalid", database_url=DSN)
         ),
+        # The Claims API with the route that takes a file switched on (S070):
+        # off by default, so the spec above does not list it.
+        "claims-uploads": create_claims(
+            ClaimsSettings(
+                runtime_url="http://runtime.invalid",
+                database_url=DSN,
+                uploads_enabled=True,
+            )
+        ),
     }
 
 
@@ -156,6 +165,19 @@ ERRORS = {
         "504",
     },
     ("claims", "get", "/claims/{claim_id}/brief"): {"404", "422", "500", "503"},
+    ("claims-uploads", "post", "/claims/{claim_id}/files"): {
+        "201",
+        "403",
+        "404",
+        "409",
+        "413",
+        "415",
+        "422",
+        "429",
+        "500",
+        "503",
+        "507",
+    },
 }
 
 
@@ -504,3 +526,123 @@ def test_the_claim_response_run_id_is_a_uuid() -> None:
     schema = SPECS["claims"]["components"]["schemas"]["ClaimResponse"]
 
     assert schema["properties"]["run_id"]["format"] == "uuid"
+
+
+# ── the route that stores a claimant's file (S070): only when it is switched on ─
+UPLOAD = "/claims/{claim_id}/files"
+
+
+def test_the_upload_route_is_listed_when_the_switch_is_on_and_not_when_it_is_off() -> (
+    None
+):
+    assert UPLOAD in SPECS["claims-uploads"]["paths"]
+    assert UPLOAD not in SPECS["claims"]["paths"]
+    assert set(SPECS["claims-uploads"]["paths"][UPLOAD]) == {"post"}
+    # Every other path is the same in both: the switch adds this one route.
+    assert set(SPECS["claims-uploads"]["paths"]) - {UPLOAD} == set(
+        SPECS["claims"]["paths"]
+    )
+
+
+def test_the_upload_routes_html_twin_is_in_no_contract() -> None:
+    # The claimant's form posts to it; it is a page, as the other pages are.
+    for name in ("claims", "claims-uploads"):
+        assert not [p for p in SPECS[name]["paths"] if p.startswith("/claimant")]
+        assert "/claimant/claims/{claim_id}/files" not in SPECS[name]["paths"]
+
+
+def test_the_upload_route_answers_201_with_a_stored_file_and_names_its_errors() -> None:
+    spec = SPECS["claims-uploads"]
+
+    assert schema_ref(spec, UPLOAD, "post", "201").endswith("/StoredFile")
+    for status in ("403", "404", "409", "413", "415", "429", "507"):
+        assert schema_ref(spec, UPLOAD, "post", status).endswith("/ErrorBody")
+    for status in ("408", "500", "503"):
+        assert schema_ref(spec, UPLOAD, "post", status).endswith("/UploadErrorBody")
+    assert spec["paths"][UPLOAD]["post"]["tags"] == ["claims"]
+
+
+def test_the_upload_routes_error_body_has_an_optional_claim_and_no_run() -> None:
+    # The route's own answers carry the claim; the middleware's 500 and the audit
+    # log's 503 carry only ``detail``, so the claim cannot be required, and an
+    # upload starts no run, so there is no ``run_id`` as in ``ClaimErrorBody``.
+    body = SPECS["claims-uploads"]["components"]["schemas"]["UploadErrorBody"]
+
+    assert set(body["properties"]) == {"detail", "claim_id"}
+    assert body["required"] == ["detail"]
+
+
+def test_the_upload_route_says_what_its_415_and_busy_503_mean() -> None:
+    responses = SPECS["claims-uploads"]["paths"][UPLOAD]["post"]["responses"]
+
+    assert "PDF, a JPEG or a PNG" in responses["415"]["description"]
+    assert "busy" in responses["503"]["description"].lower()
+    assert "deadline" in responses["408"]["description"]
+    # Not the shared sentence every route's 415 would get.
+    assert "not of a type this route takes" not in responses["415"]["description"]
+
+
+def test_the_upload_route_says_synthetic_files_only() -> None:
+    post = SPECS["claims-uploads"]["paths"][UPLOAD]["post"]
+    form = post["requestBody"]["content"]["multipart/form-data"]["schema"]
+
+    assert "Synthetic files only" in post["summary"]
+    assert "never a real person's document" in post["summary"]
+    assert "Synthetic files only" in form["properties"]["file"]["description"]
+
+
+def test_the_upload_routes_429_and_busy_503_say_how_long_to_wait() -> None:
+    responses = SPECS["claims-uploads"]["paths"][UPLOAD]["post"]["responses"]
+
+    for status in ("429", "503"):
+        header = responses[status]["headers"]["Retry-After"]
+        assert header["schema"] == {"type": "integer"}
+    # No other answer of the route carries one.
+    assert {s for s, r in responses.items() if "headers" in r} == {"429", "503"}
+
+
+def test_the_upload_route_takes_one_kind_and_one_file_as_multipart_form_data() -> None:
+    spec = SPECS["claims-uploads"]
+
+    body = spec["paths"][UPLOAD]["post"]["requestBody"]
+    form = body["content"]["multipart/form-data"]["schema"]
+
+    assert body["required"] is True
+    assert list(body["content"]) == ["multipart/form-data"]
+    assert form["additionalProperties"] is False
+    assert set(form["required"]) == {"kind", "file"}
+    assert form["properties"]["kind"]["enum"] == [
+        "police_report",
+        "photos",
+        "repair_estimate",
+        "accident_statement",
+        "other",
+    ]
+    assert form["properties"]["file"]["format"] == "binary"
+
+
+def test_a_stored_file_is_its_identifier_kind_type_size_and_hash_and_nothing_else() -> (
+    None
+):
+    stored = SPECS["claims-uploads"]["components"]["schemas"]["StoredFile"]
+
+    assert set(stored["properties"]) == {
+        "file_id",
+        "kind",
+        "media_type",
+        "size_bytes",
+        "sha256",
+    }
+    assert set(stored["required"]) == set(stored["properties"])
+    assert stored["additionalProperties"] is False
+    assert stored["properties"]["file_id"]["format"] == "uuid"
+    assert stored["properties"]["media_type"]["enum"] == [
+        "application/pdf",
+        "image/jpeg",
+        "image/png",
+    ]
+    # The hash is lower-case hex of 32 bytes and the size is the file's: 1 byte to
+    # 1 MiB, so a generated client can check what it is given.
+    assert stored["properties"]["sha256"]["pattern"] == "^[0-9a-f]{64}$"
+    assert stored["properties"]["size_bytes"]["minimum"] == 1
+    assert stored["properties"]["size_bytes"]["maximum"] == 1024 * 1024

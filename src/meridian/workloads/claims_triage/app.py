@@ -73,6 +73,11 @@ from meridian.workloads.claims_triage.claimant import (
     add_claimant_pages,
     claimant_too_large,
 )
+from meridian.workloads.claims_triage.claimant_uploads import (
+    TWIN_PATH,
+    add_claimant_upload_twin,
+)
+from meridian.workloads.claims_triage.file_download import add_download_route
 from meridian.workloads.claims_triage.lifecycle import (
     ADJUSTER_APPROVED,
     ADJUSTER_REJECTED,
@@ -113,6 +118,12 @@ from meridian.workloads.claims_triage.triaging import (
     runtime_timeout,
     store_claim,
     triage_claim,
+)
+from meridian.workloads.claims_triage.uploads import (
+    UPLOAD_BODY_LIMIT_BYTES,
+    UPLOAD_PATH,
+    StoreLimits,
+    add_upload_routes,
 )
 
 NOT_WAITING_DETAIL = "the claim does not wait for an adjuster"
@@ -353,6 +364,17 @@ def create_app(
         tracer_provider=tracer_provider,
         close=close,
         too_large=claimant_too_large,
+        # The two routes that take a file, the JSON one and its HTML twin, have a
+        # limit of their own, and only when they exist: with the switch off their
+        # paths keep the 64 KiB of the rest.
+        route_body_limits=(
+            {
+                ("POST", UPLOAD_PATH): UPLOAD_BODY_LIMIT_BYTES,
+                ("POST", TWIN_PATH): UPLOAD_BODY_LIMIT_BYTES,
+            }
+            if settings.uploads_enabled
+            else None
+        ),
     )
     app, tracer = service.app, service.tracer
 
@@ -438,6 +460,24 @@ def create_app(
             claim_id,
         )
 
+    if settings.uploads_enabled:
+        upload = add_upload_routes(
+            app,
+            dsn=dsn,
+            tenant=tenant,
+            tracer=tracer,
+            limits=StoreLimits(
+                ceiling_bytes=settings.uploads_ceiling_bytes,
+                ceiling_rows=settings.uploads_ceiling_rows,
+                rate_per_minute=settings.uploads_rate_per_minute,
+            ),
+        )
+        # The claimant's form posts to the twin, which runs the same handler.
+        add_claimant_upload_twin(app, upload)
+    if settings.downloads_enabled:
+        # The adjuster's download of a stored file (S070 F4b): its own switch, and
+        # settings refuse it without the uploads. Off, its path is no route.
+        add_download_route(app, dsn=dsn, tenant=tenant, tracer=tracer)
     add_brief_routes(app, dsn=dsn, tenant=tenant, http=http, tracer=tracer)
     add_adjuster_pages(
         app,
@@ -450,6 +490,7 @@ def create_app(
         triage_again=lambda claim_id, page_run: triage_again(
             dsn, tenant, http, tracer, claim_id, page_run=page_run, meters=meters
         ),
+        downloads_enabled=settings.downloads_enabled,
     )
     add_claimant_pages(
         app,
@@ -460,6 +501,7 @@ def create_app(
         today=today,
         deadline_days=settings.documents_deadline_days,
         meters=meters,
+        uploads_enabled=settings.uploads_enabled,
     )
     return app
 

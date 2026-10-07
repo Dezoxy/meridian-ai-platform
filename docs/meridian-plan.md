@@ -463,7 +463,7 @@ and Pydantic, at the cost of one dependency.
 | S019 | Hardened Helm charts | Probes, resource limits, default-deny NetworkPolicy, PodDisruptionBudgets, non-root read-only containers, pinned digests; `helm lint` and the infra reviewer pass | done | S018 |
 | S055 | Service-to-service identity | On kind, each service proves which service it is to the one it calls: the Agent Runtime, the Model Gateway and the tool servers refuse a call that carries no identity or comes from a service the registry does not map; the tenant and agent a caller may name come from that mapping, and a header that disagrees is refused; the tool servers accept the runtime alone (T-08, T-24, T-48, T-50); the mechanism is chosen with the owner when the step opens and recorded in an ADR | done | S019 |
 | S020 | Azure platform | Terraform adds the virtual network, AKS, ACR, PostgreSQL Flexible Server with pgvector and Workload Identity to Key Vault; the environment is created and removed with one command each. **First half, code only (2026-10-07): a module `infra/terraform/azure/` written, validated and scanned without an account and NEVER applied** (44 resources, two doors: `make azure-platform-validate` and `make azure-platform-scan`), its README, ADR 11, the deployment view `DeploymentAzure` (designed), the threat model's rows T-103 to T-107 and the Azure platform document brought to it. **What waits:** the wrapper and the command guard's rules for it (no door that plans, applies or removes exists); the owner's upgrade to pay-as-you-go by about 2026-10-30; the owner's decision on a firewall for the foundation's vault and account; the apply and its cost, stated at the paid stop; and the second half (the chart on the cluster, the roles, the egress rule, S022's push). The "done when" above is the whole step and is not met | doing | S007, S019, S055, S056 |
-| S021 | Identity | **The staff half (cut on 2026-10-07: claimants are S089, the edge layer is S090).** Entra ID sign-in for staff on Azure, and on kind a mock OIDC issuer, Keycloak (the owner's choice); four roles, platform-admin, agent-developer, adjuster and auditor, as a `roles` list claim in the token; the Claims API checks a staff token on its JSON routes and runs the sign-in for the adjuster's pages itself, with a session cookie it signs (the app layer first, the owner's order); a role is required on every route but a closed list; the tenant is resolved from the validated token through the registry; who decided is stored on the decision row (the audit rows' actor waits for S085's outbox); all of it behind a switch, `MERIDIAN_SIGNIN`, off by default until `make demo`, smoke and the evaluation client carry their own tokens. **Designed: nothing of it is built** (2026-10-07; Part C has the design, its contracts and the threat rows T-108 to T-115) | doing | The kind half: nothing unbuilt. The Entra half: S020's apply |
+| S021 | Identity | **The staff half (cut on 2026-10-07: claimants are S089, the edge layer is S090).** Entra ID sign-in for staff on Azure, and on kind a mock OIDC issuer, Keycloak (the owner's choice); four roles, platform-admin, agent-developer, adjuster and auditor, as a `roles` list claim in the token; the Claims API checks a staff token on its JSON routes and runs the sign-in for the adjuster's pages itself, with a session cookie it signs (the app layer first, the owner's order); a role is required on every route but a closed list; the tenant is resolved from the validated token through the registry; who decided is stored on the decision row (the audit rows' actor waits for S085's outbox); all of it behind a switch, `MERIDIAN_SIGNIN`, off by default until `make demo`, smoke and the evaluation client carry their own tokens. **Designed: nothing of it is built** (2026-10-07; Part C has the design, its contracts and the threat rows T-112 to T-119) | doing | The kind half: nothing unbuilt. The Entra half: S020's apply |
 | S089 | Claimants sign in as themselves | The owner's decision of 2026-10-07: "Own claimant sign-in" (the session had recommended the pages behind the staff sign-in for now; the owner chose against it). A second realm beside staff, `meridian-claimants`, with members of the public and no role (on Azure Microsoft Entra External ID, designed and not asked about yet); a claimant's session of its own, shorter than a staff one; a claim is OWNED by the claimant who filed it (the claimant's subject is stored on the claim: a migration, a column added in one file and backfilled in the next); a claim's status, its documents, its withdrawal and uploads, where they exist, are refused to another claimant with the answer an unknown claim gets; a claim that exists without an owner is staff-only; each realm's token and cookie is refused on the other's routes. **Designed: nothing of it is built.** Open for the step's design: whether a claimant is also tied to a policy (T-76's planted claims), and the claimant's session length | todo | S021 |
 | S090 | Sign-in at the edge | The owner's order of 2026-10-07: "App layer first, edge second (Recommended)"; both layers are the committed end state, so this is a step and not a "later". First TLS at kind's edge, which is plain HTTP today; then Envoy Gateway's sign-in and role rules (its `SecurityPolicy`) in front of the same app checks, which stay. A step of its own because Envoy's sign-in forces `Secure` on its cookies with no switch, so it cannot be seen to work before the edge has TLS; because the proxy pod and the controller pod each need egress to the issuer, in a namespace that is default-deny today; and because the facts sheet marks six paths as ones only a run would tell (whether a browser keeps the forced `Secure` cookie on `http://*.localhost`, whether the controller takes an in-cluster issuer with a plain-HTTP token endpoint, which pods need the new egress, whether a certificate-authority route to the issuer works, whether a policy attaches to one named rule of the Claims API's route, and what the app then receives). **Designed: nothing of it is built** | todo | S021 |
 | S022 | Delivery pipeline | Build, SBOM, Trivy scan, cosign signing, push to ACR, kind smoke test, manual approval, deploy to AKS; the rollback runbook exercised; evidence attached to the release | todo | S020, S021 |
@@ -499,7 +499,8 @@ S068 to S076 were made on 2026-10-06, at the owner's request, from the 83 open
 rows of the follow-up backlog that named no step, so that the step list is the
 whole of what is left. Like the others they harden what exists and need no new
 Azure resource. Two say what they cost: S071 calls a live model, and S070's
-first item is the owner's decision on uploads, the one capability among them.
+first item was the owner's decision on uploads, the one capability among them
+(answered on 2026-10-07: build them, as S080, after the table below).
 Each waits for the running steps that change its files (its last column).
 Several rows are observations seen once: their step closes them with a
 measurement or as not reproduced; it does not have to change code for each.
@@ -557,13 +558,14 @@ both readings the same hour ("yes both are right, go on").
 | S067 | Triage rules and screening | The one step of these that changes the triage graph's rules: claims of one policy that are open at the same time count for `frequent_claims` (T-76); the injection screen reads the description as posted, before the claimant's name is replaced; the redaction knows Hungarian forms of names and identifiers; the stored wording is compared with the manifest after ingestion (T-27, T-57); a wording version missing from `wording.EXCLUSION_CLAUSES` fails with a message that names it (moved here from S060, which may not change how the triage routes a claim); golden-set cases on the fraud indicators' boundaries and for an unknown policy number; `make eval` passes, and a change that needs `make eval-record` waits for the owner's yes, since it costs money. Built as (2026-10-06; implemented and tested, none of it run on a cluster): the Claims API screens the description as posted and hands the run one boolean, `posted_text_addresses_the_model`, which the assessor reads as a hit of its own screen (CLM-1053 and CLM-1054 are stopped, 26 of 66 attacks); the redaction finds the Hungarian national phone, tax number, domestic account number and personal identification number on their own and the social security and tax identification numbers after their word, and the claimant's name is replaced with Hungarian endings after a capital letter; a wording pair the table has no count for fails the run with the fixed code `wording-version-unknown` where the rules would read it (the log line names the product and version only when both pass a closed check), not with a message that names it, and a claim that is not valid facts fails with `claim-not-valid` after a log of its fields; the golden set holds 47 claims, seven of them new, from a second random stream, and the model is not asked about them; claims that are still open count for `frequent_claims` by the strict date rule of a decided one, and a withdrawn claim never does (migration 0025, the owner's decision of 2026-10-06); `meridian knowledge verify` compares the stored clauses with the manifest-verified wordings and the ingestion Job runs it after its write (migration 0026). The free replay passed after each landing that could move a recorded answer, and no paid recording was made | done | S060, S061, S064 |
 | S068 | Database upkeep and retention | The owner names the retention periods for `audit.events` and `gateway.usage` first (open since S011; without them the step builds the mechanism and schedules nothing); an insert-only audit table has a way to expire rows; migration 0017's rewrite of a large audit table has a way through that is written down and tested; the static check on migrations says what it cannot see or sees it; `expire_ledger` works in batches; a holder of the upkeep credential cannot stall the gateway with an open transaction; a login that is a member of `claims_sweep` is confined or refused where the database is made; no role creates temporary tables it does not need. Built as (2026-10-07; implemented and tested against PostgreSQL, none of it run on a cluster; no number of days and no schedule is set anywhere): audit rows expire through one function of the owner's that only a session logged in as the upkeep role reaches, `meridian gateway expire-audit` with a dry run that counts, in batches of at most 10,000, each with an audit row, and the rows the upkeep role wrote itself are never removed by it (migrations 0027, 0028); the ledger expires in batches of 100 to 10,000 usage rows on one connection, with a closing call for the counters and credits (0029, 0030); 0017's way through is written down in the migrations' README as needed by no database that exists, a test shows that it fails closed at its first heavy statement and the two ways out are designed, not built; the static check on migrations sees more statements and the README lists what it does not see, each entry pinned by a test; a database default ends a transaction left idle after 60 s (0031), which stops a forgotten transaction and not a deliberate one, so a holder of the upkeep credential can still stall a counter for the statement timeout; a member of `claims_sweep`, or of `gateway_upkeep`, is refused at every `meridian db migrate` after the files are applied, which detects at the next deploy and does not prevent; `pg_temp` is last in the path of every trigger and definer function, with a test over the whole catalog, and the right to make temporary tables stays with PUBLIC (decided, not built). Not built: the periods and a schedule (the owner's, four questions in the section), the briefs' expiry (waits for the owner), a parser for the static check | done (the periods are the owner's and are not set, nothing is scheduled; not built: the briefs' expiry and the removal of PUBLIC's right to make temporary tables, see the Done-when cell and the section) | S066 |
 | S069 | Runtime and gateway edges | Without a change to a prompt or a rule: a validation error in the triage's two answers logs the field; the tool-call limits can differ by agent, or the plan says why not; a failed resumed leg does not leave the first leg's value to be read as the answer; `drafted_by` is right for a completion the filter withheld and the provider billed; the runtime's client of the gateway is bounded per call; a resumed leg that outlived its lease cannot write over the leg that took the run; `service_url_problem` refuses what the HTTP client refuses; a shed tool call's audit row names its run where that can be checked; the refusal flood's count covers the caller check and the throttles; an embedding input is bounded in tokens; the health check watches the certificate the server loaded; the ingestion's data class has a tenant of its own (T-60, the owner's decision when the step opens). Cut in two on 2026-10-06 (the design in Part C): a first half with no lane, and a second half on the cluster, the server's certificate and the health check (R11) and the ingestion's tenant (R12, which the owner decides at S020). Built as, first half (2026-10-07; implemented and tested, none of it run on a cluster, no real provider called): the Claims API logs the failed fields of the runtime's answer, of the triage proposal and of the brief's output, and counts a stored proposal as stored; a leg ends its run only over the `updated_at` its own start or claim wrote, with no new column, and a late leg answers the stored status with no output; a resume that carries a value is refused with a 422; the runtime's call to the gateway has a deadline of 30 s as a whole, a timeout per phase, a reply cap of 1 MiB and `Accept-Encoding: identity`; a refused prompt and a withheld completion are told apart on the wire (`X-Meridian-Completion: withheld` and three headers naming the deployment) and the withheld one has its drafter on record; `service_url_problem` also asks the HTTP client; a shed tool call's row names its run where the run's own row can be read; every service writes the summary of a refusal flood's last window through one writer; a module that exits at import is a failed load; the access log's path is unquoted to a fixed point and loses a userinfo part; the scaffold names the host; the tool span names its step. Not built, each as a decision with its reason in the section: limits per agent (R2), an embedding bound in tokens (R10), a ceiling on the rate limits (B13), a breaker shared between processes (B14), one word for the two limits (B18), a holder column and the second host's scaffold. Built as, second half (2026-10-07; implemented and tested, and seen on kind in two runs, K1 and K2): the five services that serve TLS start through `python -m meridian.platform.common.tlsstart`, which reads the certificate once, for uvicorn's own context and for the health check, so `/healthz` watches the certificate the server loaded (R11); the module refuses a start that would not ask for a client certificate and ends a start it cannot make with one `tlsstart:` line and exit status 3; K1 saw the 422 for a resume that carries a value, one `suppressed` row from each of the five services that keep a throttle and the access log's path for an address encoded twice, and K2 saw the deploy, the served certificates of four of the five equal to the issued ones, a renewal and a restart, and smoke's 46 lines twice | doing: both halves are built and seen on kind (2026-10-07); left: R12 for the owner's decision at S020, what no kind run could show (the withheld completion's four headers, which S071 measures; a shed call's row, a takeover past the lease and `not-started`; the module's refusal line, the race itself and a renewal that splits OpenSSL's two opens), smoke's line for the sweep's findings, and the new rows of the second half | S064, S037 |
-| S070 | Claims intake and what the adjuster is told | The owner decides first whether uploads are built or stay out (T-38: the largest item here; if built it is a step of its own, split off when this one opens); a report dated as a recent loss is seen for what it is, or T-66 says why it cannot be; the adjuster's page marks a recommendation that rests on the model's answer, so a steered model's `approve` does not read as the rules'. Built as, first half (2026-10-07; implemented and tested against PostgreSQL and in the pages' own tests, none of it run on a cluster, nothing paid, no fingerprint moved): the adjuster's claim page says beside a recommendation whether it rests on a model's reading of the exclusion clauses or on the rules alone, and the queue marks it in a column, from one function over the stored fields (no new field, no migration); it reaches the 6 steered recommendations that wait for an adjuster and not the 28 automatic approvals, which no page lists; the page labels the loss date and the report date as not checked and shows two gaps in days, with no rule or bound, and T-66 says why; the claimant's name pattern is built from a read before the claim's row is locked and only for a request the claim can go on with, so a refused request pays no compile (a stale page and a documents post past the cap still do); the redaction is split into six modules by a proven move; the differential test classifies every lost run, its generator writes the forms it lacked and both date guards are pinned from both sides; the e-mail pass reads its placeholder from the mapping; and an international Hungarian phone number is cut at a space before a second number, in a form narrowed after a review (R3b) and narrowed again after a second (R3c, 951b72c), so that it turns the plain shape and not every text the row quoted. Not built, each with its reason in the section: uploads (the owner's decision is open), a bound on what a name may replace, a reorder of the assessor's checks, the wider cut of a dotted number with a `06` group and a third date guard (the owner's questions), and the fix of three known leaks of the phone matcher | doing: the first half is done (R3c and its review stand; the whole suite is the main session's); the owner's decision on uploads and four more questions are open, and the second half holds what the owner decides; so far it has built, with no word of the owner's, the property test's missing forms, the queue's judgment of a stored proposal by the claim page's function with a received time refused when it has no zone, and one shaped 500 for an answer that cannot be built after the proposal is stored (the section), and it did not build `drafted_by`, which waits for the owner | S067 |
+| S070 | Claims intake and what the adjuster is told | Uploads (T-38: the largest item here) are a step of their own, S080, split off when the owner chose on 2026-10-07 to build them ("Build now"); this step no longer holds them; a report dated as a recent loss is seen for what it is, or T-66 says why it cannot be; the adjuster's page marks a recommendation that rests on the model's answer, so a steered model's `approve` does not read as the rules'. Built as, first half (2026-10-07; implemented and tested against PostgreSQL and in the pages' own tests, none of it run on a cluster, nothing paid, no fingerprint moved): the adjuster's claim page says beside a recommendation whether it rests on a model's reading of the exclusion clauses or on the rules alone, and the queue marks it in a column, from one function over the stored fields (no new field, no migration); it reaches the 6 steered recommendations that wait for an adjuster and not the 28 automatic approvals, which no page lists; the page labels the loss date and the report date as not checked and shows two gaps in days, with no rule or bound, and T-66 says why; the claimant's name pattern is built from a read before the claim's row is locked and only for a request the claim can go on with, so a refused request pays no compile (a stale page and a documents post past the cap still do); the redaction is split into six modules by a proven move; the differential test classifies every lost run, its generator writes the forms it lacked and both date guards are pinned from both sides; the e-mail pass reads its placeholder from the mapping; and an international Hungarian phone number is cut at a space before a second number, in a form narrowed after a review (R3b) and narrowed again after a second (R3c, 951b72c), so that it turns the plain shape and not every text the row quoted. Not built here, each with its reason in the section: uploads (S080's: the owner decided to build them), a bound on what a name may replace, a reorder of the assessor's checks, the wider cut of a dotted number with a `06` group and a third date guard (the owner's questions), and the fix of three known leaks of the phone matcher | doing: the first half is done (R3c and its review stand; the whole suite is the main session's); four questions of the owner's are open (a fifth, uploads, was answered on 2026-10-07 and S080 holds them), and the second half holds what the owner decides; so far it has built, with no word of the owner's, the property test's missing forms, the queue's judgment of a stored proposal by the claim page's function with a received time refused when it has no zone, and one shaped 500 for an answer that cannot be built after the proposal is stored (the section), and it did not build `drafted_by`, which waits for the owner | S067 |
 | S071 | Measurements that need a live model | Costs money (about fifty chat calls and some embedding calls; the owner says yes before any, and the amount is stated first): a real model's answers to the injection cases the screen lets through, recorded beside the golden recording; a model's refusal of a structured request seen from a real provider; retrieval measured with a real embedding, in the evaluation and in S038's one failing check; the judge compared with labels a person wrote for a sample; a held-out set for the injection screen, and a decision on what a false alarm may cost; CLM-0034's `unsure` settled by a prompt or recorded as the right answer; retrieval over a graph measured again only if the synthetic data gains something relational to find | todo | S067 |
 | S072 | The cluster outside `meridian`, second round | On kind: the Prometheus and CloudNativePG operators' reach into Secrets and ConfigMaps of every namespace is narrowed or recorded as accepted with its reason; DNS and the collector cannot carry data out unseen (T-84), or the residual is stated; writes to Prometheus and Loki pass a policy, and the three hops behind the collector are encrypted or the plan says why not; egress from `observability` and the admission webhooks' port are bounded; `cnpg-system` and `envoy-gateway-system` have Pod Security labels and a policy; the owner decides whether node-exporter stays off; Tempo mounts no API token | doing: the first part is on `main` (2026-10-07; implemented and tested, and seen on a warm cluster by run R8 in the limits the section gives: both pods run with no token, the labels applied, smoke's 46 lines and the 21 rules passed, the Certificates Ready but issued before under the old policy; the cold run R9 then approved all eight under the exact lists from nothing): Tempo's and Loki's pods mount no service-account token (three keys); the namespaces of the CloudNativePG operator and of Envoy Gateway warn and audit at Pod Security `restricted` from a render (the gateway's namespace confirmed by the API server's dry run with its proxy pod running, R9; the operator's namespace is gone); the certificate policy for the services names the eight URIs and six DNS names the chart renders, not a wildcard; an alert on the rate store's restart loop. The documents record the four accounts that read Secrets in every namespace (not two), the accepted reaches, the residuals and the one measurement (seen on kind: the API server's calls arrive from the node's address on the pod network and pass a default-deny ingress). The cluster batch is written in files, tested without a cluster and seen on kind by the cold run R9 (2026-10-07, 11:08 to 11:17 UTC, from the batch's commit; five contracts, W, E, C, N and S, and the fix contract F2; not seen: the guard, the fall-backs, a webhook failing closed, Loki's usage report refused, the four other pods of the node rule on the kubelet's port): no pod reaches the webhooks' port 10250 but Prometheus, on the operator's; egress from `observability` is denied by default and admitted by rule; the CloudNativePG operator is released into `meridian` under `config.clusterWide=false` and a policy of its own (`cnpg-system` is gone); `envoy-gateway-system` is denied by default and admitted by rule, and `make deploy` refuses a cluster without the operator's policy; smoke compares a Deployment's name as text. The infrastructure review of the batch is in (nothing critical or high; four medium findings answered by F2); left: the merge of `main`, the whole suite and the pull request, and the rows (the cluster on this machine is the one made from the batch's commit: no `make up` from `main` on it until the batch is merged); the owner decides the writes clause and node-exporter (stays off) | S064, S066 |
 | S073 | Renewals, upgrades and what smoke cannot see | On kind: a renewal is seen for the collector's certificate and the database's, and something alerts before the database's end; the services do not all restart in the same minute at a renewal; approver-policy is restarted when it hangs, and a repaired policy does not wait an hour for cert-manager's retry; a first install that fails has a way back that was tried; the chart bounds its rollback history and `make images` says what to remove; the scripts' `kubectl` calls have a request timeout; a manual sweep Job does not hide a stopped schedule; the failure paths of smoke's newer lines are seen once on a cluster with something broken on purpose; the line that reads approver-policy's wording says so when it fails; probes that time out under load have a recorded answer for the machine the cluster runs on now | doing: the first half is done (2026-10-07: the builds and the runs R0 to R4e, with the answer for the machine recorded); the second half is under way (runs R5a, R5b, R7, R8, R9a, R9, R10 and R11 of 2026-10-07: the one-hour watch run again saw the restarts spread across the six services, the node paused ended every call at the clients' own timeout, with the history limit holding at three ReplicaSets, the cold run gave its timings, and the ingestion's word `rate-store-unavailable` was seen on a real 503); approver-policy is restarted when it hangs: seen for a frozen process on 2026-10-07 (run R13: a liveness probe on `/readyz`, applied by `make up`; the kubelet restarted the container 140 seconds after the process was stopped), and the alert for a stuck one (`MeridianCertificateRenewalOverdue`) loaded and quiet and not seen firing; still open: the ingestion's other three words, a call that a bound of the wrapper ends, a first install made to fail, a policy narrowed before the first deploy and a rotation of the rate store's password (the owner's to run or to accept as not seen) | S064, S066 |
-| S074 | Test suite and file sizes | Without the cluster: `infra/kind/smoke.sh`, `test_kind_manifests.py` and the four test files over 800 lines are split along the lines their own tests already cut; the six functions over 50 lines are under it (counted by signature plus body without the docstring, as the section says: by the whole count the row used, four of the six, `assess`, `build_report`, `build_injection_report` and `summarise`, are still over); the template-database fixture survives a test that patches the runner's file list; the tests that failed once under load (a lost connection in a parallel run, a tool server's timeout, the gateway's fallback test) are run repeatedly on the machine the suite runs on now and either hold by construction or are closed as not reproduced, with the numbers; ~~the slowest test of the job is under ten seconds~~ (not met, and not what the step did: the gates' measurement of 2026-10-07 found the slowest test at 45.0 s without coverage, with seven of the ten slowest over ten seconds; the step gives every test a limit of 600 s instead); one CPU-time helper; `unused_port()` on macOS has its answer written down; ~~the owner decides whether CI gates on coverage~~ (answered 2026-10-07: yes, with a file size check and a per-test timeout; built) | doing: the first half is done (2026-10-07; tested, none of it run on a cluster): the two upkeep test files, `test_toolserver_meters.py`, `test_claims_graph.py` and `test_kind_manifests.py` are split by moves a script proves, the template database's builder passes the list it read at import, the stack and demo tests that failed under load no longer rest on the machine's speed (argued; the measurement run, 25 loops of each beside a whole suite, has not run), the counting test takes 0.03 s alone where CI saw 47 s, and one CPU-time helper serves nine files; three questions wait for the owner (coverage in CI, a size check, a pytest-level timeout); the second half is built except what waits (2026-10-07; implemented and tested, none of it run on a cluster): S076's leftovers are closed or accepted row by row (the registry `schemas` link and `--check` line, the services edit's small ends, the scaffold's undo, the import walker's limits pinned, the golden set's workload tied to `Report` by its own validator, the claimant's closed tables read-only and three stale sentences), `run_command`, `build_report` and `render_summary` are under 50 lines by signature plus body (37, 47 and 29) with `--help`, every report and the committed summary byte for byte the same, and two of the half's own commits carried a defect that the review reproduced and a contract fixed; the third part (2026-10-07; moves a script proves, tested; seen on kind once: `make smoke` from the split as it stands printed 46 PASS, 0 FAIL, 0 SKIP, the same lines as the unsplit script's, the trace ID apart): `infra/kind/smoke.sh` is an entry of 1,185 lines and ten files under `infra/kind/smoke.d/` (`shared.sh` and nine checks, 36 to 644 lines), and checks 8 and 10 are still in the entry; the leftovers are done (2026-10-07; tested, none of it run on a cluster): the five loaders of the name-masked cases are one helper, `servicesupport.injection_case_claim`, whose missing case fails by name, and `test_redaction_hungarian.py` (858 lines) is three files and `hungariansupport.py`, the largest 368 lines, by a move a script proves with the collected count unchanged; the last cut (2026-10-07; moves a script proves, tested; seen on kind once, run R12: `make smoke` from the cut printed 46 PASS, 0 FAIL, 0 SKIP, the same lines as the run before it): checks 8 and 10 are `smoke.d/08-network-policy.sh` and `10-certificate-policy.sh`, the entry is 88 lines and every file of the script, twelve parts and the entry, is under 800 lines (the largest 647); the three gates (2026-10-07; the owner answered all three questions; implemented and tested, the numbers measured on the development machine and none of it yet run by the hosted runner: see "The three gates"): `make lint` runs a size check of 800 lines with 51 files listed as a ratchet, every test stops after 600 s, and CI's suite step measures line coverage and fails under 98 (99.11 % measured, 2.0 % of the suite's time), with the job's limit at 30 minutes; what waits: the rows the section's last table keeps, the backlog rows with home S074 (among them the three new ones: the 46 splits no row homed, the ten least covered files and coverage's cost on the hosted runner) and the measurement run of the load-sensitive tests beside a whole suite (not run) | S064, S066, S037 |
+| S074 | Test suite and file sizes | Without the cluster: `infra/kind/smoke.sh`, `test_kind_manifests.py` and the four test files over 800 lines are split along the lines their own tests already cut; the six functions over 50 lines are under it (counted by signature plus body without the docstring, as the section says: by the whole count the row used, four of the six, `assess`, `build_report`, `build_injection_report` and `summarise`, are still over); the template-database fixture survives a test that patches the runner's file list; the tests that failed once under load (a lost connection in a parallel run, a tool server's timeout, the gateway's fallback test) are run repeatedly on the machine the suite runs on now and either hold by construction or are closed as not reproduced, with the numbers; ~~the slowest test of the job is under ten seconds~~ (not met, and not what the step did: the gates' measurement of 2026-10-07 found the slowest test at 45.0 s without coverage, with seven of the ten slowest over ten seconds; the step gives every test a limit of 600 s instead); one CPU-time helper; `unused_port()` on macOS has its answer written down; ~~the owner decides whether CI gates on coverage~~ (answered 2026-10-07: yes, with a file size check and a per-test timeout; built) | doing: the first half is done (2026-10-07; tested, none of it run on a cluster): the two upkeep test files, `test_toolserver_meters.py`, `test_claims_graph.py` and `test_kind_manifests.py` are split by moves a script proves, the template database's builder passes the list it read at import, the stack and demo tests that failed under load no longer rest on the machine's speed (argued; the measurement run, 25 loops of each beside a whole suite, has not run), the counting test takes 0.03 s alone where CI saw 47 s, and one CPU-time helper serves nine files; three questions wait for the owner (coverage in CI, a size check, a pytest-level timeout); the second half is built except what waits (2026-10-07; implemented and tested, none of it run on a cluster): S076's leftovers are closed or accepted row by row (the registry `schemas` link and `--check` line, the services edit's small ends, the scaffold's undo, the import walker's limits pinned, the golden set's workload tied to `Report` by its own validator, the claimant's closed tables read-only and three stale sentences), `run_command`, `build_report` and `render_summary` are under 50 lines by signature plus body (37, 47 and 29) with `--help`, every report and the committed summary byte for byte the same, and two of the half's own commits carried a defect that the review reproduced and a contract fixed; the third part (2026-10-07; moves a script proves, tested; seen on kind once: `make smoke` from the split as it stands printed 46 PASS, 0 FAIL, 0 SKIP, the same lines as the unsplit script's, the trace ID apart): `infra/kind/smoke.sh` is an entry of 1,185 lines and ten files under `infra/kind/smoke.d/` (`shared.sh` and nine checks, 36 to 644 lines), and checks 8 and 10 are still in the entry; the leftovers are done (2026-10-07; tested, none of it run on a cluster): the five loaders of the name-masked cases are one helper, `servicesupport.injection_case_claim`, whose missing case fails by name, and `test_redaction_hungarian.py` (858 lines) is three files and `hungariansupport.py`, the largest 368 lines, by a move a script proves with the collected count unchanged; the last cut (2026-10-07; moves a script proves, tested; seen on kind once, run R12: `make smoke` from the cut printed 46 PASS, 0 FAIL, 0 SKIP, the same lines as the run before it): checks 8 and 10 are `smoke.d/08-network-policy.sh` and `10-certificate-policy.sh`, the entry is 88 lines and every file of the script, twelve parts and the entry, is under 800 lines (the largest 647); the three gates (2026-10-07; the owner answered all three questions; implemented and tested, the numbers measured on the development machine and none of it yet run by the hosted runner: see "The three gates"): `make lint` runs a size check of 800 lines with 51 files listed as a ratchet, every test stops after 600 s, and CI's suite step measures line coverage and fails under 98 (99.11 % measured, 2.0 % of the suite's time), with the job's limit at 30 minutes (coverage's first run on the hosted runner, the `python` job of pull request 128, took 14 minutes 0 seconds, inside the 10 min 1 s to 14 min 29 s measured without coverage the same day); what waits: the rows the section's last table keeps, the backlog rows with home S074 (among them two of the three new ones: the 46 splits no row homed and the ten least covered files; the third, coverage's cost on the hosted runner, is read and closed) and the measurement run of the load-sensitive tests beside a whole suite (not run) | S064, S066, S037 |
 | S075 | Harness, guard and Renovate | `make docs` notices a blank line that splits a table; the command guard's known gaps to a Secret's values and to superuser SQL are closed or listed where a session reads them, and a hook that times out has a known outcome; a rule for an implementer that edits through the shell, and a guard or a rule for `make up` and `make down` from an old checkout (both the owner's); the workflow linter knows the runner label; Renovate's week of waiting is a required check or the plan says why not (the owner's decision), an image is not proposed before the chart that installs it, and the two pgvector versions are one | done (not built: the two pgvector versions are not one, because the newest CloudNativePG image still holds 0.8.6; the owner chose package-manager holds over a required check, and uv's `exclude-newer` cannot go in before 2026-10-10; N4, the guard's own files, is the owner's open question 6; the shell-edit hook is inert until the owner sets `bashEditDiffEnabled`) | — |
 | S076 | CLI, scaffold and loader small ends | No registry entry lets the runtime name an agent that no tenant lists without a check saying so (T-81); `services_edit` refuses an alias or a merge key by itself; the scaffold says which write failed and names the line it refuses in every case; the two entry-point loaders answer a bad entry in the same fixed words; the screen's fingerprint covers what it claims to; the workload's report builders refuse another workload's manifest; `meridian registry schemas` answers an unwritable directory with a message; the scaffold can write an agent with workers, or the plan says why a second graph of subgraphs is not built. Built as: `meridian registry validate` prints one NOTE, exit code unchanged, for each graph agent the runtime may name and no tenant lists, and `load_registry` refuses nothing new, so the owner's S061 decision stands; `services_edit` itself refuses an anchor, an alias or a merge key, naming the line; a refusal about a line of the person's file names the parser's line where the parser gives one; a failed or interrupted write names its kind and the error's class, the undo puts back every file that still holds the command's own bytes and names every path it did not restore (the scaffold's write and undo are in `scaffold_writes.py`); the two loaders word a refusal in one table of fixed sentences that quote no distribution's name and no import error's text, with the registry's agent ID in front for the graphs; the screen's digest is unchanged and the documents say what it covers and does not; both report builders compare the manifest's workload with their own; `meridian registry schemas` answers a directory it cannot update with one line; a second graph of subgraphs is not built, as a decision (the section says why). Implemented and tested, not run on a cluster | done | S037 |
+| S080 | File uploads for a claim, before sign-in | A claimant uploads one PDF, JPEG or PNG of at most 1 MiB to a claim, five and 3 MiB to a claim, through the JSON route or the status page's form; the file is told by its first bytes and never by its declared type or name, and its name is not stored; an upload is not a document arrival and starts no triage; the adjuster lists a claim's files with "not scanned" beside each and, behind a second switch, downloads them as an attachment under a sandbox policy, with an audit row before the first byte; both switches are off by default, and the chart allows either only for a route host name that ends in `.localhost`; the app has brakes of its own besides the edge's second route, buffer and rate limit; nothing scans a file (designed, not built) and nothing deletes one. Built as (2026-10-07; implemented and tested against PostgreSQL and **run once on kind on 2026-10-07 with both switches on for that run only** (run RU1: by script, through the edge, not in a browser), nothing paid, no evaluation fingerprint moved, the owner's "Build now" of the same day for the uploads and "Build now, local-only switch" for the download): migration 0032 (`claims.claim_files`, `claims_api` may insert and select), the route and the form, the ceilings under advisory locks, the edge route and policies in the chart, the adjuster's list and download with brakes of their own, synthetic sample files from the seeded generator, and five reviews (database, security twice, FastAPI, platform boundary). Not built: a scanner, a delete or a retention period, a sign-in, a second host name for downloads | doing: built, reviewed and run twice on kind (RU1, RU2); the pull request is left | S070 |
 
 ### Toward services: a database each and six images
 
@@ -703,7 +705,7 @@ that day; the rest stand as their step recorded them.
 | Audit rows of one transaction share a time, so the trail cannot order them | S048 | closed by S065 (`audit.events.seq`, stamped by the database, migrations 0017 and 0019; the adjuster's queries break a tie by it) | S065 |
 | `database_failure` without the claim's ID | S048 | closed by S060 (a wrapper of the workload's logs the ID at twelve call sites; the queue has no claim) | S060 |
 | A per-phase httpx timeout | S048 | closed by S060 (3 s to connect, 5 s to write, 3 s for the pool, 60 s to read) | S060 |
-| Uploads (T-38) | S048 | open; S070 stays open for it: the owner's decision, asked in three statuses and not answered, was not taken, and nothing was built for uploads; the session recommends out until S021, when a caller has an identity. If built, a step of its own | S070 |
+| Uploads (T-38) | S048 | ~~open; S070 stays open for it: the owner's decision, asked in three statuses and not answered, was not taken, and nothing was built for uploads; the session recommends out until S021, when a caller has an identity. If built, a step of its own~~ answered by the owner on 2026-10-07 ("Build now", against that recommendation) and built as S080: implemented, tested, off by default, **not seen on a cluster**; what it leaves open is in the rows that name S080 below (scanning, retention, the open host before sign-in) | S080 |
 | A shell poll test (`test_kind_manifests.py::test_poll_clears_the_last_error_on_success`) failed once and passed alone | S048 | closed by S052: the tests' one-second budget met bash's whole-second clock, so a tick skipped the loop; the budget is two seconds | none |
 | The CI python job near its time limit | S048 | closed by S054 (4 min 50 s in parallel) | none |
 | Running the tests in parallel | S049 | done in S054 | none |
@@ -1076,7 +1078,7 @@ that day; the rest stand as their step recorded them.
 | Runbook queries and smoke lines that name the one database `meridian` or one schema each (the budget-exhaustion, secret-rotation, rate-store, provider-outage and database-failure runbooks, run by `tests/meridian/test_runbook_queries.py`; smoke's `psql -d meridian` lines and the cost-panel and service-identity checks; `infra/kind/deploy.sh`'s chunk count) | S081 (the map) | open; designed, nothing built | S087 |
 | 46 source files over the 800-line ceiling have no row of their own: `scripts/file-size-exceptions.txt` lists 51, each with the line count it may not pass (a ratchet), and five of them are homed elsewhere (`scripts/check_docs_consistency.py`, a copy of development-base's file, whose copy is the one to split; the two AWS script test files and the two upkeep and migration-rule test files, which have the rows above). The other 46 carry the reason "over the ceiling before the check existed; a row of S074 homes its split", and this row is that row. Two are not tests (`infra/terraform/aws.sh`, 812 lines, and `src/meridian/platform/registry/checks.py`, 857) and 44 are, the largest `test_runtime_app.py` (3,160 lines), `test_adjuster_pages.py` (3,097) and `test_claimant_pages.py` (2,743). Each split is work nobody has homed: a cut by S074's method (a script proves the moves) and the removal of the file's line from the list | S074 (the size check, C1, 2026-10-07) | open; each file's split is a contract of its own, none is built | S074 |
 | The ten least covered files of `src/meridian`, from the whole suite of 2026-10-07 (99.11 % of 13,783 statements, 122 missed; the same lines with the tracing core and with the monitoring one): `workloads/claim_brief/evaluation.py` 82.2 %, `platform/evaluation/report.py` 94.2 %, `platform/evaluation/fingerprints.py` 94.8 %, `workloads/claims_triage/mcp_server/tools.py` 95.1 %, `platform/gateway/startup.py` 96.0 %, `workloads/claim_brief/workflow.py` 96.2 %, `platform/policy_mcp/seed.py` 96.3 %, `platform/cli/knowledge.py` 96.4 %, `workloads/claims_triage/evaluation_http.py` 96.7 % and `platform/gateway/providers/azure_openai.py` 96.7 %. The lines still missing are ordinary error paths; no file is reachable only through the paid opt-in tests, and nothing is omitted for them. The floor is 98 for the whole, so one of these files can lose coverage without failing the gate | S074 (the coverage floor, C1, 2026-10-07) | open; a list for a person who works in those files, no fix built | S074 |
-| Coverage's cost on the hosted runner is not measured: the 2.0 % (257.63 s against 252.52 s) is the development machine's, at six workers, and the CI job's limit of 30 minutes was set from it by arithmetic (the slowest of five jobs, 14 min 29 s, scaled by 257.63 / 252.52 to 14 min 47 s, doubled and rounded up). The first pull request whose `python` check runs with `COVERAGE=1` gives the number: the Tests step's time and the whole job's, against the 10 min 1 s to 14 min 29 s read before it; if the step costs much more than 2.0 %, the limit and the workflow's comment are reread | S074 (C1b, 2026-10-07) | open; read from the first pull request that runs it | S074 |
+| Coverage's cost on the hosted runner is not measured: the 2.0 % (257.63 s against 252.52 s) is the development machine's, at six workers, and the CI job's limit of 30 minutes was set from it by arithmetic (the slowest of five jobs, 14 min 29 s, scaled by 257.63 / 252.52 to 14 min 47 s, doubled and rounded up). The first pull request whose `python` check runs with `COVERAGE=1` gives the number: the Tests step's time and the whole job's, against the 10 min 1 s to 14 min 29 s read before it; if the step costs much more than 2.0 %, the limit and the workflow's comment are reread | S074 (C1b, 2026-10-07) | closed (2026-10-07): the first pull request whose `python` check ran with `COVERAGE=1`, pull request 128, took 14 minutes 0 seconds for the job on the hosted runner, inside the 10 min 1 s to 14 min 29 s read before it without coverage the same day (the Tests step's own time is not recorded here; the limit of 30 minutes was not changed) | S074 |
 | No test reads the measuring core that coverage actually used. If the monitoring core is unavailable, or branch coverage or dynamic contexts are turned on, coverage.py 7.16.2 emits a `CoverageWarning` and falls back to the trace function without failing, and the suite then takes about 40 per cent longer (252 s to 346 s measured; on CI about 14.8 min to 20.7 min, still under the 30 minutes). The test of the configuration reads `core = "sysmon"` and the absence of `branch`, not the core in use, so the fallback would be a slow warning, not a failure | S074 (the review of the three gates, finding 7, 2026-10-07) | open; low; a check would read `coverage debug sys` or the data file's metadata after a small run | S074 |
 | The size check's scope has gaps. It reads Python under five directories and shell under two, so a new top-level Python directory is outside it, and so are `infra/kind/alerts/meridian.test.yaml` (2,184 lines, the one file over 800 outside the check), the chart's helpers (`_helpers.tpl`, 766), `tests/test_guard_bash.sh` (736), Terraform (largest 286 lines) and SQL (largest 526). A path with a space cannot be listed: the failure message suggests a line that the parser (`line.split()`) rejects, and no tracked path has a space today | S074 (the review of the three gates, finding 8, 2026-10-07) | open; low | S074 |
 | Code that runs only in a child process counts as not covered: pytest-cov 7.1 has no subprocess hook, `patch = subprocess` is not set and nothing sets `COVERAGE_PROCESS_START`, so what a test reaches only through a `python -m` child shows as missed (the reviewer ran a function reached only that way and its lines were missed). The 99.11 per cent does not rest on it, and a change in that share, up or down, is not visible in the number | S074 (the review of the three gates, 2026-10-07) | open; low; seen by the reviewer, not measured over the suite | S074 |
@@ -1085,6 +1087,17 @@ that day; the rest stand as their step recorded them.
 | The Azure server's own logging is not built: list the server's log categories at the first sign-in, build one diagnostic setting for the category that holds the connection log in a workspace of its own or under a cap of its own, then the parameters `log_connections` and `log_checkpoints`; `connection_throttle.enable` after the bootstrap; the TLS floor (`require_secure_transport`, `ssl_min_protocol_version`) read and stated; the scan's `AZU-0019`, `AZU-0021` and `AZU-0024` stay listed until then | S020 (Z6b; the second review) | open | S020, second half |
 | The Azure audit log is purged with the environment, with no export, and there is no alert on the workspace's daily cap: read Microsoft's page on the cap and the operation it logs, then build the alert and decide on an export before a removal or the knowing loss (T-105) | S020 (security review M6) | open; owner | S020, second half |
 | What the Azure second half must do, nine items in the module's README: the secrets identity's standing read, egress (the Entra host, the metadata address, the policies measured under Cilium), a second administrator, Pod Security labels on Azure's namespaces, the password's version rule, the database's roles and the Entra administrator, the server's logging, the audit log's afterlife, and the edge's Service address and source ranges | S020 (Z8) | open | S020, second half |
+| Malware scanning of an uploaded file. A stored PDF, JPEG or PNG is checked by its first bytes and nothing else, and "not scanned" stands beside every file and link; a well-formed file that exploits the adjuster's viewer is stored and delivered (T-38, T-109). A scanner is a second workload whose signature database alone needs more memory than the machine has beside the cluster; on Azure the answer is the platform's malware scanning on the store that would replace the table | S080 (design U7) | open; designed, not built (the owner's chosen option of 2026-10-07 was "a malware-scan placeholder") | S080, later half |
+| Sign-in closes the open upload and the open download, and removes what stands in for it. Until S021 the upload route takes a file for any claim from anyone who reaches the host and, behind its switch, the download serves every claim's files (T-108, T-110); the chart's `.localhost` guard is the only stop and S021 takes it out when a caller has an identity. The same step makes an upload count as the document it is labelled with (the advisor's reading of 2026-10-07; today the rules read names only, T-66). An upload credential the app checks itself was weighed and not built, because it would be a second, throwaway sign-in beside the real one | S080 (the security review's H-2; F4b) | open; designed | S021 |
+| A second host name for downloads, with a Host check in the app, so that a stored file is served from an origin the pages' cookies do not reach (the security review's requirement 10). Not built: one more name to route and to explain, and S021's cookies do not exist yet. The download's headers keep a file from running in the pages' origin and do no more | S080 (F4b, D7) | open; not built | S021 |
+| The audit model has no field for a file. `claim.file_stored` and `claim.file_downloaded` hold the claim and the tenant (the claim ID is the `reference`, which `audit.claim_trail` joins on), so five files of one claim and a download of one differ only by time, and a row cannot be tied to the file it records (the platform-boundary review's M-2). A field for a file, or a place for the identifier in the reason, is a change of the audit model, which the services split's S085 (the audit outbox, on `main`) makes anyway | S080 (the boundary review; F4b) | open | S085 |
+| Retention and a delete path for uploaded files. `claims_api` holds SELECT and INSERT on `claims.claim_files` and no DELETE, no period is set, and the bytes are also in the write-ahead log and in every backup, so a stored file stays until the database is dropped (T-111; the data classification's row). The owner decides first: how long, who deletes, and whether the schema's owner may (the owner left retention open on 2026-10-05). A foreign key with no cascade means a file must be deleted before its claim | S080 (the database review; design U8) | open; the owner's decision comes first, and nothing is built | S068 |
+| The access log of the Claims API's server holds the file's identifier in the URL of a download, as it holds every route's path. F4d kept the identifier out of the route's span and of the framework's server span (a test reads the exported spans); the uvicorn access line was not changed. While the pages have no sign-in the identifier is a handle that anyone who reaches the host can use; with sign-in it is one that a log line hands out to nobody | S080 (F4b, noticed; the second security review, L-D) | open; narrowed by F4d to the access log | S021 |
+| The adjuster's page prints each file's full SHA-256 in a `title`, so any reader can confirm that a claim holds an exact file without uploading it (read-only; the same family as the duplicate answer of T-38) | S080 (the second security review, L-E) | open; the list could show twelve characters and no more | S021 |
+| The edge's rate-limit buckets: per route or per match. RU1 showed that GET and HEAD of the download share the named rule's bucket and that the uploads' and the downloads' buckets are separate, and six uploads a minute at the edge on the JSON route; it did not try the JSON route and the claimant's form against each other, so whether the two POST matches share one bucket (six a minute) or have one each (twelve) is not known. The app's 30 files a minute is the backstop for either | S080 (the second security review, M-E; run RU1) | open; narrowed by RU1 | S080 |
+| The multipart parser leans on Starlette internals that are not documented API: the class attribute `spool_max_size`, `UploadFile._max_mem_size` and `_rolled`. Starlette arrives through FastAPI, so a lock refresh can rename one and a part of 1.0 to 1.1 MiB would spill to `/tmp`, which the pod does not have room for. A test with no database feeds a 1,100,000-byte part and fails if the part rolls to disk, and the class's docstring names the coupling; nothing pins the version | S080 (the FastAPI review, L2; F4c) | open; guarded by a test, not pinned | S080, later half |
+| Envoy's handling of an encoded path on the upload route. Run RU1 showed that Envoy normalises the path before the app sees it (`POST /claims/CLM-0001/%66iles` was served as an upload, 201; a GET with the first character of the file identifier encoded was 200; `POST //claims/CLM-0001/files` reached the route, 409), so behind this edge the app's refusal of a raw path with a `%` never fires. What is still not known is whether the normalised request is matched by the uploads route, with its buffer and rate limit, or by the first route: the bodies were under 64 KiB, which either route passes. Run RU2 sent 100 KiB bodies to an encoded and to a double-slashed path: both reached the app, which the first route's 64 KiB would not have let through, and the seventh of seven uploads to the encoded path got the edge's own 429: the uploads route serves the normalised path and its six a minute count it. Not probed: an escaped slash. The app's own brakes do not depend on the answer | S080 (the security review, M-1; F2b; runs RU1 and RU2) | closed for this edge by RU2 (an escaped slash not probed) | S080 |
+| Small ends of S080, none of which changes behaviour: `test_claim_uploads_limits.py::test_the_upload_route_alone_takes_more_than_64_kib` says "alone" and now covers the JSON route only; the shared privilege snapshot (`tests/meridian/sweepmigrationsupport.py`) does not list `MAINTAIN`, which the migration's own test checks for ten roles; the Makefile's help line for `synthetic` does not mention the upload samples; one `UnsupportedFieldAttributeWarning` ('alias' for `claim_id`) appeared once in a directory run of the claims tests, in a test that touches no upload code | S080 (F1, F1b, F4a, F4c, F5 reports) | open | S080, later half |
 
 ## Part C — Step details
 
@@ -15473,7 +15486,9 @@ a cluster.
   rows the second half's last table keeps; the backlog rows with home S074
   that are still open (among them the six new rows of this part, each file's
   split of the 46, the ten least covered files, and coverage's cost on the
-  hosted runner, to be read from the first pull request that runs it; and
+  hosted runner, read since from pull request 128, the first to run it (the
+  `python` job took 14 minutes 0 seconds, inside the 10 min 1 s to 14 min 29 s
+  measured without coverage the same day; the row is closed); and
   the rows on the manifests outside the repository, a runner for `shellcheck`,
   `test_smoke_trap.py`'s 60 s, and the leftovers' two); and the measurement
   run of the load-sensitive tests, 25 loops beside a whole suite, not run.
@@ -17031,10 +17046,11 @@ ended `20080 passed, 8 skipped, 8 warnings in 266.07s (0:04:26)`, in plan v0.83.
 
 ### S070 — Claims intake and what the adjuster is told
 **Status:** doing · **Started:** 2026-10-07 · **Finished:** —
-**Left before it is done:** the owner's decision on uploads (the step
-started without it, and built nothing for them); four more questions of
-the owner's (For the owner); and `drafted_by`, which the second half did not
-build (For the owner, second half). The first half is written here as it
+**Left before it is done:** four questions of the owner's (For the owner;
+uploads are no longer one of them: the owner answered "Build now" on
+2026-10-07 and they are S080's, so this step builds none); and `drafted_by`,
+which the second half did not build (For the owner, second half). The first
+half is written here as it
 stands (R3c and its review are in; the whole suite is the main session's);
 the second half so far is written after it, and takes what the owner
 decides.
@@ -17045,7 +17061,7 @@ a claim's row is locked or for a request the claim refuses, and the phone
 matcher of the redaction is split into modules, tested against the matcher
 before it without a gap in its sweep, and made to replace a second number
 after an international one, all without a new recording of the model and
-without a payment. Uploads are not built.
+without a payment. Uploads are not built here (S080 builds them).
 
 **What the step is not:** it builds nothing for uploads, it sets no bound on
 what a name may replace, it does not reorder the assessor's checks, and it
@@ -17061,6 +17077,8 @@ has not answered. The row's own parenthesis settles what the step does
 either way: built, uploads are a step of their own, split off when this one
 opens; so the step opened on everything else, nothing in it forecloses
 uploads, and the question stays asked (T-38 says so, as it stands).
+*Answered on 2026-10-07, about 13:40 UTC, by the question tool: "Build now".
+The step they became is S080; this paragraph is what was true until then.*
 
 **Decisions** (the session's; the owner may overturn any; the design, with
 its threat note, was written before the first contract, and what follows is
@@ -17492,7 +17510,8 @@ redaction, the name or the assessor):
 **Backlog rows, judged** (the rows homed at S070, each by its text; the
 rows are in Part B):
 
-- Uploads (T-38): stays, asked of the owner; nothing built.
+- Uploads (T-38): ~~stays, asked of the owner; nothing built~~ answered on
+  2026-10-07 ("Build now"): the row is homed at S080.
 - The loss date as the claimant's word (T-66): closed by S070 (A1, A4) as a
   reasoned residual; the rules still do not see such a report.
 - A steered model's `approve` and the page's mark: closed by S070 in part
@@ -17542,7 +17561,8 @@ that nothing is built):
 - **(a) Uploads (T-38).** Built, as a step of its own with a design, a store
   for bytes, a scanner and a paid recording if content reaches the model, or
   out. The session recommends out until S021, when a caller has an identity:
-  without a sign-in anyone could upload to any claim.
+  without a sign-in anyone could upload to any claim. *Answered on 2026-10-07
+  (about 13:40 UTC): "Build now", against that recommendation; see S080.*
 - **(b) The mark on the adjuster's page.** Built, as a decision the session
   took; say so if it should not be, or if the rules should withhold a
   recommendation that rests on the model instead (it changes `decide`, the
@@ -17791,7 +17811,8 @@ part was merged in (fe36a2a) had 18,097 passed, 8 skipped.
 that nothing is built; the first half's (a) to (e) stand as written):
 
 - **Uploads (a), the bound on what a name may replace (c), and where the
-  three known phone leaks go (e).** Unchanged. The property test now writes
+  three known phone leaks go (e).** Unchanged (uploads (a) were answered on
+  2026-10-07, "Build now", after this was written: see S080). The property test now writes
   the forms it lacked and found no digit lost, which says nothing for or
   against a fix of the three leaks: they are not losses against the matcher
   before the cut.
@@ -19416,6 +19437,573 @@ real thing):
   here and kept.
 - For the owner: the decisions above and the four questions at the paid stop.
 
+### S080 — File uploads for a claim, before sign-in
+**Status:** doing · **Started:** 2026-10-07 · **Finished:** —
+**Left before it is done:** a browser, a slow body and the app's own limits
+seen on a cluster (two runs, RU1 and RU2, saw the edge's side: the second
+settled which route serves an encoded path); the whole suite on the final tree
+(done: 21,219 passed, 8 skipped); the pull request and its merge; and the
+owner's decision
+on retention and erasure of uploaded files, which comes before any use with
+real data (For the owner). The code is built and has been reviewed twice, and
+the path ran once on kind; this record is the documents contract that follows
+them. Plan version of this part: v0.87.
+
+**Goal:** a claimant attaches one PDF, JPEG or PNG to a claim, before any
+sign-in exists, and an adjuster sees that it is there and, behind a second
+switch, takes it; both switches are off by default and the chart turns either
+on only for a host name that ends in `.localhost` (a check of a string, not a
+network boundary: U11). The file's bytes are
+stored with the claim and nothing reads them. Everything else a document
+pipeline could do (extraction, a model that reads documents, a scanner, an
+object store, a delete) is **designed or not built**, and said so where it
+matters. Names: the commits and the code's comments call this work "S070
+uploads" and "F1" to "F5", because S070's section was its home until this
+step's number was taken at the documents (the design's rule: a step's number
+is taken when its first pull request is cut); S080 is the same work.
+
+**The owner's decisions**, as `owner-answers-2026-10-06.md` holds them:
+
+- 2026-10-07, about 13:40 UTC (question tool, second round): `S070 uploads:
+  "Build now"`. The session had recommended waiting for S021, when a caller has
+  an identity. The design records the option the owner chose as "Build uploads
+  against the current unauthenticated intake, with size and type limits and a
+  malware-scan placeholder", which is why scanning is **designed** here and was
+  not asked a second time.
+- 2026-10-07, about 15:30 UTC (a sixth round; the owner: "Ask me the
+  questions"): `Uploads, the adjuster's download: "Build now, local-only switch
+  (Recommended)". With the security review's eleven requirements, an audit row
+  per download, a second switch that is off by default and that the chart
+  refuses outside a local release. Not to be exposed before S021.`
+- The same round: `Uploads, the two defaults: "Keep both (Recommended)" (the
+  database verifies each file's hash; the same file twice on a claim is
+  refused).`
+
+**Design** (the session's, written before the first contract and kept in a
+file outside the repository; U1 to U11 as they ended, each with what the
+advisor or a review changed). Nothing here is the owner's unless the list above
+says so.
+
+- **U1, the route (changed by the advisor).** `POST /claims/{claim_id}/files`,
+  multipart with one `kind` (one of the four document codes the rules know, or
+  `other`) and one `file`, and an HTML twin, `POST
+  /claimant/claims/{claim_id}/files`, whose form is on the claimant's status
+  page (the design said the documents page). **An upload is not a document
+  arrival.** The first draft made each stored file also an arrival of that
+  name, so a file started a triage, which is the threat T-38 names ("each
+  upload starts a new, paid triage run"). The advisor changed it: the rules go
+  on reading names (T-66), the adjuster's page shows files and named documents
+  as two lists, and no upload moves a claim or touches the model's budget.
+  An upload counting as the document once a caller has an identity is a
+  backlog row at S021. The names-only route and its tests stand.
+- **U2, limits (corrected twice).** One file a request, at most 1 MiB, at most
+  five files and 3 MiB to a claim, and a ceiling on the whole store. The
+  design's 256 MiB default became **128 MiB and 2,000 files** (settings with a
+  floor and a cap: bytes up to 256 MiB, files up to 100,000), after the
+  database review said the volume's arithmetic had not been done and that a
+  byte ceiling does not bound rows (F-02, F-04). "Two inserts at the same
+  moment may pass it by one file" was withdrawn (F-03: with N inserts the
+  overshoot is N-1): a claim lock and a store lock, both advisory and taken in
+  that order, make the ceilings exact.
+  The design's "a 1 MiB file stays under the form parser's threshold for
+  spooling to disk" was **false** at the route's limit: a part of 1.0 to 1.1
+  MiB rolled to `/tmp`, which the pod has 16 Mi of, so F2 wrote a parser that
+  holds the part in memory (`MemoryOnlyParser`) and a test that fails if it
+  rolls. Past a ceiling the route answers 507 for everyone. The second security
+  review added a **byte budget** (F4d): the rate counted files, and 128 unique
+  files of 1 MiB reach the 128 MiB ceiling in about four minutes at 30 files a
+  minute, so the store now also refuses more than 8 MiB stored in a minute
+  (429; a constant, not a setting, since a setting would need a variable, a
+  parser, a field and a chart value): the default ceiling takes 16 minutes to
+  fill and the 256 MiB cap 32.
+- **U3, the body limit per route (the boundary reviewer read it).** The app's
+  64 KiB stays for every other route; the two upload paths take 1 MiB and
+  76 KiB of multipart envelope, 1,126,400 bytes. The mechanism is general
+  (`route_body_limits` and `RoutePattern` in `platform/common/http.py`; the
+  Claims API alone passes any) and a test holds that every other route keeps
+  64 KiB. At the edge the same number and a **local rate limit** of six a
+  minute for the whole route: the pinned Envoy Gateway (v1.9.2) offers a local
+  limit, read from its CRDs, so the design's STOP did not come. Run RU1 on kind
+  showed that the route wins over the first and that the policies attach (see
+  Result / verification); what the edge does with an encoded path is the one
+  thing about the route's matching still not shown (see Not seen).
+- **U4, type.** By the file's first bytes (`%PDF-`, `FF D8 FF`, the PNG
+  signature), never by the declared type or name; anything else is 415 and
+  nothing is stored. The declared name is not stored: a file is known by its
+  kind, its type, its size and its SHA-256.
+- **U5, storage (changed by the database review).** Migration 0032,
+  `claims.claim_files`, with `claims_api` holding SELECT and INSERT and no
+  other role anything. F1b took the review's changes into the unapplied file:
+  the database checks that the hash is the content's (`sha256 =
+  sha256(content)`), the same file twice on a claim is refused by a unique
+  key (the owner's "Keep both"), the content is stored uncompressed, and the
+  file's header says what lock it takes and for how long. The existing
+  `claim_documents` table and its three-column test stand.
+- **U6, read-back (changed by the security review, then by the owner).** The
+  adjuster's claim page lists a claim's files with kind, type, size, hash,
+  time and "not scanned"; the claimant's status page lists kind, size and time
+  (the design said a count and the kinds) and offers no download. **The
+  download was cut out** after the security review found that the adjuster's
+  pages are as anonymous as the claimant's, so an adjuster-side download is an
+  open file host (H-2); F4a built the list alone. **Then it was built behind a
+  switch of its own** when the owner chose "Build now, local-only switch": see
+  U11. The second security review then changed the page too (F4d): the trail
+  shows the newest 200 events in time order, says when older ones exist and
+  leaves the downloads out of the list, counting them on one line ("Downloads
+  of this claim's files: N, the latest at ..."), because an anonymous caller
+  who holds one file identifier could otherwise write 200 download rows and
+  push a claim's decision off the page.
+- **U7, scanning: designed, not built.** Said beside every file on the
+  adjuster's page. A scanner is a second workload whose signature database
+  alone needs more memory than the machine has beside the cluster. What stands
+  in for it: the type allow-list, the size limits, nothing parsing or
+  rendering a file on the server, and the download's headers. On Azure the
+  designed answer is the platform's malware scanning on the store that would
+  replace the table.
+- **U8, audit (the design's sentence on refusals was wrong).** One audit row
+  for each stored file (`claim.file_stored`) and, since F4b, one for each
+  download (`claim.file_downloaded`), in the transaction of the file and
+  before the first byte respectively. The design said the existing throttled
+  refusal rows would cover refusals; **they do not exist in this workload**,
+  and a refusal writes no row, by decision (see Accepted, and said).
+- **U9, synthetic files.** Four files in `data/synthetic/upload-samples/` with
+  a manifest of their own, made in code from the seed with the standard
+  library: a PDF whose text names a golden claim, a JPEG and a PNG that show
+  the word SYNTHETIC, and a text file named like a PDF that the route refuses.
+  They are outside the golden manifest on purpose, so no fingerprint moves.
+  The form repeats the banner (T-04): "Synthetic data only: never upload a real
+  document."
+- **U10, fingerprints.** None moved: no prompt, tool, screen, golden file or
+  recording changed (the reports show nothing changed under `config/`, and F5's
+  `git diff` of the golden manifest, the injection cases and `data/evaluation`
+  printed nothing; `make eval` was not run: it needs a database, and nothing
+  it reads changed).
+- **U11, exposure (the guard was added at F4b).** Each capability has its own
+  switch, off by default: `route.uploads.enabled` (the app's
+  `MERIDIAN_CLAIMS_UPLOADS`) and `route.downloads.enabled`
+  (`MERIDIAN_CLAIMS_DOWNLOADS`), which needs uploads (the chart and the app
+  both refuse it otherwise). The design cited a "local release" guard that
+  the chart did not have (the boundary review's M-5); F4b built the real one,
+  and the second security review made it exact (F4d): **the chart refuses
+  either switch unless the route's host name as a whole is a lower-case name
+  that ends in `.localhost`** and the switches are booleans (the string
+  "false" counted as true), and prints the name quoted (a value with a newline
+  passed the first guard and rendered two names), with a sentence that names
+  S021. The first version of the guard's words said such a name "cannot be
+  reached from another machine"; the review showed that **false**: the guard
+  checks a string, Envoy matches the Host header, which any client can set,
+  and on kind the boundary is the cluster config that binds the published port
+  to 127.0.0.1, not the chart. The guard stops a release that turns the
+  switches on beside a public name in one values file; it does not stop a
+  Gateway reachable from a network, a port-forward, other local users or
+  containers that reach the loopback port or the node's address, a
+  `parentRef` to another Gateway, or a variable set by hand outside the
+  chart. The documents say it in those words. S021 removes the guard.
+- **The app's own brakes (F2b, F4c, F4d).** The security review found that the
+  only brakes against many or slow uploads were the edge's. The app now takes
+  at most four uploads at once (503, before a body byte is read), 30 files and
+  8 MiB a minute for the whole store (429, counted under the store lock), a
+  body within 20 seconds (408), and refuses a raw path that holds a percent
+  sign (404; see Not seen for what RU1 showed of it); a lock wait that times
+  out is "busy", not "the database is unavailable"; a client that goes away
+  frees its place with one INFO line; `claims_api` has a connection limit of 50
+  on kind. **The download has its own** (F4d), because the second review showed
+  that an anonymous caller could write unlimited audit rows with it: a
+  cross-site check (a navigation from another site is the pages' 403 and
+  writes no row), 30 downloads a minute for the whole store, GET and HEAD
+  alike (429, a window per process, which a second replica would multiply),
+  and four at once (503), each before the content is read, and a HEAD that
+  reads the type and size and not the bytes. The file identifier is kept out
+  of the route's span and of the framework's server span; the access log still
+  holds it (a backlog row). `SecurityHeadersMiddleware` and the cross-site
+  check moved to `page_security.py` with no change in behaviour, so that
+  `adjuster.py` is 745 lines.
+
+**Advisor:** three consultations by the main session, recorded from the
+design's dated sections.
+
+- **About 13:55 UTC on 2026-10-07, at the design before the first contract.**
+  Changed: U1 (an upload is not a document arrival); the smallest cut stands
+  and scanning as designed needs no second ask, because it was the option the
+  owner chose; `bytea` is defensible at these sizes and the ceiling is
+  computed from the `size` column, never by summing content; the per-route
+  limit changes shared code, so the boundary reviewer reads it and a test holds
+  that every other route keeps 64 KiB; F1 goes out at once. (Its sentence that
+  two inserts may pass the ceiling by one file was later withdrawn, above.)
+- **About 15:11 to 15:13 UTC, at a surprise: the security review.** The review
+  (approve with fixes; no critical, two high) found two things the design did
+  not hold. The session's reading was F2b (a semaphore, a refusal of encoded
+  paths, a lock wait with its own sentence, a connection limit), F4 cut in two
+  (the form and the list now, the download later) and no upload credential
+  before S021. The advisor kept all three and changed two things: F2b gains a
+  **rate limit in the app**, so that "2,000 small files in seconds" does not
+  depend on which edge route served the path, and the semaphore's 503 carries
+  its own sentence; and the kind run comes **after** F2b so its probes test
+  the fixed app. The download's shape went to the owner as a stated choice.
+- **About 16:20 UTC, at the design of F4b.** D1 to D7 hold. It changed one
+  sentence: D3's claim about "local" was checked before it was written (the
+  edge's port is bound to 127.0.0.1, `infra/kind/cluster.yaml`), and the
+  guard's claim is the narrow one above.
+- **After F4b and F4d, and before the pull request:** not recorded. The
+  second security review (below) read F4b, which neither the advisor nor a
+  reviewer had read, and F4d answered it; no consultation about F4d is in the
+  records this section was written from.
+
+**Work log** (from `git log` of the step's branch, `s070-uploads`, which
+carries the work under the labels "S070 uploads" and F1 to F5; git's order is
+F1, F3, F1b, F2, F5, F2b, F4a, F4c, F4b, DU, F4d; each landing was carried from
+an implementer's worktree and ran the gates its report lists):
+
+- **F1**, `941d6e3`: migration 0032 and its test (80 cases).
+- **F3**, `ec6430d`: the edge: the second HTTPRoute, its buffer and rate limit
+  in a policy of its own, the chart's switch, `MERIDIAN_CLAIMS_UPLOADS`; 17
+  chart tests. The report could not prove the route's precedence and said so.
+- **F1b**, `cbd552a`: the database review's changes to the file and its test.
+- **F2**, `22dabd2`: the route, the sniffing, the three ceilings under two
+  advisory locks, the insert and its audit row in one transaction, the
+  per-route limit in `platform/common/http.py`, the settings, OpenAPI's test.
+- **F5**, `2686333`: the four sample files and their generator, with a line in
+  `.gitattributes` so that a PNG's CR LF survives a commit.
+- **F2b**, `a95424d`: the security review's brakes in the app (above).
+- **F4a**, `97032df`: the claimant's form and its HTML twin, and the adjuster's
+  list of files; the listing moved to `claim_files.py` to avoid an import
+  cycle.
+- **F4c**, `a90f2b1`: the FastAPI and boundary reviews' fixes (below).
+- **F4b**, `cb4ea93`: the adjuster's download, its switch, its policy of its
+  own, its audit row and the chart's `.localhost` guard.
+- **DU**, `4ca66e0`: the first documents: this step's row and section, the
+  threat model, the data classification, the kind README, the demo, the root
+  README.
+- **F4d**, `9f06436`: the second security review's fixes: the download's own
+  brakes, the trail, the byte budget, the chart's guard made exact, the file
+  identifier out of the spans, `page_security.py` split out of `adjuster.py`.
+- **DU2**, this record brought to F4d, the second review and run RU1, with the
+  merge of `main` (plan v0.86), which renumbered this step's four threat rows
+  from T-103 to T-106 to T-108 to T-111 because S020 took T-103 to T-107.
+
+**The five reviews** (a review of the code at the tip named; each read the
+code, none ran a cluster):
+
+- **Database, on F1 (941d6e3): approve with fixes; 0 critical, 0 high,
+  4 medium, 13 low.** Fixed in the unapplied file (F1b): F-01 the hash is
+  checked by the database, F-05 the same file twice on a claim is refused (the
+  owner's "Keep both"), F-06 the content is stored uncompressed, F-07 a CHECK
+  on two columns is a table constraint, F-08 the header's lock sentences, F-09
+  the drift guard reads the live constraint, F-10 and F-11 two test names, F-12
+  a superuser case, F-14 a test of what a delete of a claim with a file does.
+  Fixed in F2: F-02 a row ceiling, F-03 the advisory locks, F-13 no exception
+  detail in a log or an answer, and F-15 the file is looked up through the
+  claim and its tenant. F-17 became the connection limit in F2b. **Accepted:
+  F-16** (the review said not to rely on the file and its audit row sharing a
+  transaction; F2 does, as every audited route of the workload does, and a
+  database per service would end it: S085 and S087 take it into their design).
+  **Open: F-04**, the disk and the write-ahead log at the ceiling, to be
+  measured in the run on kind.
+- **Security, on F2 (22dabd2): approve with fixes; 0 critical, 2 high,
+  4 medium, 5 low.** H-1 (no bound on uploads at once) is fixed in F2b; H-2
+  (an adjuster-side download is an open file host) is answered by the cut in
+  U6, then by the owner's choice and F4b's eleven requirements. M-1 (the rate
+  limit can be skipped) is fixed by the app's rate and the encoded-path
+  refusal; M-3 by the connection limit and the lock-wait answer. **Open: M-2**
+  (disk and log, as F-04). **Accepted: M-4** (refusals leave no audit row; see
+  below) and L-1 (the duplicate answer). L-3 (the twin had no body-limit entry)
+  was fixed in F4a, L-5 (tests) in F2b; L-2 and L-4 need no change.
+- **FastAPI, on F2b (a95424d): approve with fixes; 0 critical, 0 high,
+  3 medium, 9 low.** Fixed in F4c: M1 a client that goes away was a 500 and an
+  ERROR line, M2 a lock-wait timeout logged two ERROR lines, M3 the declared 500
+  and 503 bodies, L1 the two dependencies are `async`, L2 a test without a
+  database that fails if a part rolls to disk (the pin is a backlog row), L4 the
+  20 second read deadline, L5 the form treats "the claim already holds this
+  file" as success, L6 the OpenAPI texts, and the tests it named. **Not
+  changed:** L3 (the worst parse it built takes 94 ms, so four permits stall the
+  loop by 0.4 s at most), L7 (a `root_path` fails closed, and a test pins it),
+  L8 and L9.
+- **Platform boundary, on the branch before F4a (tip not recorded): approve
+  with fixes; 0 critical, 1 high, 6 medium, 3 low.** H-1 (three documents
+  false) is this record's. M-1 (the design promised refusal rows) is corrected
+  here and accepted below. M-2 (an audit row cannot be tied to a file) is
+  accepted and rowed (S085). M-3 (a read path with no caller) is gone: the list
+  has callers since F4a and `file_content` since F4b. M-4 (present tense for
+  what was not built) and M-6 (nothing on the route says "synthetic only") were
+  fixed in F4c. M-5 (the guard the chart did not have) was built in F4b. Of the
+  lows, L-1 (the edge routed a path the app did not serve) ended when F4a
+  built the twin and L-2 (platform prose naming a route) was fixed in F4c.
+- **Security, second, on the download (F4b, cb4ea93): approve with fixes;
+  0 critical, 1 high, 5 medium, 6 low.** It also checked the first review's
+  findings one by one (its H-1, M-1, M-3 and L-3 closed; H-2 open by design,
+  mitigated by the switch and the guard; M-2 open). Fixed in F4d:
+  **H-A** (anonymous GETs could write unlimited audit rows, and the trail's
+  oldest-200 listing would hide every later event of the claim: an app-side
+  limit of 30 a minute, four at once, a HEAD that reads no bytes, and a trail
+  of the newest 200 with the downloads counted on one line); **M-A** (no
+  cross-site check on the download GET: a navigation from another site would
+  save a file and write a row); **M-B** (the byte ceiling filled faster than
+  the file rate: the 8 MiB budget); **M-C** (the chart's guard text claimed a
+  property it does not have: the words in U11); **M-D** (a host name with a
+  newline passed the guard: anchored match, quoted); **L-A** (the string
+  "false" turned uploads on: booleans only); **L-B** (the scope marker set
+  before the response was built); **L-C** (the test of who sets the marker
+  scanned four modules: it scans the package); **L-D** (the file identifier
+  in the spans: out of both spans, the access log still holds it). **Stays as
+  rows:** L-E (the adjuster's page prints the full SHA-256 in a `title`, so a
+  reader can confirm that a claim holds an exact file without uploading it),
+  L-F (the audit row carries no file identifier: S085), and **M-E** (whether
+  the edge's rate-limit buckets are per route or per match; RU1 narrowed it:
+  GET and HEAD of the download share the named rule's bucket, and the uploads'
+  and the downloads' buckets are separate, but the two POST matches of the
+  uploads route were not tried against each other). Its probes P1 to P12 are
+  what RU1 ran in part.
+
+**Result / verification.** Implemented and tested against PostgreSQL, and **run
+once on kind** (below), nothing paid, no evaluation fingerprint moved. The
+gates are the implementers' as their reports print them; the main session
+reads them again.
+
+- **F1:** `make pytest-db` on the migration's test and the migration rules,
+  last line `260 passed in 7.91s`; after F1b, `279 passed in 7.39s`.
+- **F3:** `make helm-lint` `1 chart(s) linted, 0 chart(s) failed`; the chart
+  tests, `515 passed in 25.86s`.
+- **F2:** `make pytest-db` on the workload, `http.py`, OpenAPI, the import
+  contracts and the migration's test, `4114 passed in 94.72s (0:01:34)`.
+- **F5:** `uv run pytest tests/synthetic -n 0`, `275 passed in 1.24s`; the
+  fingerprints' test, `69 passed in 0.36s`; two `make synthetic` runs give the
+  same SHA-256 for all five files.
+- **F2b:** twelve files, `630 passed in 21.93s`.
+- **F4a:** `1156 passed in 36.89s`, and the claims workload with the kind image
+  test, `3892 passed in 82.14s (0:01:22)`.
+- **F4c:** `1081 passed in 35.92s`, and the wider run `4213 passed, 1 warning
+  in 86.66s (0:01:26)`.
+- **F4b:** `1408 passed in 42.55s`, and the wider run `4287 passed in 89.06s
+  (0:01:29)`.
+- **F4d:** the claims workload with `test_http.py`, OpenAPI, both chart files,
+  the migration, roles, import-contract and sample tests, `4421 passed in
+  102.24s (0:01:42)`; `make helm-lint` `1 chart(s) linted, 0 chart(s)
+  failed`. Line counts under `src/` of the files it touched: `adjuster.py` 745,
+  `uploads.py` 797, `file_download.py` 331, `page_security.py` 126,
+  `claim_files.py` 77. Three tests of the trail were reordered because it now
+  selects the newest events (`test_adjuster_pages.py`), and one expects the
+  count line where it expected a row.
+- **Run RU1 on kind**, 2026-10-07, 17:25 to 17:38 UTC, the local cluster (made
+  at 11:08 UTC), commit `9f06436` built and deployed by `make deploy`, with both
+  switches added to kind's values for that run only (a local edit, reverted)
+  and turned off by a second deploy at the end; free, nothing deleted. Two
+  earlier tries changed nothing but the deploy (one stopped on the script's own
+  anchor; one because the adjuster's queue held no claim, and it left the
+  switches on for about six minutes on a `.localhost` name whose port is bound
+  to 127.0.0.1). What the record prints:
+  - **Deploy:** `make deploy` rc 0 in 110 s (the image built, migration 0032
+    applied, the release upgraded); the Claims API's pod Ready with
+    `MERIDIAN_CLAIMS_UPLOADS=on` and `MERIDIAN_CLAIMS_DOWNLOADS=on`.
+  - **Routes and policies:** both HTTPRoutes `Accepted` with resolved
+    references, the uploads route with two rules, the second named
+    `downloads`; three BackendTrafficPolicies, all `Accepted=True`; the
+    downloads policy targets the named rule (`claims-api-uploads/downloads`),
+    and the route's own policy also shows `Overridden=True`: the section's
+    policy replaces it for that rule.
+  - **Which route served what:** a valid 100 KiB PDF to
+    `POST /claims/CLM-0001/files` was 201 (the second route won: the first
+    route's buffer is 64 KiB); 100 KiB of JSON to `/documents` was 413; the
+    form's twin with a same-origin `Origin` was 303; 1.2 MB to the upload path
+    was 413 with the edge's body ("Payload Too Large").
+  - **A download through the edge:** GET 200 with 102,400 bytes equal to what
+    was sent; the nine headers as the tests assert them, among them one
+    `content-security-policy: default-src 'none'; frame-ancestors 'none';
+    sandbox`, `content-disposition: attachment; filename="CLM-0001-<file
+    id>.pdf"`, `nosniff`, `no-store` and the same-origin resource policy; HEAD
+    200 in 0.011 s with the full `content-length` and the same policy.
+  - **The pages:** the adjuster's claim page linked two files with "not
+    scanned" and a line "Downloads of this claim's files: N, the latest at
+    ..."; the claimant's status page held no link to a file and no file id.
+  - **Cross-site:** a GET with `Sec-Fetch-Site: cross-site` was 403, with
+    `same-origin` 200, with `Host: evil.example` the edge's 404; a POST to the
+    twin from another origin was 403.
+  - **The limits at the edge:** seven uploads in a row were 201, 201, then
+    four 409 ("the claim already holds five files"), and the seventh was 429
+    with the edge's body (`local_rate_limited`): six a minute. 32 downloads in a
+    row were 30 times 200, then 429 with the edge's body: 30 a minute on the
+    named rule. A HEAD right after was 429 (the rule's bucket); an upload right
+    after was 409 from the app, not 429: the uploads' and the downloads'
+    buckets are separate.
+  - **The audit count:** the downloads line read 1 after the first GET and 33
+    at the end: one row per 200, 33 of them in the run, none for a HEAD, a 403
+    or a 429.
+  - **Off again:** the values edit reverted; `make deploy` rc 0 in 16 s; the
+    upload path and the download path 404; no variable switched on; smoke 46
+    PASS, 0 FAIL.
+- **Every landing:** `make lint` ended `Contracts: 6 kept, 0 broken.`,
+  `make test` ended `Ran 385 tests` / `OK` (F5's last line read `codex agents:
+  11 twins current`), and `make docs` `docs consistency: 14 checks passed`.
+- **The whole suite on the final tree,** with coverage, merged with `main` at
+  1ef35d8: `21219 passed, 8 skipped, 8 warnings in 347.91s (0:05:47)`, 99.14
+  per cent of 14,384 statements (124 missed).
+
+**Mutations**, each applied, run, seen red and restored (the counts are the
+reports'):
+
+| Landing | Removed | Red |
+|---|---|---|
+| F2 | the sniffing (the declared type is used) | 16 failed |
+| F2 | the global ceiling | 5 failed |
+| F2 | the per-route limit, applied to all routes | 36 failed |
+| F2 | the store's advisory lock | 1 failed |
+| F2 | the spool override | 2 failed |
+| F2b | the semaphore check | 2 failed |
+| F2b | the encoded-path dependency | 4 failed |
+| F2b | the cross-site dependency | 6 failed |
+| F2b | the claim lock alone | 3 failed |
+| F2b | the rate check | 3 failed |
+| F2b | the `QueryCanceled` mapping | 2 failed |
+| F3 | the second policy's target / the route-off guard | 1 failed each |
+| F4a | the twin's cross-site dependency | 6 failed |
+| F4a | the tenant filter of the listing | 1 failed (no page test could) |
+| F4a | the twin's body-limit entry | 4 failed |
+| F4a | `except HTTPException` widened | 1 failed |
+| F4c | `except ClientDisconnect` | 2 failed |
+| F4c | the read deadline | red (first failure only) |
+| F4c | the form's duplicate-as-success | 1 failed |
+| F4c | `RoutePattern`'s `[^/]+` made `[^/]*` | the `/files/` case |
+| F4b | the sandbox from the policy | 5 failed |
+| F4b | the tenant check of `file_content` | 2 failed |
+| F4b | the audit write moved after the response | 2 failed |
+| F4d | the download's limiter | 3 failed |
+| F4d | the download's cross-site check | 6 failed |
+| F4d | the trail's filter (the event argument changed) | 2 failed, among them the 250-downloads test |
+| F4d | the host name's `quote` in the chart | 1 failed |
+
+**Not seen** (what run RU1 did not reach, as its record lists it, and what is
+left of the earlier list; the second run, RU2, settled the encoded path):
+
+- **A browser.** The real file picker, a click that saves the file and does not
+  render it, another origin unable to read it, the 303 to the status page and
+  the refusal pages as a person meets them. RU1 was a script: the cross-site
+  refusals were headers it set, not a browser's.
+- **Slow bodies and slow readers:** the four permits, the 20 second read
+  deadline, and memory under four concurrent uploads and under slow downloads.
+- **The app's own 429s and 503s.** The edge's limits answered first, so the
+  app's rate (30 files a minute), the 8 MiB byte budget and the download's four
+  permits and 30 a minute were not reached behind the edge.
+- **Retries at the edge on a 503.** Whether Envoy retries a busy 503 on a POST
+  and so multiplies the load was not read.
+- **An encoded path with a body over 64 KiB.** RU1 found that **Envoy
+  normalises the path before the app sees it**, which the code's comments did
+  not expect: `POST /claims/CLM-0001/%66iles` was served as an upload (201), a
+  GET with the first character of the file identifier encoded was 200, and
+  `POST //claims/CLM-0001/files` reached the upload route too (409, the file
+  being already on the claim). So behind this edge the app's refusal of a raw
+  path that holds a percent sign never fires: the app receives the normalised
+  path. RU1 could not tell which route matched the normalised request (its
+  bodies were under 64 KiB). **RU2 did**: 100 KiB bodies sent to an encoded
+  and to a double-slashed path reached the app, which the first route's 64 KiB
+  would have refused, and the seventh of seven uploads to the encoded path got
+  the edge's own 429: the uploads route serves the normalised path and its
+  limit counts it. An escaped slash was not probed.
+- **CLM-0001 now holds five files** on that cluster, so a second run needs
+  another claim.
+- **The memory arithmetic** (not measured on the cluster): 16 MiB of 126 MB of
+  room for four uploads, from the review's measurement of about 2 MiB in the
+  parser and three to four through to the database.
+- **The database's size and write-ahead log at the ceiling** (`pg_database_size`
+  and `pg_wal` after filling to 128 MiB, and `SHOW max_wal_size`): the 2 Gi
+  volume is shared with the audit trail and a full disk stops every service
+  that writes it. Nothing here is measured; the database reviewer's arithmetic
+  for 256 MiB was 265 to 270 MiB on disk and about as much again in the log,
+  and the default is half of that ceiling.
+- **The lock-wait bound itself** (10 s; the tests ran it at 300 ms), the
+  connection limit of 50 in normal use, and a **real uvicorn**'s treatment of a
+  client that goes away (the tests drive the app with raw ASGI events; RU1 did
+  show uvicorn's answer to a HEAD behind the edge).
+- **The migration's lock timeout on a cluster.** RU1 applied 0032 (the deploy
+  ended rc 0); the migrate Job's retry of a lock timeout was not checked.
+
+**Accepted, and said:**
+
+- **Refusals write no audit row.** Design U8 said the existing throttled
+  refusal rows would cover them; there are none in this workload, and building
+  one would let an anonymous caller fill the audit table (T-49). The code's
+  comment says so; the design sentence was wrong. A flood of 415s, 409s or
+  507s shows in Envoy's log only.
+- **The audit rows of a stored file and of a download hold the claim and the
+  tenant and cannot be tied to one file.** `AuditEvent` has no field for a
+  file; five files of a claim, and a download of one of them, differ only by
+  time. Backlog row, home S085.
+- **The duplicate answer is an oracle.** A caller who holds the exact bytes
+  learns that the file is on that claim; each wrong guess stores the guess, and
+  a full claim answers before the duplicate check. The JSON 409 hands out no
+  file identifier, and the form's duplicate lands on the status page.
+- **A stored file stays for ever.** The app has no delete and no retention
+  period; `claims_api` cannot delete; the bytes are in the log and in backups.
+  T-111 is **open** for that reason, and the banner is its only guard.
+- **A well-formed PDF or image that exploits the adjuster's viewer is stored
+  and delivered.** Scanning is designed only; "not scanned" is the control.
+- **Anyone who reaches the host can fill the store.** Uploads then stop for
+  everyone until the database is dropped; the byte budget makes it take 16
+  minutes for the default ceiling instead of four.
+- **The `.localhost` guard checks a string and stops a release, nothing
+  more.** Envoy matches the Host header; on kind the boundary is the published
+  port bound to 127.0.0.1. A reachable Gateway, a port-forward, another local
+  user, a container that reaches the loopback port or the node's address, and a
+  variable set by hand outside the chart are not stopped; the app does no Host
+  check; the pages share the exposure (T-69).
+- **The adjuster's page prints each file's full SHA-256 in a `title`.** A
+  reader can confirm that a claim holds an exact file without uploading it (the
+  same family as the duplicate answer); it is read-only. A backlog row.
+
+**For the owner** (none blocks the pull request; the default if unanswered is
+that nothing more is built):
+
+- **Retention and erasure of uploaded files, before any real use.** How long
+  a file stays, who deletes it and whether the schema's owner may; until then
+  the banner is the only guard against a real person's document, and the
+  features stay off for any host that other people reach. The session's
+  recommendation is to decide it with S068's periods, and not to turn either
+  switch on beyond the machine before S021.
+- **The older S070 items stay where they are**, in S070's section: the bound on
+  what a name may replace (c), the cut of a dotted number and a third date
+  guard (d), where the three known phone leaks go (e), `drafted_by` (f) and
+  the claim brief's retention (g).
+- **A thing the session decided and the owner may reverse:** the 128 MiB
+  default for the store's bytes, below the design's 256 MiB, until a run on
+  kind has measured the volume (RU1 did not).
+
+**Rows** (Part B's follow-up backlog, each with its home; the rows are in
+the table): scanning (S080, later half); sign-in closes the open upload and
+download and removes the `.localhost` guard, and an upload counts as the
+document (S021); a second host name for downloads (S021); the audit model has
+no field for a file (S085); retention and a delete path (S068); the file
+identifier in the access log (S021); the hash in the list's `title` (S021);
+the edge's rate-limit buckets, per route or per match (S080, the next run);
+the parser leans on Starlette's internals (S080, later half); Envoy's handling
+of an encoded path, closed for this edge by RU2; small ends (S080, later
+half). Two rows of the first documents are gone: the download's missing bound
+on concurrent reads (F4d gave it four permits and 30 a minute) and
+`adjuster.py` over 800 lines (it is 745). The row "Uploads (T-38)" is closed by
+this step and homed here.
+
+**Follow-ups:**
+
+- The threat model's T-38 is brought to what is built, designed and off, and
+  T-66 says an upload does not count as the document; **T-108 to T-111 are new**
+  (the bound on many uploads, the stored file against the viewer, the open
+  file host, a real document; they were T-103 to T-106 until the merge of
+  `main`, where S020 took T-103 to T-107), which makes 111 threats (the
+  register, the root README and the demo's last page say the count; the demo's
+  page said 101, which was already stale).
+- The data classification's row of uploaded documents, the kind README's
+  section "Files for a claim", the demo's optional part on a file, the root
+  README's rows of the claimant's pages and the adjuster's UI and the synthetic
+  README's name for the step were brought to the code. The chart's comments in
+  `values.yaml` and `route.yaml` were read against the code and F4d's own words
+  about the guard stand. The migrations README names 0032. The first
+  documents said a `.localhost` name resolves to the machine itself and is
+  reached from the machine alone; that is replaced, in the threat model, the
+  kind README, the root README and this section, by what the review
+  says the guard is. **File sizes:** `scripts/check_file_sizes.py` reached `main` after
+  this branch was cut, so once: the entries of `test_http.py` (860 to 1,037
+  lines) and `test_adjuster_pages.py` (3,097 to 3,105) were set to the counts
+  this branch grew them to, and `test_claim_files_migration.py` (824) and
+  `test_claim_uploads.py` (1,340) were listed, as test files written on a
+  branch cut before the check existed; no file under `src/` is over 800.
+
 ### S081 — The decision record for the move toward services
 **Status:** doing · **Started:** 2026-10-07 · **Finished:** —
 **Goal:** write down, before anything is built, what the owner decided about
@@ -19906,11 +20494,11 @@ the owner may overturn any that the answers above do not state):
   amended by the advisor:** the app enforces the cookie's own expiry on every
   request; the cookie lives no longer than Keycloak's session; a stolen cookie
   cannot be revoked before it ends, which is stated for both populations and
-  is a threat row (T-110); the rate store's Redis exists if a store is ever
+  is a threat row (T-114); the rate store's Redis exists if a store is ever
   wanted. **And a switch:** `MERIDIAN_SIGNIN`, off by default, the repository's
   own pattern, so the contracts land in pieces while kind keeps working; it
   flips when the scripts have their tokens (D7). While it is off every route
-  is as open as today (T-113).
+  is as open as today (T-117).
 - **D4, two populations in the Claims API.** Staff routes (`/adjuster/*`, the
   decision, triage and brief routes): a staff session or token with the
   adjuster role. That is S021. The claimant routes (`/claimant/*`), ownership
@@ -19992,7 +20580,7 @@ Y2; `platform-boundary-reviewer` on Y1 and Y6.
 **Work log:** 2026-10-07. The design (the map of what is open today, the facts
 sheet, the design with the advisor's reading); the owner's four questions at
 about 17:28 UTC and the order at about 17:33 UTC; Y0 (this section, the three
-rows, the eight threat rows T-108 to T-115 and four rows amended, three data
+rows, the eight threat rows T-112 to T-119 and four rows amended, three data
 classification rows, the backlog homes below).
 
 **Result / verification:** Y0 is documents. `make docs`, `make check`, `make
@@ -20013,7 +20601,7 @@ sign-in, because none exists.
 - How the key-set client's blocking fetch behaves inside the async Claims API
   when the issuer is down, under the suite's timeouts.
 - Whether the cookie's expiry, the issuer's session and a restart of Keycloak
-  agree (T-114).
+  agree (T-118).
 - Everything about Entra: the app registrations, the tokens' `roles`, `tid`
   and `oid` in this tenant, the External ID tenant of S089.
 - The edge half (S090) and the claimants' half (S089): not designed beyond
@@ -20026,10 +20614,43 @@ sign-in, because none exists.
 - **A restart of the mock issuer ends every token,** and the people signed in
   through it must sign in again: development mode keeps nothing. Acceptable on
   kind; said here so it is not found out. Whether a cookie the app already
-  signed keeps working until its own expiry is open (T-114).
+  signed keeps working until its own expiry is open (T-118).
 - **Open for you or the next session:** whether S022 and S026 also depend on
   S089 and S090 (their rows are unchanged); and, for S089, whether a claimant
   is tied to a policy.
+
+**Two reviews of the module (Y1), 2026-10-07, and what they changed.** A
+platform-boundary review (no critical, no high, three medium) and a security
+review (no critical, two high, eight medium); both say approve with fixes,
+and the security review found no forged token, no algorithm confusion and no
+forged cookie in its probes. Nothing uses the module, so none of this was
+reachable. The fixes are contract Y1b, and no route is wired (Y4) before it
+is in. The design changes in five places:
+- **An unreachable key URL answers 503, not 401,** when no usable key is
+  cached; a key id nobody has stays 401. A 401 makes a client drop its
+  session and sign in again in a loop, and hides an outage from a dashboard.
+- **`nbf` is checked when present and no longer required;** `exp`, `iss`,
+  `aud` and `sub` are required, and an `iat` further ahead than the leeway is
+  refused. Requiring `nbf` gave no security (the signature covers the
+  claims) and would refuse an issuer that does not send it.
+- **The key fetch** (both high findings): the response is asked for
+  uncompressed and a compressed one is a failed fetch (a 199 KB compressed
+  answer peaked at 437 MB in the review's probe); a cached key is served
+  without waiting for a fetch in flight, a fetch has a total deadline, and a
+  failed fetch and a stale key each log a warning.
+- **A token's kind and who it was issued to** can be required by two settings
+  that are empty until Y2 has decoded a live token; without them an ID token
+  with the right issuer and audience passed as an access token.
+- **The principal says how it was authenticated** (bearer or cookie) and
+  which issuer it came from, so a route that changes state can demand a
+  same-origin check on the cookie path and later rows key a person by issuer
+  and subject. The session's cap is also enforced when a cookie is opened,
+  the key URL is HTTPS outside kind, and the session key is base64 of at
+  least 32 bytes.
+
+Kept for later, each with its home: the cookie's `__Host-` name (S090, where
+TLS reaches the edge); the Entra subject (`oid` with `tid`) and the pinned
+v2 issuer (the Azure half); the runbook lines for a key compromise (Y8).
 
 **Rows** (Part B and the registers, changed by Y0):
 - Part B: S021 is cut to the staff half and set to `doing`; S089 and S090 are
@@ -20039,7 +20660,7 @@ sign-in, because none exists.
   the same tenant can tell a claim whose name has nothing to replace from one
   with a heavy name" (no per-user separation), both S021 to S089. The others
   that name S021 keep it (below).
-- The threat model: T-108 to T-115 new, designed; T-05, T-06, T-32 and T-69
+- The threat model: T-112 to T-119 new, designed; T-05, T-06, T-32 and T-69
   amended; the header's counts. The data classification: the issuer's keys row
   amended, and two new rows (the app's cookie-signing key, which every
   environment has; the session cookie and the subject). The root README's
@@ -21004,12 +21625,41 @@ its home, S070.
   and Part D question 5 answered (stay in the trial's tenant). The wrapper and
   the guard's rules, the upgrade, a firewall decision, the apply and the second
   half wait. The whole suite: 20,563 passed, 8 skipped.
+- **v0.87, 2026-10-07:** S080, file uploads for a claim before sign-in
+  (new, `doing`; the owner's "Build now" for the uploads and "Build now,
+  local-only switch" for the adjuster's download, both of 2026-10-07, and
+  "Keep both" for the hash check and the refusal of the same file twice):
+  migration 0032 (`claims.claim_files`), a route and a form that store one PDF,
+  JPEG or PNG of at most 1 MiB, five to a claim, told by its first bytes, an
+  upload that is not a document arrival and starts no triage, the app's own
+  brakes (four at once, a rate and a byte budget on the store, a read
+  deadline, ceilings on bytes and files), a second edge route with a buffer and
+  a rate limit, the adjuster's list and, behind a switch of its own and with
+  brakes of its own, download, and a chart that turns either switch on only for
+  a host name that ends in `.localhost` (a check of a string, said so).
+  Implemented and tested against PostgreSQL; **run once on kind** (run RU1,
+  2026-10-07, both switches on for that run only, by script and not in a
+  browser); both switches off by default; scanning designed, not built; no
+  delete and no retention. Five reviews (database 0/0/4/13, security 0/2/4/5,
+  FastAPI 0/0/3/9, platform boundary 0/1/6/3 and the second security review
+  0/1/5/6, by critical, high, medium and low), the second answered by F4d. RU1
+  found that Envoy normalises a raw path before the app sees it, and RU2 that
+  the upload route serves the normalised request and its limit counts it. T-38
+  brought
+  to the code and T-66 corrected; T-108 to T-111 new (111 threats; S020 holds
+  T-103 to T-107); the data classification's row, the kind README, the
+  migrations README, the demo and the root README brought to the code. S070's
+  row, section and backlog row no longer say that uploads wait for the owner.
+  S074's row and its coverage backlog row are closed with the python job of
+  pull request 128 (14 min 0 s). Eleven backlog rows are new or narrowed, each
+  with a home, and the row "Uploads (T-38)" is closed and homed at S080. Size
+  check: two listed test files set to their counts, two listed.
 - **PLAN-VERSION, 2026-10-07:** S021 `doing`, designed and not built: the
   step is cut to the staff half (Keycloak on kind, four roles, the app layer
   first behind a switch that is off by default, the tenant from the token, the
   actor on the decision row), with the owner's five answers and the design's
   ten decisions in its Part C section; S089 (claimants sign in as themselves)
   and S090 (sign-in at the edge) are new rows, `todo`; two backlog rows
-  moved to S089; the threat model's rows T-108 to T-115 are new and designed
+  moved to S089; the threat model's rows T-112 to T-119 are new and designed
   and T-05, T-06, T-32 and T-69 are amended; the data classification has one
   row amended and two new. The whole suite: FINAL-SUITE-RESULT.

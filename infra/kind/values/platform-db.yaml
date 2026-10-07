@@ -61,9 +61,18 @@ cluster:
       login: true
       passwordSecret:
         name: meridian-owner-db
+    # The Claims API holds one connection per request, in a worker thread, and the
+    # server runs at most 40 of them at once (anyio's default thread limit, which
+    # nothing here raises); a request that writes an audit row in a connection of
+    # its own and the replacement of a dropped one take a few more, so 50 is the
+    # 40 and ten spare. It is a bound that an anonymous caller of the upload route
+    # (the one route that waits on locks) cannot pass, and it keeps the services'
+    # shared hundred from being taken by one: during a rollout the old pod's
+    # connections end as it drains, so two full pods do not both ask for it.
     - name: claims_api
       ensure: present
       login: true
+      connectionLimit: 50
       passwordSecret:
         name: claims-api-db
     - name: agent_runtime
