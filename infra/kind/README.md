@@ -1980,8 +1980,14 @@ than before. Two replicas of one service would still restart together, because
 they mount one Secret (not built: each service has one replica on kind). The
 spread is implemented and tested with the chart rendered and the clock
 injected. Seen on kind on 2026-10-07 (run R2): the shares on the six services,
-0, 1/6, 2/6, 3/6, 4/6 and 5/6 in name order, and none on the rate store. Not
-seen: the restarts at a renewal (the watch above, run again, shows them). And
+0, 1/6, 2/6, 3/6, 4/6 and 5/6 in name order, and none on the rate store. Seen
+on kind on 2026-10-07 (run R7, the watch above run again, one replica of each
+service): the six services' containers each stopped once at a renewal, 99 or
+100 seconds apart, in the reverse order of the shares, and in no reading were
+fewer than five of the six Ready. Not seen: two replicas of one service, a
+`renewBefore` shorter than one and five sixths of the margin, and the alert
+`MeridianCertificateNotRenewed` in that run (it was given the values back
+before the alert's hour). And
 while the
 short certificates are in place `make smoke` fails on check 11, because a
 Meridian alert is firing (smoke itself was not run then: the failure follows
