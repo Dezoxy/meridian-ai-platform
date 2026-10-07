@@ -100,9 +100,9 @@ def _runtime_entries(document: yaml.Node | None) -> list[yaml.MappingNode]:
 def line_of(text: str, mark: yaml.Mark) -> int:
     """The 1-based line of ``text`` at ``mark``, as an editor counts it: only a line
     feed ends a line. The parser also counts U+0085, U+2028 and U+2029 (and a lone
-    carriage return), which a person does not see as breaks. At the very end of a
-    text that ends with a line feed this is the line after the last one."""
-    return text.count("\n", 0, mark.index) + 1
+    carriage return), which a person does not see as breaks. A mark at the very end
+    of a text that ends with a line feed is on the last line, not the one after."""
+    return text.count("\n", 0, min(mark.index, max(len(text) - 1, 0))) + 1
 
 
 def _not_yaml(old: str, exc: yaml.YAMLError) -> str:
@@ -150,6 +150,9 @@ def _runtime_agents(old: str) -> tuple[yaml.Node, yaml.Node]:
         document = yaml.compose(old, Loader=yaml.SafeLoader)
     except yaml.YAMLError as exc:
         raise ServicesEditError(_not_yaml(old, exc)) from None
+    except RecursionError:
+        # `compose` recurses with the nesting; `parse` below does not.
+        raise ServicesEditError(SERVICES_NOT_YAML) from None
     line = _shared_node_line(old, document)
     if line is not None:
         raise ServicesEditError(SERVICES_SHARED_NODE.format(line))
@@ -171,7 +174,9 @@ def services_edit(old: str, name: str) -> str:
     ``agents`` of the Agent Runtime's entry, verified."""
     key, value = _runtime_agents(old)
     line = line_of(old, key.start_mark)
-    one_line = value.start_mark.line == value.end_mark.line
+    # The editor's lines, not the parser's: a U+2028 inside a quoted item is a break
+    # to the parser only. The parse check below still guards the result.
+    one_line = "\n" not in old[value.start_mark.index : value.end_mark.index]
     if not (isinstance(value, yaml.SequenceNode) and value.flow_style and one_line):
         raise ServicesEditError(SERVICES_AGENTS_UNUSABLE.format(line))
     listed = [item.value for item in value.value if isinstance(item, yaml.ScalarNode)]
