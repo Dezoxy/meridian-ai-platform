@@ -7,6 +7,7 @@ request body, SQL or exception text (T-03).
 
 import logging
 import os
+import re
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -67,6 +68,8 @@ HELD_QUERY_KEY = "meridian.held_query_string"
 
 # The answer for a request whose declared body is over the limit, by its scope.
 type ScopeAnswer = Callable[[Scope], Response]
+# A body limit of its own for exact routes: (method, path pattern) -> bytes.
+type RouteLimits = Mapping[tuple[str, str], int]
 
 # Only a database that cannot be reached or has dropped the connection is
 # "unavailable"; every other error is ours, so a constraint or data error must
@@ -106,11 +109,13 @@ ERROR_DESCRIPTIONS = {
     404: "No such resource.",
     409: "The request conflicts with what is stored.",
     413: BODY_TOO_LARGE.capitalize() + ".",
+    415: "What was sent is not of a type this route takes.",
     429: "A limit of the tenant is reached.",
     500: "An internal error; the body carries no detail.",
     502: "A service this one calls failed or answered outside its contract.",
     503: "The database or the audit log is unavailable.",
     504: "A service this one calls did not answer in time.",
+    507: "The service has no room left to keep what was sent.",
 }
 
 
@@ -172,6 +177,38 @@ def install_error_handlers(app: FastAPI) -> None:
         return error_answer(*database_failure(exc))
 
 
+class RoutePattern:
+    """An exact (method, path pattern) a body limit is set for: ``/claims/{id}/files``.
+
+    A ``{name}`` is a whole segment and matches exactly one non-empty segment;
+    every other segment matches itself, character for character. So the pattern
+    has no prefix, wildcard or trailing-slash reading: a path that is not
+    exactly the route's keeps the app's limit."""
+
+    PARAMETER = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}")
+
+    def __init__(self, method: str, pattern: str) -> None:
+        if not pattern.startswith("/"):
+            raise ValueError("a route pattern starts with a slash")
+        segments = pattern.split("/")
+        if any(
+            ("{" in s or "}" in s) and not self.PARAMETER.fullmatch(s) for s in segments
+        ):
+            raise ValueError("a route pattern's parameter is a whole segment")
+        self.method = method
+        self.path = re.compile(
+            "/".join(
+                "[^/]+" if self.PARAMETER.fullmatch(s) else re.escape(s)
+                for s in segments
+            )
+        )
+
+    def matches(self, scope: Scope) -> bool:
+        return scope["method"] == self.method and bool(
+            self.path.fullmatch(scope["path"])
+        )
+
+
 class BodyLimitMiddleware:
     """Answer 413 once a request body exceeds ``max_bytes``.
 
@@ -179,17 +216,36 @@ class BodyLimitMiddleware:
     without one (chunked) is counted as it is read, so the header cannot be
     used to get round the limit.
 
+    ``route_limits`` maps an exact ``(method, path pattern)`` to its own limit
+    (see ``RoutePattern``); every other request keeps ``max_bytes``. The limit
+    of a request is resolved once and used for both the declared length and
+    the count of a streamed body.
+
     ``too_large`` gives the answer to a declared length over the limit for the
     request's scope (the JSON answer by default); a body counted as it is read
     goes through the app's ``HTTPException`` handler.
     """
 
     def __init__(
-        self, app: ASGIApp, max_bytes: int, too_large: ScopeAnswer = body_too_large
+        self,
+        app: ASGIApp,
+        max_bytes: int,
+        too_large: ScopeAnswer = body_too_large,
+        route_limits: RouteLimits | None = None,
     ) -> None:
         self.app = app
         self.max_bytes = max_bytes
         self.too_large = too_large
+        self.routes = tuple(
+            (RoutePattern(method, pattern), limit)
+            for (method, pattern), limit in (route_limits or {}).items()
+        )
+
+    def _limit_of(self, scope: Scope) -> int:
+        for route, limit in self.routes:
+            if route.matches(scope):
+                return limit
+        return self.max_bytes
 
     def _answer_too_large(self, scope: Scope) -> Response:
         """The caller's answer, or the JSON 413 when making it raises. This runs
@@ -208,12 +264,9 @@ class BodyLimitMiddleware:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
+        limit = self._limit_of(scope)
         declared = Headers(scope=scope).get("content-length")
-        if (
-            declared is not None
-            and declared.isdigit()
-            and int(declared) > self.max_bytes
-        ):
+        if declared is not None and declared.isdigit() and int(declared) > limit:
             await self._answer_too_large(scope)(scope, receive, send)
             return
         received = 0
@@ -223,7 +276,7 @@ class BodyLimitMiddleware:
             message = await receive()
             if message["type"] == "http.request":
                 received += len(message.get("body", b""))
-                if received > self.max_bytes:
+                if received > limit:
                     # Raised where the app reads the body, so the ordinary
                     # HTTPException handler answers it.
                     raise HTTPException(HTTP_PAYLOAD_TOO_LARGE, BODY_TOO_LARGE)
@@ -339,6 +392,7 @@ def create_service_app(
     tracer_provider: TracerProvider | None = None,
     close: Callable[[], None] | None = None,
     too_large: ScopeAnswer = body_too_large,
+    route_body_limits: RouteLimits | None = None,
     environ: Mapping[str, str] = os.environ,
     clock: Callable[[], datetime] = utc_now,
 ) -> ServiceApp:
@@ -349,8 +403,10 @@ def create_service_app(
     caller's), the error handlers, the body limit, the FastAPI instrumentation
     and ``GET /healthz``, which reads nothing per request and nothing of the
     caller's. ``close`` runs at shutdown. ``too_large`` is the answer to a
-    declared body over the limit (see ``BodyLimitMiddleware``). No server span
-    keeps a query string (see ``drop_query_from_span``).
+    declared body over the limit (see ``BodyLimitMiddleware``).
+    ``route_body_limits`` gives an exact route a limit of its own; no service
+    passes any but the one route that takes a file. No server span keeps a
+    query string (see ``drop_query_from_span``).
 
     The certificate ``environ`` names is loaded here (S056, T-89). Inside its
     margin, ``/healthz`` reads the file again: it answers 503 when the file
@@ -394,7 +450,10 @@ def create_service_app(
     # app runs, and this one sits closest to the routes.
     app.add_middleware(UnexpectedErrorMiddleware)
     app.add_middleware(
-        BodyLimitMiddleware, max_bytes=max_body_bytes, too_large=too_large
+        BodyLimitMiddleware,
+        max_bytes=max_body_bytes,
+        too_large=too_large,
+        route_limits=route_body_limits,
     )
     # Outermost of ours, so inside the instrumentation (see QueryHidingFastAPI).
     app.add_middleware(RestoreQueryMiddleware)

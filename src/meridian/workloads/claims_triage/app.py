@@ -114,6 +114,11 @@ from meridian.workloads.claims_triage.triaging import (
     store_claim,
     triage_claim,
 )
+from meridian.workloads.claims_triage.uploads import (
+    UPLOAD_BODY_LIMIT_BYTES,
+    UPLOAD_PATH,
+    add_upload_routes,
+)
 
 NOT_WAITING_DETAIL = "the claim does not wait for an adjuster"
 DECIDED_OTHERWISE_DETAIL = "the claim was decided otherwise"
@@ -353,6 +358,13 @@ def create_app(
         tracer_provider=tracer_provider,
         close=close,
         too_large=claimant_too_large,
+        # The one route that takes a file has a limit of its own, and only when
+        # it exists: with the switch off its path keeps the 64 KiB of the rest.
+        route_body_limits=(
+            {("POST", UPLOAD_PATH): UPLOAD_BODY_LIMIT_BYTES}
+            if settings.uploads_enabled
+            else None
+        ),
     )
     app, tracer = service.app, service.tracer
 
@@ -438,6 +450,15 @@ def create_app(
             claim_id,
         )
 
+    if settings.uploads_enabled:
+        add_upload_routes(
+            app,
+            dsn=dsn,
+            tenant=tenant,
+            tracer=tracer,
+            ceiling_bytes=settings.uploads_ceiling_bytes,
+            ceiling_rows=settings.uploads_ceiling_rows,
+        )
     add_brief_routes(app, dsn=dsn, tenant=tenant, http=http, tracer=tracer)
     add_adjuster_pages(
         app,

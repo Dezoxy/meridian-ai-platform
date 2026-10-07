@@ -46,6 +46,15 @@ def apps() -> dict[str, FastAPI]:
         "claims": create_claims(
             ClaimsSettings(runtime_url="http://runtime.invalid", database_url=DSN)
         ),
+        # The Claims API with the route that takes a file switched on (S070):
+        # off by default, so the spec above does not list it.
+        "claims-uploads": create_claims(
+            ClaimsSettings(
+                runtime_url="http://runtime.invalid",
+                database_url=DSN,
+                uploads_enabled=True,
+            )
+        ),
     }
 
 
@@ -156,6 +165,18 @@ ERRORS = {
         "504",
     },
     ("claims", "get", "/claims/{claim_id}/brief"): {"404", "422", "500", "503"},
+    ("claims-uploads", "post", "/claims/{claim_id}/files"): {
+        "201",
+        "403",
+        "404",
+        "409",
+        "413",
+        "415",
+        "422",
+        "500",
+        "503",
+        "507",
+    },
 }
 
 
@@ -504,3 +525,72 @@ def test_the_claim_response_run_id_is_a_uuid() -> None:
     schema = SPECS["claims"]["components"]["schemas"]["ClaimResponse"]
 
     assert schema["properties"]["run_id"]["format"] == "uuid"
+
+
+# ── the route that stores a claimant's file (S070): only when it is switched on ─
+UPLOAD = "/claims/{claim_id}/files"
+
+
+def test_the_upload_route_is_listed_when_the_switch_is_on_and_not_when_it_is_off() -> (
+    None
+):
+    assert UPLOAD in SPECS["claims-uploads"]["paths"]
+    assert UPLOAD not in SPECS["claims"]["paths"]
+    assert set(SPECS["claims-uploads"]["paths"][UPLOAD]) == {"post"}
+    # Every other path is the same in both: the switch adds this one route.
+    assert set(SPECS["claims-uploads"]["paths"]) - {UPLOAD} == set(
+        SPECS["claims"]["paths"]
+    )
+
+
+def test_the_upload_route_answers_201_with_a_stored_file_and_names_its_errors() -> None:
+    spec = SPECS["claims-uploads"]
+
+    assert schema_ref(spec, UPLOAD, "post", "201").endswith("/StoredFile")
+    for status in ("403", "404", "409", "413", "415", "507"):
+        assert schema_ref(spec, UPLOAD, "post", status).endswith("/ErrorBody")
+    for status in ("500", "503"):
+        assert schema_ref(spec, UPLOAD, "post", status).endswith("/ClaimErrorBody")
+    assert spec["paths"][UPLOAD]["post"]["tags"] == ["claims"]
+
+
+def test_the_upload_route_takes_one_kind_and_one_file_as_multipart_form_data() -> None:
+    spec = SPECS["claims-uploads"]
+
+    body = spec["paths"][UPLOAD]["post"]["requestBody"]
+    form = body["content"]["multipart/form-data"]["schema"]
+
+    assert body["required"] is True
+    assert list(body["content"]) == ["multipart/form-data"]
+    assert form["additionalProperties"] is False
+    assert set(form["required"]) == {"kind", "file"}
+    assert form["properties"]["kind"]["enum"] == [
+        "police_report",
+        "photos",
+        "repair_estimate",
+        "accident_statement",
+        "other",
+    ]
+    assert form["properties"]["file"]["format"] == "binary"
+
+
+def test_a_stored_file_is_its_identifier_kind_type_size_and_hash_and_nothing_else() -> (
+    None
+):
+    stored = SPECS["claims-uploads"]["components"]["schemas"]["StoredFile"]
+
+    assert set(stored["properties"]) == {
+        "file_id",
+        "kind",
+        "media_type",
+        "size_bytes",
+        "sha256",
+    }
+    assert set(stored["required"]) == set(stored["properties"])
+    assert stored["additionalProperties"] is False
+    assert stored["properties"]["file_id"]["format"] == "uuid"
+    assert stored["properties"]["media_type"]["enum"] == [
+        "application/pdf",
+        "image/jpeg",
+        "image/png",
+    ]

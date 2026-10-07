@@ -16,6 +16,20 @@ from meridian.workloads.claims_triage.lifecycle import (
     MIN_DEADLINE_DAYS,
     deadline_days_of,
 )
+from meridian.workloads.claims_triage.uploads import (
+    DEFAULT_CEILING_BYTES,
+    DEFAULT_CEILING_ROWS,
+    MAX_CEILING_BYTES,
+    MAX_CEILING_ROWS,
+    MIN_CEILING_BYTES,
+    MIN_CEILING_ROWS,
+    UPLOADS_CEILING_ENV,
+    UPLOADS_ENABLED_ENV,
+    UPLOADS_ROWS_ENV,
+    ceiling_bytes_of,
+    ceiling_rows_of,
+    uploads_enabled_of,
+)
 
 RUNTIME_URL_ENV = "MERIDIAN_RUNTIME_URL"
 TENANT_ENV = "MERIDIAN_TENANT"
@@ -40,6 +54,17 @@ class ClaimsSettings(BaseModel):
     documents_deadline_days: int = Field(
         DOCUMENTS_DEADLINE_DAYS, ge=MIN_DEADLINE_DAYS, le=MAX_DEADLINE_DAYS
     )
+    # Whether the route that stores a claimant's file exists (S070): off unless
+    # the chart says so, so turning the pages on does not turn uploads on. The
+    # ceilings are the most bytes and rows of files the table may hold, whatever the
+    # claims.
+    uploads_enabled: bool = False
+    uploads_ceiling_bytes: int = Field(
+        DEFAULT_CEILING_BYTES, ge=MIN_CEILING_BYTES, le=MAX_CEILING_BYTES
+    )
+    uploads_ceiling_rows: int = Field(
+        DEFAULT_CEILING_ROWS, ge=MIN_CEILING_ROWS, le=MAX_CEILING_ROWS
+    )
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] = os.environ) -> Self:
@@ -52,4 +77,7 @@ class ClaimsSettings(BaseModel):
             documents_deadline_days=deadline_days_of(
                 environ.get(DOCUMENTS_DEADLINE_ENV)
             ),
+            uploads_enabled=uploads_enabled_of(environ.get(UPLOADS_ENABLED_ENV)),
+            uploads_ceiling_bytes=ceiling_bytes_of(environ.get(UPLOADS_CEILING_ENV)),
+            uploads_ceiling_rows=ceiling_rows_of(environ.get(UPLOADS_ROWS_ENV)),
         )
