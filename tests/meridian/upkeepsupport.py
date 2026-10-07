@@ -310,17 +310,17 @@ PLANT_NOW = (
 
 
 def call_with_a_planted_clock(
-    db: DatabaseHandle, statement: str, params: Any = ()
+    db: DatabaseHandle, statement: str, params: Any = (), role: str = ROLE
 ) -> list:
-    """Call ``statement`` as the role in a session whose search path puts a
-    schema first that holds a ``now()`` returning the year 2000.
+    """Call ``statement`` as ``role`` (the upkeep role) in a session whose search
+    path puts a schema first that holds a ``now()`` returning the year 2000.
 
     The control comes first: in that session a plain ``now()`` is the planted
     one, so a function body that named ``now()`` without being pinned would
     take the year 2000 too.
     """
     run(db, OWNER, PLANT_NOW)
-    with connect(db.dsn(ROLE), "test") as conn:
+    with connect(db.dsn(role), "test") as conn:
         conn.execute("SET search_path = planted, pg_catalog")
         ((year,),) = conn.execute("SELECT extract(year FROM now())::int").fetchall()
         assert year == 2000
@@ -333,10 +333,10 @@ TEMP_TABLES_NAMED_LIKE_TYPES = ("date", "bigint", "uuid", "text", "interval")
 
 
 def call_after_temp_tables_named_like_types(
-    db: DatabaseHandle, statement: str, params: Any = ()
+    db: DatabaseHandle, statement: str, params: Any = (), role: str = ROLE
 ) -> list:
-    """Call ``statement`` as the role in a session that holds a temporary table
-    named like each type a body uses.
+    """Call ``statement`` as ``role`` (the upkeep role) in a session that holds a
+    temporary table named like each type a body uses.
 
     Every role may create temporary tables (the database's default), and the
     session's temporary schema is searched FIRST for relations and types unless
@@ -344,7 +344,7 @@ def call_after_temp_tables_named_like_types(
     composite type of the temporary table. The control comes first: in that
     session a cast to ``date`` is the temporary type's.
     """
-    with connect(db.dsn(ROLE), "test") as conn:
+    with connect(db.dsn(role), "test") as conn:
         for name in TEMP_TABLES_NAMED_LIKE_TYPES:
             conn.execute(
                 sql.SQL("CREATE TEMP TABLE {} (x int)").format(sql.Identifier(name))
@@ -385,3 +385,47 @@ def assert_counters_reconcile(db: DatabaseHandle) -> None:
         "AND c.kind = 'tokens-day' AND c.period_start = u.day)",
     )
     assert uncounted == [(0,)]
+
+
+HELD = 100
+MICRO_HELD = 5_000_000
+
+
+def credit(
+    db: DatabaseHandle, amount: int, kind: str = TOKENS_KIND, tenant: str = TENANT
+) -> tuple[uuid.UUID, int]:
+    ((credit_id, held),) = run(db, ROLE, CREDIT, (tenant, kind, amount, REASON))
+    return credit_id, held
+
+
+def credits(db: DatabaseHandle) -> list[tuple]:
+    return run(
+        db,
+        OWNER,
+        "SELECT credit_id, tenant, kind, period_start, amount, reason, db_role "
+        "FROM gateway.credits ORDER BY recorded_at, amount",
+    )
+
+
+def planted_ledger(db: DatabaseHandle) -> None:
+    """One settled call that charged the tenant HELD tokens today and MICRO_HELD
+    this month, so the two counters hold what their usage rows charge."""
+    plant_usage(db, tokens=HELD, micro_eur=MICRO_HELD, state="settled")
+
+
+# The columns `meridian gateway` reads, by table: LIST_RESERVED (usage) and the
+# dry run's counts of rows by month (usage.month, the two period_start columns).
+READABLE_COLUMNS = {
+    "usage": (
+        "attempt_id",
+        "tenant",
+        "deployment",
+        "state",
+        "reserved_at",
+        "reserved_tokens",
+        "reserved_micro_eur",
+        "month",
+    ),
+    "budget_counters": ("period_start",),
+    "credits": ("period_start",),
+}

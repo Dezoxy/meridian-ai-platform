@@ -29,8 +29,8 @@ from chartsupport import (
     rendered_chart,
     run_helm,
 )
+from kindsupport import function_body
 from servicesupport import REPO_ROOT
-from test_kind_manifests import function_body
 
 KIND_DIR = REPO_ROOT / "infra" / "kind"
 MAKEFILE = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")

@@ -9,11 +9,13 @@ text the output must never carry.
 """
 
 import re
+import time
 import tracemalloc
 from collections.abc import Callable
 from pathlib import Path
 
 import httpx
+import psycopg
 import pytest
 from dbsupport import INGEST_ROLE, OWNER, DatabaseHandle
 from knowledgesupport import (
@@ -27,10 +29,12 @@ from knowledgesupport import (
     ingest,
     ingest_without_database,
 )
+from psycopg import sql
+from psycopg.pq import TransactionStatus
 from servicesupport import owner_rows
 from typer.testing import CliRunner
 
-from meridian.platform.cli import app
+from meridian.platform.cli import app, knowledge
 from meridian.platform.cli.db import INGEST_DATABASE_URL_ENV
 from meridian.platform.common.db import connect
 from meridian.platform.gateway.replay import replay_embedding
@@ -360,6 +364,77 @@ def test_a_database_error_inside_the_check_exits_2_and_leaves_a_refused_audit_ro
     ((role, _, outcome, _, _, reference, reason),) = verify_rows(stored)
     assert (role, outcome, reference) == (INGEST_ROLE, "refused", "wordings")
     assert reason == "database-error"
+
+
+# ── no transaction stays open while the report is printed (S068, U5b) ────────
+# The database's default for an idle transaction is 60 s (0031): a standard
+# output that stalls while the read transaction is still open would lose the
+# check's audit row. The test turns the default down for its own database copy.
+SHORT_TIMEOUT_SECONDS = 0.3
+
+
+def spy_on_the_report(monkeypatch: pytest.MonkeyPatch) -> list:
+    """Replace the command's ``_report`` with one that records what the command's
+    connection is doing when the report starts, then prints as before."""
+    connections: list = []
+    seen: list = []
+    real_connect = knowledge.connect
+    real_report = knowledge._report
+
+    def connect_and_remember(dsn: str, name: str):
+        connections.append(real_connect(dsn, name))
+        return connections[-1]
+
+    def report(result) -> None:
+        seen.append(connections[0].info.transaction_status)
+        real_report(result)
+
+    monkeypatch.setattr(knowledge, "connect", connect_and_remember)
+    monkeypatch.setattr(knowledge, "_report", report)
+    return seen
+
+
+@pytest.mark.parametrize("tampered", [False, True])
+def test_the_connection_is_in_no_transaction_when_the_report_is_printed(
+    stored: DatabaseHandle,
+    as_ingestion: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+    tampered: bool,
+) -> None:
+    if tampered:
+        tamper(stored, "body", "a body the manifest does not hold")
+    seen = spy_on_the_report(monkeypatch)
+
+    code, _ = verify()
+
+    assert code == (1 if tampered else 0)
+    assert seen == [TransactionStatus.IDLE]
+
+
+def test_a_report_that_waits_past_the_idle_timeout_still_leaves_the_audit_row(
+    stored: DatabaseHandle,
+    as_ingestion: DatabaseHandle,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with psycopg.connect(stored.admin_dsn, autocommit=True) as admin:
+        admin.execute(
+            sql.SQL(
+                "ALTER DATABASE {} SET idle_in_transaction_session_timeout = {}"
+            ).format(sql.Identifier(stored.name), sql.Literal("300ms"))
+        )
+    real_report = knowledge._report
+
+    def stalled_report(result) -> None:
+        # A standard output that does not drain, for three times the timeout.
+        time.sleep(SHORT_TIMEOUT_SECONDS * 3)
+        real_report(result)
+
+    monkeypatch.setattr(knowledge, "_report", stalled_report)
+
+    code, lines = verify()
+
+    assert code == 0, lines
+    assert [row[2] for row in verify_rows(stored)] == ["verified"]
 
 
 def test_the_stored_clauses_are_read_through_a_cursor_not_all_into_memory(

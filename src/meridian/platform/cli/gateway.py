@@ -1,7 +1,9 @@
 """``meridian gateway``: the upkeep of the Model Gateway's ledger (S066).
 
-A thin command over the three functions of migration 0020, run as the database
-role ``gateway_upkeep``. That role can write no table: each function holds its
+A thin command over the functions of migrations 0020, 0028 and 0030
+(``expire-audit`` calls the audit expiry and its count, ``expire`` the ledger's
+expiry in batches), run as the database role
+``gateway_upkeep``. That role can write no table: each function holds its
 rule and writes its audit row in the transaction of its change (T-25, T-47), so
 this module only parses what the operator typed, calls one function and prints
 counts, IDs and amounts. It never prints the connection string, and it imports
@@ -13,7 +15,8 @@ import os
 import re
 import uuid
 from collections.abc import Callable
-from datetime import date
+from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Annotated, NoReturn
 
@@ -90,6 +93,16 @@ REFUSALS = {
         "there is nothing to remove before that month: "
         "run without --confirm to see the counts"
     ),
+    "GU401": (
+        "the cutoff is in the future: --before is at most now, and nothing "
+        "newer than it is removed"
+    ),
+    "GU402": "the limit is from 1 to 10000 rows a batch: give --limit in that range",
+    "GU305": "the limit is from 100 to 10000 rows a batch: give --limit in that range",
+    "GU306": (
+        "usage rows of those months are held by another session, or changed "
+        "during the call: nothing was changed by this call, so run it again"
+    ),
 }
 # What the dry run prints for a tenant or deployment that is not an ID: the ledger
 # is text from a database, and an escape sequence in it must not reach a terminal.
@@ -130,7 +143,9 @@ def _detail(code: str, message: str, kind: str | None) -> str:
     """The number the server's own message gives for two refusals."""
     if code == "GU204" and kind and (left := re.search(r"\((\d+)\)$", message)):
         return f" (at most {_amount(kind, int(left[1]))} can be credited now)"
-    if code == "GU303" and (rows := re.search(r"^expire_ledger: (\d+) usage", message)):
+    if code == "GU303" and (
+        rows := re.search(r"^expire_ledger_batch: (\d+) usage", message)
+    ):
         return f" (count: {rows[1]})"
     return ""
 
@@ -145,15 +160,25 @@ def _fail_on(exc: psycopg.Error, kind: str | None) -> NoReturn:
     _fail(f"gateway upkeep failed ({type(exc).__name__}): {detail}")
 
 
+QUERY_CANCELED = "57014"
+
+
+class CountCancelled(Exception):
+    """A count that the statement timeout cancelled (only raised for a caller
+    that asked for it: ``_upkeep(..., on_cancel=True)``)."""
+
+
 def _upkeep[T](
     work: Callable[[psycopg.Connection], T],
     *,
     read_only: bool = False,
     kind: str | None = None,
+    on_cancel: bool = False,
 ) -> T:
     """Run ``work`` in one transaction as the upkeep role. What it returns is
     printed by the caller after the commit, so no line says a change was made
-    that was not."""
+    that was not. With ``on_cancel`` a statement cancelled by the timeout raises
+    ``CountCancelled`` for the caller to word; any other failure exits as ever."""
     dsn = os.environ.get(UPKEEP_DATABASE_URL_ENV)
     if not dsn:
         _fail(f"{UPKEEP_DATABASE_URL_ENV} is not set")
@@ -162,6 +187,8 @@ def _upkeep[T](
             conn.read_only = read_only
             return work(conn)
     except psycopg.Error as exc:
+        if on_cancel and exc.diag.sqlstate == QUERY_CANCELED:
+            raise CountCancelled from None
         _fail_on(exc, kind)
     except UnicodeError:
         # Text that cannot be encoded or decoded (a stray byte in an argument or
@@ -386,8 +413,19 @@ def credit(
 
 
 # ── expire ───────────────────────────────────────────────────────────────────
-EXPIRE_LEDGER = "SELECT * FROM gateway.expire_ledger(%s, %s)"
-# What expire_ledger would remove, by the same conditions as its DELETEs, and
+EXPIRE_LEDGER_BATCH = "SELECT * FROM gateway.expire_ledger_batch(%s, %s, %s)"
+# The function's own floor and maximum (0030); the default is a tenth of the
+# maximum. Each batch writes an audit row the upkeep role can never remove, which
+# is why a batch is never smaller than the floor.
+MIN_LEDGER_BATCH = 100
+MAX_LEDGER_BATCH = 10_000
+DEFAULT_LEDGER_BATCH = 1_000
+LEDGER_COUNT_CANCELLED = (
+    "the count was cancelled (the statement timeout, or by an administrator), "
+    "and nothing was changed: the real run removes in batches and needs no "
+    "count, and a nearer --before counts faster"
+)
+# What the expiry would remove, by the same conditions as its DELETEs, and
 # the database's own current UTC month (the function's clock, not this host's).
 WOULD_REMOVE = (
     "SELECT date_trunc('month', now() AT TIME ZONE 'UTC')::date, "
@@ -408,7 +446,17 @@ def _counts(prefix: str, month: date, usage: int, counters: int, credits: int) -
     )
 
 
-def _dry_run(conn: psycopg.Connection, before: date) -> list[str]:
+def _batches_line(usage: int, limit: int, batches: int | None = None) -> str:
+    """What the run takes in calls: the batches of usage rows, then the call that
+    removes the counters and credits. Before a run, the batches it will need."""
+    taken = -(-usage // limit) if batches is None else batches
+    return (
+        f"in {taken} batch(es) of at most {limit} usage rows, "
+        "then the counters and credits of those months"
+    )
+
+
+def _dry_run(conn: psycopg.Connection, before: date, limit: int) -> list[str]:
     current, usage, counters, credits, open_rows = conn.execute(
         WOULD_REMOVE, {"before": before}
     ).fetchone()
@@ -417,11 +465,74 @@ def _dry_run(conn: psycopg.Connection, before: date) -> list[str]:
         _refuse("GU302")
     lines = [
         _counts("would remove", before, usage, counters, credits),
+        _batches_line(usage, limit),
         f"still reserved in those months: {open_rows}",
     ]
     if open_rows:
         lines.append("--confirm is refused until each is closed (see: close)")
     return [*lines, "nothing removed: add --confirm to remove them", DRY_RUN_NOTE]
+
+
+def _ledger_limit(limit: int) -> int:
+    if not MIN_LEDGER_BATCH <= limit <= MAX_LEDGER_BATCH:
+        raise typer.BadParameter(
+            f"a batch is from {MIN_LEDGER_BATCH} to {MAX_LEDGER_BATCH} usage rows",
+            param_hint="'--limit'",
+        )
+    return limit
+
+
+@dataclass
+class Removed:
+    """What the batches of a run have removed so far, and committed."""
+
+    usage: int = 0
+    batches: int = 0
+
+
+def _call_until_closed(
+    conn: psycopg.Connection, month: date, slug: str, limit: int, so_far: Removed
+) -> tuple[int, int]:
+    """Call the function on one connection until a call removes no usage row,
+    one transaction for each call. That last call closed the periods (it returns
+    their counters and credits) or found nothing to close."""
+    while True:
+        removed = conn.execute(EXPIRE_LEDGER_BATCH, (month, slug, limit)).fetchone()
+        conn.commit()
+        if removed[0] == 0:
+            return removed[1], removed[2]
+        so_far.usage += removed[0]
+        so_far.batches += 1
+
+
+def _expire_ledger_batches(
+    month: date, slug: str, limit: int
+) -> tuple[int, int, int, int]:
+    """One connection for the run, a transaction for each call. Returns the usage
+    rows, counters and credits removed and the batches that removed usage rows. A
+    failure after a batch says what stays removed, then exits as any failure."""
+    so_far = Removed()
+    try:
+        counters, credits = _upkeep(
+            lambda conn: _call_until_closed(conn, month, slug, limit, so_far)
+        )
+    except typer.Exit:
+        if so_far.batches:
+            # A count, not a promise of the total: a batch is counted after its
+            # commit returned, so a commit whose outcome is unknown (the
+            # connection died inside it) may have removed one batch more. The
+            # line starts "removed N usage rows in B batch(es) before the
+            # failure" because infra/kind/upkeep.sh matches that start.
+            typer.echo(
+                f"removed {so_far.usage} usage rows in {so_far.batches} batch(es) "
+                "before the failure (at least that many: a commit whose outcome "
+                "is unknown may have removed one batch more): each batch is its "
+                "own transaction with its own audit row, and what was removed "
+                "stays removed; run the command again to continue",
+                err=True,
+            )
+        raise
+    return so_far.usage, counters, credits, so_far.batches
 
 
 @app.command()
@@ -438,6 +549,15 @@ def expire(
         str,
         typer.Option("--reason", help="Why: a slug, such as retention-2026. Audited."),
     ],
+    limit: Annotated[
+        int,
+        typer.Option(
+            "--limit",
+            help=f"Usage rows a batch removes, {MIN_LEDGER_BATCH} to "
+            f"{MAX_LEDGER_BATCH}; each batch is its own transaction and leaves "
+            "an audit row nobody can remove.",
+        ),
+    ] = DEFAULT_LEDGER_BATCH,
     confirm: Annotated[
         bool,
         typer.Option(
@@ -452,15 +572,214 @@ def expire(
     month is the operator's decision: there is no default, nothing runs this on
     a schedule, and the retention period is the owner's to choose. The current
     month is never removed, and months with a reservation still open are
-    refused. One audit row is written.
+    refused. With --confirm it removes at most --limit usage rows at a time (100
+    to 10,000: each batch leaves an audit row nobody can remove), on one
+    connection, and then the counters and credits of those months in one more
+    call. A run that stops half way leaves what it removed removed; running it
+    again continues.
     """
     month = _month(before)
     slug = _slug(reason)
+    batch = _ledger_limit(limit)
     if not confirm:
-        for line in _upkeep(lambda conn: _dry_run(conn, month), read_only=True):
+        try:
+            lines = _upkeep(
+                lambda conn: _dry_run(conn, month, batch),
+                read_only=True,
+                on_cancel=True,
+            )
+        except CountCancelled:
+            _fail(LEDGER_COUNT_CANCELLED)
+        for line in lines:
             typer.echo(line)
         return
-    removed = _upkeep(
-        lambda conn: conn.execute(EXPIRE_LEDGER, (month, slug)).fetchone()
+    usage, counters, credits, batches = _expire_ledger_batches(month, slug, batch)
+    if usage + counters + credits == 0:
+        # Nothing before that month: the function returns zeros and writes no row.
+        _refuse("GU304")
+    typer.echo(_counts("removed", month, usage, counters, credits))
+    typer.echo(_batches_line(usage, batch, batches))
+
+
+# ── expire-audit ─────────────────────────────────────────────────────────────
+EXPIRE_AUDIT_EVENTS = "SELECT gateway.expire_audit_events(%s, %s, %s)"
+COUNT_AUDIT_EVENTS = "SELECT gateway.count_audit_events_before(%s)"
+# The function's own maximum (0028); the default is a tenth of it.
+MAX_AUDIT_BATCH = 10_000
+DEFAULT_AUDIT_BATCH = 1_000
+AUDIT_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+# A timestamp in ASCII digits; the offset is optional here only so that its
+# absence gets a sentence of its own.
+AUDIT_TIMESTAMP = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]{1,6})?)?"
+    r"(Z|[+-][0-9]{2}(:?[0-9]{2})?)?"
+)
+AUDIT_DRY_RUN_NOTE = (
+    "this is a count at this moment: a row another session holds is left for a "
+    "later run"
+)
+
+
+def _audit_cutoff(text: str) -> datetime:
+    """A bare date is 00:00 UTC of that day; a timestamp must carry its offset,
+    or it would mean this machine's zone. Returned in UTC."""
+    try:
+        if AUDIT_DATE.fullmatch(text):
+            return datetime.fromisoformat(text).replace(tzinfo=UTC)
+        if AUDIT_TIMESTAMP.fullmatch(text):
+            cutoff = datetime.fromisoformat(text)
+            if cutoff.tzinfo is not None:
+                return cutoff.astimezone(UTC)
+            raise typer.BadParameter(
+                "a timestamp needs its offset (Z or +hh:mm): without one it would "
+                "mean this machine's zone",
+                param_hint="'--before'",
+            )
+    except (ValueError, OverflowError):
+        pass
+    raise typer.BadParameter(
+        "a cutoff is a date, such as 2026-09-01 (00:00 UTC), or a timestamp with "
+        "an offset, such as 2026-09-01T12:00:00+02:00",
+        param_hint="'--before'",
     )
-    typer.echo(_counts("removed", month, *removed))
+
+
+def _audit_limit(limit: int) -> int:
+    if not 1 <= limit <= MAX_AUDIT_BATCH:
+        raise typer.BadParameter(
+            f"a batch is from 1 to {MAX_AUDIT_BATCH} rows", param_hint="'--limit'"
+        )
+    return limit
+
+
+AUDIT_COUNT_CANCELLED = (
+    "the count did not finish inside the statement timeout, and nothing was "
+    "changed: the real run removes in batches and needs no count, and a nearer "
+    "--before counts faster"
+)
+
+
+def _count_audit(cutoff: datetime) -> int:
+    """What the expiry would take for this cutoff, counted in a read-only
+    transaction; raises ``CountCancelled`` when the timeout cancels the count."""
+    return _upkeep(
+        lambda conn: conn.execute(COUNT_AUDIT_EVENTS, (cutoff,)).fetchone()[0],
+        read_only=True,
+        on_cancel=True,
+    )
+
+
+def _say_what_remains(cutoff: datetime) -> None:
+    """After a real run: count once what is still older than the cutoff. A row
+    another session held, or one written by a transaction that began before the
+    cutoff, is left for a later run. A count the timeout cancels is said, and the
+    command still succeeds: the removal happened."""
+    try:
+        remaining = _count_audit(cutoff)
+    except CountCancelled:
+        typer.echo(
+            "the count of what remains did not finish inside the statement "
+            "timeout; the removal above happened"
+        )
+        return
+    if remaining:
+        typer.echo(
+            f"{remaining} audit rows older than the cutoff remain (rows another "
+            "session held, or written by a transaction that began before it): "
+            "run it again"
+        )
+
+
+def _utc_text(cutoff: datetime) -> str:
+    return cutoff.isoformat().replace("+00:00", "Z")
+
+
+def _expire_audit_batches(cutoff: datetime, slug: str, limit: int) -> tuple[int, int]:
+    """Call the function until a call removes nothing; each call is its own
+    transaction. Returns the rows removed and the batches that removed some. A
+    failure after a batch says what stays removed, then exits as any failure."""
+    total = batches = 0
+    while True:
+        try:
+            removed = _upkeep(
+                lambda conn: conn.execute(
+                    EXPIRE_AUDIT_EVENTS, (cutoff, slug, limit)
+                ).fetchone()[0]
+            )
+        except typer.Exit:
+            if batches:
+                typer.echo(
+                    f"removed {total} audit rows in {batches} batch(es) before the "
+                    "failure: each batch is its own transaction with its own audit "
+                    "row, and what was removed stays removed",
+                    err=True,
+                )
+            raise
+        if removed == 0:
+            return total, batches
+        total += removed
+        batches += 1
+
+
+@app.command("expire-audit")
+def expire_audit(
+    before: Annotated[
+        str,
+        typer.Option(
+            "--before",
+            help="The cutoff: every audit row recorded before it goes. A date "
+            "(00:00 UTC of that day) or a timestamp with an offset, such as "
+            "2026-09-01T12:00:00+02:00. No default. Through `make gateway-upkeep` "
+            "only a date works (its words hold no colon or plus sign).",
+        ),
+    ],
+    reason: Annotated[
+        str,
+        typer.Option("--reason", help="Why: a slug, such as retention-2026. Audited."),
+    ],
+    limit: Annotated[
+        int,
+        typer.Option(
+            "--limit",
+            help=f"Rows a batch removes, 1 to {MAX_AUDIT_BATCH}; each batch is its "
+            "own transaction.",
+        ),
+    ] = DEFAULT_AUDIT_BATCH,
+    confirm: Annotated[
+        bool,
+        typer.Option(
+            "--confirm",
+            help="Remove what the dry run counts. Without it nothing is removed.",
+        ),
+    ] = False,
+) -> None:
+    """Remove audit rows older than --before, in batches.
+
+    Without --confirm it counts what would be removed and removes nothing. The
+    cutoff is the operator's decision: there is no default, nothing runs this on
+    a schedule, and the retention period is the owner's to choose. The function
+    looks at a row's age only, not at whether its claim still exists. With
+    --confirm it removes at most --limit rows at a time until a call removes
+    nothing, one audit row for each batch, and prints the total and the number
+    of batches.
+    """
+    cutoff = _audit_cutoff(before)
+    slug = _slug(reason)
+    batch = _audit_limit(limit)
+    text = _utc_text(cutoff)
+    if not confirm:
+        try:
+            counted = _count_audit(cutoff)
+        except CountCancelled:
+            _fail(AUDIT_COUNT_CANCELLED)
+        typer.echo(f"would remove audit rows before {text}: {counted}")
+        typer.echo(f"in {-(-counted // batch)} batch(es) of at most {batch}")
+        typer.echo("nothing removed: add --confirm to remove them")
+        typer.echo(AUDIT_DRY_RUN_NOTE)
+        return
+    total, batches = _expire_audit_batches(cutoff, slug, batch)
+    typer.echo(
+        f"removed {total} audit rows before {text} in {batches} batch(es) "
+        f"of at most {batch}"
+    )
+    _say_what_remains(cutoff)

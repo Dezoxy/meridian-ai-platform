@@ -235,6 +235,10 @@ def verify(
                 if unaudited:
                     failure += f"; the failure could not be audited ({unaudited})"
                 _cannot_verify(failure)
+            # The read transaction is still open here. End it before printing:
+            # a standard output that stalls must not hold a transaction idle
+            # until the database ends the session (0031) and the audit row with it.
+            conn.rollback()
             _report(result)
             unaudited = _audit_check(conn, verification_event(result, run_id))
     except psycopg.Error as exc:
