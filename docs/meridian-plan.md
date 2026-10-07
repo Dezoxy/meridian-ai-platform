@@ -12561,8 +12561,16 @@ on 2026-10-06 side by side; E3 waited for E2 (both edit the runtime's
   fires), E2's writer tests (written after a pure move), the gateway tests of
   E6 and E6b, the four throttle tests and the `SystemExit` test of F1, E5's two
   guard tests, and one E4 group that pinned behaviour that did not change.
-- **The whole suite on the final tree:** FINAL-SUITE-RESULT
-- **The evaluation's free replay on the final tree:** REPLAY-RESULT
+- **The whole suite on the final tree:** `15860 passed, 8 skipped, 8 warnings
+  in 265.52s` at four workers beside the cluster, on 2c94f48, 2026-10-07 04:54
+  to 05:00 UTC, with `make test`, `make docs` and `make lint` ending 0 before
+  it; the one commit after it fills these lines. A first run, at six workers
+  from 04:28 UTC, was stopped by the session and is no result: the machine
+  ran out of memory under it (the session's fault, ten agents beside it).
+- **The evaluation's free replay on the final tree:** the two stack files
+  whole, `24 passed, 2 skipped in 34.85s`; `make eval` ended 0 with "eval
+  compare: passed" twice (the golden set and the injection cases). No
+  baseline changed in this branch.
 - **F2, the last fix contract:** its own run of the gateway's, the runtime's
   and the workload's tests with a database printed `6300 passed, 6 skipped in
   145.24s`; lint, `make docs` and `make test` ended 0 (its report). Red
@@ -13191,7 +13199,7 @@ on 2026-10-06 side by side; E3 waited for E2 (both edit the runtime's
   test's gaps in the backlog (S070); T-73 and T-76 corrected, T-66, T-57,
   T-27, T-30, T-25 and T-13 brought to the code. Seven backlog rows closed
   (one in part) and fourteen new.
-- **vPLAN-VERSION, 2026-10-07:** S069, first half: the edges of the Agent
+- **v0.67, 2026-10-07:** S069, first half: the edges of the Agent
   Runtime, the Model Gateway and the tool servers, with no lane and no
   migration. A late leg writes nothing over the leg that took the run (its
   end matches the `updated_at` of its own claim, no new column) and a resume
