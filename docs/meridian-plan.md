@@ -13156,9 +13156,10 @@ contract that wrote this part followed K2.
   harness's own reporting, which prints one for a bare command that fails;
   two lines of R11's run that joined `; echo rc=$?` were refused and run bare.
   Smoke 46 PASS twice is K2's.
-- **The whole suite on the final tree:** on b2f0062 (this half with `main` 5f2db56 merged in), at six workers:
-  20,058 passed, 8 skipped (3 min 48 s); `make test` (385 tests), `make docs`,
-  `make lint` and `make secret-scan` ended 0.
+- **The whole suite on the final tree:** on b2f0062 (this half with `main`
+  5f2db56 merged in), at six workers: 20,058 passed, 8 skipped (3 min 48 s);
+  `make test` (385 tests), `make docs`, `make lint` and `make secret-scan`
+  ended 0.
 - **Not seen, and why:** the withheld completion's four headers (S071's paid
   measurements), a shed tool call's row, a takeover past the lease and
   `not-started` (K1: no request makes the condition), and, from K2, the
