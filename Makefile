@@ -100,7 +100,7 @@ EVAL_INPUTS         := src config/registry data/synthetic data/evaluation/record
 
 STRUCTURIZR := docker run --rm -v "$(CURDIR)/$(ARCH_DIR):/w:ro"
 
-.PHONY: help validate inspect check docs test secret-scan view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db alerts eval eval-compare eval-baseline eval-record synthetic up deploy images helm-lint demo smoke gateway-upkeep grafana grafana-password cluster-holder down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry aws-validate aws-scan aws-plan aws-apply aws-destroy
+.PHONY: help validate inspect check docs test secret-scan view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db alerts eval eval-compare eval-baseline eval-record synthetic up deploy images helm-lint demo smoke gateway-upkeep grafana grafana-password cluster-holder down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry aws-validate aws-scan aws-plan aws-apply aws-destroy gcp-validate
 .DEFAULT_GOAL := help
 
 ## help            list the targets
@@ -368,3 +368,11 @@ aws-apply:
 ## aws-destroy     REMOVES the AWS environment: Terraform asks its own question; the owner runs it, in a terminal, from a sign-in no session can read (the terminal check stops an accident and a plain shell, not a session that makes itself a terminal)
 aws-destroy:
 	infra/terraform/aws.sh destroy
+
+# ── Google Cloud module (a scaffold: checked, never planned, never applied) ──
+# infra/terraform/gcp/README.md says what this is. There is no project and no
+# credential, and deliberately no target that plans, applies or removes it.
+
+## gcp-validate    terraform fmt -check, init with no backend and validate of the Google Cloud module; needs no project and no credential and changes nothing in Google Cloud
+gcp-validate:
+	infra/terraform/aws.sh validate gcp
