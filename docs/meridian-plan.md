@@ -955,7 +955,8 @@ that day; the rest stand as their step recorded them.
 | The Google provider is pinned `~> 8.6` and its lock holds 8.6.0, which was published on 2026-10-06, a day before the module was written (8.5.0 a week before); no run has used it beyond `init` and `validate`. Renovate's `terraform` group moves the lock after a week and its note names `make gcp-validate` and `make gcp-scan`; the release notes of the 8 series are unread. S079's twin pins the same provider and is the next step to read them | S078 (G1's report) | open | S079 |
 | The Google Cloud module's `workload_service_account` may be up to 253 characters, but the secret's ID is the 18-character prefix `meridian-gcp-test-` and that name, against Secret Manager's limit of 255: a name of more than 237 characters passes the validation and fails an apply. A bound of 237 on the variable would close it | S078 (G4's report) | open; low | S079 |
 | `make deploy` reads how many rows `knowledge.chunks` holds before it decides to ingest again, and an unreadable count now stops it (S073, K9); two answers still start an ingestion, which embeds the corpus again and calls the model: an exit-0 answer of `psql` that is empty or not a number (a cut stream), and psql's own statement or lock timeout error (5 s and 3 s from `PGOPTIONS`), which under heavy load is a count that could not be read | S073 (K9's report, decision 4) | closed by S073 (2026-10-07, K13, after the re-read named both as findings): the one answer that starts an ingestion is exit 0 with the text `0`; every other answer stops the deploy with nothing removed (tested with a stand-in, not seen on a cluster) | S073 |
-| The test `test_the_probes_and_the_pods_are_the_same_with_seven_services_as_with_one` fails when the clock ticks between its two runs, because each names its pod `smoke-network-<epoch>` (it failed once in K10's broad run, and passed three times alone) | S073 (K10's report) | open | S074 |
+| The test `test_the_probes_and_the_pods_are_the_same_with_seven_services_as_with_one` fails when the clock ticks between its two runs, because each names its pod `smoke-network-<epoch>` (it failed once in K10's broad run, and passed three times alone) | S073 (K10's report) | closed by S073 (2026-10-07, K14), after it failed this step's own pull request in CI: the harness gives both runs one fixed second, shown failing first under a clock made to tick; every other name the kind scripts build from the clock, a random number or a process ID was read against its tests, and none compares two runs | S073 |
+| The tests that hold the variable validations of the three Terraform modules (170 of them: 63 in `test_aws_script.py`, 107 in `test_gcp_module.py`) need the `terraform` program and SKIP where it is missing, and the `python` workflow installs only Helm and uv: on the hosted runner they have never run. Those modules are never applied, so CI was meant to be their gate, and the pull requests of S036 and S078 said "the tests hold" of runs made on the development machine alone. Every other tool the suite needs fails in CI when it is missing (`jq`, Helm, the database, Docker); this one skips without a word. Install the pinned `terraform` in the workflow (a `_VERSION` there needs a Renovate reader) or make the marker fail under CI as the `jq` one does | S073 (K14's reading of the pull request's skipped tests: 178, where the run before S078 merged had 71 and the development machine has 8) | open | S079 |
 | Small ends of S068's last two commits, from a re-read that came back while its pull request was in its checks, none fixed there: the audit expiry's line after a failure does not say "at least" as the ledger's now does (the same commit of unknown outcome), and the kind script's test still holds the ledger's old line in its fixtures, so no test proves the script reads the new one; the two tests that plant a reserved row under a SHARE lock take the past month from a second reading of the clock, so a run in the milliseconds around a month's first instant would fail; a paragraph copied into two test files says the tests of the file call the expiry as the owner, which is true of their expiry tests only; no test asserts that a generic plan was in fact chosen on the sixth call; and only one of the two new concurrency tests was shown to fail under a mutation | S068 (a Python re-read of F3 and F4, 2026-10-07) | open; low | S074 |
 | Three small ends of the kind scripts that the infrastructure review of S073 left: `upkeep.sh` reads a `helm get` that timed out (status 124) as "the release is not installed" and says to run `make deploy`, though it stops and does no harm (L3); `smoke.sh` puts a Deployment's name unescaped into a basic regular expression, safe for a DNS label and not for a dotted name (L6); `kctl` gives a plain `delete` without `--wait=false` the request flag though it waits by default, and no call site is affected today (L7) | S073 (infrastructure review) | open | S073 |
 | The restart share is read from `MERIDIAN_TLS_RESTART_SHARE` by `certlife._restart_share`: an empty value is 0, the old behaviour, so a chart typo that renders an empty share hides itself, while a value of only whitespace refuses the start (the Python review of S073, L4); a share written with Unicode digits or padded is read as a number | S073 (Python review) | open | S073 |
@@ -14740,6 +14741,22 @@ of the step's branch at 3270162, before this record):
   K13, so the sentence above that CI's run would be the only whole-suite
   evidence for K12 no longer holds: this is it. The commit after it fills
   this line.
+- **The pull request's second failed run, and K14.** With everything above
+  pushed, the `python` check failed again, on one test of 17,511: a test of
+  smoke's network check runs the script twice and compares the calls, the
+  script names its probe pod after the clock's second, and the second passed
+  between the two runs. An earlier contract of this step had seen exactly
+  that once and the session wrote a backlog row for another step instead of
+  fixing a test it knew could fail on a clock: its own miss, and it cost a
+  run. K14 gives both runs one fixed second in the harness (red first with a
+  clock made to tick on every call, green under the same clock after), and
+  read every other name the kind scripts build from the clock, a random
+  number or a process ID against the tests that see it: none compares two
+  runs. The same reading answered why that run skipped 178 tests where the
+  one before S078 merged skipped 71: the 170 tests of the three Terraform
+  modules' validations skip where `terraform` is missing, and the workflow
+  does not install it. On the hosted runner they have never run (a backlog
+  row, homed at S079, which builds the validate door).
 
 **Not seen** (the first half's list; the second half's items are above):
 
@@ -15466,5 +15483,5 @@ status is brought to say so):
   step stays open for its
   second half (a frozen API server, certificates of one hour, the cold run,
   the ingestion's word on a real refusal, a rotation of the store's
-  password). T-84, T-86, T-87, T-89, T-91 and T-92 changed, no new threat. Seven
-  backlog rows closed, eight closed in part, five new.
+  password). T-84, T-86, T-87, T-89, T-91 and T-92 changed, no new threat. Eight
+  backlog rows closed, eight closed in part, six new.
