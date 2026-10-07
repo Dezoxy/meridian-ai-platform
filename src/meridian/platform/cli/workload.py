@@ -76,7 +76,10 @@ def new(
 
     Calls no platform API and no model. Exit 2, with nothing written, when the
     name or the tree is refused; exit 1 when a write fails, after what was
-    written has been removed (the output names anything that could not be).
+    written has been removed (the output names anything that could not be). An
+    interrupt during the writes ends the command as the interrupt (exit 130),
+    also when the removal itself then fails; the lines to check by hand are
+    printed first.
     """
     try:
         plan = plan_workload(root, name)

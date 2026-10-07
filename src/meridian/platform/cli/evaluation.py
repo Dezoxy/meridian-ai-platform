@@ -309,41 +309,52 @@ def _write_graded_report(
     return report
 
 
+# The eight options of ``meridian eval run``, in the order of its signature.
+BaseUrlOption = Annotated[
+    str,
+    typer.Option(
+        "--base-url",
+        callback=_plain_http_url,
+        help="The deployed Claims API, e.g. http://localhost:8000.",
+    ),
+]
+ReportPathOption = Annotated[
+    Path,
+    typer.Option("--report", dir_okay=False, help="Where to write the report."),
+]
+WorkloadOption = Annotated[
+    str, typer.Option("--workload", help="The workload to evaluate.")
+]
+GoldenSetOption = Annotated[
+    Path, typer.Option("--golden-set", help="The workload's golden set.")
+]
+RegistryDirOption = Annotated[
+    Path, typer.Option("--registry", help="Directory holding the registry.")
+]
+LimitOption = Annotated[
+    int | None,
+    typer.Option("--limit", min=1, help="Stop after this many cases ran."),
+]
+PaceOption = Annotated[
+    float,
+    typer.Option("--pace", min=0.0, help="Seconds to wait after a case that ran."),
+]
+AllowEmptyOption = Annotated[
+    bool,
+    typer.Option("--allow-empty", help="Pass when the golden set holds no case."),
+]
+
+
 @app.command("run")
 def run_command(
-    base_url: Annotated[
-        str,
-        typer.Option(
-            "--base-url",
-            callback=_plain_http_url,
-            help="The deployed Claims API, e.g. http://localhost:8000.",
-        ),
-    ],
-    report_path: Annotated[
-        Path,
-        typer.Option("--report", dir_okay=False, help="Where to write the report."),
-    ],
-    workload: Annotated[
-        str, typer.Option("--workload", help="The workload to evaluate.")
-    ] = DEFAULT_WORKLOAD,
-    golden_set: Annotated[
-        Path, typer.Option("--golden-set", help="The workload's golden set.")
-    ] = DEFAULT_GOLDEN_SET,
-    registry_dir: Annotated[
-        Path, typer.Option("--registry", help="Directory holding the registry.")
-    ] = DEFAULT_REGISTRY_DIR,
-    limit: Annotated[
-        int | None,
-        typer.Option("--limit", min=1, help="Stop after this many cases ran."),
-    ] = None,
-    pace: Annotated[
-        float,
-        typer.Option("--pace", min=0.0, help="Seconds to wait after a case that ran."),
-    ] = DEFAULT_PACE_SECONDS,
-    allow_empty: Annotated[
-        bool,
-        typer.Option("--allow-empty", help="Pass when the golden set holds no case."),
-    ] = False,
+    base_url: BaseUrlOption,
+    report_path: ReportPathOption,
+    workload: WorkloadOption = DEFAULT_WORKLOAD,
+    golden_set: GoldenSetOption = DEFAULT_GOLDEN_SET,
+    registry_dir: RegistryDirOption = DEFAULT_REGISTRY_DIR,
+    limit: LimitOption = None,
+    pace: PaceOption = DEFAULT_PACE_SECONDS,
+    allow_empty: AllowEmptyOption = False,
 ) -> None:
     """Post the golden set to a deployed stack, read each answer, grade it.
 
