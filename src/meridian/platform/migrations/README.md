@@ -100,33 +100,45 @@ The next two files of S068 put the ledger's expiry in batches. Implemented and
 tested, not run on a cluster; no retention period is set and nothing is
 scheduled.
 [`0029_usage_month_idx.sql`](0029_usage_month_idx.sql) is an index on
-`gateway.usage (month, attempt_id)` and nothing else, with the owner guard and
+`gateway.usage (month)` and nothing else, with the owner guard and
 `SET LOCAL lock_timeout` first: the table had no index on `month`, so a batch
 sorted every row of the months to remove and the question "is any row left"
 read the whole table. It is **not built concurrently**, for the reason above
 (the runner's transaction). The build takes SHARE on `gateway.usage`, so the
 gateway's reserve (an insert) and its close (an update) wait while it runs:
-0.30 s at 1,000,000 rows on one machine with the data in memory, not measured
-on a cloud disk. The index costs a write for every row the gateway reserves,
-and `attempt_id` is a random UUID, so those entries do not land at the end of
-the index.
+0.11 to 0.12 s at 1,000,000 rows on one machine with the data in memory, not
+measured on a cloud disk. The index is on `month` alone: the pair
+`(month, attempt_id)` was reviewed and changed before any database had it,
+because its second key (a random UUID) made no order anything needs and cost
+every model call an insert into a random page of the index. On `month` alone
+an insert lands on the rightmost page, the index is 6.8 MB at 1,000,000 rows
+(the pair was 39 MB and took 0.33 s to build) and the batch reads the table in
+the order of its rows; the cost of an insert was argued, not timed.
 [`0030_ledger_expire_batches.sql`](0030_ledger_expire_batches.sql) adds
 `gateway.expire_ledger_batch(p_before, p_reason, p_limit)`, the owner's,
 executable by `gateway_upkeep` alone, and takes that role's EXECUTE on 0020's
 `gateway.expire_ledger` back (the function stays and the owner may call it): one
-way to expire the ledger. One call removes at most `p_limit` usage rows (1 to
-10,000; 10,000 rows took 0.08 to 0.14 s at 1,000,000 rows, on the same machine)
-of the months before `p_before`, oldest month first, and writes one
+way to expire the ledger. One call removes at most `p_limit` usage rows (100 to
+10,000; 10,000 rows took 8 to 12 ms at 1,000,000 rows, on the same machine) of
+the months before `p_before`, oldest month first, and writes one
 `ledger.expired` row; the call that finds none left removes the counters and
 credits of those months and writes one more; a call after that returns zeros and
-writes none. It refuses as 0020's function does, with the same codes (GU001,
-GU002, GU301, GU302, GU303 while a usage row of those months is still reserved)
-and two of its own: GU305 (a limit outside 1 to 10,000) and GU306 (rows of those
-months are held by another session, nothing changed). GU304 is not used: the
-command tells a finished run from a refusal by the zeros. Rows go by location
-(`ctid`) over rows locked in the same statement, which is safe on this table,
-unlike an update-prone one, because the batch takes only rows that are not
-`reserved` and the trigger `usage_close_once` lets nothing change a closed row.
+writes none. **The floor of 100 is there because each of those audit rows is
+permanent**: the upkeep role cannot remove a row it wrote (0028), so a limit of
+1 would write one permanent row for every row of the ledger; the limit is a
+maximum, so a ledger of fewer than 100 rows still expires in one batch. It
+refuses as 0020's function does, with the same codes (GU001, GU002, GU301,
+GU302, GU303 while a usage row of those months is still reserved) and two of its
+own: GU305 (a limit outside 100 to 10,000) and GU306 (rows of those months are
+held by another session, or changed during the call; nothing changed). GU304 is
+not used: the command tells a finished run from a refusal by the zeros. Rows go
+by location (`ctid`) over rows locked in the same statement: that `FOR UPDATE`
+lock is what keeps a row where it is, and the batch's taking only rows that are
+not `reserved`, with the trigger `usage_close_once` that lets nothing change a
+closed row, is a second defence a later change must not lean on alone. The
+question "is any row left" is a `PERFORM 1 ... ORDER BY month LIMIT 1` and not
+an `EXISTS`, which PostgreSQL strips of both clauses and plans as a scan from
+the start of the table when the statistics are stale.
 While a run is half done the counters of the past months stand without all their
 usage rows, so the runbook's reconciliation shows drift for those periods until
 the closing call; nothing the gateway decides reads a past period. The role's

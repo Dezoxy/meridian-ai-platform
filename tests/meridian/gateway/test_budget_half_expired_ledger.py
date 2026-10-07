@@ -12,7 +12,7 @@ from decimal import Decimal
 
 import pytest
 from dbsupport import OWNER, DatabaseHandle
-from ledgerbatchsupport import batch, plant_ledger
+from ledgerbatchsupport import MIN_BATCH, batch, plant_ledger
 from servicesupport import REGISTRY_DIR
 from upkeepsupport import previous_month, run, utc_day, utc_month
 
@@ -65,7 +65,7 @@ def test_a_call_is_admitted_and_charged_the_same_with_a_half_expired_past_period
     db = fresh_database
     current, today = utc_month(db), utc_day(db)
     old = previous_month(current)
-    plant_ledger(db, [old], rows=6)
+    plant_ledger(db, [old], rows=120)
     # The past counter of the first tenant is far above any limit: a decision that
     # read it would refuse the call.
     run(
@@ -75,8 +75,8 @@ def test_a_call_is_admitted_and_charged_the_same_with_a_half_expired_past_period
         "WHERE tenant = %s AND period_start = %s",
         (A_HUGE_PAST_COUNTER, HALF_EXPIRED_TENANT, old),
     )
-    half = batch(db, current, 3)
-    assert half == (3, 0, 0)
+    half = batch(db, current, MIN_BATCH)
+    assert half == (MIN_BATCH, 0, 0)
     past_before = run(db, OWNER, PAST_COUNTERS, (HALF_EXPIRED_TENANT, current))
     request = ChatRequest(
         messages=(Message(role="user", content="x" * 30),), max_output_tokens=100

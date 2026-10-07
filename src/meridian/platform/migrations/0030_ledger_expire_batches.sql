@@ -28,10 +28,11 @@
 --   the path names it). EXECUTE is the owner's and the upkeep role's alone. One
 --   call is exactly one of three things, and what it returns says which:
 --   1. A batch: it removes at most p_limit usage rows of the months before
---      p_before, oldest month first and then by attempt_id (the order of 0029's
---      index), skipping rows another session holds (FOR UPDATE SKIP LOCKED: a
---      held row does not count toward the limit and goes with a later call). It
---      writes one audit row and returns (rows removed, 0, 0).
+--      p_before, oldest month first (the order of 0029's index; which rows of a
+--      month go first is not specified), skipping rows another session holds
+--      (FOR UPDATE SKIP LOCKED: a held row does not count toward the limit and
+--      goes with a later call). It writes one audit row and returns (rows
+--      removed, 0, 0).
 --   2. The closing call: when no usage row is left before p_before it removes the
 --      budget counters whose period_start is before p_before, then the credits of
 --      those periods (0020's order), writes one audit row and returns (0,
@@ -53,17 +54,21 @@
 --   GU302  p_before is later than the first day of the current UTC month
 --   GU303  a usage row of the months to remove is still reserved: every call
 --          refuses while one is (message: how many), as 0020 does; the
---          operator closes them with close_reservation first. It is checked
---          before anything is removed, again before the periods are closed (a
---          reservation that committed in between would otherwise lose its
---          counters), and its raise undoes the removal of the counters and
---          credits.
---   GU305  the limit is below 1 or above 10,000 (new, in the GU3xx series of the
---          ledger's expiry)
+--          operator closes them with close_reservation first. The rows are
+--          counted up to three times in a call: before anything is removed;
+--          only when a call removed no row and rows are left, to tell this
+--          code from GU306; and after the counters and credits were removed (a
+--          reservation that committed while that removal waited for the
+--          counters' row locks would otherwise lose its counters), where the
+--          raise undoes the removal of the counters and credits.
+--   GU305  the limit is below 100 or above 10,000 (new, in the GU3xx series of
+--          the ledger's expiry; the floor is why, in the paragraph on the limit)
 --   GU306  a call that removed no row found usage rows of those months left, and
---          none is reserved: another session holds them (or a row was written
---          reserved after the first check and closed before this one). Nothing
---          is changed; the periods stay open and a later call takes them (new).
+--          none is reserved: another session holds them, or they changed during
+--          the call (a row written reserved after the first count and closed
+--          before the question, or a row that committed after the call's
+--          snapshot). Nothing is changed; the periods stay open, and running
+--          the command again takes the rows (new).
 --   GU304, 0020's "nothing to remove", is NOT used: a call after the periods are
 --   closed returns zeros, so the command can tell a finished run from a refusal.
 --   A refused call leaves no change and no audit row.
@@ -85,26 +90,49 @@
 --   second plan to choose. A location is safe only if a row cannot move between
 --   the subquery and the DELETE, and this table, unlike audit.events, has
 --   updates: the gateway closes a reservation with an UPDATE, which makes a new
---   version of the row at a new location. Read from the writers (gateway/
---   budget.py, 0020): the only UPDATE of a usage row is the close of a row whose
---   state is 'reserved' (CLOSE_USAGE has state = 'reserved' in its WHERE and so
---   has close_reservation), and the trigger usage_close_once (0003) refuses every
---   later change: a closed row never changes again, not for the owner. The batch
---   selects only rows whose state is not 'reserved', so every row it locks and
---   removes is one that no statement can update: its location cannot change, and
---   VACUUM does not move a row. A reserved row is never selected, and it never
---   reaches the DELETE (GU303 refuses first). A row that turns reserved to closed
---   after the first check is a closed row, with its counters settled, and goes
---   like any other. The audit table's choice was by location too, for a
---   different reason (nothing updates it); this table's is justified by the
---   state filter, and a test holds the plan.
+--   version of the row at a new location. What keeps a row where it is: the FOR
+--   UPDATE row lock, taken in the same statement. It marks the row in place and
+--   makes no new version, so no other statement can move the row until the
+--   transaction ends, and the lock holds ROW EXCLUSIVE on the table, so VACUUM
+--   FULL and CLUSTER cannot get their lock before then (a plain VACUUM does not
+--   move a row). Were an update of a row committed before the lock was taken,
+--   the lock would follow it to the new version and return the new location.
+--   A second defence, said as such: the batch selects only rows whose state is
+--   not 'reserved', and, read from the writers (gateway/budget.py, 0020), the
+--   only UPDATE of a usage row is the close of a row whose state is 'reserved'
+--   (CLOSE_USAGE has state = 'reserved' in its WHERE and so has
+--   close_reservation) and the trigger usage_close_once (0003) refuses every
+--   later change, so a row the batch selects is one that no statement can
+--   update. A later change that drops the row lock must not lean on the state
+--   filter and the trigger instead: a VACUUM FULL between the subquery and the
+--   DELETE would then move rows. A reserved row is never selected, and it never
+--   reaches the DELETE (GU303 refuses first). A row that turns reserved to
+--   closed after the first count is a closed row, with its counters settled, and
+--   goes like any other. The audit table's choice was by location too, for a
+--   different reason (nothing updates it); a test holds the plan.
 --
 --   The reserved rows. 0020 refuses the whole expiry while a usage row of the
 --   months to remove is still reserved, and so does this function, on every
 --   call, whatever the limit: removing the closed rows of a month whose open
 --   reservation will settle against a counter that is then gone would leave an
 --   orphan (0020's race, reproduced there). The count reads usage_open_idx (the
---   partial index on the reserved rows) and is cheap.
+--   partial index on the reserved rows, and not usage_month_idx: a test holds
+--   that too) and is cheap. A call counts once before it removes anything; a
+--   second time only when it removed no row and rows are left, to tell GU303
+--   from GU306; and the closing call once more after it removed the counters
+--   and credits.
+--
+--   Is any row left. A call that removed no row asks it with PERFORM 1 ... ORDER
+--   BY month LIMIT 1 and not with EXISTS (...): PostgreSQL throws the ORDER BY
+--   and the LIMIT of an EXISTS away, and the planner then reads the table from
+--   its start when the statistics say that most rows are older than the cutoff,
+--   as they still do right after a large removal and before the next ANALYZE; it
+--   expects the first page to hit, and when nothing is left it reads the whole
+--   table, dead rows included, against the 10 s timeout (seen on a scratch
+--   table: a Seq Scan after ANALYZE and after the removal alike). A plain SELECT
+--   that orders by the indexed column and takes one row can only be answered
+--   cheaply by the index, whatever the statistics say; a test shows its plan
+--   after a large removal with no ANALYZE.
 --
 --   Between calls. The counters of the past months stand while their usage rows
 --   are removed batch by batch, so a counter no longer equals the charges of its
@@ -118,15 +146,25 @@
 --   past period). A reconciliation of a past period is meaningful before an
 --   expiry starts or after it ends, not during.
 --
---   The limit. 1 to 10,000. Measured on PostgreSQL 17, one machine, a data
---   directory in memory, a table of 1,000,000 settled usage rows of about 200
---   bytes in one month, 0029's index, one login of the upkeep role, connection
---   included: three batches of 10,000 rows took 0.135, 0.103 and 0.076 s and one
---   of 1,000 rows 0.036 s. That is not a cold cloud disk, where the margin to the
---   10 s timeout was not measured, and removed rows leave dead index entries that
---   each later batch's scan steps over until VACUUM takes them. A removal is one
---   trigger-free DELETE (usage has only the UPDATE trigger). A larger expiry is a
---   loop of calls, each its own transaction.
+--   The limit. 100 to 10,000. The floor: every batch writes one audit row, and
+--   0028 keeps every row the upkeep role wrote out of the audit expiry, so the
+--   role can never remove it; a limit of 1 would write one permanent row for
+--   every row of the ledger. At 100 a ledger of a million rows writes at most
+--   10,000 rows, and the limit is a maximum, so a ledger of fewer than 100 rows
+--   still expires in one batch. The maximum: measured on PostgreSQL 17, one
+--   machine, a data directory in memory, a table of 1,000,000 settled usage rows
+--   of about 200 bytes (211 MB) in one month, 0029's index, one connection of
+--   the upkeep role for the whole run, as the command holds it: three batches of
+--   10,000 rows took 12, 9 and 8 ms, two of 1,000 rows 2 and 1 ms, and the other
+--   968,000 rows went in 97 batches of 10,000 that averaged 8 ms; the call that
+--   then found nothing left took 2 ms. That is one run on a warm table and not a
+--   cold cloud disk, where the margin to the 10 s timeout was not measured.
+--   Removed rows leave dead index entries that each later batch's scan steps
+--   over until VACUUM takes them (a scan marks the ones it passes, so the next
+--   one passes them cheaply, and a long transaction that holds back the cleanup
+--   horizon would change that: not measured). A removal is one trigger-free
+--   DELETE (usage has only the UPDATE trigger). A larger expiry is a loop of
+--   calls, each its own transaction.
 --
 --   What a half-finished run leaves: the rows removed so far stay removed, each
 --   call with its audit row; running the command again continues from the oldest
@@ -196,6 +234,7 @@ SECURITY DEFINER
 SET search_path = pg_catalog, pg_temp
 AS $$
 DECLARE
+    min_limit constant integer := 100;
     max_limit constant integer := 10000;
     reserved bigint;
     left_over boolean;
@@ -213,9 +252,9 @@ BEGIN
     ELSIF p_before > date_trunc('month', now() AT TIME ZONE 'UTC')::date THEN
         RAISE EXCEPTION 'expire_ledger_batch: the current month is never removed'
             USING ERRCODE = 'GU302';
-    ELSIF p_limit < 1 OR p_limit > max_limit THEN
-        RAISE EXCEPTION 'expire_ledger_batch: the limit is from 1 to %', max_limit
-            USING ERRCODE = 'GU305';
+    ELSIF p_limit < min_limit OR p_limit > max_limit THEN
+        RAISE EXCEPTION 'expire_ledger_batch: the limit is from % to %',
+            min_limit, max_limit USING ERRCODE = 'GU305';
     END IF;
     SELECT count(*) INTO reserved
     FROM gateway.usage AS u WHERE u.month < p_before AND u.state = 'reserved';
@@ -228,7 +267,7 @@ BEGIN
     WHERE d.ctid = ANY (ARRAY(
         SELECT s.ctid FROM gateway.usage AS s
         WHERE s.month < p_before AND s.state <> 'reserved'
-        ORDER BY s.month, s.attempt_id
+        ORDER BY s.month
         LIMIT p_limit
         FOR UPDATE SKIP LOCKED
     ));
@@ -242,8 +281,9 @@ BEGIN
         RETURN QUERY SELECT n_usage, 0::bigint, 0::bigint;
         RETURN;
     END IF;
-    SELECT EXISTS (SELECT 1 FROM gateway.usage AS u WHERE u.month < p_before)
-    INTO left_over;
+    PERFORM 1 FROM gateway.usage AS u
+    WHERE u.month < p_before ORDER BY u.month LIMIT 1;
+    left_over := FOUND;
     IF left_over THEN
         SELECT count(*) INTO reserved
         FROM gateway.usage AS u WHERE u.month < p_before AND u.state = 'reserved';
@@ -253,7 +293,7 @@ BEGIN
                 reserved USING ERRCODE = 'GU303';
         END IF;
         RAISE EXCEPTION
-            'expire_ledger_batch: usage rows of those months are held by another session'
+            'expire_ledger_batch: usage rows of those months are held by another session, or changed during the call'
             USING ERRCODE = 'GU306';
     END IF;
     DELETE FROM gateway.budget_counters AS c WHERE c.period_start < p_before;

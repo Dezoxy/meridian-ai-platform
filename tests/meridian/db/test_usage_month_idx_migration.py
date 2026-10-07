@@ -1,9 +1,11 @@
-"""0029: an index on ``gateway.usage (month, attempt_id)`` for the ledger's expiry
-in batches (S068, T-25).
+"""0029: an index on ``gateway.usage (month)`` for the ledger's expiry in batches
+(S068, T-25).
 
 The batch function of 0030 removes the usage rows of the months before a cutoff,
-oldest first, and asks whether any is left; the table had no index on ``month``,
-so every call scanned it whole. The file holds the index and nothing else. The
+oldest month first, and asks whether any is left; the table had no index on
+``month``, so every call scanned it whole. The index is on ``month`` alone: a
+second key would buy an order nothing needs and cost every model call an insert
+into a random page of the index. The file holds the index and nothing else. The
 migration is found by the end of its name, never by its number.
 """
 
@@ -79,7 +81,7 @@ def test_the_migration_is_recorded(migrated_database: DatabaseHandle) -> None:
     assert (migration_name(),) in recorded
 
 
-def test_the_index_is_a_plain_one_on_month_then_attempt_id(
+def test_the_index_is_a_plain_one_on_month_alone(
     migrated_database: DatabaseHandle,
 ) -> None:
     columns = run(migrated_database, OWNER, INDEX_COLUMNS, (INDEX,))
@@ -91,7 +93,7 @@ def test_the_index_is_a_plain_one_on_month_then_attempt_id(
         (INDEX,),
     )
 
-    assert columns == [("month",), ("attempt_id",)]
+    assert columns == [("month",)]
     assert partial_or_unique == [(False,)]
 
 
@@ -103,7 +105,7 @@ def test_the_index_holds_the_order_the_batch_asks_for_so_no_sort_is_needed(
             row[0]
             for row in conn.execute(
                 "EXPLAIN SELECT attempt_id FROM gateway.usage "
-                "WHERE month < current_date ORDER BY month, attempt_id LIMIT 100"
+                "WHERE month < current_date ORDER BY month LIMIT 100"
             )
         )
 

@@ -1,12 +1,14 @@
 """``meridian gateway expire`` in batches (S068, T-25, T-49).
 
-The dry run's counts and its line of batches, a real run of several batches (each
-its own transaction with its own audit row), the limit, what a failure between
-batches leaves, a count the statement timeout cancels, and a row another session
-holds. The function's own rules are tested in
+The dry run's counts and its line of batches, a real run of several batches (one
+connection for the run, a transaction and an audit row for each batch), the
+limit (from 100 to 10,000, as the function's), what a failure between batches
+leaves, a count the statement timeout cancels, and a row another session holds.
+The function's own rules are tested in
 ``tests/meridian/db/test_ledger_expiry_batches.py``; the older tests of the
 command, which a run of one batch leaves as they were, are in
-``test_upkeep_cli.py``. The ledger is planted by ``ledgerbatchsupport``.
+``test_upkeep_cli.py``. The ledger is planted by ``ledgerbatchsupport``; with the
+smallest limit a run of three batches needs 250 usage rows.
 """
 
 import psycopg
@@ -55,7 +57,7 @@ def connections(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return asked
 
 
-def planted_old_month(db: DatabaseHandle, rows: int = 5) -> str:
+def planted_old_month(db: DatabaseHandle, rows: int = 250) -> str:
     """An old month's ledger; the text of the current month, the cutoff."""
     current = utc_month(db)
     plant_ledger(db, [previous_month(current)], rows=rows)
@@ -83,12 +85,12 @@ def test_the_dry_run_says_how_many_batches_the_real_run_will_take(
     current = planted_old_month(db)
     before = ledger(db)
 
-    result = runner.invoke(app, argv(current, "--limit", "2"))
+    result = runner.invoke(app, argv(current, "--limit", "100"))
 
     assert result.exit_code == 0, result.output
     assert result.stdout.splitlines() == [
-        f"would remove before {current}: usage rows 5, counter rows 6, credits 2",
-        f"in 3 batch(es) of at most 2 usage rows, {THEN}",
+        f"would remove before {current}: usage rows 250, counter rows 6, credits 2",
+        f"in 3 batch(es) of at most 100 usage rows, {THEN}",
         "still reserved in those months: 0",
         "nothing removed: add --confirm to remove them",
         gateway_cli.DRY_RUN_NOTE,
@@ -134,11 +136,11 @@ def test_a_dry_run_whose_count_is_cancelled_says_what_that_means_and_changes_not
     assert result.exit_code == 1
     assert result.stdout == ""
     assert result.stderr.splitlines() == [
-        "ERROR the count did not finish inside the statement timeout, and "
-        "nothing was changed: the real run removes in batches and needs no "
-        "count, and a nearer --before counts faster"
+        "ERROR the count was cancelled (the statement timeout, or by an "
+        "administrator), and nothing was changed: the real run removes in "
+        "batches and needs no count, and a nearer --before counts faster"
     ]
-    assert usage_count(db) == 5
+    assert usage_count(db) == 250
 
 
 # ── the real run ─────────────────────────────────────────────────────────────
@@ -147,12 +149,12 @@ def test_a_real_run_of_three_batches_prints_the_totals_and_the_number_of_batches
 ) -> None:
     current = planted_old_month(db)
 
-    result = runner.invoke(app, argv(current, "--limit", "2", "--confirm"))
+    result = runner.invoke(app, argv(current, "--limit", "100", "--confirm"))
 
     assert result.exit_code == 0, result.output
     assert result.stdout.splitlines() == [
-        f"removed before {current}: usage rows 5, counter rows 6, credits 2",
-        f"in 3 batch(es) of at most 2 usage rows, {THEN}",
+        f"removed before {current}: usage rows 250, counter rows 6, credits 2",
+        f"in 3 batch(es) of at most 100 usage rows, {THEN}",
     ]
     left = ledger(db)
     assert (left["usage"], left["counters"], left["credits"]) == ([], [], [])
@@ -163,56 +165,103 @@ def test_each_call_leaves_its_audit_row_under_the_upkeep_role(
 ) -> None:
     current = planted_old_month(db)
 
-    runner.invoke(app, argv(current, "--limit", "2", "--confirm"))
+    runner.invoke(app, argv(current, "--limit", "100", "--confirm"))
 
     assert ledger_audit_rows(db) == [
-        audit_row(current, "batch usage=2"),
-        audit_row(current, "batch usage=2"),
-        audit_row(current, "batch usage=1"),
+        audit_row(current, "batch usage=100"),
+        audit_row(current, "batch usage=100"),
+        audit_row(current, "batch usage=50"),
         audit_row(current, "closed counters=6 credits=2"),
     ]
 
 
-def test_the_default_limit_is_below_the_functions_maximum() -> None:
-    assert gateway_cli.DEFAULT_LEDGER_BATCH < gateway_cli.MAX_LEDGER_BATCH == 10_000
+def test_a_run_of_three_batches_opens_one_connection(
+    monkeypatch: pytest.MonkeyPatch, db: DatabaseHandle
+) -> None:
+    current = planted_old_month(db)
+    real_connect = gateway_cli.connect
+    opened: list[int] = []
+
+    def counts(dsn: str, application_name: str) -> psycopg.Connection:
+        opened.append(1)
+        return real_connect(dsn, application_name)
+
+    monkeypatch.setattr(gateway_cli, "connect", counts)
+
+    result = runner.invoke(app, argv(current, "--limit", "100", "--confirm"))
+
+    # Three batches and the closing call, one connection (a thousand batches would
+    # otherwise be a thousand handshakes), and every call committed.
+    assert result.exit_code == 0, result.output
+    assert opened == [1]
+    assert len(ledger_audit_rows(db)) == 4
 
 
-@pytest.mark.parametrize("limit", ["0", "-1", "10001"])
+def test_the_default_limit_is_within_the_functions_range() -> None:
+    assert (
+        gateway_cli.MIN_LEDGER_BATCH
+        <= gateway_cli.DEFAULT_LEDGER_BATCH
+        < gateway_cli.MAX_LEDGER_BATCH
+    )
+    assert (gateway_cli.MIN_LEDGER_BATCH, gateway_cli.MAX_LEDGER_BATCH) == (100, 10_000)
+
+
+@pytest.mark.parametrize("limit", ["0", "-1", "1", "99", "10001"])
 def test_a_limit_outside_the_functions_range_is_refused_before_the_database_is_touched(
     connections: list[str], limit: str
 ) -> None:
     result = runner.invoke(app, argv("2026-01", "--limit", limit, "--confirm"))
 
     assert result.exit_code == 2
+    assert "100 to 10000" in " ".join(result.output.split())
     assert connections == []
+
+
+@pytest.mark.parametrize("limit", ["100", "10000"])
+def test_the_smallest_and_the_largest_limit_reach_the_database(
+    connections: list[str], limit: str
+) -> None:
+    result = runner.invoke(app, argv("2026-01", "--limit", limit, "--confirm"))
+
+    # The connect of this test fails, so the run ends at the first call: the limit
+    # was accepted and the database was asked.
+    assert result.exit_code == 1
+    assert len(connections) == 1
+
+
+def fail_the_third_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The third execution of the batch statement, on whatever connection, raises
+    a lost connection before it reaches the server; every other statement runs."""
+    real_execute = psycopg.Connection.execute
+    calls: list[int] = []
+
+    def execute(self: psycopg.Connection, query: str, *args: object, **kwargs: object):
+        if query == gateway_cli.EXPIRE_LEDGER_BATCH:
+            calls.append(1)
+            if len(calls) == 3:
+                raise psycopg.OperationalError("connection lost")
+        return real_execute(self, query, *args, **kwargs)
+
+    monkeypatch.setattr(psycopg.Connection, "execute", execute)
 
 
 def test_a_failure_between_batches_leaves_what_was_removed_removed_and_says_so(
     monkeypatch: pytest.MonkeyPatch, db: DatabaseHandle
 ) -> None:
     current = planted_old_month(db)
-    real_connect = gateway_cli.connect
-    calls: list[int] = []
+    fail_the_third_call(monkeypatch)
 
-    def fails_the_third_time(dsn: str, application_name: str) -> psycopg.Connection:
-        calls.append(1)
-        if len(calls) == 3:
-            raise psycopg.OperationalError("connection lost")
-        return real_connect(dsn, application_name)
-
-    monkeypatch.setattr(gateway_cli, "connect", fails_the_third_time)
-
-    result = runner.invoke(app, argv(current, "--limit", "2", "--confirm"))
+    result = runner.invoke(app, argv(current, "--limit", "100", "--confirm"))
 
     assert result.exit_code == 1
     lines = result.stderr.splitlines()
     assert lines[0].startswith("ERROR gateway upkeep failed")
     assert lines[1] == (
-        "removed 4 usage rows in 2 batch(es) before the failure: each batch is its "
-        "own transaction with its own audit row, and what was removed stays "
+        "removed 200 usage rows in 2 batch(es) before the failure: each batch is "
+        "its own transaction with its own audit row, and what was removed stays "
         "removed; run the command again to continue"
     )
-    assert usage_count(db) == 1
+    assert usage_count(db) == 50
     assert len(ledger_audit_rows(db)) == 2
 
 
@@ -229,32 +278,41 @@ def test_a_failure_in_the_first_call_does_not_claim_a_removal(
 def test_a_row_another_session_holds_stops_the_run_with_its_line_and_what_was_removed(
     db: DatabaseHandle,
 ) -> None:
-    current = planted_old_month(db, rows=4)
-    held = run(
-        db,
-        OWNER,
-        "SELECT attempt_id FROM gateway.usage ORDER BY attempt_id LIMIT 1",
-    )[0]
+    current = planted_old_month(db, rows=140)
+    held = run(db, OWNER, "SELECT attempt_id FROM gateway.usage ORDER BY ctid LIMIT 1")[
+        0
+    ]
     with connect(db.dsn(OWNER), "test-holder") as holder:
         holder.execute(
             "SELECT 1 FROM gateway.usage WHERE attempt_id = %s FOR UPDATE", held
         )
 
-        result = runner.invoke(app, argv(current, "--limit", "10", "--confirm"))
+        result = runner.invoke(app, argv(current, "--limit", "100", "--confirm"))
         holder.rollback()
 
     assert result.exit_code == 1
     assert result.stdout == ""
     lines = result.stderr.splitlines()
     assert lines[0] == f"ERROR GU306 {gateway_cli.REFUSALS['GU306']}"
-    assert lines[1].startswith("removed 3 usage rows in 1 batch(es) before the failure")
+    assert lines[1].startswith(
+        "removed 139 usage rows in 2 batch(es) before the failure"
+    )
     assert usage_count(db) == 1
+
+
+def test_the_sentence_for_rows_held_also_says_a_row_may_have_changed() -> None:
+    line = gateway_cli.REFUSALS["GU306"]
+
+    # The function refuses with this code for a row held by another session and
+    # for one that was written or closed while the call ran: both are cured by
+    # running the command again.
+    assert "held by another session, or changed during the call" in line
 
 
 def test_a_reserved_row_refuses_the_run_with_the_count_and_removes_nothing(
     db: DatabaseHandle,
 ) -> None:
-    current = planted_old_month(db, rows=3)
+    current = planted_old_month(db, rows=30)
     plant_ledger(
         db,
         [previous_month(utc_month(db))],

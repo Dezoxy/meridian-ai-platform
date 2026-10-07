@@ -17,7 +17,7 @@ from pathlib import Path
 import psycopg
 import pytest
 from dbsupport import OWNER, UPKEEP_ROLE, DatabaseHandle
-from ledgerbatchsupport import BATCH
+from ledgerbatchsupport import BATCH, MIN_BATCH, plant_ledger
 from servicesupport import REGISTRY_DIR
 from upkeepsupport import (
     CLOSE,
@@ -351,15 +351,21 @@ def test_the_reconciliation_shows_drift_between_the_batches_of_an_expiry_not_aft
     current = utc_month(ledger_run.db)
     old = previous_month(current)
     plant_ledger_of_a_month(ledger_run.db, old)
+    # Rows of other tenants with no counter (the query starts from the counters, so
+    # it does not see them), planted after the two rows above: with the smallest
+    # limit a batch takes the first hundred rows of the month, and the 120 rows
+    # leave a second batch for the rest.
+    plant_ledger(ledger_run.db, [old], rows=120, label="pad", counters=False)
 
-    # One of the month's two usage rows goes; its counters stand until the
-    # closing call, so the period no longer reconciles (the runbook says so).
-    run(ledger_run.db, UPKEEP_ROLE, BATCH, (current, "retention-test", 1))
+    # The first batch removes the month's two usage rows with the first rows of
+    # the pad; their counters stand until the closing call, so the period no
+    # longer reconciles (the runbook says so).
+    run(ledger_run.db, UPKEEP_ROLE, BATCH, (current, "retention-test", MIN_BATCH))
     between = [
         row for row in drift_rows(ledger_run.db) if row["period_start"] < current
     ]
-    run(ledger_run.db, UPKEEP_ROLE, BATCH, (current, "retention-test", 1))
-    run(ledger_run.db, UPKEEP_ROLE, BATCH, (current, "retention-test", 1))
+    run(ledger_run.db, UPKEEP_ROLE, BATCH, (current, "retention-test", MIN_BATCH))
+    run(ledger_run.db, UPKEEP_ROLE, BATCH, (current, "retention-test", MIN_BATCH))
 
     assert any(row["drift"] != 0 for row in between)
     assert all(row["drift"] == 0 for row in drift_rows(ledger_run.db))

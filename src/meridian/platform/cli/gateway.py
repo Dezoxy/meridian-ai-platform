@@ -15,6 +15,7 @@ import os
 import re
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Annotated, NoReturn
@@ -97,10 +98,10 @@ REFUSALS = {
         "newer than it is removed"
     ),
     "GU402": "the limit is from 1 to 10000 rows a batch: give --limit in that range",
-    "GU305": "the limit is from 1 to 10000 rows a batch: give --limit in that range",
+    "GU305": "the limit is from 100 to 10000 rows a batch: give --limit in that range",
     "GU306": (
-        "usage rows of those months are held by another session: nothing was "
-        "changed by this call, so run it again when it lets go"
+        "usage rows of those months are held by another session, or changed "
+        "during the call: nothing was changed by this call, so run it again"
     ),
 }
 # What the dry run prints for a tenant or deployment that is not an ID: the ledger
@@ -413,13 +414,16 @@ def credit(
 
 # ── expire ───────────────────────────────────────────────────────────────────
 EXPIRE_LEDGER_BATCH = "SELECT * FROM gateway.expire_ledger_batch(%s, %s, %s)"
-# The function's own maximum (0030); the default is a tenth of it.
+# The function's own floor and maximum (0030); the default is a tenth of the
+# maximum. Each batch writes an audit row the upkeep role can never remove, which
+# is why a batch is never smaller than the floor.
+MIN_LEDGER_BATCH = 100
 MAX_LEDGER_BATCH = 10_000
 DEFAULT_LEDGER_BATCH = 1_000
 LEDGER_COUNT_CANCELLED = (
-    "the count did not finish inside the statement timeout, and nothing was "
-    "changed: the real run removes in batches and needs no count, and a nearer "
-    "--before counts faster"
+    "the count was cancelled (the statement timeout, or by an administrator), "
+    "and nothing was changed: the real run removes in batches and needs no "
+    "count, and a nearer --before counts faster"
 )
 # What the expiry would remove, by the same conditions as its DELETEs, and
 # the database's own current UTC month (the function's clock, not this host's).
@@ -470,44 +474,59 @@ def _dry_run(conn: psycopg.Connection, before: date, limit: int) -> list[str]:
 
 
 def _ledger_limit(limit: int) -> int:
-    if not 1 <= limit <= MAX_LEDGER_BATCH:
+    if not MIN_LEDGER_BATCH <= limit <= MAX_LEDGER_BATCH:
         raise typer.BadParameter(
-            f"a batch is from 1 to {MAX_LEDGER_BATCH} usage rows",
+            f"a batch is from {MIN_LEDGER_BATCH} to {MAX_LEDGER_BATCH} usage rows",
             param_hint="'--limit'",
         )
     return limit
 
 
+@dataclass
+class Removed:
+    """What the batches of a run have removed so far, and committed."""
+
+    usage: int = 0
+    batches: int = 0
+
+
+def _call_until_closed(
+    conn: psycopg.Connection, month: date, slug: str, limit: int, so_far: Removed
+) -> tuple[int, int]:
+    """Call the function on one connection until a call removes no usage row,
+    one transaction for each call. That last call closed the periods (it returns
+    their counters and credits) or found nothing to close."""
+    while True:
+        removed = conn.execute(EXPIRE_LEDGER_BATCH, (month, slug, limit)).fetchone()
+        conn.commit()
+        if removed[0] == 0:
+            return removed[1], removed[2]
+        so_far.usage += removed[0]
+        so_far.batches += 1
+
+
 def _expire_ledger_batches(
     month: date, slug: str, limit: int
 ) -> tuple[int, int, int, int]:
-    """Call the function until a call removes no usage row; each call is its own
-    transaction. That last call closed the periods (it returns their counters and
-    credits) or found nothing to close. Returns the usage rows, counters and
-    credits removed and the batches that removed usage rows. A failure after a
-    batch says what stays removed, then exits as any failure."""
-    usage = batches = 0
-    while True:
-        try:
-            removed = _upkeep(
-                lambda conn: conn.execute(
-                    EXPIRE_LEDGER_BATCH, (month, slug, limit)
-                ).fetchone()
+    """One connection for the run, a transaction for each call. Returns the usage
+    rows, counters and credits removed and the batches that removed usage rows. A
+    failure after a batch says what stays removed, then exits as any failure."""
+    so_far = Removed()
+    try:
+        counters, credits = _upkeep(
+            lambda conn: _call_until_closed(conn, month, slug, limit, so_far)
+        )
+    except typer.Exit:
+        if so_far.batches:
+            typer.echo(
+                f"removed {so_far.usage} usage rows in {so_far.batches} batch(es) "
+                "before the failure: each batch is its own transaction with its "
+                "own audit row, and what was removed stays removed; run the "
+                "command again to continue",
+                err=True,
             )
-        except typer.Exit:
-            if batches:
-                typer.echo(
-                    f"removed {usage} usage rows in {batches} batch(es) before the "
-                    "failure: each batch is its own transaction with its own audit "
-                    "row, and what was removed stays removed; run the command "
-                    "again to continue",
-                    err=True,
-                )
-            raise
-        if removed[0] == 0:
-            return usage, removed[1], removed[2], batches
-        usage += removed[0]
-        batches += 1
+        raise
+    return so_far.usage, counters, credits, so_far.batches
 
 
 @app.command()
@@ -528,8 +547,9 @@ def expire(
         int,
         typer.Option(
             "--limit",
-            help=f"Usage rows a batch removes, 1 to {MAX_LEDGER_BATCH}; each batch "
-            "is its own transaction.",
+            help=f"Usage rows a batch removes, {MIN_LEDGER_BATCH} to "
+            f"{MAX_LEDGER_BATCH}; each batch is its own transaction and leaves "
+            "an audit row nobody can remove.",
         ),
     ] = DEFAULT_LEDGER_BATCH,
     confirm: Annotated[
@@ -546,10 +566,11 @@ def expire(
     month is the operator's decision: there is no default, nothing runs this on
     a schedule, and the retention period is the owner's to choose. The current
     month is never removed, and months with a reservation still open are
-    refused. With --confirm it removes at most --limit usage rows at a time, one
-    audit row for each batch, and then the counters and credits of those months
-    in one more call. A run that stops half way leaves what it removed removed;
-    running it again continues.
+    refused. With --confirm it removes at most --limit usage rows at a time (100
+    to 10,000: each batch leaves an audit row nobody can remove), on one
+    connection, and then the counters and credits of those months in one more
+    call. A run that stops half way leaves what it removed removed; running it
+    again continues.
     """
     month = _month(before)
     slug = _slug(reason)

@@ -14,6 +14,11 @@ from dbsupport import OWNER, UPKEEP_ROLE, DatabaseHandle
 from upkeepsupport import run
 
 BATCH = "SELECT * FROM gateway.expire_ledger_batch(%s, %s, %s)"
+# The limit is from 100 to 10,000: every batch writes an audit row that the upkeep
+# role can never remove, so a smaller floor would write one permanent row for a
+# handful of ledger rows. A test that needs several batches plants more than
+# MIN_BATCH rows.
+MIN_BATCH = 100
 MAX_BATCH = 10_000
 REASON = "batch-test"
 # 0030's refusals beyond 0020's (GU001, GU002, GU301, GU302 and GU303 mean what

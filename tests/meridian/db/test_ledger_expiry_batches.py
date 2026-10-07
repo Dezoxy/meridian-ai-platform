@@ -18,6 +18,7 @@ from ledgerbatchsupport import (
     BATCH,
     LIMIT_OUT_OF_RANGE,
     MAX_BATCH,
+    MIN_BATCH,
     REASON,
     ROWS_LOCKED,
     batch,
@@ -85,48 +86,64 @@ def test_a_call_removes_at_most_the_limit_of_usage_rows_and_touches_no_counter(
     fresh_database: DatabaseHandle,
 ) -> None:
     current = utc_month(fresh_database)
-    plant_ledger(fresh_database, months_before(current, 2), rows=5)
+    plant_ledger(fresh_database, months_before(current, 2), rows=60)
     before = ledger(fresh_database)
 
-    result = batch(fresh_database, current, 4)
+    result = batch(fresh_database, current, MIN_BATCH)
 
     after = ledger(fresh_database)
-    assert result == (4, 0, 0)
-    assert len(after["usage"]) == len(before["usage"]) - 4
+    assert result == (MIN_BATCH, 0, 0)
+    assert len(after["usage"]) == len(before["usage"]) - MIN_BATCH
     assert after["counters"] == before["counters"]
     assert after["credits"] == before["credits"]
+
+
+def test_a_ledger_of_fewer_rows_than_the_smallest_limit_expires_in_one_batch(
+    fresh_database: DatabaseHandle,
+) -> None:
+    current = utc_month(fresh_database)
+    plant_ledger(fresh_database, months_before(current, 1), rows=7)
+
+    calls = drain(fresh_database, current, MIN_BATCH)
+
+    # The limit is a maximum: seven rows go in one batch, then the closing call.
+    assert calls == [(7, 0, 0), (0, 6, 2)]
 
 
 def test_a_ledger_of_several_months_goes_oldest_month_first_in_batches(
     fresh_database: DatabaseHandle,
 ) -> None:
     current = utc_month(fresh_database)
-    oldest, older = months_before(current, 2)
-    plant_ledger(fresh_database, [oldest, older], rows=5)
+    oldest, older, old = months_before(current, 3)
+    # The months are planted newest first, so that the table holds the newest
+    # month's rows first. Their IDs are hashes of a label, so the order they were
+    # planted in has nothing to do with the order of their attempt IDs: only the
+    # ORDER BY of the batch puts the oldest month first.
+    plant_ledger(fresh_database, [old, older, oldest], rows=60)
 
-    first = batch(fresh_database, current, 4)
+    first = batch(fresh_database, current, MIN_BATCH)
 
-    # Four of the five rows of the oldest month; the older month is whole.
+    # The oldest month (60 rows) and 40 of the older one's; the newest is whole.
     months = run(
         fresh_database,
         OWNER,
         "SELECT month, count(*) FROM gateway.usage GROUP BY month ORDER BY month",
     )
-    assert first == (4, 0, 0)
-    assert months == [(oldest, 1), (older, 5)]
+    assert first == (MIN_BATCH, 0, 0)
+    assert months == [(older, 20), (old, 60)]
 
 
 def test_the_call_that_finds_no_usage_row_left_removes_the_counters_and_credits(
     fresh_database: DatabaseHandle,
 ) -> None:
     current = utc_month(fresh_database)
-    plant_ledger(fresh_database, months_before(current, 2), rows=5)
+    plant_ledger(fresh_database, months_before(current, 2), rows=125)
 
-    calls = drain(fresh_database, current, 4)
+    calls = drain(fresh_database, current, MIN_BATCH)
 
-    # Ten rows: 4, 4, 2, then the closing call. Three tenants and two kinds make
-    # six counters a month; a credit of each kind makes two.
-    assert calls == [(4, 0, 0), (4, 0, 0), (2, 0, 0), (0, 12, 4)]
+    # 250 rows: 100, 100, 50, then the closing call. Three tenants and two kinds
+    # make six counters a month; a credit of each kind makes two.
+    assert calls == [(100, 0, 0), (100, 0, 0), (50, 0, 0), (0, 12, 4)]
     left = ledger(fresh_database)
     assert (left["usage"], left["counters"], left["credits"]) == ([], [], [])
 
@@ -136,11 +153,11 @@ def test_a_call_after_the_periods_are_closed_removes_nothing_and_writes_no_row(
 ) -> None:
     current = utc_month(fresh_database)
     plant_ledger(fresh_database, months_before(current, 1), rows=2)
-    drain(fresh_database, current, 10)
+    drain(fresh_database, current, MIN_BATCH)
     audit_before = ledger_audit_rows(fresh_database)
     state_before = ledger(fresh_database)
 
-    result = batch(fresh_database, current, 10)
+    result = batch(fresh_database, current, MIN_BATCH)
 
     assert result == (0, 0, 0)
     assert ledger_audit_rows(fresh_database) == audit_before
@@ -153,10 +170,10 @@ def test_a_ledger_emptied_in_batches_ends_where_one_expire_ledger_call_ends(
     current = utc_month(fresh_database)
     months = [*months_before(current, 3), current]
     for db in (fresh_database, second_database):
-        plant_ledger(db, months, rows=7)
+        plant_ledger(db, months, rows=80)
 
     one_call = run(fresh_database, OWNER, EXPIRE, (current, REASON))[0]
-    calls = drain(second_database, current, 5)
+    calls = drain(second_database, current, MIN_BATCH)
 
     assert ledger(second_database) == ledger(fresh_database)
     assert sum(call[0] for call in calls) == one_call[0]
@@ -170,7 +187,7 @@ def test_a_cutoff_in_the_past_keeps_the_months_from_it_on(
     oldest, older, last = months_before(current, 3)
     plant_ledger(fresh_database, [oldest, older, last, current], rows=3)
 
-    drain(fresh_database, older, 100)
+    drain(fresh_database, older, MIN_BATCH)
 
     kept = ledger(fresh_database)
     assert {row[3] for row in kept["usage"]} == {older, last, current}
@@ -197,9 +214,9 @@ def test_each_call_that_changed_something_writes_one_row_under_the_upkeep_role(
     fresh_database: DatabaseHandle,
 ) -> None:
     current = utc_month(fresh_database)
-    plant_ledger(fresh_database, months_before(current, 1), rows=5)
+    plant_ledger(fresh_database, months_before(current, 1), rows=250)
 
-    drain(fresh_database, current, 3)
+    drain(fresh_database, current, MIN_BATCH)
 
     rows = ledger_audit_rows(fresh_database)
     before = f"{current:%Y-%m}"
@@ -207,14 +224,21 @@ def test_each_call_that_changed_something_writes_one_row_under_the_upkeep_role(
         (
             "ledger.expired",
             "completed",
-            f"before={before} batch usage=3",
+            f"before={before} batch usage=100",
             REASON,
             UPKEEP_ROLE,
         ),
         (
             "ledger.expired",
             "completed",
-            f"before={before} batch usage=2",
+            f"before={before} batch usage=100",
+            REASON,
+            UPKEEP_ROLE,
+        ),
+        (
+            "ledger.expired",
+            "completed",
+            f"before={before} batch usage=50",
             REASON,
             UPKEEP_ROLE,
         ),
@@ -235,7 +259,7 @@ def test_the_audit_row_of_a_batch_names_no_tenant_and_holds_no_free_text(
     current = utc_month(fresh_database)
     plant_ledger(fresh_database, months_before(current, 1), rows=2)
 
-    batch(fresh_database, current, 10)
+    batch(fresh_database, current, MIN_BATCH)
 
     rows = run(
         fresh_database,
@@ -259,7 +283,7 @@ def test_a_reserved_row_of_a_month_to_remove_refuses_every_call_and_changes_noth
     before = ledger(fresh_database)
 
     states = [
-        sqlstate(fresh_database, UPKEEP_ROLE, BATCH, (current, REASON, 2))
+        sqlstate(fresh_database, UPKEEP_ROLE, BATCH, (current, REASON, MIN_BATCH))
         for _ in range(2)
     ]
 
@@ -280,7 +304,7 @@ def test_the_refusal_says_how_many_rows_are_still_reserved(
         counters=False,
     )
 
-    error = refusal(fresh_database, UPKEEP_ROLE, BATCH, (current, REASON, 5))
+    error = refusal(fresh_database, UPKEEP_ROLE, BATCH, (current, REASON, MIN_BATCH))
 
     assert error.diag.message_primary == (
         "expire_ledger_batch: 2 usage rows of those months are still reserved"
@@ -294,7 +318,7 @@ def test_a_reserved_row_of_the_current_month_does_not_stop_the_expiry_of_the_pas
     plant_ledger(fresh_database, months_before(current, 1), rows=2)
     plant_ledger(fresh_database, [current], rows=1, label="now", state="reserved")
 
-    calls = drain(fresh_database, current, 10)
+    calls = drain(fresh_database, current, MIN_BATCH)
 
     assert calls == [(2, 0, 0), (0, 4, 2)]
     assert run(fresh_database, OWNER, "SELECT state FROM gateway.usage") == [
@@ -309,12 +333,12 @@ def test_the_expiry_goes_through_once_the_reserved_row_is_closed(
     old = previous_month(current)
     attempt = plant_usage(fresh_database, day=old, month=old)
     assert (
-        sqlstate(fresh_database, UPKEEP_ROLE, BATCH, (current, REASON, 5))
+        sqlstate(fresh_database, UPKEEP_ROLE, BATCH, (current, REASON, MIN_BATCH))
         == STILL_RESERVED
     )
 
     run(fresh_database, UPKEEP_ROLE, CLOSE, (attempt, True, REASON))
-    calls = drain(fresh_database, current, 5)
+    calls = drain(fresh_database, current, MIN_BATCH)
 
     assert calls == [(1, 0, 0), (0, 2, 0)]
 
@@ -325,29 +349,66 @@ def test_a_usage_row_another_session_holds_is_skipped_and_the_periods_stay_open(
 ) -> None:
     current = utc_month(fresh_database)
     old = previous_month(current)
-    plant_ledger(fresh_database, [old], rows=4)
+    plant_ledger(fresh_database, [old], rows=150)
+    # The first row of the table: all rows share one month, so the batch reads the
+    # index in the order of the rows' locations and meets this one first.
     held = run(
         fresh_database,
         OWNER,
-        "SELECT attempt_id FROM gateway.usage ORDER BY attempt_id LIMIT 1",
+        "SELECT attempt_id FROM gateway.usage ORDER BY ctid LIMIT 1",
     )[0]
     with connect(fresh_database.dsn(OWNER), "test-holder") as holder:
         holder.execute(
             "SELECT 1 FROM gateway.usage WHERE attempt_id = %s FOR UPDATE", held
         )
 
-        removed = batch(fresh_database, current, 3)
-        refused = sqlstate(fresh_database, UPKEEP_ROLE, BATCH, (current, REASON, 3))
+        removed = [batch(fresh_database, current, MIN_BATCH) for _ in range(2)]
+        refused = sqlstate(
+            fresh_database, UPKEEP_ROLE, BATCH, (current, REASON, MIN_BATCH)
+        )
         counters_after = len(ledger(fresh_database)["counters"])
         holder.rollback()
 
-    # Three rows go while the fourth is held (a limit of three with one held
-    # takes the next three, not two); then the call finds only the held row.
-    assert removed == (3, 0, 0)
+    # 149 rows go while the first is held (a held row does not count toward the
+    # limit: the first call takes 100 and not 99); then the call finds only the
+    # held row, which is a refusal and not an empty run.
+    assert removed == [(100, 0, 0), (49, 0, 0)]
     assert refused == ROWS_LOCKED
     assert counters_after == 6
     assert run(fresh_database, OWNER, "SELECT attempt_id FROM gateway.usage") == [held]
-    assert drain(fresh_database, current, 3) == [(1, 0, 0), (0, 6, 2)]
+    assert drain(fresh_database, current, MIN_BATCH) == [(1, 0, 0), (0, 6, 2)]
+
+
+def test_when_every_usage_row_left_is_held_the_call_is_refused_and_changes_nothing(
+    fresh_database: DatabaseHandle,
+) -> None:
+    current = utc_month(fresh_database)
+    plant_ledger(fresh_database, [previous_month(current)], rows=120)
+    before = ledger(fresh_database)
+    with connect(fresh_database.dsn(OWNER), "test-holder") as holder:
+        holder.execute("SELECT 1 FROM gateway.usage FOR UPDATE")
+
+        error = refusal(fresh_database, UPKEEP_ROLE, BATCH, (current, REASON, 100))
+        holder.rollback()
+
+    # A call that removed no row and found rows left is not "nothing left": the
+    # counters and credits stay, and no audit row says otherwise.
+    assert error.sqlstate == ROWS_LOCKED
+    assert ledger(fresh_database) == before
+    assert ledger_audit_rows(fresh_database) == []
+    assert drain(fresh_database, current, MIN_BATCH) == [
+        (100, 0, 0),
+        (20, 0, 0),
+        (0, 6, 2),
+    ]
+
+
+# The branch of the function that tells GU303 from GU306 when rows are left (a row
+# that was reserved when the call's first count ran) is not reached by any test:
+# a reserved row has to commit between two statements of one call, and nothing
+# short of a hook into the function can pause it there. The first count refuses
+# every reserved row it sees (the tests above), and the third refuses one that
+# commits while the closing call waits (the test of the late reservation below).
 
 
 # ── a reservation that commits while the closing call runs ──────────────────
@@ -373,7 +434,7 @@ def test_a_reservation_that_commits_while_the_closing_call_waits_is_not_orphaned
     current = utc_month(fresh_database)
     old = previous_month(current)
     plant_ledger(fresh_database, [old], rows=3)
-    drain_usage = batch(fresh_database, current, 10)
+    drain_usage = batch(fresh_database, current, MIN_BATCH)
     assert drain_usage == (3, 0, 0)
     counters_before = ledger(fresh_database)["counters"]
 
@@ -383,7 +444,7 @@ def test_a_reservation_that_commits_while_the_closing_call_waits_is_not_orphaned
     first, second = second_waits_for_first(
         fresh_database,
         (OWNER, RESERVE_AS_THE_GATEWAY, {"month": old}),
-        (UPKEEP_ROLE, BATCH, (current, REASON, 10)),
+        (UPKEEP_ROLE, BATCH, (current, REASON, MIN_BATCH)),
     )
 
     assert first == []
@@ -401,20 +462,26 @@ def test_a_reservation_that_commits_while_the_closing_call_waits_is_not_orphaned
     ("arguments", "code"),
     [
         pytest.param(
-            ("2020-01-01", "Not A Slug", 5), BAD_REASON, id="reason-not-a-slug"
+            ("2020-01-01", "Not A Slug", MIN_BATCH), BAD_REASON, id="reason-not-a-slug"
         ),
-        pytest.param(("2020-01-01", None, 5), BAD_REASON, id="reason-null"),
-        pytest.param((None, REASON, 5), NULL_ARGUMENT, id="cutoff-null"),
+        pytest.param(("2020-01-01", None, MIN_BATCH), BAD_REASON, id="reason-null"),
+        pytest.param((None, REASON, MIN_BATCH), NULL_ARGUMENT, id="cutoff-null"),
         pytest.param(("2020-01-01", REASON, None), NULL_ARGUMENT, id="limit-null"),
-        pytest.param(("2020-01-15", REASON, 5), NOT_A_MONTH, id="not-a-first"),
+        pytest.param(("2020-01-15", REASON, MIN_BATCH), NOT_A_MONTH, id="not-a-first"),
         pytest.param(("2020-01-01", REASON, 0), LIMIT_OUT_OF_RANGE, id="limit-zero"),
         pytest.param(
             ("2020-01-01", REASON, -1), LIMIT_OUT_OF_RANGE, id="limit-negative"
         ),
+        pytest.param(("2020-01-01", REASON, 1), LIMIT_OUT_OF_RANGE, id="limit-one"),
+        pytest.param(
+            ("2020-01-01", REASON, MIN_BATCH - 1),
+            LIMIT_OUT_OF_RANGE,
+            id="limit-one-below-the-floor",
+        ),
         pytest.param(
             ("2020-01-01", REASON, MAX_BATCH + 1),
             LIMIT_OUT_OF_RANGE,
-            id="limit-too-large",
+            id="limit-one-above-the-largest",
         ),
     ],
 )
@@ -443,16 +510,33 @@ def test_the_current_month_is_never_a_cutoff_a_later_month_is_refused(
     current = utc_month(fresh_database)
     next_month = (current.replace(day=28) + timedelta(days=5)).replace(day=1)
 
-    state = sqlstate(fresh_database, UPKEEP_ROLE, BATCH, (next_month, REASON, 5))
+    state = sqlstate(
+        fresh_database, UPKEEP_ROLE, BATCH, (next_month, REASON, MIN_BATCH)
+    )
 
     assert state == CURRENT_MONTH
 
 
-def test_the_largest_limit_is_accepted(fresh_database: DatabaseHandle) -> None:
+@pytest.mark.parametrize("limit", [MIN_BATCH, MAX_BATCH])
+def test_the_smallest_and_the_largest_limit_are_accepted(
+    fresh_database: DatabaseHandle, limit: int
+) -> None:
     current = utc_month(fresh_database)
     plant_ledger(fresh_database, months_before(current, 1), rows=2)
 
-    assert batch(fresh_database, current, MAX_BATCH) == (2, 0, 0)
+    assert batch(fresh_database, current, limit) == (2, 0, 0)
+
+
+def test_the_message_of_a_refused_limit_gives_the_range(
+    fresh_database: DatabaseHandle,
+) -> None:
+    current = utc_month(fresh_database)
+
+    error = refusal(fresh_database, UPKEEP_ROLE, BATCH, (current, REASON, 99))
+
+    assert error.diag.message_primary == (
+        "expire_ledger_batch: the limit is from 100 to 10000"
+    )
 
 
 # ── the search path is pinned ───────────────────────────────────────────────
@@ -463,10 +547,10 @@ def test_temporary_tables_named_like_types_do_not_change_a_batch_or_the_closing_
     plant_ledger(fresh_database, months_before(current, 1), rows=2)
 
     first = call_after_temp_tables_named_like_types(
-        fresh_database, BATCH, (current, REASON, 10)
+        fresh_database, BATCH, (current, REASON, MIN_BATCH)
     )
     closing = call_after_temp_tables_named_like_types(
-        fresh_database, BATCH, (current, REASON, 10)
+        fresh_database, BATCH, (current, REASON, MIN_BATCH)
     )
 
     assert first == [(2, 0, 0)]
@@ -481,6 +565,8 @@ def test_a_clock_planted_in_a_schema_the_caller_controls_is_not_called_by_a_batc
 
     # With the planted now() the current month would be January 2000 and the call
     # would be refused as one that removes it.
-    rows = call_with_a_planted_clock(fresh_database, BATCH, (current, REASON, 10))
+    rows = call_with_a_planted_clock(
+        fresh_database, BATCH, (current, REASON, MIN_BATCH)
+    )
 
     assert rows == [(2, 0, 0)]

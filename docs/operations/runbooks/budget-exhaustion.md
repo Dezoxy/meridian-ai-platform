@@ -282,34 +282,42 @@ current month. Without `--confirm` the command prints what it would remove, in
 how many batches, and removes nothing; read that first. It is a count at that
 moment: rows that arrive before `--confirm` are removed too, and a reservation
 that arrives makes the expiry refuse. If the count is cancelled by the
-statement timeout the command says so and changes nothing; the real run needs
-no count, so a nearer `--before` counts faster or the run goes ahead.
+statement timeout (or by an administrator) the command says so and changes
+nothing; the real run needs no count, so a nearer `--before` counts faster or
+the run goes ahead.
 
-With `--confirm` the command calls one function until it has finished. Each
-call removes at most `--limit` usage rows (default 1,000, at most 10,000),
-oldest month first, in a transaction of its own with one `ledger.expired` audit
-row (`before=YYYY-MM batch usage=N`); the call that finds no usage row left
-removes the counters and credits of those months and writes one more row
-(`before=YYYY-MM closed counters=N credits=N`). It prints the totals and the
-number of batches. A batch of 10,000 rows took 0.08 to 0.14 s at 1,000,000 rows
-on a development machine with the data in memory (migration 0030's header); a
-cold cloud disk was not measured. Use `--limit 10000` for a backlog of many
-millions of rows.
+With `--confirm` the command calls one function until it has finished, on one
+connection, one transaction for each call. Each call removes at most `--limit`
+usage rows (default 1,000, from 100 to 10,000), oldest month first, with one
+`ledger.expired` audit row (`before=YYYY-MM batch usage=N`); the call that finds
+no usage row left removes the counters and credits of those months and writes
+one more row (`before=YYYY-MM closed counters=N credits=N`). It prints the
+totals and the number of batches. **The floor of 100 is there because every one
+of those audit rows is permanent**: the upkeep role cannot remove a row it wrote,
+so a limit of 1 would leave one row in the audit log for every row of the
+ledger. A batch of 10,000 rows took 8 to 12 ms at 1,000,000 rows on a
+development machine with the data in memory (migration 0030's header; one run,
+a warm table, a cold cloud disk was not measured). `--limit 10000` for a
+backlog of many millions of rows rests on that measurement alone: it is the
+fewest audit rows and, in memory, no slower per row, and it is untested on a
+disk of a cloud database.
 
 - **Between the batches the counters of the past months stand without all
   their usage rows.** The reconciliation shows drift for those periods until
   the closing call, and nothing the gateway decides reads a past period (a test
-  admits and charges a call in the current period the same). Run it once, to
-  its end, and do not run two at once: a row another session holds is skipped
-  and, when only held rows are left, the call is refused (`GU306`, nothing
-  changed); run the command again. A session that holds a row and goes idle
-  inside its transaction is ended after 60 seconds (migration 0031), so a row
-  that stays held is held by a session that is working or that lifted the limit
-  for itself.
-- **A half-finished run stays finished as far as it went.** A failure after
-  some batches says how many usage rows were removed and that they stay removed
-  (each batch has its audit row); running the command again continues from the
-  oldest row left. There is no undo.
+  admits and charges a call in the current period the same). Do not run two at
+  once: a row another session holds is skipped and, when only held rows are
+  left, the call is refused (`GU306`, nothing changed by that call; the message
+  also covers a row that changed during the call); run the command again. A
+  session that holds a row and goes idle inside its transaction is ended
+  after 60 seconds (migration 0031), so a row that stays held is held by a
+  session that is working or that lifted the limit for itself.
+- **A run can end before its end, and running it again continues.** On kind the
+  Job's deadline of 120 s can stop a large run wherever it stands, and a Job
+  that was stopped prints nothing of what it removed; the batches that finished
+  stay removed, each with its audit row, and the next run goes on from the
+  oldest row left. A failure the command sees after some batches says how many
+  usage rows were removed and that they stay removed. There is no undo.
 - **No period and no schedule.** Nothing here sets a number of days and nothing
   runs it by itself; the cutoff is the operator's argument.
 
