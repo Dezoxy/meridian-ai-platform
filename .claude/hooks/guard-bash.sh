@@ -821,18 +821,18 @@ unhelped "$cmd" "az[[:space:]]+keyvault[[:space:]]+secret[[:space:]]+(show|set|d
 aws_end="([[:space:]]|\$|[;&|)\"${sq}\`])"
 aws_make_pre="(^|[^[:alnum:]_.-])(g|gnu)?make[[:space:]]+([^;&|${eol}]*[[:space:]])?[\"${sq}]?"
 aws_script_pre="aws\.sh[[:space:]]+([^;&|${eol}]*[[:space:]])?[\"${sq}]?"
-aws_destroy_re="${aws_make_pre}aws-destroy${aws_end}|${aws_script_pre}destroy${aws_end}"
+aws_destroy_re="${aws_make_pre}aws-(kubeadm-)?destroy${aws_end}|${aws_script_pre}destroy${aws_end}"
 # A pseudo-terminal tool or the shell's tracing in a command that names the
 # wrapper or a target of it. The terminal check in aws.sh is `[[ -t 0 ]]` and a
 # pseudo-terminal satisfies it; a trace prints what the script keeps out of its
 # output; BASH_ENV, ENV and the rest run code before the script's first line.
-aws_pty_named_re="aws\.sh|aws-(plan|apply|destroy)"
+aws_pty_named_re="aws\.sh|aws-(kubeadm-)?(plan|apply|destroy)"
 # The tool's word is read anywhere in a command that names the wrapper: a
 # search for it in the wrapper (grep -n script infra/terraform/aws.sh) is denied
 # too, a false alarm by design (re-anchoring it to where a command starts was
 # tried in S036 T3b and missed a wrapper with an option, timeout 9 script).
 aws_pty_re="(^|[^[:alnum:]_.-])(script|unbuffer|expect|socat|setsid|pty)([^[:alnum:]_-]|\$)"
-aws_named_re="aws\.sh|aws-(validate|scan|plan|apply|destroy)"
+aws_named_re="aws\.sh|aws-(kubeadm-)?(validate|scan|plan|apply|destroy)"
 aws_sh_word="(^|[^[:alnum:]_.-])((ba|da|k|z|a)?sh|set)"
 aws_trace_flag="(-[a-zA-Z]*[xv][a-zA-Z]*|--(xtrace|verbose))"
 aws_trace_re="${aws_sh_word}[[:space:]]+(-[^[:space:]]*[[:space:]]+)*${aws_trace_flag}${aws_end}"
@@ -848,11 +848,14 @@ aws_tf_target_re="(^|[^[:alnum:]_./-])(terraform|tofu|aws)[[:space:]]|aws\.sh|(g
 # or the state's directory, or the plan or state file's name. The verbs that
 # change the account, the state or the workspace are denied (apply and destroy
 # are the wrapper's, which pins the account and the plan); the verbs that print
-# the state or run unattended ask in the next section.
-aws_dir_re="terraform/aws([/[:space:]\"${sq};&|)]|\$)"
-aws_dir_re+="|-chdir[=[:space:]]+[\"${sq}]?([^[:space:]\"${sq}]*/)?aws([/\"${sq}[:space:]]|\$)"
-aws_dir_re+="|(^|[^[:alnum:]_.-])cd[[:space:]]+[\"${sq}]?([^[:space:];&|\"${sq}]*/)?aws([/\"${sq};&|[:space:]]|\$)"
-aws_dir_re+="|meridian-aws|aws\.tf(plan|state)"
+# the state or run unattended ask in the next section. The second module
+# (aws-kubeadm, S079) takes the same rules: `aws(-kubeadm)?` is the module's
+# name where a pattern reads one, and the make targets aws-kubeadm-plan, -apply
+# and -destroy are read before the Makefile has them.
+aws_dir_re="terraform/aws(-kubeadm)?([/[:space:]\"${sq};&|)]|\$)"
+aws_dir_re+="|-chdir[=[:space:]]+[\"${sq}]?([^[:space:]\"${sq}]*/)?aws(-kubeadm)?([/\"${sq}[:space:]]|\$)"
+aws_dir_re+="|(^|[^[:alnum:]_.-])cd[[:space:]]+[\"${sq}]?([^[:space:];&|\"${sq}]*/)?aws(-kubeadm)?([/\"${sq};&|[:space:]]|\$)"
+aws_dir_re+="|meridian-aws|aws(-kubeadm)?\.tf(plan|state)"
 aws_tf_cmd="(^|[^[:alnum:]_.-])(terraform|tofu)[[:space:]]+([^;&|${eol}]*[[:space:]])?"
 aws_tf_deny_re="${aws_tf_cmd}(apply|destroy|import|force-unlock|state[[:space:]]+(mv|rm|push)|workspace[[:space:]]+(new|delete|select)|plan[[:space:]]+([^;&|${eol}]*[[:space:]])?-out)([[:space:]=]|\$|[;&|)\"${sq}])"
 # The one workspace command a session may be asked about: the README's way back
@@ -865,7 +868,7 @@ aws_tf_deny_re="${aws_tf_cmd}(apply|destroy|import|force-unlock|state[[:space:]]
 aws_ws_default_re="workspace[[:space:]]+select[[:space:]]+[\"${sq}]?default[\"${sq}]?([[:space:]]|[;&|)\"${sq}\`])"
 # The working directory the harness passed counts as a cd into the module when
 # it is the module's directory or under it.
-aws_cwd_re='(^|/)terraform/aws(/|$)'
+aws_cwd_re='(^|/)terraform/aws(-kubeadm)?(/|$)'
 aws_in_module=""
 [[ "$hook_cwd" =~ $aws_cwd_re ]] && aws_in_module=1
 # The aws CLI: a call that prints a new credential, and a delete. The same
@@ -884,7 +887,7 @@ aws_deny_re+="|(batch-|force-)?(delete|terminate|purge)-[a-z0-9-]+|s3[[:space:]]
 # passes.
 aws_closed_path="(local\.env|\.tfstate|\.tfplan|meridian-aws|\.aws(/|[[:space:]\"${sq}]|\$)|\.terraformrc|\.terraform\.d|\.tfvars(\.json)?(\$|[^.a-zA-Z]))"
 aws_reader_re="${reader_pre}(cat|tac|nl|less|more|bat|head|tail|grep|egrep|fgrep|rg|ag|sed|awk|gawk|cut|od|hexdump|xxd|strings|base64|diff|cmp|jq|yq|sort|uniq|cp|tar|zip|python3?|perl|ruby|node|source|echo|printf|xargs|dd|rsync|scp|curl)[[:space:]].*${aws_closed_path}"
-aws_steer_path="(\.terraformrc|\.gitconfig|\.config/git/|\.aws(/|[[:space:]\"${sq}]|\$)|\.terraform/environment|aws\.tfplan)"
+aws_steer_path="(\.terraformrc|\.gitconfig|\.config/git/|\.aws(/|[[:space:]\"${sq}]|\$)|\.terraform/environment|aws(-kubeadm)?\.tfplan)"
 aws_writer_re=">>?[[:space:]]*[\"${sq}]?[^[:space:]\"${sq};&|]*${aws_steer_path}"
 aws_writer_re+="|${reader_pre}(tee|cp|mv|install|ln|dd|rsync|truncate)[[:space:]].*${aws_steer_path}"
 aws_writer_re+="|${reader_pre}sed[[:space:]]+([^;&|${eol}]*[[:space:]])?-[a-zA-Z]*i[^;&|${eol}]*${aws_steer_path}"
@@ -1019,8 +1022,8 @@ foundation_apply_re="${runner}${script_path}foundation\.sh[[:space:]]+[\"${sq}]?
 #     path component: terraform -chdir=infra/terraform/aws state list is not
 #     one), in the image of the CLI, and after uvx --from awscli; --help passes.
 #   - python3 or uv run that imports boto3, botocore or awscli.
-aws_apply_re="${aws_make_pre}aws-apply${aws_end}|${aws_script_pre}apply${aws_end}"
-aws_plan_re="${aws_make_pre}aws-plan${aws_end}|${aws_script_pre}plan${aws_end}"
+aws_apply_re="${aws_make_pre}aws-(kubeadm-)?apply${aws_end}|${aws_script_pre}apply${aws_end}"
+aws_plan_re="${aws_make_pre}aws-(kubeadm-)?plan${aws_end}|${aws_script_pre}plan${aws_end}"
 aws_image_re="(^|[^[:alnum:]_.-])(g|gnu)?make[[:space:]]+([^;&|${eol}]*[[:space:]])?[\"${sq}]?(TRIVY|PROMTOOL)_IMAGE="
 aws_tf_ask_re="${aws_tf_cmd}(plan|show|output|console|refresh|state[[:space:]]+(list|show|pull)|workspace[[:space:]]+select[[:space:]]+[\"${sq}]?default[\"${sq}]?)${aws_end}"
 aws_auto_re="(^|[^[:alnum:]_.-])(terraform|tofu|terragrunt)[[:space:]]+([^;&|${eol}]*[[:space:]])?-auto-approve([[:space:]=]|\$)"

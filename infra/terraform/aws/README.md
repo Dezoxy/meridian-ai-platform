@@ -345,7 +345,11 @@ a session from doing by reflex what only the owner should do:
   denied there too, as a second layer; the bare `terraform plan` and the one
   with `-chdir` into this directory ask. The settings hold in Claude Code
   only: Codex runs the same hook and reads no settings file, so there the
-  hook's own asks and denies are all there is.
+  hook's own asks and denies are all there is. Since S079 (K6) the second
+  module's names (`infra/terraform/aws-kubeadm`, `aws-kubeadm.tfplan`,
+  `~/.local/state/meridian-aws-kubeadm/`, `make aws-kubeadm-plan|apply|destroy`)
+  get the same answers in the same rules and entries; that module's README
+  says what was measured.
 - **Not covered, once:** wrappers before `aws` that the ask does not read
   (`timeout`, `nice`, `watch`, `env -i`, `xargs`, `find -exec`, a brace group, a
   path prefix); the `hashicorp/terraform` image, `terragrunt` and

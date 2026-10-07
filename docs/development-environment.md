@@ -89,7 +89,7 @@ clone plus the tools above is a working environment. What is not in git:
 |---|---|---|
 | Private notes | `.context/` (ignored) | Copy by hand; never commit, never quote in a tracked file |
 | Azure state settings | `infra/terraform/local.env` (ignored) | What `make azure-state` wrote. Copy by hand, or let that target write it again when S020 opens; never into a tracked file |
-| AWS pin and settings | `infra/terraform/local.env-aws` (ignored, mode 600) | Four `KEY=value` lines the owner writes by hand (the account number, the Region, an address and an e-mail address), read and never run by `infra/terraform/aws.sh`; the module's README lists them. The state is under `~/.local/state/meridian-aws/`, not in the checkout, and moves only if it is copied |
+| AWS pin and settings | `infra/terraform/local.env-aws` (ignored, mode 600) | Four `KEY=value` lines the owner writes by hand (the account number, the Region, an address and an e-mail address), read and never run by `infra/terraform/aws.sh`; the module's README lists them. The state is under `~/.local/state/meridian-aws/` (the self-managed module's under `~/.local/state/meridian-aws-kubeadm/`), not in the checkout, and moves only if it is copied |
 | Local permission answers | `.claude/settings.local.json` (ignored) | Leave behind; the assistant asks again |
 | The kind cluster | Docker, on the old machine | Do not move. `make up`, then `make deploy`, rebuild it from the charts; `make smoke` and `make demo` prove it. The owner runs `make down` on the old machine |
 | Cluster credentials | `infra/kind/kubeconfig` (ignored) | `make up` writes a new one |
@@ -172,7 +172,12 @@ For the virtual machine both are recorded below.
   `apply`, `import`, `state` writes), and asks before `make aws-plan`,
   `make aws-apply`, a `terraform plan` of that module and an `aws` call that
   is not a read (the same runbook's section on the AWS environment lists what
-  it does not see). It knows no Google Cloud command beyond two `gcloud`
+  it does not see). Since S079 (K6) the same rules, and the settings' denies
+  for the state directory `~/.local/state/meridian-aws-kubeadm/` and the hidden
+  variable files, name the self-managed module too
+  (`infra/terraform/aws-kubeadm`, `aws-kubeadm.tfplan`, and
+  `make aws-kubeadm-plan|apply|destroy`, which the guard reads before the
+  Makefile has them). It knows no Google Cloud command beyond two `gcloud`
   verbs and no `gcp-*` target: no credential for Google Cloud exists on the
   machine, which is what stands in the way (T-100). A known limit, older than
   this change: the hook has ten seconds, and with the machine loaded (a load

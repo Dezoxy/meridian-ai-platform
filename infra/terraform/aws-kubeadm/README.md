@@ -309,15 +309,21 @@ these down and do not close them, and what the environment does not close (the
 configuration, a clean filter in the repository's own `.git/config`, a changed
 `HOME`, a link at the plan's path) is the same list. What holds is that no
 session holds the credentials. New for this module: the command guard was
-written for the managed module's names, and its rules for this module are the
-later change. From the guard's text, not run against these names: its patterns
-for `aws.sh` followed by `plan`, `apply` or `destroy` read the three command
-lines above as they read the managed module's, and its path patterns match
-`.tfstate`, `.tfplan` and `meridian-aws` as substrings, which reach this
-module's state and plan; they do not name the directory
-`infra/terraform/aws-kubeadm` for Terraform by hand, and the file-tool denies
-for the state directory are a glob for `meridian-aws/`, which does not reach
-`meridian-aws-kubeadm/`.
+written for the managed module's names and now reads this module's too
+(S079, contract K6). Measured 2026-10-07, by the guard's own cases, which run
+each shape against both modules (nothing was run against an account): before
+this change `plan -out`, `show`, `output`, `state list`, `workspace new` and a
+write by `tee`, `mv` or `install` into `aws-kubeadm.tfplan` got no answer from
+the guard in this directory, and the file-tool denies for the state directory
+were a glob for `meridian-aws/`, which does not reach `meridian-aws-kubeadm/`.
+Now Terraform by hand against `infra/terraform/aws-kubeadm` (`-chdir`, `cd` or
+the working directory the harness reports) gets the answer the managed module's
+directory gets, `aws-kubeadm.tfplan` is guarded as `aws.tfplan` is, the
+settings deny `Read`, `Edit` and `Write` for the state directory
+`~/.local/state/meridian-aws-kubeadm/` and for the hidden variable files of
+this directory, and the targets `make aws-kubeadm-plan`, `aws-kubeadm-apply`
+and `aws-kubeadm-destroy`, which do not exist yet, are asked, asked and denied
+as `make aws-plan`, `aws-apply` and `aws-destroy` are.
 
 ## Removal
 
