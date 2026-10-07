@@ -1,9 +1,9 @@
 import re
 
 from meridian.platform.guardrails.redaction_common import (
-    EMAIL_PLACEHOLDER,
     JSON_ESCAPE_BEFORE,
     JSON_ESCAPE_LETTERS,
+    PLACEHOLDERS,
 )
 
 # Every pattern below is linear: no quantifier sits inside a repeated group
@@ -36,7 +36,7 @@ EMAIL = re.compile(
 
 
 def _replace_email(text: str, found: dict[str, int]) -> str:
-    replaced, count = EMAIL.subn(EMAIL_PLACEHOLDER, text)
+    replaced, count = EMAIL.subn(PLACEHOLDERS["email"], text)
     if count:
         found["email"] = count
     return replaced

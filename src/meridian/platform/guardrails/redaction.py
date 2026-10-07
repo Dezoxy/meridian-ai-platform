@@ -184,11 +184,17 @@ def redact(text: str) -> Redaction:
     throughout after one or two date groups and the same separator
     ("30/06/06/22270/67/2"), a Budapest number written "06-12-2026-14" (a month
     from 10 to 12, a year, one separator), or a mobile number "06 2026 12345"
-    after a day and the same separator ("30 06 2026 12345"); and a national
-    number after an international one and a plain space ("+36 30 123 4567 06
-    20 765 4321" gives "[phone] 765 4321": the international span takes the
-    first digits and the last seven stay, as before the guard; with dots or
-    slashes ("+36/83/701/902 00 36/73/48/9525") it is F1r's separator change).
+    after a day and the same separator ("30 06 2026 12345"); and, in three
+    cases only, a national number after an international one and a space.
+    Otherwise both are replaced ("+36 30 123 4567 06 20 765 4321" gives
+    "[phone] [phone]", and so does "+36/83/701/902 00 36/73/48/9525"). The cut
+    is not made where the first is not a complete Hungarian number ("+49 30 123
+    4567 06 20 765 4321" gives "[phone] 765 4321"), where the national rule
+    refuses the second ("+36 30 123 4567 06 99 765 4321" gives the same), or
+    where the second ends in a group that begins a third ("+36 30 123 4567 06 1
+    234 56 06 1 234 5678" gives "[phone] 56 [phone]"): the span then takes the
+    first digits and what it leaves of the second stays, as before the cut
+    (``_international_span`` in ``redaction_phone.py`` holds the detail).
     Not found, and not found before the guard either: two numbers joined by a
     hyphen ("06301234567-06201234567"), a number written "(+36 30) 123 4567",
     and a dotted or slashed international number one of whose groups begins
