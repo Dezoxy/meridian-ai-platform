@@ -6,6 +6,7 @@ import json
 import pytest
 
 from meridian.platform.guardrails import PLACEHOLDERS, Redaction, redact
+from meridian.platform.guardrails import redaction as module
 
 NBSP = chr(0x00A0)
 NARROW_NBSP = chr(0x202F)
@@ -230,6 +231,18 @@ def test_an_email_with_letters_of_any_script_is_redacted_whole(address: str) -> 
 
     assert result.text == "Write to [email] now"
     assert dict(result.found) == {"email": 1}
+
+
+def test_a_card_is_replaced_by_what_the_placeholders_mapping_says(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The kinds read their placeholder from the one mapping, so that swapping it
+    # (as a test of a caller's does) misses none of them.
+    monkeypatch.setattr(module, "PLACEHOLDERS", {"card": "<card>"})
+
+    result = module.redact("Pay with 4111 1111 1111 1111 today")
+
+    assert result.text == "Pay with <card> today"
 
 
 @pytest.mark.parametrize("length", [63, 64, 65, 100, 500])

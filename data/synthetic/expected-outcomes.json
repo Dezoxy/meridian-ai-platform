@@ -755,5 +755,146 @@
         "clause": "4.1"
       }
     ]
+  },
+  {
+    "claim_id": "CLM-0041",
+    "route": "adjuster",
+    "reason": "fraud_indicator",
+    "recommendation": "approve",
+    "payable_amount": 780,
+    "exclusion": null,
+    "fraud_indicators": [
+      "frequent_claims"
+    ],
+    "missing_documents": [],
+    "citations": [
+      {
+        "wording": "HOME-STD",
+        "clause": "2.1"
+      },
+      {
+        "wording": "HOME-STD",
+        "clause": "4.1"
+      }
+    ]
+  },
+  {
+    "claim_id": "CLM-0042",
+    "route": "auto_approve",
+    "reason": "within_threshold",
+    "recommendation": "approve",
+    "payable_amount": 630,
+    "exclusion": null,
+    "fraud_indicators": [],
+    "missing_documents": [],
+    "citations": [
+      {
+        "wording": "HOME-STD",
+        "clause": "2.1"
+      },
+      {
+        "wording": "HOME-STD",
+        "clause": "4.1"
+      }
+    ]
+  },
+  {
+    "claim_id": "CLM-0043",
+    "route": "adjuster",
+    "reason": "fraud_indicator",
+    "recommendation": "approve",
+    "payable_amount": 1990,
+    "exclusion": null,
+    "fraud_indicators": [
+      "early_loss"
+    ],
+    "missing_documents": [],
+    "citations": [
+      {
+        "wording": "HOME-PLUS",
+        "clause": "2.1"
+      },
+      {
+        "wording": "HOME-PLUS",
+        "clause": "4.1"
+      }
+    ]
+  },
+  {
+    "claim_id": "CLM-0044",
+    "route": "adjuster",
+    "reason": "fraud_indicator",
+    "recommendation": "approve",
+    "payable_amount": 400,
+    "exclusion": null,
+    "fraud_indicators": [
+      "late_report"
+    ],
+    "missing_documents": [],
+    "citations": [
+      {
+        "wording": "MOTOR-COMP",
+        "clause": "2.4"
+      },
+      {
+        "wording": "MOTOR-COMP",
+        "clause": "4.1"
+      },
+      {
+        "wording": "MOTOR-COMP",
+        "clause": "5.1"
+      }
+    ]
+  },
+  {
+    "claim_id": "CLM-0045",
+    "route": "adjuster",
+    "reason": "policy_not_found",
+    "recommendation": null,
+    "payable_amount": null,
+    "exclusion": null,
+    "fraud_indicators": [],
+    "missing_documents": [],
+    "citations": []
+  },
+  {
+    "claim_id": "CLM-0046",
+    "route": "auto_approve",
+    "reason": "within_threshold",
+    "recommendation": "approve",
+    "payable_amount": 2000,
+    "exclusion": null,
+    "fraud_indicators": [],
+    "missing_documents": [],
+    "citations": [
+      {
+        "wording": "MOTOR-COMP",
+        "clause": "2.4"
+      },
+      {
+        "wording": "MOTOR-COMP",
+        "clause": "4.1"
+      }
+    ]
+  },
+  {
+    "claim_id": "CLM-0047",
+    "route": "auto_approve",
+    "reason": "within_threshold",
+    "recommendation": "approve",
+    "payable_amount": 1010,
+    "exclusion": null,
+    "fraud_indicators": [],
+    "missing_documents": [],
+    "citations": [
+      {
+        "wording": "HOME-PLUS",
+        "clause": "2.1"
+      },
+      {
+        "wording": "HOME-PLUS",
+        "clause": "4.1"
+      }
+    ]
   }
 ]

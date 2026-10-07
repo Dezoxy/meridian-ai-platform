@@ -73,10 +73,21 @@ that cannot be trusted, a description that holds special-category data or
 addresses the model, or a request the provider's content filter refused (S047;
 ``assessment.py`` turns each into an assessment). A wording clause that
 addresses the model is platform data, not the claim's: it fails the run
-(``wording-addresses-the-model``). No log line, exception message
-or span attribute of the graph holds claim text, a tool result or model text:
-a tool result that does not fit its model raises a ``GraphFailure`` whose code
-says which answer, not what it held (the graph's own violations all do).
+(``wording-addresses-the-model``). So does a policy whose wording the table of
+exclusion counts does not know (``wording-version-unknown``, S067), where the
+rules would read the count: a referral as ``unverified`` would hide the cause. A
+claim that is not valid facts fails the run (``claim-not-valid``) after a log
+line of its fields and kinds of error. The run's input may carry one boolean
+beside the claim, the Claims API's screen of the description as posted (S067,
+``posted_text.py``): the assessor reads true as a hit of its own screen, and a
+value that is not a boolean fails the run (``posted-flag-not-valid``). No log
+line, exception message or span attribute of the graph holds claim text, a tool
+result or model text: a tool result that does not fit its model raises a
+``GraphFailure`` whose code says which answer, not what it held (the graph's own
+violations all do). One exception, in ``workers.py``: the line for an unknown
+wording repeats the policy's product and version when, and only when, each is a
+closed identifier (a product of the catalogue, a version of the form
+``2026-01``).
 """
 
 from typing import Any
@@ -90,7 +101,7 @@ from meridian.runtime.model_client import ModelClient
 from meridian.runtime.tool_client import ToolClient
 
 from . import workers
-from .models import ClaimFacts, DraftedBy
+from .models import DraftedBy
 from .proposal import Citation, TriageProposal
 from .rules import Assessment, Facts, HistoryEntry, PolicyRecord, decide
 
@@ -123,7 +134,7 @@ def _citations(policy: PolicyRecord | None, clauses: tuple[str, ...]) -> tuple:
 def propose(state: workers.ClaimState) -> dict[str, Any]:
     """The supervisor's own step: the rules decide the route from the facts the
     workers gathered. No tool, no model."""
-    claim = ClaimFacts.model_validate(state["claim"])
+    claim = workers.claim_of(state)
     policy = (
         PolicyRecord.model_validate(state["policy"])
         if state["policy"] is not None

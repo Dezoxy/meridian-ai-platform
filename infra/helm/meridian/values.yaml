@@ -411,16 +411,21 @@ jobs:
   # the record that this image's corpus is in the store. deploy.sh finds it and
   # skips the ingestion, which spends most of the tenant's tokens for a minute;
   # a Job that expired would make every deploy ingest again.
+  #
+  # The Job then reads the store back (`meridian knowledge verify`, S067: each
+  # stored clause against the manifest-verified wording, exit 1 on a difference,
+  # 2 when it cannot check), so one command line runs both and the Job fails when
+  # either does: `&&` stops at the first failure and the shell's status is the
+  # failing command's. The fixed string takes no input (the image has `sh`).
+  # Built and tested without a cluster (tests/meridian/test_ingest_job_verify.py).
   ingest:
     enabled: false
     command:
-      - meridian
-      - knowledge
-      - ingest
-      - --tenant
-      - claims-triage
-      - --from
-      - /opt/meridian/synthetic
+      - sh
+      - -c
+      - >-
+        meridian knowledge ingest --tenant claims-triage --from /opt/meridian/synthetic
+        && meridian knowledge verify --from /opt/meridian/synthetic
     # No retry: a second pod straight after a failure would meet the token
     # window the first one filled. The next deploy is the retry.
     backoffLimit: 0

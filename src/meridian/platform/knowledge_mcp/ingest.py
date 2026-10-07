@@ -242,6 +242,14 @@ def _parse_all(source: Path) -> list[_Wording]:
     return wordings
 
 
+def verified_documents(source: Path) -> list[tuple[str, WordingDocument]]:
+    """``(sha256, document)`` of each wording under ``source``, after every check
+    ``ingest_wordings`` makes before it embeds (the manifest, the parse): the
+    same code, so ``meridian knowledge verify`` refuses what the ingestion
+    refuses. Raises ``IngestError``; reads files and nothing else."""
+    return [(wording.sha256, wording.document) for wording in _parse_all(source)]
+
+
 # ── 4. the embedding ────────────────────────────────────────────────────────
 def _wait_for(error: EmbeddingCallError) -> float:
     asked = (

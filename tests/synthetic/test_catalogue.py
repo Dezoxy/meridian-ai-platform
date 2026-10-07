@@ -230,9 +230,9 @@ def test_flood_is_covered_by_home_plus_and_excluded_by_home_standard(
 
 # -- the citations ------------------------------------------------------------
 def test_every_citation_resolves_to_a_heading_in_the_cited_wording(
-    synthetic_dir: Path, outcomes
+    synthetic_dir: Path, policy_outcomes
 ):
-    for outcome in outcomes:
+    for outcome in policy_outcomes:
         assert outcome["citations"], outcome["claim_id"]
         for citation in outcome["citations"]:
             path = synthetic_dir / "wordings" / f"{citation['wording']}.md"
@@ -244,20 +244,22 @@ def test_every_citation_resolves_to_a_heading_in_the_cited_wording(
             )
 
 
-def test_citations_name_the_wording_of_the_claims_policy(claims, policies, outcomes):
+def test_citations_name_the_wording_of_the_claims_policy(
+    policy_claims, policies, policy_outcomes
+):
     policy_of = {p["policy_number"]: p for p in policies}
-    claim_of = {c["claim_id"]: c for c in claims}
-    for outcome in outcomes:
+    claim_of = {c["claim_id"]: c for c in policy_claims}
+    for outcome in policy_outcomes:
         product = policy_of[claim_of[outcome["claim_id"]]["policy_number"]]["product"]
         assert {c["wording"] for c in outcome["citations"]} == {product}
 
 
 def test_each_citation_points_at_the_clause_the_label_is_about(
-    synthetic_dir: Path, claims, policies, outcomes
+    synthetic_dir: Path, policy_claims, policies, policy_outcomes
 ):
     policy_of = {p["policy_number"]: p for p in policies}
-    claim_of = {c["claim_id"]: c for c in claims}
-    for outcome in outcomes:
+    claim_of = {c["claim_id"]: c for c in policy_claims}
+    for outcome in policy_outcomes:
         claim = claim_of[outcome["claim_id"]]
         product = policy_of[claim["policy_number"]]["product"]
         headings = wording_headings(synthetic_dir, product)

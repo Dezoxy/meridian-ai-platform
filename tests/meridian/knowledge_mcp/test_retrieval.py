@@ -37,12 +37,14 @@ from servicesupport import REPO_ROOT, owner_rows
 from meridian.platform.common.db import connect
 
 # Labelled clauses per group: the generator's citations of the claims, in
-# sections 2 and 3 for the narrative queries (28 clauses), in section 5 except
-# 5.1 for the documents queries (6), and five questions for each of four
-# products (20).
+# sections 2 and 3 for the narrative queries (34 clauses: 28 of the first forty
+# claims and six of the claims on a fraud indicator's boundary, each a cover
+# clause), in section 5 except 5.1 for the documents queries (6), and five
+# questions for each of four products (20). The floors below were measured
+# before those six queries existed and still hold.
 LABELLED = {
-    NARRATIVE: 28,
-    f"{NARRATIVE} section 2": 20,
+    NARRATIVE: 34,
+    f"{NARRATIVE} section 2": 26,
     f"{NARRATIVE} section 3": 8,
     DOCUMENTS: 6,
     CONCEPT: 20,

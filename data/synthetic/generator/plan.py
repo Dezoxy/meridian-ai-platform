@@ -1,4 +1,5 @@
-"""The scenario plan: 40 claims, each with the outcome it is built to produce.
+"""The scenario plan: 40 claims, each with the outcome it is built to produce,
+and ``EXTRA_PLAN``, seven more from a second random stream.
 
 The plan is the balance of the golden set and is written down here, not drawn
 at random: eight claims within the threshold, six over it, six with one fraud
@@ -98,3 +99,31 @@ PLAN = (
     ),
 )
 POLICY_COUNT = 50
+FIRST_EXTRA_POLICY = POLICY_COUNT + 1
+UNKNOWN_POLICY = "unknown_policy"
+
+
+@dataclass(frozen=True)
+class ExtraSpec:
+    """A scenario of the second stream. ``kind`` is a fraud indicator or
+    ``unknown_policy``; ``flagged`` puts the indicator on its boundary (True) or
+    one day off it (False)."""
+
+    kind: str
+    product: str
+    peril: str
+    flagged: bool = True
+
+
+# Added after the forty and drawn from a second random stream (``extra.py``), so
+# the forty keep their bytes. Each peril is one no circumstance exclusion of its
+# product names, so the triage model is not asked about any of these claims.
+EXTRA_PLAN = (
+    ExtraSpec("early_loss", "HOME-PLUS", "fire", True),
+    ExtraSpec("early_loss", "HOME-PLUS", "fire", False),
+    ExtraSpec("frequent_claims", "HOME-STD", "fire", True),
+    ExtraSpec("frequent_claims", "HOME-STD", "fire", False),
+    ExtraSpec("late_report", "MOTOR-COMP", "glass", True),
+    ExtraSpec("late_report", "MOTOR-COMP", "glass", False),
+    ExtraSpec(UNKNOWN_POLICY, "HOME-STD", "burglary", False),
+)

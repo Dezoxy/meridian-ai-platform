@@ -199,6 +199,24 @@ def needs_assessment(
     )
 
 
+def reads_exclusion_count(
+    claim: ClaimFacts, policy: PolicyRecord | None, terms: Terms | None
+) -> bool:
+    """Whether ``decide`` reaches the gaps, where ``exclusions_complete`` is read:
+    the policy is in force, no peril exclusion was found and the cover clause
+    was. A claim decided before that (no policy, a lapsed or expired one, a peril
+    the product does not cover, no cover clause) never reads it. The graph fails a
+    run whose wording the table has no count for only when this is true (S067);
+    a test keeps it equal to the paths of ``decide``."""
+    return (
+        policy is not None
+        and terms is not None
+        and policy_state(policy, claim.loss_date) == "in_force"
+        and terms.peril_exclusion is None
+        and terms.cover is not None
+    )
+
+
 def _cite(*clauses: Clause | None) -> tuple[str, ...]:
     """The numbers of the clauses that were retrieved; none is invented."""
     return tuple(c.clause for c in clauses if c is not None)

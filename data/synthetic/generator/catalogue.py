@@ -32,6 +32,7 @@ REASONS = (
     "excluded",
     "policy_inactive",
     "missing_documents",
+    "policy_not_found",
 )
 FRAUD_INDICATORS = ("early_loss", "frequent_claims", "late_report")
 KIND_PERIL = "peril"  # the peril itself is not covered by the product

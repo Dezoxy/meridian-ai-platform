@@ -203,6 +203,45 @@ def test_a_pair_that_is_not_in_the_table_is_never_complete(
     assert terms.exclusions_complete is False
 
 
+@pytest.mark.parametrize(
+    ("product", "version"),
+    [
+        ("HOME-STD", "2026-02"),
+        ("HOME-STD", ""),
+        ("HOME-OLD", "2026-01"),
+        ("home-std", "2026-01"),
+    ],
+)
+def test_a_pair_that_is_not_in_the_table_has_no_count(
+    product: str, version: str
+) -> None:
+    """``select_terms`` stays pure and says only "not complete"; the graph asks
+    this before it relies on that (S067): a pair with no count fails the run."""
+    assert wording.exclusions_counted(product, version) is False
+
+
+def test_every_pair_of_the_table_has_a_count() -> None:
+    assert all(wording.exclusions_counted(*pair) for pair in EXCLUSION_CLAUSES)
+
+
+def test_the_table_is_read_when_asked_so_a_test_may_patch_it() -> None:
+    table = MappingProxyType({("HOME-STD", "2031-07"): 4})
+
+    with patch.object(wording, "EXCLUSION_CLAUSES", table):
+        assert wording.exclusions_counted("HOME-STD", "2031-07") is True
+        assert wording.exclusions_counted("HOME-STD", "2026-01") is False
+
+
+def test_the_catalogue_of_wordings_is_the_generators() -> None:
+    assert wording.catalogue_wording("HOME-STD", catalogue.WORDING_VERSION)
+    assert not wording.catalogue_wording("HOME-STD", f"{catalogue.WORDING_VERSION}\n")
+    assert not wording.catalogue_wording("HOME-OLD", catalogue.WORDING_VERSION)
+    assert all(
+        wording.catalogue_wording(code, catalogue.WORDING_VERSION)
+        for code in catalogue.PRODUCTS
+    )
+
+
 def test_probes_of_a_policy_in_force_ask_for_the_peril_its_exclusions_and_terms() -> (
     None
 ):
