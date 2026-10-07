@@ -16765,10 +16765,12 @@ fixes; no critical finding, one high, two medium, seven low.
   the printed last line. The whole suite is the main session's.
 - **The whole suite on the final tree:**
 
-The main session's run on the tree with `main` 064e5ab merged in (S072's
-first part; fe36a2a): `make test` (343 tests), `make docs` (14 checks) and
-`make lint` ended 0; the whole suite at six workers beside the kind cluster
-and no other run with a database: 18,097 passed, 8 skipped (3 min 54 s).
+The main session's run on the final tree, with `main` 8e2f4a1 merged in
+(S072's first part and S074's third; 6e04ff5): `make test` (372 tests),
+`make docs` (14 checks) and `make lint` ended 0; the whole suite at six
+workers beside the kind cluster and no other run with a database: 18,193
+passed, 8 skipped (3 min 29 s). An earlier run on the tree before S074's
+part was merged in (fe36a2a) had 18,097 passed, 8 skipped.
 
 - **Documents (D3), as run:** `make docs`, `make check` and `make test`, each
   read by its exit status, are in the report of that contract.
