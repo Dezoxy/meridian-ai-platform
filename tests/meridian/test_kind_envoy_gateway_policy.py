@@ -55,9 +55,11 @@ EDGE_FILE = MANIFESTS / "envoy-gateway-networkpolicy.yaml"
 GATEWAY_FILE = MANIFESTS / "gateway.yaml"
 OBSERVABILITY_FILE = MANIFESTS / "observability-networkpolicy.yaml"
 NAMESPACE = "envoy-gateway-system"
+# What the shared function's log line calls the pods that may reach the node's
+# 6443: the controller and its hook Job, not the proxy pods, which may not.
+WHOSE = "Envoy Gateway's controller and hook Job"
 EDGE_CALL = (
-    'apply_api_server_policy "${ENVOY_GATEWAY_POLICY_FILE}" "Envoy Gateway\'s" '
-    '"TCP 6443"'
+    f'apply_api_server_policy "${{ENVOY_GATEWAY_POLICY_FILE}}" "{WHOSE}" "TCP 6443"'
 )
 
 # The proxy pods, by the two labels that have run on kind: smoke.sh's first line
@@ -434,7 +436,10 @@ def test_up_applies_the_five_policies_with_the_address_and_changes_nothing_else(
     assert "API-SERVER" not in applied
     assert "apply --server-side --force-conflicts -f -" in asked
     assert NODE in done.stdout
-    assert "Envoy Gateway's pods may reach TCP 6443" in done.stdout
+    # Only the controller and its Job reach 6443; the line must not say that the
+    # proxy pods ("Envoy Gateway's pods") do.
+    assert f"{WHOSE} pods may reach TCP 6443" in done.stdout
+    assert "Envoy Gateway's pods may reach" not in done.stdout
 
 
 @requires_jq
@@ -445,7 +450,7 @@ def test_up_stops_before_changing_the_policies_when_the_address_is_unreadable(
 
     assert done.returncode != 0
     assert applied == ""
-    assert "Envoy Gateway's NetworkPolicy was not changed" in done.stderr
+    assert f"{WHOSE} NetworkPolicy was not changed" in done.stderr
 
 
 @requires_jq

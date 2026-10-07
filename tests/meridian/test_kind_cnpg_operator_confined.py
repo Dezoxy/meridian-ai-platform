@@ -66,11 +66,10 @@ INSTANCE_MANAGER_PORT = 8000
 # The namespace the operator used to live in, spelled so that this file does not
 # name it. A line that names it must be history, and say so.
 OLD_NAMESPACE = "cnpg-" + "system"
-# Files that still name it and are not this contract's to change: smoke.sh holds
-# two messages ("read the operator's log in <namespace>"); another step is
-# splitting that file, and a later contract of this batch edits it. The count is
-# pinned, so the edit that removes them has to remove this entry too.
-STILL_NAMING = {"infra/kind/smoke.sh": 2}
+# Files that still name it: none. smoke.sh held two messages ("read the
+# operator's log in <namespace>") until contract S of this batch said where the
+# log is now, so the scan holds the whole tree.
+STILL_NAMING: dict[str, int] = {}
 SCANNED = (KIND_DIR, REPO_ROOT / "infra" / "helm", REPO_ROOT / "tests")
 TEXT_SUFFIXES = {".py", ".sh", ".yaml", ".yml", ".md", ".env", ".json", ".jsonl", ""}
 
@@ -476,3 +475,14 @@ def test_the_collector_is_kept_from_the_operator_by_the_operators_own_policy() -
     assert policies_of(OPERATOR_FILE) == {"cnpg-operator": operator_policy()}
     ports = {p["port"] for r in rules(operator_policy(), "egress") for p in r["ports"]}
     assert 4318 not in ports and 4317 not in ports
+
+
+def test_smoke_says_where_the_operators_log_is_now() -> None:
+    smoke = (KIND_DIR / "smoke.sh").read_text(encoding="utf-8")
+    # Check 10's verdict on the database's certificates: both messages send the
+    # reader to the Deployment in `meridian`, which the scan above cannot ask for.
+    where = "in meridian (the Deployment cnpg-cloudnative-pg)"
+
+    assert f"read its log {where}" in smoke
+    assert f"read the operator's log {where}" in smoke
+    assert OLD_NAMESPACE not in smoke

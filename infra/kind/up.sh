@@ -374,7 +374,7 @@ log "network: observability's NetworkPolicies, with the node's address (before P
 apply_api_server_policy "${OBSERVABILITY_POLICY_FILE}" "observability's" "TCP 6443 and 10250"
 
 log "network: Envoy Gateway's NetworkPolicies, with the node's address (before the controller, its hook Job and the proxy pods)"
-apply_api_server_policy "${ENVOY_GATEWAY_POLICY_FILE}" "Envoy Gateway's" "TCP 6443"
+apply_api_server_policy "${ENVOY_GATEWAY_POLICY_FILE}" "Envoy Gateway's controller and hook Job" "TCP 6443"
 
 log "network: the NetworkPolicy of smoke's telemetrygen Jobs in meridian"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/smoke-networkpolicy.yaml" >/dev/null
