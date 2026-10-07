@@ -1515,8 +1515,8 @@ at the edge, and the database's size and log at the ceiling.
   128 MiB and 2,000 stored files (507), and five files and 3 MiB to a claim. It
   also refuses a raw path that holds a percent sign, but RU1 showed that Envoy
   normalises the path first, so behind this edge that refusal does not fire;
-  whether the normalised request is matched by the uploads route was not
-  shown. Files go to the one database (2 Gi on kind, shared with
+  RU2 showed that the uploads route serves the normalised request and that
+  its limit counts it. Files go to the one database (2 Gi on kind, shared with
   the audit trail); `claims_api` has a connection limit of 50 there. Nothing
   scans a file: malware scanning is designed, not built.
 
