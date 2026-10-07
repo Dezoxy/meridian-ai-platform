@@ -48,10 +48,11 @@ GROUPS = [
     "meridian.certificates",
     "meridian.telemetry",
 ]
-# The file holds 17 alert rules and 3 recording rules (S064: two of them are in
+# The file holds 18 alert rules and 3 recording rules (S064: two of them are in
 # the group `meridian.telemetry`, with four alerts, the fourth (G1) about the log
-# agent's DaemonSet; S066 added one alert, on the gateway's group).
-RULE_COUNT = 20
+# agent's DaemonSet; S066 added one alert, on the gateway's group; S072 one, on
+# the workloads').
+RULE_COUNT = 21
 # Tied to the script in test_smoke_line_count.py: the sum of the lines each
 # check prints when all is well, so a ``pass`` beyond this count fails that test. S063
 # added the fifth line of the network policy check (the collector), the two
@@ -816,9 +817,9 @@ def test_the_readmes_say_what_the_files_hold_and_that_smoke_reads_them() -> None
     )
 
     assert "five alerts on it and three on the workloads" not in kind
-    assert "six on the gateway, three on the workloads and four on the" in kind
+    assert "six on the gateway, four on the workloads and four on the" in kind
     assert "four on missing telemetry" in kind
-    assert "17 alert rules and three recording rules" in kind
+    assert "18 alert rules and three recording rules" in kind
     assert "Neither the rules nor the health dashboard has been applied" not in kind
     assert "`make smoke` checks neither" not in kind
     assert "It does not check the rules or the new dashboard" not in operations

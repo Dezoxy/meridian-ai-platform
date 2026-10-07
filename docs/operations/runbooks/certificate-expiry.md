@@ -231,7 +231,9 @@ and so who may receive their telemetry (a certificate chain that ends in a CA
 of their own, served by a pod that carries the collector Service's labels).
 On kind those who may write it are the cluster administrator and, by the
 rendered charts' RBAC (read, not exercised), the Prometheus operator and the
-CloudNativePG operator, which hold ConfigMap write rights cluster-wide. Treat
+CloudNativePG operator, which hold ConfigMap write rights cluster-wide; and
+kube-state-metrics and Envoy Gateway's controller can read it (the render of
+2026-10-07, T-68). Treat
 the ConfigMap's write rights as part of the telemetry's trust boundary.
 
 A request for either certificate that a policy refuses is Denied, with the
