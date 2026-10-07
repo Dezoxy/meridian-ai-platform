@@ -15401,7 +15401,11 @@ a cluster.
   900), `tests/meridian/test_helm_identity.py` (1,047 to 1,086) and
   `tests/meridian/test_smoke_alert_rules.py` (825 to 826). Their entries were
   set to today's counts here, once, because the list records the tree on the
-  day the check starts to run; from this merge on a count is only lowered. And
+  day the check starts to run. The same holds once for each branch that was
+  cut before the check reached `main` (on this day: the uploads, S072's client
+  certificates and S020's module each grew a listed file): it sets that entry
+  to the file's count at its own merge of `main`, and says so in its pull
+  request. A branch cut after this merge only lowers a count. And
   the job's limit was seen from the other side the same day: the python job of
   pull request 126 passed every step and was cancelled at 15 minutes 12
   seconds, on a hosted runner that was slow during an incident at GitHub; its
