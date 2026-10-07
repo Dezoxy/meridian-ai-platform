@@ -90,7 +90,8 @@ kctl() {
       cat >"${STATE}/created.json"
       [[ "${CREATE_STATUS}" == 0 ]] || { echo "Error: create" >&2; return 1; } ;;
     *" wait "*)
-      [[ "${WAIT_STATUS}" == 0 ]] || { echo "error: timed out" >&2; return 1; } ;;
+      [[ "${WAIT_STATUS}" == 0 ]] ||
+        { echo "${WAIT_SAYS-error: timed out}" >&2; return 1; } ;;
     *" logs "*)
       printf "%s" "${ANSWER}"
       return "${LOGS_STATUS}" ;;
@@ -121,9 +122,11 @@ def run_function(
     stub: str,
     environment: dict[str, str],
     extra: list[str] | None = None,
+    stderr: list[str] | None = None,
 ) -> tuple[list[str], str]:
     """Run ``name`` of smoke.sh against ``stub``; its output lines and what
-    ``kctl`` was asked, one call per line."""
+    ``kctl`` was asked, one call per line. The function's standard error is
+    appended to ``stderr`` (as one text) when a list is given."""
     state = tmp_path / "state"
     state.mkdir()
     asked = tmp_path / "kctl-calls"
@@ -161,6 +164,8 @@ def run_function(
         },
     )
     assert done.returncode == 0, done.stderr
+    if stderr is not None:
+        stderr.append(done.stderr)
     return done.stdout.splitlines(), asked.read_text(encoding="utf-8")
 
 
@@ -343,19 +348,28 @@ def run_clear_text(
     create_status: int = 0,
     wait_status: int = 0,
     logs_status: int = 0,
+    wait_says: str | None = None,
+    stderr: list[str] | None = None,
 ) -> tuple[list[str], str, dict]:
+    """``wait_says`` is what the stub ``wait`` prints on standard error when it
+    fails (its default is a short line of its own); ``stderr`` collects the
+    function's standard error."""
+    environment = {
+        "ANSWER": answer,
+        "DEPLOYED": deployed,
+        "CREATE_STATUS": str(create_status),
+        "WAIT_STATUS": str(wait_status),
+        "LOGS_STATUS": str(logs_status),
+    }
+    if wait_says is not None:
+        environment["WAIT_SAYS"] = wait_says
     lines, asked = run_function(
         tmp_path,
         "check_telemetry_clear_text",
         CLEAR_STUB,
-        {
-            "ANSWER": answer,
-            "DEPLOYED": deployed,
-            "CREATE_STATUS": str(create_status),
-            "WAIT_STATUS": str(wait_status),
-            "LOGS_STATUS": str(logs_status),
-        },
-        extra=["clear_text_job_spec"],
+        environment,
+        extra=["clear_text_job_spec", "show_wait_error"],
+        stderr=stderr,
     )
     created = tmp_path / "state" / "created.json"
     job = json.loads(created.read_text()) if created.exists() else {}
@@ -451,6 +465,64 @@ def test_a_probe_that_did_not_complete_fails_and_names_its_logs(
 
     assert line.startswith("FAIL  telemetry: ")
     assert "kubectl -n meridian logs job/smoke-cleartext-1700000000" in line
+
+
+BOUND_SENTENCE = (
+    "error: kubectl wait was ended after its --timeout: the API server did not answer"
+)
+ORDINARY_TIMEOUT = "error: timed out waiting for the condition on jobs/x"
+
+
+def test_a_wait_that_an_outer_bound_ends_shows_its_sentence_on_standard_error(
+    tmp_path: Path,
+) -> None:
+    said: list[str] = []
+
+    (line,) = run_clear_text(
+        tmp_path, "", wait_status=1, wait_says=BOUND_SENTENCE, stderr=said
+    )[0]
+
+    # The FAIL line is as it was, and the sentence is no longer thrown away.
+    assert line.startswith("FAIL  telemetry: the clear-text probe ")
+    assert said[0].splitlines() == [BOUND_SENTENCE]
+
+
+def test_a_wait_that_merely_timed_out_prints_nothing_more_than_the_fail_line(
+    tmp_path: Path,
+) -> None:
+    said: list[str] = []
+
+    (line,) = run_clear_text(
+        tmp_path, "", wait_status=1, wait_says=ORDINARY_TIMEOUT, stderr=said
+    )[0]
+
+    assert line.startswith("FAIL  telemetry: ")
+    assert said == [""]
+
+
+def test_a_sentence_beside_the_ordinary_line_is_shown_without_it_or_controls(
+    tmp_path: Path,
+) -> None:
+    said: list[str] = []
+    both = f"{ORDINARY_TIMEOUT}\n{BOUND_SENTENCE}\x1b[31m"
+
+    run_clear_text(tmp_path, "", wait_status=1, wait_says=both, stderr=said)
+
+    # The escape character is dropped (what is left of it is printable text).
+    assert said[0].splitlines() == [BOUND_SENTENCE + "[31m"]
+
+
+def test_both_waits_of_the_telemetry_check_show_what_they_say() -> None:
+    sites = re.findall(
+        r'(if ! wait_said="\$\(kctl [^\n]*wait --for=condition=complete.*?'
+        r"then\n\s+show_wait_error)",
+        SMOKE_SH,
+        re.S,
+    )
+
+    assert len(sites) == 2
+    assert "wait_said" in function_definition(SMOKE_SH, "check_telemetry_clear_text")
+    assert "local signal wait_said" in function_definition(SMOKE_SH, "check_telemetry")
 
 
 def test_a_job_that_cannot_be_made_fails(tmp_path: Path) -> None:

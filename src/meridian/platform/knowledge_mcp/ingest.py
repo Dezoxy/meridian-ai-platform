@@ -262,7 +262,14 @@ def _wait_for(error: EmbeddingCallError) -> float:
 
 def _failure_message(error: EmbeddingCallError) -> str:
     """A status the gateway answered is a refusal; no status is a call that
-    failed in transit or was answered with something that is not the contract."""
+    failed in transit or was answered with something that is not the contract.
+    A 503 adds the fixed word of the gateway's refusal (``unknown`` when it is
+    not one of the gateway's four): the Job's last line says which one it met."""
+    if error.gateway_word is not None:
+        return (
+            "the model gateway refused the embedding call "
+            f"({error}; kind {error.gateway_word})"
+        )
     if error.status_code:
         return f"the model gateway refused the embedding call ({error})"
     return f"the embedding call to the model gateway failed ({error})"

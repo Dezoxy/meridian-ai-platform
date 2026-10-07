@@ -95,7 +95,10 @@ def run_upkeep(
     kind_dir, stubs = make_scratch(tmp_path)
     calls = tmp_path / "calls"
     calls.touch()
-    log = f'printf \'%s{SEPARATOR}\' {{name}} "$@" >>"{calls}"; echo >>"{calls}"'
+    # One write for one call: two stubs of a pipe (`create --dry-run | apply`)
+    # append at the same time, and a line written in two parts can be cut in
+    # two by the other's (seen once under load: three changes read as two).
+    log = f'printf \'%s\\n\' "$(printf \'%s{SEPARATOR}\' {{name}} "$@")" >>"{calls}"'
     answer = (
         NOT_FOUND
         if role_state == "missing"
@@ -534,6 +537,98 @@ def test_a_refusal_in_the_middle_of_the_output_is_still_a_refusal(
     assert done.returncode == 1
     assert "changed nothing" in last_line_of(done.stderr)
     assert "may have been applied" not in done.stderr
+
+
+# The two expiries loop a function in batches, each its own transaction, and a
+# failure can come after some batches have committed: the ledger's can be a
+# refusal (`ERROR GUnnn`: rows held by another session), either's a lost
+# connection. The command then prints, after the error, a line that says what it
+# removed "before the failure" and that it stays removed
+# (src/meridian/platform/cli/gateway.py). The state is known, so it is neither
+# "nothing changed" nor "may have been applied".
+FAILURE_AFTER_BATCHES = {
+    "a-refusal-of-the-ledger": (
+        "ERROR GU306 usage rows of those months are held by another session, or "
+        "changed during the call: nothing was changed by this call, so run it "
+        "again\n"
+        "removed 3 usage rows in 1 batch(es) before the failure: each batch is "
+        "its own transaction with its own audit row, and what was removed stays "
+        "removed; run the command again to continue\n"
+    ),
+    "a-lost-connection-in-the-audit-expiry": (
+        "ERROR gateway upkeep failed (OperationalError): no server message "
+        "(connection failed?)\n"
+        "removed 2000 audit rows in 2 batch(es) before the failure: each batch is "
+        "its own transaction with its own audit row, and what was removed stays "
+        "removed\n"
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    "output", list(FAILURE_AFTER_BATCHES.values()), ids=list(FAILURE_AFTER_BATCHES)
+)
+def test_a_failure_after_batches_says_what_stays_removed_not_that_nothing_changed(
+    tmp_path: Path, output: str
+) -> None:
+    done = run_upkeep(
+        tmp_path,
+        "expire --before 2000-01 --reason old-months --confirm",
+        job="failed",
+        output=output,
+    )
+
+    last = last_line_of(done.stderr)
+    assert done.returncode == 1
+    assert last.startswith("error: ")
+    assert "before the failure" in last
+    assert "stays removed" in last
+    assert "running it again continues" in last
+    # Neither promise is made: that nothing changed, and that it is unknown.
+    assert "changed nothing" not in done.stderr
+    assert "may have been applied" not in done.stderr
+    assert "a credit is a new row on every run" not in done.stderr
+    # The output is printed once, with the line the command wrote.
+    assert done.stdout.count("before the failure") == 1
+
+
+def test_a_line_that_only_mentions_the_failure_keeps_a_refusal_a_plain_refusal(
+    tmp_path: Path,
+) -> None:
+    done = run_upkeep(
+        tmp_path,
+        "expire --before 2000-01 --reason old-months --confirm",
+        job="failed",
+        output="see the runbook: what was removed before the failure stays\n" + REFUSAL,
+    )
+
+    last = last_line_of(done.stderr)
+    assert "changed nothing" in last
+    assert "stays removed" not in last
+
+
+def test_the_header_says_a_refusal_changes_nothing_only_when_no_batch_ran() -> None:
+    header = UPKEEP_SH.split("set -euo pipefail")[0]
+
+    assert "before the failure" in header
+    assert "which changes nothing" not in header
+
+
+def test_the_empty_arguments_sentence_names_the_five_subcommands(
+    tmp_path: Path,
+) -> None:
+    done = run_upkeep(tmp_path, "")
+
+    assert "reservations, close, credit, expire or expire-audit" in done.stderr
+
+
+def test_the_kind_readme_row_names_expire_audit_and_the_partial_failure() -> None:
+    lines = (KIND_DIR / "README.md").read_text(encoding="utf-8").splitlines()
+    row = next(line for line in lines if line.startswith("| `make gateway-upkeep"))
+
+    assert "expire-audit --before YYYY-MM-DD" in row
+    assert "before the failure" in row
+    assert "which changes nothing" not in row
 
 
 @pytest.mark.parametrize(

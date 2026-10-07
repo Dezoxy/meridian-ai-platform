@@ -42,6 +42,7 @@ from sweepmigrationsupport import (
 )
 
 from meridian.platform.common.db import connect
+from meridian.platform.migrations.runner import SweepMemberships, sweep_memberships
 from meridian.workloads.claims_triage.lifecycle import MOVE_CLAIM
 
 
@@ -360,14 +361,11 @@ def test_the_sweep_cannot_become_another_role_or_switch_its_triggers_off(
 def test_no_login_is_a_member_of_the_sweep_role(
     migrated_database: DatabaseHandle,
 ) -> None:
-    rows = run(
-        migrated_database,
-        OWNER,
-        "SELECT count(*) FROM pg_auth_members "
-        "WHERE roleid = 'claims_sweep'::regrole OR member = 'claims_sweep'::regrole",
-    )
+    # The rule is the one `meridian db migrate` applies at every run.
+    with connect(migrated_database.dsn(OWNER), "meridian-test") as conn:
+        found = sweep_memberships(conn)
 
-    assert rows == [(0,)]
+    assert found == SweepMemberships(members=0, memberships=0)
 
 
 # ── the triggers hold for SET ROLE as well as for the login ─────────────────

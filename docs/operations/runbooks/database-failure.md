@@ -80,7 +80,10 @@ ORDER BY connections DESC;
 
 A statement is cut off after 10 seconds and a connection attempt after 5,
 so a pile-up is traffic, not a hung query. Stop the traffic; the
-connections close with their requests.
+connections close with their requests. A session that holds a row lock and sits
+idle inside its transaction (`state` is `idle in transaction`) is ended after 60
+seconds (migration 0031, implemented and tested, not run on a cluster); a session
+can lift that for itself, so a holder that stays is deliberate, not forgotten.
 
 ### The data is lost
 
@@ -120,7 +123,10 @@ chosen. The restore procedure is written when S029 has run it once.
 `MeridianSweepStale` fires when the sweep's CronJob has had no successful
 run for 15 minutes, three runs, or has existed that long and never
 succeeded. The database is the usual cause, which is why this alert leads
-here. The sweep says why:
+here. The alert reads the CronJob's last successful time, which a Job run by
+hand moves too (seen on kind on 2026-10-07), so a by-hand run can hide a
+stopped schedule from the alert for 15 minutes; `make smoke` does not take the
+by-hand Job for the schedule's. The sweep says why:
 
 ```sh
 k() { kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meridian "$@"; }

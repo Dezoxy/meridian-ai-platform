@@ -65,7 +65,8 @@ PYTEST_WORKERS      ?= 10
 # command line (make PROMTOOL_IMAGE=...) CAN override it: only `override` would
 # stop that. .github/renovate.json reads it as it reads PYTEST_DB_IMAGE.
 PROMTOOL_IMAGE      := quay.io/prometheus/prometheus:v3.15.0-distroless@sha256:b2a413d5a03ea6a76782a508d1c7947440bba3b973931a25676e278431891b01
-# Trivy's configuration scan for `make aws-scan` (S036): 0.75.0, read on
+# Trivy's configuration scan for `make aws-scan` (S036) and `make gcp-scan`
+# (S078), one image for both: 0.75.0, read on
 # 2026-10-06. The digest is the multi-arch index's (`docker buildx imagetools
 # inspect` shows an OCI index; `docker pull` of the tag prints the same digest);
 # := so an environment variable does not change it, but a variable on make's
@@ -100,7 +101,7 @@ EVAL_INPUTS         := src config/registry data/synthetic data/evaluation/record
 
 STRUCTURIZR := docker run --rm -v "$(CURDIR)/$(ARCH_DIR):/w:ro"
 
-.PHONY: help validate inspect check docs test secret-scan view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db alerts eval eval-compare eval-baseline eval-record synthetic up deploy images helm-lint demo smoke gateway-upkeep grafana grafana-password cluster-holder down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry aws-validate aws-scan aws-plan aws-apply aws-destroy
+.PHONY: help validate inspect check docs test secret-scan view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db alerts eval eval-compare eval-baseline eval-record synthetic up deploy images helm-lint demo smoke gateway-upkeep grafana grafana-password cert-renew cluster-holder down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry aws-validate aws-scan aws-plan aws-apply aws-destroy gcp-validate gcp-scan
 .DEFAULT_GOAL := help
 
 ## help            list the targets
@@ -305,6 +306,10 @@ grafana-password:
 helm-lint:
 	helm lint --strict infra/helm/meridian -f infra/kind/values/meridian.yaml --set-string image.repository=meridian --set-string image.tag=lint --set-string rateStore.image=$(PYTEST_REDIS_IMAGE) --set jobs.migrate.enabled=true --set jobs.seed.enabled=true --set jobs.ingest.enabled=true --set jobs.upkeep.enabled=true --set-string jobs.upkeep.runSuffix=lint --set-json 'jobs.upkeep.args=["reservations"]'
 
+## cert-renew      ask cert-manager to issue one Certificate of the namespace meridian again now, for after a denied or failed request when cert-manager's own wait (an hour, doubling) would otherwise hold a repaired deploy: make cert-renew CERT=<name> (the name of a Certificate, see kubectl -n meridian get certificate); it sets the Certificate's Issuing condition as cmctl renew does and changes nothing else; needs make up and make deploy; stops when another holder has the cluster unless TAKE_CLUSTER=1; CERT=rate-store restarts the store (503 for one to three minutes); tested against a stub kubectl; seen on kind on 2026-10-07 (the refusals and one renewal of a healthy Certificate); not seen (a denied request, a 409)
+cert-renew:
+	infra/kind/cert-renew.sh
+
 ## cluster-holder  print who holds the kind cluster (the holder, its commit, the time and the state: changing after a make up or make deploy that did not end well), or that there is no record or no cluster; make up, deploy and down stop when another holder has it unless TAKE_CLUSTER=1 is in front of the command (CLUSTER_HOLDER=<name> names a checkout that is not on a branch); a notice, not a lock
 cluster-holder:
 	infra/kind/holder.sh
@@ -368,3 +373,16 @@ aws-apply:
 ## aws-destroy     REMOVES the AWS environment: Terraform asks its own question; the owner runs it, in a terminal, from a sign-in no session can read (the terminal check stops an accident and a plain shell, not a session that makes itself a terminal)
 aws-destroy:
 	infra/terraform/aws.sh destroy
+
+# ── Google Cloud module (a scaffold: checked, never planned, never applied) ──
+# infra/terraform/gcp/README.md says what this is. There is no project and no
+# credential, and deliberately no target that plans, applies or removes it.
+
+## gcp-validate    terraform fmt -check, init with no backend and validate of the Google Cloud module; needs no project and no credential and changes nothing in Google Cloud
+gcp-validate:
+	infra/terraform/aws.sh validate gcp
+
+## gcp-scan        Trivy's configuration scan of the Google Cloud module from the same pinned image as aws-scan: offline, changes nothing in Google Cloud, needs no project and no credential; fails on a HIGH or CRITICAL finding that infra/terraform/gcp/.trivyignore does not list (needs Docker)
+gcp-scan:
+	@ls "$(CURDIR)"/infra/terraform/gcp/*.tf >/dev/null 2>&1 || { echo "gcp-scan: no .tf file in infra/terraform/gcp, nothing to scan" >&2; exit 1; }
+	docker run --rm --network none --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges -e TRIVY_CACHE_DIR=/tmp/trivy --mount type=bind,source="$(CURDIR)/infra/terraform/gcp",target=/work,readonly -w /work $(TRIVY_IMAGE) config --quiet --skip-check-update --skip-version-check --disable-telemetry --skip-dirs .terraform --skip-files gcp.tfplan,terraform.tfstate,terraform.tfstate.backup --severity HIGH,CRITICAL --exit-code 1 .

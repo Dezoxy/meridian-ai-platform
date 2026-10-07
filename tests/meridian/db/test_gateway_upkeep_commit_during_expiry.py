@@ -5,6 +5,10 @@ transaction; a credit or an expiry that waited for those locks must count the
 row when it comes back. The rest of the expiry is in
 ``test_gateway_upkeep_expire.py``. The constants and helpers are in
 ``upkeepsupport``.
+
+Since 0030 the upkeep role calls the expiry in batches
+(``test_ledger_expiry_batches.py``) and no longer ``expire_ledger``: the tests of
+this one call it as the owner, who still may.
 """
 
 import uuid
@@ -81,7 +85,7 @@ def test_a_reservation_that_commits_while_an_expiry_waits_is_not_orphaned(
     first, second = second_waits_for_first(
         fresh_database,
         (OWNER, RESERVE_AS_THE_GATEWAY, reserve),
-        (ROLE, EXPIRE, (current, REASON)),
+        (OWNER, EXPIRE, (current, REASON)),
     )
 
     assert first == []
@@ -160,10 +164,12 @@ def test_an_expiry_writes_one_audit_row_with_the_month_and_the_three_counts(
     last = previous_month(current)
     plant_ledger_of_a_month(fresh_database, last)
 
-    run(fresh_database, ROLE, EXPIRE, (current, REASON))
+    run(fresh_database, OWNER, EXPIRE, (current, REASON))
 
     (row,) = audit_rows(fresh_database)
-    assert row["db_role"] == ROLE
+    # The upkeep role may not call this function any more (0030): the owner does,
+    # and the row names the session's user, as every row of an upkeep function.
+    assert row["db_role"] == OWNER
     assert row["service"] == SERVICE
     assert (row["event"], row["outcome"]) == ("ledger.expired", "completed")
     assert row["tenant"] is None

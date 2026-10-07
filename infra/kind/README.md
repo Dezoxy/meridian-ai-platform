@@ -445,7 +445,14 @@ answers 404.
 ## Prerequisites
 
 Docker (running), `kind`, `kubectl`, `helm`, `openssl` and `jq`. `make smoke`
-and `make demo` also need `curl`. Tested with:
+and `make demo` also need `curl`. `make up`, `make deploy`, `make smoke` and
+`make gateway-upkeep` also need `timeout` (coreutils; it bounds a call of
+`kubectl` that no flag bounds, see "How long the scripts wait for the API
+server", S073), and refuse to start without it. The wrapper reads two behaviours
+of it, the statuses 124 (ended) and 137 (killed after the grace); GNU `timeout`
+gives both, and so did uutils 0.10.0, the one on the machine of the S073 runs
+(run R4e used it): the re-read of K9, K10 and K12 saw both statuses behave the
+same there. Tested with:
 
 | Tool | A laptop | A Linux virtual machine (2026-10-06) |
 |---|---|---|
@@ -468,15 +475,16 @@ node image, Kubernetes components and the platform).
 | Command | What it does |
 |---|---|
 | `make up` | Create the cluster if absent, install every release, provision the Grafana dashboards and apply the alert rules. Safe to rerun; it converges. On a cluster that exists it first reads who holds it and stops when another holder has it, unless `TAKE_CLUSTER=1` is in front of it; it records itself as the holder with state `changing` before it changes anything and with state `ok` when it ends well, so a run that fails leaves `changing` (S075; see "Who holds the cluster" below). Took 4 to 5 minutes from no cluster (245 s and 304 s, images already local, on the laptop; 5 min 04 s and 4 min 28 s on the Linux machine of the table above), under a minute after. |
-| `make deploy` | Needs `make up`. Builds the image, loads it into the node, runs the migration and seed Jobs, installs or upgrades the Helm release `meridian` from [`../helm/meridian/`](../helm/meridian/) (the sweep's CronJob and the network policies among its objects), ingests the wordings once per image and waits for the six Deployments and the route. Safe to rerun. Before it builds or runs anything it reads who holds the cluster and stops when another holder has it, unless `TAKE_CLUSTER=1` is in front of it; it records itself as the holder with state `changing` right after that check and with state `ok` when it ends well, so a run that fails leaves `changing` (S075; see "Who holds the cluster" below). The first deploy of an image waits a minute after the ingestion (below). |
+| `make deploy` | Needs `make up`. Builds the image, loads it into the node, runs the migration and seed Jobs, installs or upgrades the Helm release `meridian` from [`../helm/meridian/`](../helm/meridian/) (the sweep's CronJob and the network policies among its objects), ingests the wordings once per image and waits for the six Deployments and the route. Safe to rerun. Before it builds or runs anything it reads who holds the cluster and stops when another holder has it, unless `TAKE_CLUSTER=1` is in front of it; it records itself as the holder with state `changing` right after that check and with state `ok` when it ends well, so a run that fails leaves `changing` (S075; see "Who holds the cluster" below). Its first change is Meridian's alert rules, the same `PrometheusRule` file `make up` applies, through one function of `common.sh`: after its checks, so a refused deploy changes nothing, and before the build, so a cluster without the Prometheus operator is refused in seconds with a sentence that names the kind (S073; tested against stub commands, not yet seen on a cluster). The first deploy of an image waits a minute after the ingestion (below). |
 | `make images` | Lists the `meridian:*` images in the Docker engine and in the kind node, each marked `in use` (a pod template of the namespace's Deployments, CronJobs and Jobs names it, or a Pod that exists), `rollback` (only an old ReplicaSet names it: a rollback's target, kept, with no command) or `unused`, with the counts and the size Docker reports, and prints the commands that would remove the unused ones. It removes nothing: removing them is the owner's command. With no `infra/kind/kubeconfig` it asks kind: no cluster of that name, and it lists the engine's images, all unused; a cluster that exists (the credentials are in another checkout) is an error, because it cannot tell which images are in use. A cluster that does not answer, or a listing that fails, is an error too. Run on the cluster on 2026-10-06: after three deploys it listed three `meridian:*` images in the engine and in the node, one `in use` and two `rollback` (an old ReplicaSet names each), kept with no removal command, and removed nothing; on the cluster made again from nothing it listed three in the engine, one in use and two unused (no ReplicaSet of the new cluster names them) with the `docker image rm` line printed for them, and one in the node. The refusal in a checkout without the cluster's credentials was tested against stub commands and not tried on the cluster. |
 | `make helm-lint` | `helm lint --strict` on the chart with kind's values and every Job on (the upkeep Job with one argument and a suffix, which it needs to render). Needs no cluster; CI runs it. |
 | `make alerts` | Prometheus's own checker (`promtool`, from a pinned image) on the alert rules, then their unit tests. Needs Docker and no cluster; CI runs it. |
 | `make demo` | Runs `make deploy`, then posts a synthetic claim and finds its trace in Tempo; when the claim waits for an adjuster, posts the decision (`make demo DECISION=reject`; approve by default) and finds that trace too. Prints PASS only when each trace has at least one span from each service it must cross (a service Tempo lists with no span does not count) and its span counts have settled (unchanged for three readings, six seconds). Passed on the cluster on 2026-10-06 with spans from every service, in 30 s; the zero-span rule and the FAIL wording "alternated" were tested against a stub and not seen on the cluster. |
 | `make smoke` | One PASS, FAIL or SKIP line per check; exits non-zero on any FAIL. |
-| `make gateway-upkeep ARGS="..."` | Needs `make up` (the Secret `gateway-upkeep-db`) and `make deploy` (the image). Runs the gateway's upkeep command (`meridian gateway`, S066) as a Job of its own under the database role `gateway_upkeep` and prints its output; `ARGS` is the subcommand and its arguments (`reservations --older-than 15`, `close ATTEMPT_ID --reason SLUG`, `credit TENANT --tokens N --reason SLUG`, `expire --before YYYY-MM --reason SLUG`). `infra/kind/upkeep.sh` splits `ARGS` on blanks into an array without reading any of it as shell and refuses, before it asks the cluster anything, a word with a character outside letters, digits, `.`, `_`, `=` and `-`: a quote, a backslash, a `$`, a backtick, a newline or a glob character among them. It passes the words to `helm template` as one JSON list (`--set-json`), with a suffix of its own so that a second run is a new Job, applies the Job outside the release (`make deploy` neither creates nor removes it) with the image the release runs, waits for it and prints its log through the same filter as the deploy's Jobs. Exit code 0 when the Job succeeded; 1 when it failed (the command exits 1 on a refusal, `ERROR GUnnn`, which changes nothing, and 2 on a usage error: both are a Failed Job, never retried), when it did not finish in three minutes or when `make up` or `make deploy` is missing (`make` itself returns 2 for the failed recipe). Only a failure whose output holds the command's own `ERROR GUnnn` line says that nothing was changed; every other failure, and a Job that did not finish, says that the change may have been applied and to read the reservations or the audit rows before running it again, because a credit is a new row on every run. Make itself expands `$(...)` and `$$` in a value given on its command line before the script sees it (the script's header and the target's help line say so); what reaches the script is then checked as above. The Job and its output are kept for a day. Implemented and tested (stub `kubectl`, the real chart), and run on kind on 2026-10-06 (second and third runs of S066): a read, a refusal and a credit of one token; the audit row of the credit was not read on the cluster. |
+| `make gateway-upkeep ARGS="..."` | Needs `make up` (the Secret `gateway-upkeep-db`) and `make deploy` (the image). Runs the gateway's upkeep command (`meridian gateway`, S066) as a Job of its own under the database role `gateway_upkeep` and prints its output; `ARGS` is the subcommand and its arguments (`reservations --older-than 15`, `close ATTEMPT_ID --reason SLUG`, `credit TENANT --tokens N --reason SLUG`, `expire --before YYYY-MM --reason SLUG [--limit N] [--confirm]`, `expire-audit --before YYYY-MM-DD --reason SLUG [--limit N] [--confirm]`; only the date form of `expire-audit` passes the word check below, which allows no colon or plus sign). `infra/kind/upkeep.sh` splits `ARGS` on blanks into an array without reading any of it as shell and refuses, before it asks the cluster anything, a word with a character outside letters, digits, `.`, `_`, `=` and `-`: a quote, a backslash, a `$`, a backtick, a newline or a glob character among them. It passes the words to `helm template` as one JSON list (`--set-json`), with a suffix of its own so that a second run is a new Job, applies the Job outside the release (`make deploy` neither creates nor removes it) with the image the release runs, waits for it and prints its log through the same filter as the deploy's Jobs. Exit code 0 when the Job succeeded; 1 when it failed (the command exits 1 on a refusal, `ERROR GUnnn`, and 2 on a usage error: both are a Failed Job, never retried), when it did not finish in three minutes or when `make up` or `make deploy` is missing (`make` itself returns 2 for the failed recipe). A failure whose output holds a line that says what the command removed "before the failure" (the two expiries remove in batches, and a failure can follow batches that committed) says what stays removed and that running the command again continues; one that holds the command's own `ERROR GUnnn` line and no such line says that the refusal changed nothing; every other failure, and a Job that did not finish, says that the change may have been applied and to read the reservations or the audit rows before running it again, because a credit is a new row on every run. Make itself expands `$(...)` and `$$` in a value given on its command line before the script sees it (the script's header and the target's help line say so); what reaches the script is then checked as above. The Job and its output are kept for a day. Implemented and tested (stub `kubectl`, the real chart), and run on kind on 2026-10-06 (second and third runs of S066): a read, a refusal and a credit of one token; the audit row of the credit was not read on the cluster. |
 | `make grafana` | Port-forward Grafana to <http://127.0.0.1:3000>. User `admin`. |
 | `make grafana-password` | Print the Grafana admin password. |
+| `make cert-renew CERT=<name>` | Ask cert-manager to issue one Certificate of the namespace `meridian` again, now (S073). After a denied or failed request cert-manager waits before it asks again (an hour, doubling to 32), so a repaired policy does not help a deploy for an hour; `cmctl renew` asks at once and is not installed, so `infra/kind/cert-renew.sh` does what it does with `kubectl`: it sets the Certificate's `Issuing` condition to `True` (reason `ManuallyTriggered`, the time now, the Certificate's generation) through the status subresource, as a JSON merge patch that carries every other condition and the `resourceVersion` it read (a Certificate cert-manager changed in between is refused, and the command is run again). It refuses, before it asks the cluster anything, a missing `CERT` and a name that is not a DNS label, without repeating the value, and then a name that is not a Certificate of the namespace, listing the names it found; a Certificate that is already being issued is left alone. It reads no Secret and writes nothing but that status. It reads who holds the cluster first, stops when another holder has it unless `TAKE_CLUSTER=1` is in front of it, and writes the record `ok` right after the write succeeded (a refused write leaves the record as it was). With `CERT=rate-store` it first says what the renewal costs: the store restarts itself when its certificate file is newer than its start, so every model call answers 503 for one to three minutes (worked out from the probes' numbers, not measured) and the tenants' rate windows are lost (the six services do not restart on a renewal by hand). `make deploy`'s stop at the Certificates names it. Tested against a stub `kubectl`. Seen on kind on 2026-10-07: a refusal for each bad name (no `CERT`, a name that is not a Certificate, a name that is not a DNS label), each with its own sentence and nothing written, and one renewal of a healthy Certificate (revision 1 to 2 within the same second, a new CertificateRequest Approved and Ready, the record back at `ok`). Not seen: the renewal of a Certificate whose request was denied (the case it is for), a refusal by a `409` between the read and the write, the rate store's renewal, and the script's one write of the record (the renewal seen ran the script before that change, when it wrote `changing` and then `ok`). |
 | `make cluster-holder` | Print who holds the cluster: the holder, its commit, the time its last `make up` or `make deploy` started or ended and the state, `ok` or `changing` with a sentence that says to look at what failed (S075); or that there is no record, or no cluster. It changes nothing on the cluster and refreshes the gitignored credentials file as `make up` does. A cluster that does not answer is an error. See "Who holds the cluster" below. |
 | `make down` | Delete the `meridian` cluster and its credentials file. Destructive; refuses any other cluster name. Since S075 it reads the record of who holds the cluster first and stops when another holder has it, unless `TAKE_CLUSTER=1` is in front of it; a cluster that does not answer stops it too (who holds it cannot be told, and another step's `make up` may be restarting the node), and `TAKE_CLUSTER=1 make down` deletes a broken cluster all the same. The record goes with the cluster. |
 
@@ -511,8 +519,10 @@ node image, Kubernetes components and the platform).
    roles, never a row. Every `psql` smoke runs has a statement timeout of 5
    seconds and a lock timeout of 3 seconds (`PGOPTIONS` in the exec), so a
    migration that holds a lock while smoke runs fails that line with psql's
-   message instead of hanging it (the two pgvector lines keep no message: they
-   say the extension is not installed). Those reads passed on the cluster on
+   message instead of hanging it (the two pgvector lines keep the first line
+   of it since S073, K4, cleaned and cut like the others: a read that failed
+   says "could not read pg_extension", not "not installed"; tested with
+   stand-ins, not yet seen on a cluster). Those reads passed on the cluster on
    2026-10-06, so `env` exists in the database's container; the migrations
    line named `0019_audit_trail_seq.sql`, "the newest of this checkout", after
    the deploy applied migrations 0017 to 0019 to the cluster's database. A
@@ -677,7 +687,8 @@ node image, Kubernetes components and the platform).
    changes no claim. Before `make deploy` this check prints SKIP.
 7. **Sweep.** Two lines, read-only (the second is S064's, below). The first:
    the CronJob `meridian-sweep` exists, and
-   the last of its Jobs to finish, scheduled or made by hand, succeeded; the
+   the last of its Jobs that the schedule made to finish succeeded (a Job made
+   by hand is not one: see below); the
    line says when it finished. It fails when the CronJob is missing, when the
    last finished Job failed (the line gives its reason, and `describe` and
    `logs` commands: a Job that hit its deadline or whose pod never started has
@@ -701,6 +712,61 @@ node image, Kubernetes components and the platform).
    and while it is suspended (`.spec.suspend`: it makes no runs, so none is
    overdue), this line prints SKIP. A PASS does not say the sweep did its
    work, only that a Job finished.
+   A Job made by hand (`kubectl create job --from=cronjob/...`) has the
+   CronJob as its owner like a scheduled one, so by the owner alone a recent one
+   would pass for the schedule's success (S073, K4). The verdict tells them
+   apart by two annotations seen on kind: a by-hand Job carries
+   `cronjob.kubernetes.io/instantiate: manual` and a scheduled one carries
+   `batch.kubernetes.io/cronjob-scheduled-timestamp`. Only a Job that has the
+   first and not the second is left out (the scheduled timestamp is the
+   positive fact and wins); a Job with neither, as on an older cluster, counts
+   as before and the line says the annotation was absent. When the newest
+   finished Job of all was made by hand the line says so, with its name and
+   time, and that a by-hand run is not a run of the schedule: a recent by-hand
+   success beside a schedule that stopped is the stopped verdict, and a by-hand
+   failure beside a healthy schedule is a PASS. Seen on kind on 2026-10-07: the
+   CronJob kept ONE successful Job, so a by-hand success evicted the schedule's
+   own, and the verdict, resting on the failed scheduled Job of the evening
+   before, failed a healthy schedule for four minutes. The chart now keeps
+   three (`successfulJobsHistoryLimit: 3`), and the verdict has a third case
+   for a history that still lacks the schedule's newest run (its newest
+   finished Job finished before the CronJob's `lastScheduleTime` and a by-hand
+   Job finished after it): that Job is not judged, and `lastScheduleTime`
+   decides. Older than 15 minutes is the stopped verdict (FAIL); within it,
+   with a Job of the schedule running or not, the line is a SKIP that says the
+   schedule fired at that time, its Job is no longer in the history and its
+   outcome was not read: run smoke again after the next scheduled run. After a
+   by-hand run, then, the sweep lines may print two SKIP in place of two PASS
+   (the findings line follows the first) until the schedule's next run. The fix
+   is tested with stand-ins. Seen on kind on 2026-10-07 (run R4c): with the
+   limit of three, a by-hand Job made after one scheduled run did not evict the
+   schedule's success, and the line passed on the schedule's Job and said in
+   brackets that the newest finished Job of all was made by hand and not
+   judged; with the by-hand Job removed smoke passed again. Not seen:
+   the third case itself (a history that lacks the schedule's newest run: its
+   SKIP, and the FAIL once the schedule's time is older than the bound), which
+   the limit of three keeps from happening. Someone who edits a
+   Job's annotations can pass for the schedule, and the alert
+   `MeridianSweepStale` reads the CronJob's last successful time, which a
+   by-hand success moves too (seen on kind on 2026-10-07): a by-hand run can
+   hide a stopped schedule from the alert for one staleness window.
+   Seen on kind on 2026-10-07 as well: after seven runs of `make smoke` in an
+   hour this line failed with `jq: Argument list too long`. It listed every
+   Job of the namespace and handed the list to `jq` as one argument, which the
+   kernel limits to 131,072 bytes; each run leaves four Jobs of its own (the
+   telemetry and log probes, kept 15 minutes after they finish), and 28 of them
+   made the list 227,658 bytes. The cause was older than S073. Now the line
+   lists the Jobs by the sweep's label (`app.kubernetes.io/name=meridian-sweep`,
+   which the CronJob gives every Job it makes, scheduled or by hand), and no
+   answer of the cluster or of Prometheus goes to `jq` as an argument anywhere
+   in the script: each goes in on standard input or as a file from a process
+   substitution (a test reads the script for it). The fix is tested with
+   stand-ins and the real `jq`, with a list above the limit. Seen on kind on
+   2026-10-07 (run R4c): with 17 Jobs in the namespace, a list of 123,794
+   bytes, `make smoke` passed this line, 45 PASS and no FAIL, three times in
+   six minutes, where run R4b had failed it at 227,658 bytes. Not seen: a
+   list over 131,072 bytes again: the label leaves the namespace's size out of
+   the line, so only the test with the real `jq` holds that case.
    The second line (S064) asks Prometheus, through Grafana's datasource proxy
    as check 5 does, whether the six findings of the pass have arrived: the
    gauge `meridian_sweep_last_pass` for job `claims-sweep`, each of
@@ -822,8 +888,21 @@ node image, Kubernetes components and the platform).
    are tested against stub commands and were not seen on a cluster. What it
    does not prove, and stays by hand (S019): that a pod of another namespace
    cannot reach the database, and that an address outside the machine is
-   unreachable (smoke sends nothing there); and it does not read the
-   policies, which the chart's tests render and compare.
+   unreachable (smoke sends nothing there); and it does not read what the
+   policies say, which the chart's tests render and compare. It does read
+   whether each one is there (S073, K4): the check lists the Meridian
+   Deployments as checks 3, 5 and 7 do and, from one listing of the
+   NetworkPolicies of `meridian`, prints one FAIL line that names each service
+   whose policy of the same name is missing (the chart makes one per
+   Deployment, the rate store's included, and prints no new line when all are
+   there). The probes are as before, from the Claims API's pod and one probe
+   pod: what the policies do is proved for the Claims API's egress and for the
+   database's, the collector's and the rate store's ingress only. When
+   Deployments exist and the Claims API's is not among them, the check fails,
+   because the probes run in its pod. Tested with stand-ins. Seen on kind on
+   2026-10-07 (runs R4, R4c and R4d): the green smoke runs, 45 PASS and then
+   46, with all seven policy objects there. Not seen: the FAIL that names a
+   service whose policy is missing.
 9. **Service identity.** Five lines, run with Python in the Agent Runtime's
    pod against the Model Gateway (the image has no curl; the Claims API's pod
    would be the better caller to refuse, but the policy of line 8 blocks it
@@ -883,7 +962,7 @@ node image, Kubernetes components and the platform).
    the CA and its DNS name; a traceback (a name that does not resolve, a
    certificate that does not verify, a refused connection) is a FAIL, never a
    refusal. Before `make deploy` this check prints SKIP.
-10. **Certificate policy.** Four lines, never SKIP, the first three read-only:
+10. **Certificate policy.** Five lines, never SKIP, the first three read-only:
     the objects exist after `make up`, so a missing one is a FAIL. The three
     `CertificateRequestPolicy` objects are Ready. The Deployment
     `cert-manager-approver-policy` in `cert-manager` has an available replica.
@@ -953,7 +1032,30 @@ node image, Kubernetes components and the platform).
     smoke's label was left in `default`. The three other lines passed too. The
     FAIL forms (a request Approved, a message in neither form, a request left
     undecided, a delete that fails) were tested without a cluster and not seen
-    there.
+    there. The fifth line (S073) is read-only and for kind only: on Azure the
+    database and its certificates are the provider's. CloudNativePG signs the
+    database's server and replication client certificates with an authority of
+    its own (cert-manager does not issue them, and Prometheus holds no series
+    for them), and writes their three expirations into the status of the
+    Cluster `platform-db`, as text in Go's default time format
+    (`2027-01-04 18:05:31 +0000 UTC`, not RFC 3339). The line reads that
+    status once and judges the earliest: it passes, naming the certificate
+    and the days left, while more than 84 hours remain (half of the operator's
+    renewal threshold, `EXPIRING_CHECK_THRESHOLD`, 7 days by default, in whole
+    days, as the pinned operator's documentation says), and fails when less
+    remains, when a certificate has ended, when the status holds no
+    expiration at all, and when a date is not in exactly that form with a
+    `+0000 UTC` zone or has it and is no date, as month 13 ("cannot tell",
+    and the line names which certificate without repeating the text). The
+    lifetime, `CERTIFICATE_DURATION`, is in whole days too (default 90), so
+    the shortest is one day and a renewal cannot be seen inside one cluster
+    run; smoke does not shorten it. Tested
+    with a stand-in and the real jq. Seen on kind on 2026-10-07: a pass on
+    the real Cluster, naming `platform-db-ca` with 89 days left. Not seen: the
+    line failing (no certificate on kind is near its end, and the shortest
+    lifetime is one day), and a renewal by the operator. It tells
+    nothing between two runs of smoke: no alert rule watches these dates (see
+    [the certificate expiry runbook](../../docs/operations/runbooks/certificate-expiry.md)).
 11. **Alert rules and health dashboard.** Four lines, read-only, run last.
     The first three read Prometheus' `/api/v1/rules` through Grafana's
     datasource proxy, for the `PrometheusRule` `meridian` that `make up`
@@ -965,7 +1067,32 @@ node image, Kubernetes components and the platform).
     group and rule names are the file's, in both directions, so a cluster
     that runs an older rule file says which groups and rules differ (the
     file's names are read with `awk` by their indentation, and a test keeps
-    that equal to a YAML parser's reading). And no alert of the Meridian
+    that equal to a YAML parser's reading), and so are each rule's expression
+    and an alert's `for` (S073, K4: the second line again; the FAIL names the
+    rule and which of the two differs, never an expression's text, and says
+    to run `make deploy` or `make up`). Prometheus returns the parsed
+    expression, not the file's text, with the matchers of a selector sorted by
+    name and a duration in its largest units (`[24h]` comes back as `[1d]`:
+    seen on 2026-10-07 with the pinned Prometheus image, the cluster's own,
+    running the file's rules in a container on the development machine, not on
+    the cluster), so both sides go through one
+    `jq` filter that collapses whitespace, writes every duration in
+    milliseconds, removes all whitespace and sorts the matchers between a pair
+    of braces; it is not a PromQL parser. It does not see a change that only
+    moves whitespace (also inside a string literal), a label value or regular
+    expression that holds a comma, a brace or a word like `1h`, an
+    expression written another way that is the same one (a quote that is not
+    a double quote; expected, not tried), the rule's labels and annotations, or
+    a `keep_firing_for`. Tested with stand-ins. Seen on kind on 2026-10-07: the
+    expressions and `for` of the cluster's rules compared with the file's in
+    run R4 for the first time, all equal after the filter, and in every green
+    run after it; in run R4b a rule's `for` changed on the object (2m to 59m)
+    was named, with `make deploy` or `make up` as the remedy, and `make deploy`
+    put it back; and the `PrometheusRule` taken away was named as missing and
+    `make deploy` made it again with its five groups. Not seen: a changed
+    expression (only a `for` was changed on the cluster) and the other
+    differences the filter cannot see.
+    And no alert of the Meridian
     groups is firing: a firing alert is a FAIL that names it, and a pending
     one is not a failure, so the line names it and passes. With no group of
     the Meridian prefix loaded the third line fails: there is nothing to be
@@ -1101,11 +1228,24 @@ In order, `make deploy`:
    `make images` lists them, each marked in use or unused by a workload, and
    prints the commands that would remove the unused ones; it removes nothing.
    "In use" means a pod template names the image now, or a Pod that exists
-   does. The chart sets no `revisionHistoryLimit`, so after a deploy that
-   changed the image the previous tag is what an old ReplicaSet would start
-   again on a rollback, and with `pullPolicy: Never` a removed image cannot be
-   pulled again: an image only an old ReplicaSet names is marked `rollback`
-   (a rollback's target), listed apart, and gets no removal command. In a
+   does. The chart keeps two old ReplicaSets of each Deployment
+   (`revisionHistoryLimit: 2`; a ReplicaSet beyond the limit goes at the next
+   rollout and does not come back), so after a deploy that changed the image
+   the previous tags are what an old ReplicaSet would start again on a
+   rollback, and with `pullPolicy: Never` a removed image cannot be pulled
+   again: an image only an old ReplicaSet names is marked `rollback` (a
+   rollback's target), listed apart, and gets no removal command; what nothing
+   names, not a pod and not a ReplicaSet the limit keeps, is `unused` and gets
+   the command. It reads a reference as `repository:tag`, with or without a
+   registry (a port in its host included) or a digest after the tag; another
+   registry's image of the same name is another image, and an image named by a
+   digest and no tag stops the listing, because it cannot say which tag runs.
+   (The reading of references is tested against stub commands and not seen on
+   a cluster; the limit is tested with the chart rendered, and seen on kind on
+   2026-10-07, run R2: `revisionHistoryLimit: 2` on all seven Deployments and
+   20 ReplicaSets after the deploy, 13 before it. Not seen: the limit removing
+   an old ReplicaSet over three deploys, and `make images` with the new
+   reading.) In a
    checkout with no `infra/kind/kubeconfig` it asks kind for the cluster: when
    none exists every image is unused by definition, and when one does (its
    credentials are in another checkout) it says it cannot tell which images
@@ -1274,9 +1414,19 @@ directive bounds a script that writes without end, which the pod's memory limit
 ends by restarting the store, so every tenant has its windows again. Both
 probes ping as the ACL user `probe` and pass only on `PONG`, so a store frozen
 by a looping script is restarted within about a minute (every window starts
-again); their `redis-cli` runs under `timeout 2`, inside the kubelet's 3
-seconds, so a store frozen below the protocol fails the probe at once and
-leaves no client behind (proved against a paused container). Its
+again); their `redis-cli` runs beside a `sleep 2` that the script waits for
+with `wait -n`, inside the kubelet's 5 seconds, so a store frozen below the
+protocol fails the probe after 2 seconds and leaves no process behind (S073,
+K7: the image's `timeout` left one defunct process per probe, 2,024 of them
+under the Redis server after about two hours on kind on 2026-10-06, then "can't
+fork" in every probe and the gateway's 503 to every call; measured on the
+pinned image with the server stopped by `SIGSTOP`, not `docker pause`, which
+stops `docker exec` too). Seen on kind on 2026-10-07 (run R2): the store's
+new pod held no defunct process at five readings a minute apart and after
+smoke, six minutes in (the old probes had left about 90 by then), Ready with
+no restart. Not seen: the store over the two hours the fault took, a store
+frozen below the protocol on kind, and the probes at `timeoutSeconds: 5`
+(a later change). Its
 NetworkPolicy admits the Model Gateway's pods on 6379 and nobody
 else, and gives it no egress; it is the store's only control before
 authentication, so the chart refuses the store with `networkPolicy.enabled`
@@ -1810,9 +1960,22 @@ hour (seen pending, then firing, on 2026-10-06), because the rule counts every
 certificate under 21 days from its end as a late renewal; any
 `certificate.duration` under 21 days trips it an hour after issuance.
 
-What the watch showed, beyond the marks above: all six services restart in the
-same minute, because one deploy issues their certificates in the same second,
-and with one replica each nothing answered for about a minute; and while the
+What the watch showed, beyond the marks above, before the restarts were spread
+(S073): all six services restarted in the same minute, because one deploy
+issues their certificates in the same second, and with one replica each nothing
+answered for about a minute. The chart now gives each service a share of the
+restart margin, its place in the sorted list of services over their count (the
+first none, the last five sixths) as `MERIDIAN_TLS_RESTART_SHARE`, and the
+service looks at the file that share of a margin earlier than it did: the
+restarts are spread across the margin, 100 seconds apart for one-hour
+certificates and four hours apart for the default of 90 days, and never later
+than before. Two replicas of one service would still restart together, because
+they mount one Secret (not built: each service has one replica on kind). The
+spread is implemented and tested with the chart rendered and the clock
+injected. Seen on kind on 2026-10-07 (run R2): the shares on the six services,
+0, 1/6, 2/6, 3/6, 4/6 and 5/6 in name order, and none on the rate store. Not
+seen: the restarts at a renewal (the watch above, run again, shows them). And
+while the
 short certificates are in place `make smoke` fails on check 11, because a
 Meridian alert is firing (smoke itself was not run then: the failure follows
 from the firing alert and the check's rule). So the last step of the watch is
@@ -2000,10 +2163,13 @@ cluster.
 pass is skipped while another is running. A Job made by hand (below) runs
 beside a scheduled one, which is why the role may hold 4 connections. A pass
 is cut off after 120 seconds and is not retried (`backoffLimit: 0`): the next
-run, five minutes later, is the retry. The CronJob keeps one succeeded and
+run, five minutes later, is the retry. The CronJob keeps three succeeded and
 three failed Jobs, and a by-hand Job counts toward those limits because the
-CronJob owns it. A succeeded Job is removed when the next one finishes, about
-five minutes later. Kubernetes removes any Job a day after it finishes
+CronJob owns it. With one succeeded Job kept, a by-hand success evicted the
+schedule's own (seen on kind on 2026-10-07), so it keeps three: a by-hand run
+or two leave the schedule's last success in the history. The oldest succeeded
+Job is removed when a fourth finishes, about fifteen minutes later.
+Kubernetes removes any Job a day after it finishes
 (`ttlSecondsAfterFinished`), and that day is what keeps a failure to read in
 the morning, and the last success of a suspended CronJob. A pod has no
 service-account token, no extra privilege and a read-only root filesystem,
@@ -2029,9 +2195,20 @@ kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meridian \
   logs job/meridian-sweep-by-hand-1
 ```
 
-The by-hand Job counts as the sweep's last Job for `make smoke`. To stop the
-schedule, patch `suspend` to `true` on the CronJob; `make smoke` then prints
-SKIP for the sweep until it is `false` again.
+`make smoke` does not take the by-hand Job for the schedule's: it carries the
+annotation `cronjob.kubernetes.io/instantiate: manual`, so the seventh line
+leaves it out of its verdict and says, when it is the newest Job of all, that
+it was made by hand. Seen on kind on 2026-10-07: with one success kept, a
+by-hand success evicted the schedule's, and the line failed a healthy schedule
+for one period; the history limit of three and the verdict's third case (a
+SKIP that says the schedule's newest run is not in the history, a FAIL when
+the schedule's last time is older than the bound) are the fix, tested with
+stand-ins; what run R4c saw of it on 2026-10-07 (the by-hand Job not evicting
+the schedule's success, the line passing with its note) is under check 7
+above, and the case of the history that lacks the schedule's newest run was not
+seen. To
+stop the schedule, patch `suspend` to `true` on the CronJob; `make smoke` then
+prints SKIP for the sweep until it is `false` again.
 
 ## The cost dashboard
 
@@ -2081,7 +2258,10 @@ counted, more than 5 percent and at least 5, or more than half and at least 2,
 were refused because the store gave no answer, for 2 minutes: one refused call
 no longer fires it, and calls refused before the store is asked do not dilute
 it; loaded and healthy on kind on 2026-10-06 in this form, after `make up`,
-since `make deploy` does not apply the rules; never seen firing), and, from
+before S073 only `make up` applied the rules and `make deploy` did not; now
+`make deploy` applies the alert rules too, seen on kind on 2026-10-07: its log
+line in run R3, and in run R4b a `for` put back and the rule object made again;
+never seen firing), and, from
 S064, four on missing telemetry
 (loaded and healthy on kind on 2026-10-06, in the third run, and none seen
 firing; tested without a cluster, not seen firing on one): the Model Gateway's,
@@ -2113,7 +2293,9 @@ cost dashboard's reason (above); a unit test holds the case those would
 lose.
 
 `make up` applies both: the rules with `kubectl apply`, the dashboard as a
-ConfigMap that Grafana's sidecar provisions. `make smoke` reads them back
+ConfigMap that Grafana's sidecar provisions. `make deploy` applies the rules
+again (the same function, S073), so a rule changed in the tree needs no `make
+up`; the dashboard is `make up`'s alone. `make smoke` reads them back
 (check 11, passed on the cluster on 2026-10-06 with four groups and, in the
 third of S064's runs, with five groups and all 19 rules, and in the third of
 S066's runs the same day with all 20, `MeridianRateStoreRefusing` among them):
@@ -2134,9 +2316,11 @@ One plan step uses the cluster at a time (the plan's Part A). Since S075 the
 rule leaves a record that the commands read. Status: **implemented**, tested
 against stub commands, and seen on kind once (the record written
 through a deploy, a deploy refused while another ran, and `make down`
-refused with the record at `ok`). Not seen on a cluster: `TAKE_CLUSTER=1`, a
-record left `changing` by a run that failed, and `make up` on an existing
-cluster; the stub tests hold each.
+refused with the record at `ok`). Seen on kind on 2026-10-07 (run R2):
+`TAKE_CLUSTER=1 CLUSTER_HOLDER=S073 make deploy` took the record from another
+holder, S075, and left it at S073, `ok`. Not seen on a cluster: a record left
+`changing` by a run that failed, and `make up` on an existing cluster; the
+stub tests hold each.
 
 The record is the ConfigMap `meridian-cluster-holder` in `kube-system`, with
 four values and nothing else (no path, no user or host name, no address of a
@@ -2162,6 +2346,7 @@ Which commands read it and which do not:
 |---|---|---|
 | `make up` | Once the cluster exists, before it changes anything; on a machine with no cluster it creates one and reads nothing | `changing` right after the check passes (on a new cluster, as soon as it answers), `ok` at the end, when it ended well |
 | `make deploy` | Before it builds or runs anything | `changing` right after the check passes, `ok` at the end, when it ended well |
+| `make cert-renew` | After it checked `CERT` and found the cluster, before it reads the Certificates; a refusal after that (not a Certificate, none in the namespace) leaves the record as it was | `ok` right after the write succeeded; nothing when it only refused, found the Certificate already being issued, or the write was refused (the record is then as it was) |
 | `make demo` | Only through `make deploy`, which it runs first; then it posts a claim without asking | Through `make deploy` |
 | `make down` | Before it deletes the cluster; a cluster that does not answer stops it (`TAKE_CLUSTER=1` deletes it all the same) | No: the record goes with the cluster |
 | `make cluster-holder` | Yes, and prints it | No |
@@ -2272,6 +2457,63 @@ never run `helm repo add`. To work by hand:
 export KUBECONFIG=$PWD/infra/kind/kubeconfig
 kubectl get pods -A
 ```
+
+### How long the scripts wait for the API server (S073)
+
+Every `kubectl` call of the scripts goes through `kctl` (`common.sh`), which
+bounds it by what the call is. A frozen node used to hang `make smoke` or `make
+deploy` with no word; now a call ends with kubectl's own error, or with a line
+that names the bound.
+
+| Call | Bound | Set by |
+|---|---|---|
+| An ordinary call (`get`, `apply`, `create`, `patch`, `label`, `logs`, a `delete` with no `--wait`) | `--request-timeout=15s`, a request | `KCTL_REQUEST_TIMEOUT`, for instance `20s` |
+| `exec`, and a `delete` with `--wait` (also `--timeout=60s`) | the system's `timeout`, 90 s, which then prints the line `kctl: kubectl exec ended with status 124 ...` | `KCTL_OUTER_TIMEOUT`, in seconds |
+| `wait` and `rollout status` | their own `--timeout` at every call site, and the system's `timeout` for that value plus 30 s, which then stops the script with a line that says the API server did not answer; a call with no `--timeout` is refused; no request flag, which may end the watch early | the call site; `KCTL_WAIT_MARGIN`, in seconds |
+| `port-forward`, `attach`, `logs -f`, `get -w` | none, they are streams; `port-forward` is started raw (`kubectl ... &`) by `smoke.sh` and `demo.sh`, which kill it and look for its port with a counted loop, and by `grafana.sh` in the foreground, which ends with ^C; no script uses the other three | |
+| `helm get` (`upkeep.sh`), which has no timeout flag | the system's `timeout`, 30 s | `HELM_READ_TIMEOUT`, in seconds |
+| `helm upgrade --install` | `--wait --timeout 10m` for each of `make up`'s ten releases; `--timeout 300s` for the chart in `make deploy`; and the system's `timeout`: for `make up`'s releases (their charts are taken to carry hooks; not rendered to check) three times that value plus 60 s, for the chart in `make deploy` (no hook, no `--wait`) that value plus 60 s; it stops the script with a line that names `helm status` and `helm history`; a call with no `--timeout` is refused | `up.sh`, `deploy.sh`; `HELM_UPGRADE_MARGIN`, in seconds |
+
+A call that passes its own `--request-timeout` (the reads of the API server's
+address and of the holder's record) keeps it. `kctl` reads the words of the
+call up to `--`, so the command an `exec` runs decides nothing, and a namespace
+called `wait` is a namespace. The scripts need `timeout` (coreutils: GNU's, or
+uutils 0.10.0, which run R4e used and whose statuses 124 and 137 behaved the
+same in the re-read's runs; on macOS, `brew install coreutils` puts GNU's on the
+PATH as `gtimeout`, so add a `timeout` link) and `up.sh`, `smoke.sh`,
+`deploy.sh` and `upkeep.sh` say so at their start. Why the flag is not on every
+call: kubectl's help says the flag bounds "a single server request", and says
+nothing of what it does to a watch, a log stream or an exec session, so those
+calls get the bound that is written for them.
+
+Two things the bounds do not mean. The request flag is per request and not per
+call: against a listener that accepts a connection and never answers, `kubectl
+get --request-timeout=4s` took 20 s, because the client tries discovery five
+times (measured by the review of S073, 2026-10-07, at 4 s; 15 s was not
+measured and gives about 75 s). And a `--timeout` of `wait`, `rollout status`
+or `helm upgrade` bounds the waiting loop and not the first request: against
+the same listener all three were still running after 25 s with a `--timeout`
+of 3 s, which is why each now has the outer bound. The Helm margin is the
+wider one because a Helm ended in the middle of an install or an upgrade can
+leave the release `pending-install` or `pending-upgrade`, and Helm's
+`--timeout` is per operation ("time to wait for any individual Kubernetes
+operation (like Jobs for hooks)", Helm v4.3.0's help), so a chart with hooks
+may lawfully take a pre-hook, the wait and a post-hook: for `make up`'s
+releases the bound is three timeouts plus the margin, a ceiling and not a
+measurement (nobody measured the hooks' time). When the line says it ended
+one, read `helm status` and `helm history` of the release before anything
+else, and change nothing until they say what state it is in; the way out
+(`helm rollback` or an uninstall) is the owner's, on the list of things a
+session asks before. Each margin is digits only, at most six, or empty for the
+default; anything else stops the script at its start.
+
+What was seen on kind: `make deploy` and `make smoke` with the request flag
+and the `exec` bound on their calls (run R2, 2026-10-07, and the runs after
+it), which passed. `make deploy` and `make smoke` also ran under the outer
+bound on `wait`, `rollout status` and Helm on the path where nothing goes wrong
+(run R4e); no bound has fired on kind. A frozen API server (the node paused
+with `docker pause`) was not seen with any of these bounds: only the tests'
+stand-ins and the review's silent listener have met one.
 
 ## Memory
 

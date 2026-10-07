@@ -1,6 +1,8 @@
 // The Google Cloud deployment environment: a mapping of the Azure design
-// (S077), designed and nothing else. Nothing here is built, applied or priced;
-// no Google Cloud project exists and no billing account was opened (C-05).
+// (S077), designed and nothing else. Terraform code for it exists, validated
+// and scanned offline and never planned (S078); nothing here is applied or
+// priced, no Google Cloud project exists and no billing account was opened
+// (C-05).
 // Every node and instance carries the tag "Designed", always last, so that it
 // renders dotted and faded (constraint C-07). The environment's name is one
 // token: the view register check reads the deployment view's definition with a
@@ -37,7 +39,7 @@ gcp = deploymentEnvironment "GcpDesigned" {
             ingressInstance = containerInstance meridian.ingress "" "Designed"
         }
 
-        database = deploymentNode "Managed PostgreSQL" "Would hold the Platform Database with the vector extension, reached inside the network by private services access. Cloud SQL for PostgreSQL 16 or later defaults to the Enterprise Plus edition, so the cheaper edition would be named. Designed." "Cloud SQL for PostgreSQL with the vector extension" "Designed" {
+        database = deploymentNode "Managed PostgreSQL" "Would hold the Platform Database with the vector extension, reached inside the network by Private Service Connect. Cloud SQL for PostgreSQL 16 or later defaults to the Enterprise Plus edition, so the cheaper edition would be named. Designed." "Cloud SQL for PostgreSQL with the vector extension" "Designed" {
             platformDbInstance = containerInstance meridian.platformDb "" "Designed"
         }
 

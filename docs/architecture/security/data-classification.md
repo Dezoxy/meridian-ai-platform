@@ -60,11 +60,11 @@ which for this project is always in the EU.
 | Prompts and completions | Class of the request | Not stored on their own; inside checkpoints | Redacted before leaving the gateway |
 | Graph checkpoints | `personal` | Platform Database, runtime schema (S015) | Hold a run's state while it runs or waits for an adjuster: the claim's facts without the claimant's name and email, one boolean for the screen of the description as it was posted (S067), the tool results and the model's answer. Only the runtime's role may read or write them (T-63); they are deleted when the run ends, and a scheduled sweep, whose role may delete them and read none of them, removes those of a run nobody will resume and what a failed delete left (S052, T-77); they are keyed by a thread ID that no caller sees, and a resume must name the run's tenant and claim (T-10) |
 | Workflow checkpoints (the second agent framework's) | `personal` | Platform Database, runtime schema (`runtime.workflow_checkpoints`, S037, ADR 9) | The same class of data as the graph checkpoints, for the claim brief: six scalars of the claim (ID, policy number, two dates, peril, amount) and a count of documents, the facts the model is sent, and the brief's own text, unredacted, while the run lives. JSON only; the runtime's role writes them, the schema's owner and the sweep's role (which reads the thread column only and may delete) are the other holders; the host deletes them when the run ends, and the sweep removes what a failed delete left. A brief that nobody decides keeps its rows with no age bound (T-63, T-77) |
-| Claim briefs | `personal` | Platform Database, claims schema (`claims.briefs`, S037) | One row per brief of a claim: the run, a state and the model's plain text, redacted for e-mail addresses, IBANs, card and phone numbers before it is stored (names and addresses are not masked, T-73), at most 4,000 characters; only the Claims API's role reads the text, and the sweep's role cannot. No retention rule (S068) |
+| Claim briefs | `personal` | Platform Database, claims schema (`claims.briefs`, S037) | One row per brief of a claim: the run, a state and the model's plain text, redacted for e-mail addresses, IBANs, card and phone numbers before it is stored (names and addresses are not masked, T-73), at most 4,000 characters; only the Claims API's role reads the text, and the sweep's role cannot. No retention rule: S068 built the mechanism for the audit table and the ledger only, and a rule for briefs waits for the owner's answer on an undecided one (S070) |
 | Triage proposals, fraud indicators, claim notes, approval requests | `personal` | Platform Database, claims schema | Fraud indicators are shown to adjusters only; of a proposal the claimant's status page reads the missing documents and nothing else (S049, T-65); the adjuster's pages derive from its stored `recommendation` and `assessment` a sentence and a queue marker on what the recommendation rests on, in fixed words, with no new stored field and nothing new sent to a model (S070, T-26); whether they count as offence data under Art. 10 is a legal question outside this project |
 | Approval decisions | `personal` | Platform Database, claims schema, written by the Claims Triage App (S015) | The decision word, its time and the paused run whose proposal it answers, or no run for a claim referred without one; from S048 also the words that end a paused run, `send_back` and `withdrawn`; no free text. The adjuster's identity is designed (T-32, S021) |
-| Audit records | `personal` (pseudonymous) | Platform Database, audit schema, insert-only | Identifiers and routing facts, no prompt text; a claim ID still points at a person |
-| Usage and cost records | `personal` (pseudonymous) | Platform Database | Per tenant, agent, model and claim ID |
+| Audit records | `personal` (pseudonymous) | Platform Database, audit schema, insert-only except through one expiry function (S068; no period is set and nothing is scheduled) | Identifiers and routing facts, no prompt text; a claim ID still points at a person. The `reason` column holds the reason a call was refused and, for `meridian knowledge verify`, the counts it made (S067) |
+| Usage and cost records | `personal` (pseudonymous) | Platform Database | Per tenant, agent, model and claim ID; removed in batches by a command an operator runs (S068; no period is set and nothing is scheduled) |
 | Traces, metrics and logs | `personal` (pseudonymous) | Observability Stack | Claim IDs allowed, content not (T-03) |
 | Policy wordings and their chunks | `internal` | Git as generator output; pgvector | Product documents, not about a person |
 | Embedding vectors | The class of their text | Wording vectors in pgvector (S012); a query's vector is not stored | A vector can be turned back into an approximation of its text, so it is never in a span, a metric, a log or an audit row (T-56) |
@@ -88,3 +88,14 @@ An insert-only audit table and the right to erasure (GDPR Art. 17) pull in
 opposite directions. With synthetic data nothing has to be erased; a
 production deployment would keep personal fields out of the audit records,
 or encrypt them per data subject and delete the key.
+
+Since S068 the mechanism for an expiry exists and no period does. Audit rows
+older than a cutoff an operator types can be removed through one function that
+only a session logged in as the upkeep role reaches, and the ledger's rows in
+batches through another; the periods are the owner's and are not set, nothing
+is scheduled, and a removal reads a row's age only, not whether its claim
+still exists (the threat model, T-25 and T-49; the budget runbook). Rows the
+upkeep role wrote itself are not removed by that function, so every removal
+leaves a permanent row. Expired rows stay in a backup until it rolls off, so
+a production period is stated beside the backup's retention. Implemented and
+tested against PostgreSQL, not run on a cluster.

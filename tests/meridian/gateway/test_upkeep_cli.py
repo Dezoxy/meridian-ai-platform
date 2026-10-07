@@ -429,6 +429,8 @@ def test_expire_without_confirm_says_what_it_would_remove_and_removes_nothing(
     assert result.stdout.splitlines() == [
         f"would remove before {month_text(current)}: usage rows 2, "
         "counter rows 3, credits 2",
+        "in 1 batch(es) of at most 1000 usage rows, "
+        "then the counters and credits of those months",
         "still reserved in those months: 0",
         "nothing removed: add --confirm to remove them",
         "this is a count at this moment: rows that arrive before --confirm are "
@@ -474,21 +476,27 @@ def test_expire_with_confirm_removes_the_old_months_and_audits_it_under_the_role
 
     assert result.exit_code == 0, result.output
     assert result.stdout.splitlines() == [
-        f"removed before {month_text(current)}: usage rows 2, counter rows 3, credits 2"
+        f"removed before {month_text(current)}: usage rows 2, "
+        "counter rows 3, credits 2",
+        "in 1 batch(es) of at most 1000 usage rows, "
+        "then the counters and credits of those months",
     ]
     assert run(db, OWNER, "SELECT count(*) FROM gateway.usage") == [(1,)]
     assert run(db, OWNER, "SELECT count(*) FROM gateway.credits") == [(0,)]
     assert {period for (_, _, period) in counters(db)} == {utc_day(db), current}
-    (row,) = audit_rows(db)
-    assert (row["event"], row["outcome"], row["tenant"]) == (
-        "ledger.expired",
-        "completed",
-        None,
+    # One batch for the two usage rows, then the call that closes the periods.
+    batch_row, closing_row = audit_rows(db)
+    for row in (batch_row, closing_row):
+        assert (row["event"], row["outcome"], row["tenant"]) == (
+            "ledger.expired",
+            "completed",
+            None,
+        )
+        assert (row["reason"], row["db_role"]) == ("retention-test", UPKEEP_ROLE)
+    assert batch_row["reference"] == f"before={month_text(current)} batch usage=2"
+    assert closing_row["reference"] == (
+        f"before={month_text(current)} closed counters=3 credits=2"
     )
-    assert row["reference"] == (
-        f"before={month_text(current)} usage=2 counters=3 credits=2"
-    )
-    assert (row["reason"], row["db_role"]) == ("retention-test", UPKEEP_ROLE)
     assert_counters_reconcile(db)
     assert db.passwords[UPKEEP_ROLE] not in result.output
 
@@ -520,7 +528,7 @@ def test_expire_dry_run_warns_and_confirm_refuses_while_a_reservation_is_open(
     confirmed = runner.invoke(app, [*argv, "--confirm"])
 
     assert dry.exit_code == 0, dry.output
-    assert dry.stdout.splitlines()[1:3] == [
+    assert dry.stdout.splitlines()[2:4] == [
         "still reserved in those months: 1",
         "--confirm is refused until each is closed (see: close)",
     ]
@@ -559,6 +567,7 @@ def test_expire_succeeds_once_the_open_reservation_is_closed_by_the_command(
     assert usage_row(db, open_attempt) is None
     assert [row["event"] for row in audit_rows(db)] == [
         "ledger.reservation-closed",
+        "ledger.expired",
         "ledger.expired",
     ]
     assert_counters_reconcile(db)

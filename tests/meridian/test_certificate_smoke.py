@@ -576,8 +576,9 @@ def test_the_policy_check_is_the_tenth_and_is_documented() -> None:
     assert calls[10] == "check_alert_rules"
     assert calls[11].startswith("if ((failures")
     # Four lines since S062: the three above and the request that must be
-    # refused (test_certificate_refused_request.py).
-    assert "10. certificate policy: four lines" in SMOKE_SH
+    # refused (test_certificate_refused_request.py); five since S073, K5: the
+    # database's own certificates (test_smoke_database_certificates.py).
+    assert "10. certificate policy: five lines" in SMOKE_SH
 
 
 def test_the_policies_smoke_reads_are_the_ones_deploy_reads() -> None:

@@ -292,8 +292,11 @@ def test_the_stamp_function_is_the_owners_with_a_fixed_search_path(
     )
 
     # SECURITY DEFINER so that the owner, not the writer, takes the nextval;
-    # the grant list is the owner's alone, as 0001 left it.
-    assert rows == [(True, OWNER, ["search_path=pg_catalog"], [f"{OWNER}=X/{OWNER}"])]
+    # the grant list is the owner's alone, as 0001 left it. The path names
+    # pg_temp last since 0031 (S068).
+    assert rows == [
+        (True, OWNER, ["search_path=pg_catalog, pg_temp"], [f"{OWNER}=X/{OWNER}"])
+    ]
 
 
 @pytest.mark.parametrize("role", SERVICE_ROLES)

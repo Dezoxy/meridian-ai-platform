@@ -72,8 +72,17 @@ def _gateway_answer(error: EmbeddingCallError, call: ToolCall) -> Refused:
     has passed (the wait was cut by the time the call had left, not by a gateway
     that is down). No retry: a busy gateway is the caller's to wait for, and the
     runtime's time for the call is short. The status is logged (0 is no usable
-    answer), never the body or the query."""
-    logger.warning("embedding call failed: status %d", error.status_code)
+    answer), and for a 503 the fixed word of which refusal of the gateway's it
+    was (S073); never the body or the query. The answer to an agent has no word:
+    an agent is not told which part of the platform is away."""
+    if error.gateway_word is None:
+        logger.warning("embedding call failed: status %d", error.status_code)
+    else:
+        logger.warning(
+            "embedding call failed: status %d, kind %s",
+            error.status_code,
+            error.gateway_word,
+        )
     if error.status_code == HTTP_TOO_MANY_REQUESTS:
         return Refused("gateway-busy")
     if error.status_code == HTTP_FORBIDDEN:

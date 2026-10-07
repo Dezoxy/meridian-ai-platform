@@ -113,8 +113,12 @@ cluster:
         name: claims-sweep-db
     # The gateway's ledger upkeep (S066, migration 0020): an operator runs
     # `meridian gateway ...` with this role, and no workload holds its Secret.
-    # The command opens one connection for milliseconds, so 2 is one in use and
-    # one spare. The limit bounds how many sessions a holder of the credential
+    # The role executes five functions and writes no table: close_reservation,
+    # credit_tenant, expire_ledger_batch, expire_audit_events and
+    # count_audit_events_before. The command holds one connection for a run (an
+    # expiry in batches is one run on one connection, to the Job's deadline at
+    # most), so 2 is one in use and one spare. The limit bounds how many
+    # sessions a holder of the credential
     # can hold open; it does not stop one session from sitting in an open
     # transaction, so it is a bound and not a defence. The role is a plain
     # login role, a member of no role: the migration refuses it otherwise, so

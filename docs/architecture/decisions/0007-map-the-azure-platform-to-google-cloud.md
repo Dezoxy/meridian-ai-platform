@@ -590,6 +590,72 @@ the test would cost stands as a sketch of a test that is not planned. A
 cluster whose control plane is not managed is S079's, on Google Cloud a
 scaffold too. The text above stands as it was decided.
 
+Amended on 2026-10-07 (S078): the module exists, in `infra/terraform/gcp/`, as
+code that `terraform validate` accepts and an offline scan has read. It was
+never planned and never applied: no project exists and nothing ran in Google
+Cloud. So no row of this record was falsified by an apply, because none
+happened, and every row stays a reading of the vendor's pages. Where the module
+departs from a row, or settles on paper what a row left open, it is here:
+
+- **Row 22 and item 6 of "What a Terraform module needs".** The module reaches
+  Cloud SQL by Private Service Connect, not by private services access. The
+  fragile-points list above says the peering can block a network's removal for
+  up to four days after an instance is gone; Private Service Connect has none,
+  and costs the same two resources (an internal address and a forwarding rule
+  to the instance's service attachment). The provider's general text says an
+  instance needs `ipv4_enabled` or a `private_network`, and its own example for
+  Private Service Connect uses neither, which is what the module follows; only
+  an apply settles it. The deployment view's line for the database says
+  Private Service Connect now, and the view exists (the "Related" list below
+  still says none yet).
+- **Row 13.** The module enables eight APIs, not the list above: it adds Cloud
+  Resource Manager (the project's IAM policy and the project data source; this
+  one has to be on already, because the data source is read before the module
+  can enable anything) and Cloud Billing Budget, and leaves out Service
+  Networking (Private Service Connect needs no peering) and Agent Platform (a
+  model is not a resource, item 10). Each has `disable_on_destroy = false`. The
+  list was "to be confirmed by a plan" and has not been.
+- **Rows 3 and 4.** The budget has an amount and no currency code. The
+  provider's page says `currency_code` is optional and, if given, must match
+  the billing account's currency; this record settles no currency, so the amount
+  (whole units, at most 500) is in the account's own. Alerts are at 50, 80 and
+  100 percent of actual spend with credits excluded, to row 4's default
+  recipients. The step's first contract built it past an instruction to stop
+  there, and the plan records that as a slip the session accepted.
+- **Row 1.** The Google provider has no list of allowed projects, as AWS's has
+  of accounts, so the module checks itself: a sensitive variable for the
+  project's number, a data source and a precondition that every resource waits
+  for. `terraform validate` does not evaluate a precondition and nothing was
+  planned, so the pin is written and held by tests on the text, and has never
+  been seen to refuse.
+- **Regions.** This record had no list of Google's regions in EU member states.
+  The module's `region` variable accepts eleven, read from Google's page
+  "Regions and zones" (<https://docs.cloud.google.com/compute/docs/regions-zones>)
+  on 2026-10-07: `europe-central2`, `europe-north1`, `europe-north2`,
+  `europe-southwest1`, `europe-west1`, `europe-west3`, `europe-west4`,
+  `europe-west8`, `europe-west9`, `europe-west10` and `europe-west12`, with
+  `europe-west3` the default as chosen above. London and Zurich are left out, as
+  finding 6 says they must be, and a test holds both out by name. The cluster
+  is zonal, so the module also holds a zone for each of the eleven, read from
+  the same page on 2026-10-07: the first zone it lists, which is `-a` for ten of
+  them and `europe-west1-b` for `europe-west1`, because that Region has no zone
+  a (the page lists b, c and d).
+- **Row 23.** The cluster ships system-component logs only, and they still
+  land in the project's `_Default` bucket, which Google's page "Regionalize your
+  logs" (read on 2026-10-07) puts in the `global` location, promises no EU
+  location for and cannot be moved once it exists. Choosing a Region for the
+  cluster, the database and the secret does not choose one for the default log
+  bucket. This is a residency gap of the module, not solved by it: a bucket and
+  a sink, or the organization's default log location, outside the module, would
+  close it. The module also grants the nodes `roles/artifactregistry.reader` on
+  its one repository, which row 19's question about the pull role pointed at.
+
+Questions 13, 14 and 16 and the others in the table below are not answered: no
+apply happened, so the node role's name and its reach into Artifact Registry,
+the instance name's reuse and an API's delay are as open as they were. The cost
+sketch stands as a sketch of a test that is not planned, and the module makes no
+load balancer. The text above stands as it was decided.
+
 ## Consequences
 
 Positive:

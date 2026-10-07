@@ -2,6 +2,10 @@
 
 A schema or a temporary table the caller controls must not change what the two
 functions call. The constants and helpers are in ``upkeepsupport``.
+
+Since 0030 the upkeep role calls the expiry in batches
+(``test_ledger_expiry_batches.py``) and no longer ``expire_ledger``: the tests of
+this one call it as the owner, who still may.
 """
 
 from dbsupport import OWNER, DatabaseHandle
@@ -70,7 +74,7 @@ def test_temporary_tables_named_like_types_do_not_change_an_expiry(
     plant_ledger_of_a_month(fresh_database, previous_month(current))
 
     rows = call_after_temp_tables_named_like_types(
-        fresh_database, EXPIRE, (current, REASON)
+        fresh_database, EXPIRE, (current, REASON), role=OWNER
     )
 
     assert rows == [(2, 3, 2)]
@@ -84,6 +88,8 @@ def test_a_clock_planted_in_a_schema_the_caller_controls_is_not_called_by_an_exp
 
     # With the planted now() the current month would be January 2000 and the
     # expiry would be refused as one that removes it.
-    rows = call_with_a_planted_clock(fresh_database, EXPIRE, (current, REASON))
+    rows = call_with_a_planted_clock(
+        fresh_database, EXPIRE, (current, REASON), role=OWNER
+    )
 
     assert rows == [(2, 3, 2)]
