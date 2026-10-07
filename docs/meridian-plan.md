@@ -13250,6 +13250,12 @@ the design was written before the first contract and is in the handoff files):
   G4 changed and the sentences the review's lows asked for, ADR 7's note gains
   the zone of each Region and the logs' gap, and one backlog row is added. It
   changed no `.tf` file and no test.
+- **G6, the re-read's fixes:** the module's test file (a count of the lines that
+  start a resource and a data source, both `location` lines held as
+  `local.zone`, the zone scan over the module's text, no `project` on the
+  reader grant, the storage ceiling held at exactly 20), one comment in
+  `database.tf` (on the provider's page for `disk_size`) and the README's
+  sentences. No declaration of any `.tf` file changed.
 
 **Reviews:**
 
@@ -13314,8 +13320,12 @@ each before a fix.
   matched against a literal list, plan, apply and the removal refuse any word,
   and nothing reaches the module directory but `validate`. The scan stayed clean
   at HIGH and CRITICAL after the fixes, by the fix contract's own run.
-- **Nobody reviewed the fix contract (G4) itself.** Its proof is the Google and
-  provider pages it names and read on 2026-10-07, and the mutations above.
+- **An infrastructure re-read of the fix contract (G4)** found nothing above
+  medium, two medium and nine low. Both medium findings were tests that could
+  not fail: a resource written on one line, which the list of 18 addresses could
+  not see, and the node pool's zone, which no test held, so the first review's
+  HIGH could have come back unseen. G6 closed the two tests and carried the
+  rest as sentences in the README. **Nobody reviewed G6.**
 
 **Result / verification:**
 

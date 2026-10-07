@@ -38,10 +38,14 @@ resource "google_sql_database_instance" "main" {
     # to 3054 GB and bill for it. A ceiling of 20 GB, closed and small, is
     # enough for a test that lives an hour; an instance that reaches it stops
     # growing, and one that runs out of space goes offline (the same page).
-    # disk_size is left unset: the provider's page says a disk_size beside
-    # autoresize makes a later apply try to delete the instance to resize it
-    # back. The instance's first size is Cloud SQL's own, which no page read
-    # here states: an apply shows it, and it has to be below the ceiling.
+    # disk_size is left unset. The provider's page for this resource (the
+    # repository's docs file on its main branch, read 2026-10-07, which may be
+    # newer than the locked 8.6.0) says that when disk_size is set, later
+    # applies attempt to delete the instance to resize the disk to that value if
+    # autoresize has resized it, and advises lifecycle.ignore_changes on
+    # disk_size. With no disk_size there is nothing to ignore. The instance's
+    # first size is Cloud SQL's own, which no page read here states: an apply
+    # shows it, and it has to be below the ceiling.
     disk_autoresize       = true
     disk_autoresize_limit = 20
 

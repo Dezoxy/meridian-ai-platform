@@ -176,6 +176,13 @@ def squeezed(text: str) -> str:
     return " ".join(re.sub(r"^\s*#", "", text, flags=re.MULTILINE).split())
 
 
+def comment_lines_of(name: str) -> str:
+    """The lines of a file that are a comment and nothing else, squeezed: what a
+    comment must say, with no code line to satisfy a word the code also holds."""
+    lines = raw_text(name).splitlines()
+    return squeezed("\n".join(line for line in lines if line.lstrip().startswith("#")))
+
+
 def top_level_blocks(text: str, kind: str) -> dict[str, str]:
     """The bodies of the top-level blocks of one kind (``resource``, ``data``,
     ``output``...), keyed by their labels joined with a dot. ``terraform fmt``
@@ -289,6 +296,28 @@ def test_the_pins_message_names_neither_the_project_nor_the_number_it_expected()
 
 def test_the_module_declares_exactly_these_resources() -> None:
     assert sorted(resources()) == RESOURCE_ADDRESSES
+
+
+def test_no_resource_is_written_where_the_block_reader_cannot_see_it() -> None:
+    # The reader needs "{", a newline and a closing brace at the start of a line.
+    # `resource "terraform_data" "sneak" { input = "x" }` on one line matches none
+    # of that, and `terraform fmt` leaves it alone: only a count of the lines that
+    # START a resource sees it, and the reader's own count must equal it.
+    started = re.findall(r'^resource "', module_text(), flags=re.MULTILINE)
+
+    assert len(started) == len(RESOURCE_ADDRESSES)
+    assert len(started) == len(resources())
+
+
+def test_the_one_data_source_is_the_projects_and_no_other_is_read() -> None:
+    # `data "google_project" "current" {}` is itself written on one line, so the
+    # block reader cannot list it; the labels of the lines that start a data
+    # source are what is counted.
+    started = re.findall(
+        r'^data ("[^"]+"\s+"[^"]+")', module_text(), flags=re.MULTILINE
+    )
+
+    assert started == ['"google_project" "current"']
 
 
 def test_every_resource_but_the_pin_names_the_pin_in_its_depends_on() -> None:
@@ -540,6 +569,12 @@ def test_the_lock_file_holds_the_two_platform_hashes_the_aws_lock_has() -> None:
     # `terraform providers lock -platform=linux_amd64 -platform=darwin_arm64`
     # writes one h1: hash for each platform and the zh: hashes of the archives;
     # the platform is not in the hash, so the count is what can be held.
+    #
+    # What this test can tell: the lock holds two h1: hashes and they are not the
+    # same string. What it cannot tell: which platform each is for, or that a
+    # hash is the provider's (a made-up h1: string passes, which was tried). A
+    # hash is not pinned here on purpose: Renovate rewrites the lock, and a test
+    # that held a value would fail on its first pull request.
     lock = (MODULE_DIR / ".terraform.lock.hcl").read_text(encoding="utf-8")
     aws_lock = (MODULE_DIR.parent / "aws" / ".terraform.lock.hcl").read_text(
         encoding="utf-8"
@@ -727,18 +762,54 @@ def test_st_ghislain_is_not_given_a_zone_it_does_not_have() -> None:
     zones = module_zones()
 
     assert zones["europe-west1"] == "europe-west1-b"
-    assert "a" not in PAGE_ZONES["europe-west1"]
+    assert zones["europe-west1"] != "europe-west1-a"
+
+
+def test_the_node_pool_and_the_cluster_are_both_in_the_one_zone_the_map_gives() -> None:
+    # The first review's HIGH was a zone built as "<region>-a": the cluster's
+    # location was fixed and the node pool's could have gone back unseen. Each of
+    # the two `location` lines is held on its own, as the one plain local.zone.
+    for resource_type in ("google_container_cluster", "google_container_node_pool"):
+        body = one_resource(resource_type)
+
+        locations = re.findall(r"^\s*location\s*=\s*(.+)$", body, flags=re.MULTILINE)
+
+        assert [value.strip() for value in locations] == ["local.zone"], resource_type
+    assert len(re.findall(r"\blocal\.zone\b", module_text())) == 2
 
 
 def test_the_zone_is_looked_up_with_no_fallback_for_a_region_without_an_entry() -> None:
-    main = file_text("main.tf")
+    # The positive claim is the one that holds: `local.zone` is the one plain
+    # index into the map, and the two `location` lines above are `local.zone`.
+    text = module_text()
+    assert re.findall(r"^\s*zone\s*=\s*(.+)$", text, flags=re.MULTILINE) == [
+        "local.zones[var.region]"
+    ]
+    assert len(re.findall(r"\blocal\.zones\b", text)) == 1  # the index, nowhere else
 
-    # An index, not lookup(): a Region added to the list without a zone is an
-    # error of the plan, not a zone built from a guess. try() and coalesce() are
-    # the other two ways to write a fallback.
-    assert "local.zones[var.region]" in main
-    for fallback in ("lookup(", "try(", "coalesce(", '"${var.region}-'):
-        assert fallback not in main, fallback
+    # What follows is a denylist of the ways a zone has been, or could be, built
+    # from the Region's name instead. It is a LIST and cannot be complete: HCL has
+    # more string functions than are named here (`regex(`, `trimprefix(`,
+    # `cidrsubnet(`...), and a zone could pass through a local or a variable. A
+    # name that is not here is not therefore safe; the assertions above are.
+    # Every file but variables.tf is read: that file's validations use `try(` and
+    # `regex(` on other variables, and nothing there makes a zone.
+    code = "\n".join(
+        file_text(path.name) for path in tf_files() if path.name != "variables.tf"
+    )
+    fallbacks = (
+        "lookup(",  # a map lookup with a default
+        "try(",  # the other two ways to write a fallback
+        "coalesce(",
+        "${var.region",  # interpolation, "${var.region}-a"
+        "format(",  # format("%s-a", var.region)
+        "join(",  # join("-", [var.region, "a"])
+        "replace(",
+        "substr(",
+        "concat(",
+    )
+    for fallback in fallbacks:
+        assert fallback not in code, fallback
 
 
 def test_the_zone_comment_says_what_was_read_and_when() -> None:
@@ -822,7 +893,9 @@ def test_the_cluster_ships_system_components_logs_only_and_says_why() -> None:
     assert "WORKLOADS" not in cluster
     # What the pages said: the _Default bucket is in the global location and
     # cannot be moved, and the platform's chart ships workload logs itself.
-    comment = squeezed(raw_text("cluster.tf"))
+    # The comment lines only: the code line holds SYSTEM_COMPONENTS too, so the
+    # word would be found with the comment deleted.
+    comment = comment_lines_of("cluster.tf")
     assert "_Default" in comment
     assert "global" in comment
     assert "SYSTEM_COMPONENTS" in comment
@@ -914,6 +987,11 @@ def test_the_nodes_may_read_the_modules_own_repository_and_nothing_else_in_it() 
         body,
         re.M,
     )
+    # No `project`: the member's project is the provider's own, and an argument
+    # could aim the grant at another project's repository of the same name,
+    # outside the pin. (The body does name terraform_data.project_pin, so the
+    # word alone is not what is refused: an argument called project is.)
+    assert not re.search(r"^\s*project\s*=", body, re.M)
     assert not re.search(
         r"artifact_registry_repository_iam_(binding|policy)", module_text()
     )
@@ -983,7 +1061,10 @@ def test_the_databases_storage_grows_to_a_closed_ceiling_and_no_disk_size_is_set
     # instance after a resize.
     assert re.search(r"^\s*disk_autoresize\s*=\s*true$", database, re.MULTILINE)
     (limit,) = re.findall(r"^\s*disk_autoresize_limit\s*=\s*(\d+)$", database, re.M)
-    assert 0 < int(limit) <= 50
+    # Exactly the number the README states, not a range that accepts 1: a change
+    # of the limit changes the README's sentence in the same commit.
+    assert int(limit) == 20
+    assert "ceiling of 20 GB" in squeezed(raw_text("README.md"))
     assert "disk_size" not in database
     comment = squeezed(raw_text("database.tf"))
     assert "disk_size" in comment

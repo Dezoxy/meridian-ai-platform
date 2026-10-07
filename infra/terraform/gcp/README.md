@@ -39,7 +39,9 @@ the exact list.
 - `versions.tf`: Terraform `~> 1.16`, the `hashicorp/google` provider `~> 8.6`
   (any 8.x from 8.6 and never 9; the lock file holds 8.6.0, with two distinct
   `h1:` hashes for `linux_amd64` and `darwin_arm64`, as the AWS lock does, and
-  `-lockfile=readonly` makes the lock decide what runs), and `backend "local"
+  `-lockfile=readonly` makes the lock decide what runs: true of `make
+  gcp-validate`, which passes it, and of a by-hand `init` only if that passes
+  it too, see "How the owner would apply it by hand"), and `backend "local"
   {}` with no path. **A bare `terraform init` therefore writes
   `terraform.tfstate` in this directory**, which in a worktree is a file a
   session deletes (see "How the owner would apply it by hand").
@@ -48,8 +50,9 @@ the exact list.
   budget. No credential, token or impersonation argument: the provider reads an
   operator's own application default credentials.
 - `main.tf`: the names, a zone for each Region of the list (below),
-  `data "google_project"`, eight `google_project_service` resources with
-  `disable_on_destroy = false`, and the project pin.
+  `data "google_project"`, one `google_project_service` resource (one address,
+  with `for_each` over eight services) with `disable_on_destroy = false`, and
+  the project pin.
 - `network.tf`: one VPC with no automatic subnets, one regional subnet
   (`10.10.0.0/24`) with a Pod range (`10.20.0.0/16`) and a Service range
   (`10.30.0.0/20`) and Private Google Access, a router and Cloud NAT.
@@ -324,6 +327,11 @@ for a test that lives for hours.
    `terraform.tfstate`, and a test fails if one sits in the directory, but that
    is a guard against a commit and not a place to keep a state.) Run this after
    steps 2 and 3 below: the APIs of step 3 are enabled before the first `init`.
+   **Pass `-lockfile=readonly` too.** What this README says of the lock (it
+   decides what runs) is true of `make gcp-validate`, which passes the flag. A
+   by-hand `init` without it still installs the locked 8.6.0, but Terraform may
+   add hashes to the lock file: the reviewer's reading of Terraform's behaviour,
+   not read on a page and not run.
 2. **Choose the machine.** One where no agent session runs and no credential is
    readable by one: another machine, or another operating-system user. No guard
    rule stands between a session and a Google Cloud command (above).
@@ -439,6 +447,11 @@ the scaffold and it is not solved:** narrowing what is shipped narrows what
 reaches the global bucket and does not regionalize it. Whether `SYSTEM_COMPONENTS`
 alone is accepted beside the default `logging_service` is not seen.
 
+**Metrics are the same kind of gap.** GKE's system metrics go to Cloud
+Monitoring, which has no Region choice, and the module sets nothing for them
+(from a reviewer's memory, not read on a page). Nothing here narrows or
+regionalizes them.
+
 ## What `validate` and the scan cannot see
 
 `terraform validate` reads the text against the provider's schema and evaluates
@@ -473,7 +486,12 @@ an apply would settle it:
 - Whether `SYSTEM_COMPONENTS` alone is accepted beside the default
   `logging_service` (see the logs section above), and the instance's first disk
   size against the ceiling of 20 GB (Cloud SQL's own first size is not stated on
-  any page read, and it has to be below the ceiling).
+  any page read, and it has to be below the ceiling). The provider's page (its
+  docs file on the main branch, read 2026-10-07) says `disk_type` defaults to
+  `PD_SSD`, whose minimum is 10 GB, and that `HYPERDISK_BALANCED` has a minimum
+  of 20 GB. It does not say which type a shared-core tier starts on. If one
+  started on a disk of 20 GB, the ceiling would leave no headroom: the storage
+  could not grow at all.
 - Whether a regional secret's endpoint (a `*.rep.googleapis.com` host) is
   reached from private nodes. Private Google Access does not cover it (ADR 7,
   row 22), so the traffic would go through Cloud NAT.
@@ -499,6 +517,22 @@ an apply would settle it:
   secret: nothing is installed into the cluster to try it.
 - Whether the settings the scan found nothing in are right. It checks a list of
   checks, not this design.
+
+From a reviewer's memory, **not read on any page** and not run, so each is a
+question for an apply and not a fact:
+
+- A temporary third node. `initial_node_count = 1` makes a node of the default
+  pool for a few minutes beside the pool's own nodes, which the reviewer
+  remembered as an `e2-medium` with a 100 GB disk. Its machine type and disk
+  are outside the closed list of machine types, and it counts toward quota.
+- System metrics go to Cloud Monitoring, which has no Region choice (see the
+  logs section).
+- Private nodes with no `master_ipv4_cidr_block`: believed optional on newer
+  control planes and required on older ones.
+- A proxy-only subnet, which a regional load balancer needs, if an edge is ever
+  added. The module makes none.
+- Cloud Logging and Cloud Monitoring are not in the list of enabled APIs; they
+  are believed to be on by default in a new project.
 
 ## What a production environment sets differently
 
