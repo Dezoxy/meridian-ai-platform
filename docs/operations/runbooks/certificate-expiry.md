@@ -69,6 +69,9 @@ cluster on 2026-10-06.
 - Later, if nothing was done: a service whose certificate is a day from
   its end turns unhealthy and restarts in a loop, because the file it
   loads is still the old one.
+- A service that is not Ready after a restart and whose output holds a line
+  that starts `tlsstart:`: the start module refused (step 5 of "What to
+  do").
 
 ## Confirm
 
@@ -164,6 +167,65 @@ k get certificaterequestpolicy
    infra/kind/kubeconfig`); on any other cluster it is the owner's to
    run. The health check restarts a service on its own a day before the
    end; do not wait for it.
+5. A service does not start after a renewal and its restart: its pod is not
+   Ready and its container exits and restarts with a back-off. For the five
+   services that serve TLS (everything but the Claims API) read the output
+   of the container that exited, with `k -n meridian logs
+   deployment/<service> --previous`, or in Loki `{service_name="<service>"} |
+   logger=""` (a line that is not JSON). If it holds a line that begins
+   `tlsstart:`, the start module (S069) refused to listen and exited with
+   status 3; the line names a flag or a variable and an error's class and
+   never a value or a file's content. The forms, from the module's code and
+   its tests (none was seen on a cluster; where a reading below is the
+   writer's and no run or report measured it, it says "reasoned"):
+   - `--ssl-certfile cannot be read (<class>)`: the certificate file could
+     not be opened; the class is the operating system's error for it (the
+     reviews' probes printed `FileNotFoundError` and `IsADirectoryError`).
+     Look at the Certificate (`k -n meridian describe certificate <service>`)
+     and at whether the Secret `<service>-tls` exists.
+   - `the TLS context cannot be built from --ssl-certfile, --ssl-keyfile and
+     --ssl-ca-certs (<class>)`: one of the three files could not be made into
+     a context. For an `SSLError` the line carries OpenSSL's reason, for
+     example `KEY_VALUES_MISMATCH` (a key that does not match the
+     certificate, which the module's tests produce with a mismatched pair; a
+     renewal that lands between OpenSSL's two opens of the certificate and
+     the key shows the same way, and the module then loads again, so the line
+     appears only when the bytes did not change) or `PEM_LIB` (the Python
+     review's example of a file that is not PEM). For any other class the line
+     gives the class alone and does not say which of the three files. Reasoned:
+     read the Certificate's events and ask cert-manager for a new certificate
+     (`make cert-renew CERT=<service>`, step 3) rather than editing the
+     Secret.
+   - `--ssl-certfile changed during each of 5 loads; not started`: the file's
+     bytes differed between the module's two reads in each of five loads.
+     Reasoned: a renewal is one change, so five in a row is not one; read the
+     Certificate's revision and events.
+   - `the served certificate (--ssl-certfile) cannot be read as a certificate
+     (SettingsError)`: the bytes the context was loaded from do not parse as a
+     certificate.
+   - `MERIDIAN_TLS_RESTART_SHARE must be a number from zero up to, but not
+     including, one (SettingsError)`: the variable the Deployment sets is
+     outside that range; the chart sets it. The Claims API's start ends in a
+     traceback and exit status 1 for the same value.
+   - `the command line is not one this start takes`: the Deployment's command
+     is not one the module takes: a word it does not know (an abbreviated flag
+     too), a missing certificate, key or CA flag, or a client-certificate
+     setting that is not 1 or 2. The line names no flag. Compare the `command`
+     in `k -n meridian get deployment <service> -o yaml` with the chart's
+     values; the five commands start `python -m
+     meridian.platform.common.tlsstart`, and a values override of the command
+     is the likely cause (reasoned).
+
+   A rollout that meets this stalls on the new pod and the old pod keeps
+   serving (the Deployments set no strategy, so the default rolling update
+   with one replica surges one pod and makes none unavailable: read from the
+   chart by the infrastructure review, not seen with a refused start). A
+   traceback with no `tlsstart:` line (a `SettingsError` that names a
+   variable, say) is an app factory's, as before, with exit status 1.
+   Status: the success was seen on kind (2026-10-07, K2: the five started
+   through the module, no `tlsstart:` line, a renewal of `policy-mcp` and its
+   restart); the refusal, each form above and the queries were not seen on a
+   cluster.
 
 ## The collector's certificate and its authority (S063)
 
