@@ -21,6 +21,12 @@
 #      and the Secret `rate-store-credentials` (S066), with its two keys, the
 #      gateway's address in the rate store and the store's ACL file, which
 #      `make up` makes once: a pod that cannot read it would not start
+#      Then, the first change (S073): Meridian's alert rules, the one
+#      PrometheusRule `make up` applies too (apply_alert_rules, common.sh), so a
+#      rule changed in the tree is on the cluster after a deploy. They come after
+#      the checks, so a refused deploy changes nothing, and before the build, so
+#      a cluster without the Prometheus operator is refused in seconds, not after
+#      the image and the Jobs
 #   1. docker build of the repository's Dockerfile, tagged meridian:<first 12 hex
 #      digits of the image ID> and loaded into the kind node (no registry)
 #   2. the migration Job, as the database owner role, then the policy seed Job,
@@ -434,7 +440,7 @@ ingest_corpus() {
 wait_for_certificates() {
   kctl -n "${NAMESPACE}" wait --for=condition=Ready certificate \
     -l app.kubernetes.io/part-of=meridian --timeout="${CERTIFICATE_TIMEOUT}" >/dev/null ||
-    die "the Certificates were not all Ready in ${CERTIFICATE_TIMEOUT}. Look at the requests first (since S056 the usual cause is one that approver-policy denied or never decided): kubectl -n ${NAMESPACE} get certificaterequest, then describe the one of the Certificate that is not Ready and read its Approved or Denied condition and the reason. Then the issuer '${ISSUER_NAME}': is it Ready? (kubectl get clusterissuer ${ISSUER_NAME}; 'make up' makes it). The runbook: docs/operations/runbooks/certificate-expiry.md"
+    die "the Certificates were not all Ready in ${CERTIFICATE_TIMEOUT}. Look at the requests first (since S056 the usual cause is one that approver-policy denied or never decided): kubectl -n ${NAMESPACE} get certificaterequest, then describe the one of the Certificate that is not Ready and read its Approved or Denied condition and the reason. Then the issuer '${ISSUER_NAME}': is it Ready? (kubectl get clusterissuer ${ISSUER_NAME}; 'make up' makes it). After a failed request cert-manager waits before it asks again (an hour, doubling), so once the cause is repaired ask it now: make cert-renew CERT=<name> (the name of a Certificate that is not Ready: kubectl -n ${NAMESPACE} get certificate). The runbook: docs/operations/runbooks/certificate-expiry.md"
   log "the services' certificates are ready"
 }
 
@@ -481,6 +487,7 @@ require_database
 require_issuer
 require_approval
 require_rate_store_secret
+apply_alert_rules
 build_image
 run_job "meridian-migrate-${tag}" migrate
 run_job "meridian-seed-${tag}" seed

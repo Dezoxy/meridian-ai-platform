@@ -66,7 +66,15 @@ KNOWN_VERBS = {
 # background, and ``kctl ... &`` would background a subshell, whose process id
 # is not kubectl's, so the script's ``kill`` would leave kubectl running.
 RAW_PORT_FORWARDS = {"grafana.sh": 1, "demo.sh": 1, "smoke.sh": 1}
-SCRIPTS = ("up.sh", "deploy.sh", "smoke.sh", "demo.sh", "upkeep.sh", "images.sh")
+SCRIPTS = (
+    "up.sh",
+    "deploy.sh",
+    "smoke.sh",
+    "demo.sh",
+    "upkeep.sh",
+    "images.sh",
+    "cert-renew.sh",
+)
 
 
 def call_class(args: list[str]) -> str:

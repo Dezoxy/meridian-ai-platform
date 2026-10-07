@@ -124,8 +124,29 @@ k get certificaterequestpolicy
    (`shouldBackoffReissuingOnFailure` in cert-manager v1.21.2, with its
    default minimum and maximum). It does not wait when the Certificate's
    spec no longer matches the pending request. So after a repaired policy
-   the Certificate is not Ready at once; `cmctl renew <name> -n
-   <namespace>` asks again now, where `cmctl` is installed.
+   the Certificate is not Ready at once. On the kind cluster `make
+   cert-renew CERT=<name>` asks again now, for one Certificate of the
+   namespace `meridian` (the names: `k -n meridian get certificate`). It does
+   what `cmctl renew` does and nothing else: it sets the Certificate's
+   `Issuing` condition to `True`, with the reason `ManuallyTriggered`,
+   through the status subresource (cmctl v2.6.1, `pkg/renew/renew.go`, lines
+   216 to 218), carrying every other condition and the version it read, so a
+   Certificate that cert-manager changed in between is refused and the
+   command is run again. cert-manager's issuing controller then makes a new
+   request: the failed one of the earlier attempt is told from a new one by
+   its failure time being before the condition's time (`issuing_controller.go`
+   in cert-manager v1.21.2), which is why the command sets the time to now.
+   The request is Approved or Denied again, so read it as in "Confirm"; a
+   policy that is still wrong denies it again, and the next wait is longer.
+   A Certificate whose `Issuing` condition is already `True` is being issued
+   and is left alone. Status: tested against a stub `kubectl` (the patch it
+   sends, each refusal, the bound on each call) and **not yet seen on a
+   cluster**. Read from the CRD and the source and not seen: that the status
+   subresource takes a merge patch of the condition list, and that the
+   controllers act on a write made by `kubectl` as they do on cmctl's. Only a
+   cluster shows whether a request is made at once after a failed one.
+   `cmctl renew <name> -n <namespace>` does the same where `cmctl` is
+   installed, and is the alternative.
 4. The certificate was renewed but a service still serves the old one:
    a Deployment loads its certificate once, when it starts. Restart it
    with `kubectl -n meridian rollout restart deploy/<service>` and watch

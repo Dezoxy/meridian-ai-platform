@@ -1436,12 +1436,14 @@ def test_deploy_migrates_seeds_installs_ingests_and_then_waits_in_that_order() -
     # approver-policy with its five policies. So is the rate store's Secret
     # (S066), which `make up` makes: a pod that cannot read it would not start,
     # after the Jobs had run. The store is waited for before the gateway, whose
-    # every call (the ingestion's too) needs it.
+    # every call (the ingestion's too) needs it. Meridian's alert rules (S073)
+    # are the first change, after the checks and before the build.
     assert main_sequence() == [
         "require_database",
         "require_issuer",
         "require_approval",
         "require_rate_store_secret",
+        "apply_alert_rules",
         "build_image",
         'run_job "meridian-migrate-${tag}" migrate',
         'run_job "meridian-seed-${tag}" seed',

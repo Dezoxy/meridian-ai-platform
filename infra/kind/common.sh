@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Shared by up.sh, deploy.sh, upkeep.sh, demo.sh, smoke.sh, down.sh, holder.sh and grafana.sh. Source it; do not run it.
+# Shared by up.sh, deploy.sh, upkeep.sh, demo.sh, smoke.sh, down.sh, holder.sh, grafana.sh and cert-renew.sh. Source it; do not run it.
 #
 # Safety rules kept in one place:
 #  - The cluster's credentials live in infra/kind/kubeconfig (gitignored). The
@@ -201,6 +201,29 @@ job_state() {
 printable_ascii() {
   LC_ALL=C tr -cd '[:print:]\n' |
     sed -E 's#postgres(ql)?://[^[:space:]]+#postgresql://[redacted]#g'
+}
+
+# apply_alert_rules: Meridian's alert rules (alerts/meridian.yaml, one
+# PrometheusRule) applied to the cluster. `make up` and `make deploy` both call
+# it, so a rule changed in the tree reaches the cluster by either and the two
+# cannot drift (S073). It stops the script with a sentence when the apply fails,
+# and with its own when the cluster does not serve the kind (no Prometheus
+# operator: kubectl says "no matches for kind"). kubectl's error is printed
+# first, cleaned (printable_ascii) and cut short.
+apply_alert_rules() {
+  local errors
+  log "observability: Meridian's alert rules"
+  errors="$(mktemp)"
+  if ! kctl apply --server-side --force-conflicts -f "${KIND_DIR}/alerts/meridian.yaml" >/dev/null 2>"${errors}"; then
+    printable_ascii <"${errors}" | cut -c 1-300 >&2
+    if grep -q 'no matches for kind' "${errors}"; then
+      rm -f "${errors}"
+      die "the cluster does not serve the kind PrometheusRule, so Meridian's alert rules cannot be applied: the Prometheus operator is not installed (kubectl's error is above); run 'make up' first"
+    fi
+    rm -f "${errors}"
+    die "could not apply Meridian's alert rules (kubectl's error is above); read it, then run the command again"
+  fi
+  rm -f "${errors}"
 }
 
 # The rate store's Secret carries, as this annotation, the SHA-256 of the rules of

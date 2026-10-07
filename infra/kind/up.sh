@@ -459,8 +459,7 @@ install_release kube-prometheus-stack observability "${PROMETHEUS_STACK_CHART}" 
 kctl -n observability wait --for=condition=Available \
   prometheus/kube-prometheus-stack-prometheus --timeout=10m >/dev/null
 apply_dashboards
-log "observability: Meridian's alert rules"
-kctl apply --server-side --force-conflicts -f "${KIND_DIR}/alerts/meridian.yaml" >/dev/null
+apply_alert_rules
 log "observability: Prometheus scrapes cert-manager's metrics"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/cert-manager-metrics.yaml" >/dev/null
 log "observability: Tempo"
