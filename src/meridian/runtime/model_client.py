@@ -4,7 +4,10 @@ It sets the three ``X-Meridian-*`` headers and forwards the trace context, so
 graph code neither sets headers nor knows the gateway's address (T-08).
 """
 
+import json
+import logging
 import threading
+import time
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -15,7 +18,10 @@ import httpx
 from opentelemetry import propagate
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from meridian.platform.common.http import BoundedEntityId
 from meridian.platform.registry.models import DataClass
+
+logger = logging.getLogger(__name__)
 
 CHAT_PATH = "/v1/chat"
 DATA_CLASS_HEADER = "X-Meridian-Data-Class"
@@ -25,6 +31,17 @@ DATA_CLASS_HEADER = "X-Meridian-Data-Class"
 # refusal by the provider's filter.
 REFUSAL_HEADER = "X-Meridian-Refusal"
 REFUSAL_CONTENT_FILTER = "content-filter"
+# A second header beside the refusal mark, for a completion withheld after the
+# provider ran (billed: the filter withheld it, or the model's own refusal of a
+# structured request), and the three headers that then name the deployment.
+# Copies too. The refusal header keeps its one value, so a runtime that knows
+# only that header still reads a withheld completion as a filtered call; a value
+# of this header other than the fixed one is ignored.
+COMPLETION_HEADER = "X-Meridian-Completion"
+COMPLETION_WITHHELD = "withheld"
+DEPLOYMENT_HEADER = "X-Meridian-Deployment"
+PROVIDER_HEADER = "X-Meridian-Provider"
+MODE_HEADER = "X-Meridian-Mode"
 # How a call to the gateway ended, for the runtime's metric: the closed set of
 # words a call's reason comes from. ``unreachable`` is no answer at all (a
 # transport error that is not a timeout), ``refused`` a 429 or a 403,
@@ -39,6 +56,22 @@ CALL_REASONS: frozenset[str] = frozenset(get_args(CallReason))
 # Told once for each call ``chat`` is asked to make, with the reason of a failure.
 CallObserver = Callable[[CallOutcome, CallReason | None], None]
 REFUSED_STATUSES = frozenset({HTTPStatus.TOO_MANY_REQUESTS, HTTPStatus.FORBIDDEN})
+# One model call as a whole, from the send to the last byte of the answer. The
+# HTTP client's own timeouts are for each phase and each wait for bytes (the
+# read is 30 s), so a reply that trickles never trips them. The gateway bounds
+# all its attempts at 25 s (a test keeps this above that), so a call the gateway
+# answers in time, with its own 504 included, is never cut here; 30 s is also
+# the client's wait for one read, so once the headers are in a call ends at this
+# deadline plus at most one read timeout.
+# The clock is read once the headers are in: the phases before them have their
+# own bounds (``app.GATEWAY_*_TIMEOUT_SECONDS``), and headers that trickle, each
+# wait under the read timeout, are bounded by neither.
+MODEL_CALL_DEADLINE_SECONDS = 30.0
+# The largest reply of the gateway that is read, counted on the decoded bytes.
+# The model's output is capped at 1024 tokens (a few KiB of text) and the
+# largest of the 27 recorded answers is 421 bytes as a JSON entry, so 1 MiB is
+# a bound no honest reply comes near; a reply past it is no usable answer.
+MAX_REPLY_BYTES = 1024 * 1024
 
 
 class ModelCallError(Exception):
@@ -66,13 +99,32 @@ class ModelCallTimeoutError(ModelCallError):
         self.args = ("model gateway did not answer in time",)
 
 
+@dataclass(frozen=True, slots=True)
+class Drafter:
+    """The deployment that drafted a completion the filter withheld, as the
+    gateway named it in headers; each part passed its pattern."""
+
+    deployment: str
+    provider: str
+    mode: str
+
+
 class ModelCallFilteredError(ModelCallError):
     """The provider's content filter refused the request or withheld the
     completion: the gateway answers 400 with the ``X-Meridian-Refusal`` header
-    for that. A 400 without it is a plain ``ModelCallError``."""
+    for that. A 400 without it is a plain ``ModelCallError``.
 
-    def __init__(self) -> None:
+    ``withheld`` is true when the gateway said the provider ran and its
+    completion was withheld (it was billed); ``drafter`` then holds the
+    deployment it named, or none when a header was missing or outside its
+    pattern. A refused prompt has neither. The message is fixed text."""
+
+    def __init__(
+        self, *, withheld: bool = False, drafter: Drafter | None = None
+    ) -> None:
         super().__init__(HTTPStatus.BAD_REQUEST)
+        self.withheld = withheld
+        self.drafter = drafter
 
 
 class ModelCallLimitError(ModelCallError):
@@ -100,7 +152,9 @@ class _Reply(BaseModel):
 
     Unknown fields are ignored, so a newer gateway (a field added later) never
     breaks the runtime. An unknown mode is refused: the stored proposal records
-    it as provenance (T-39). So is a missing or unknown finish reason: a graph
+    it as provenance (T-39). So is a deployment or provider that is not a
+    bounded registry ID (the same words a withheld completion's headers are
+    held to), and a missing or unknown finish reason: a graph
     must know whether a reply was cut short. The runtime does not
     import the gateway's models: the two services share a wire contract, not
     code.
@@ -120,12 +174,75 @@ class _Reply(BaseModel):
         input_tokens: int
         output_tokens: int
 
-    deployment: str
-    provider: str
+    deployment: BoundedEntityId
+    provider: BoundedEntityId
     model: str
     mode: Literal["replay", "recorded", "live"]
     output: Output
     usage: Usage
+
+
+class _DeadlinePassed(httpx.TimeoutException):
+    """The call outlasted ``MODEL_CALL_DEADLINE_SECONDS``: a timeout like the
+    transport's, so it is counted and answered as one. Private and message-less."""
+
+
+class _ReplyTooLarge(Exception):
+    """The reply outgrew ``MAX_REPLY_BYTES``, or came in a content coding and
+    was refused unread. Private and message-less."""
+
+
+class _Provenance(BaseModel):
+    """The deployment headers of a withheld completion, held to the patterns of
+    the registry's IDs and the three modes: all three or none is kept."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    deployment: BoundedEntityId
+    provider: BoundedEntityId
+    mode: Literal["replay", "recorded", "live"]
+
+
+def _is_compressed(headers: httpx.Headers) -> bool:
+    """Whether a reply names a content coding other than ``identity``. The
+    client asks for none, but httpx decodes whatever arrives, so a coded reply
+    is refused before any chunk of it is read."""
+    coding = headers.get("Content-Encoding")
+    return coding is not None and coding.strip().lower() != "identity"
+
+
+def _drafter_of(headers: httpx.Headers) -> Drafter | None:
+    try:
+        named = _Provenance.model_validate(
+            {
+                "deployment": headers.get(DEPLOYMENT_HEADER),
+                "provider": headers.get(PROVIDER_HEADER),
+                "mode": headers.get(MODE_HEADER),
+            }
+        )
+    except ValidationError as exc:
+        # A value outside its pattern, or a header missing, is dropped and never
+        # carried, and said once: a billed call would otherwise show as not
+        # asked. The class only; the error would quote the header's value.
+        logger.warning(
+            "a withheld completion's provenance headers were not used: %s",
+            type(exc).__name__,
+        )
+        return None
+    return Drafter(named.deployment, named.provider, named.mode)
+
+
+@dataclass(frozen=True, slots=True)
+class _Answer:
+    """What the gateway said: the status, whether it marked a filtered 400 (and
+    whether the completion was withheld, with the deployment named), and the
+    body of a 2xx only (the body of any other status is never read)."""
+
+    status_code: int
+    filtered: bool
+    payload: bytes
+    withheld: bool = False
+    drafter: Drafter | None = None
 
 
 class ModelClient:
@@ -133,7 +250,8 @@ class ModelClient:
 
     ``max_calls`` bounds the calls of this client, so of one run; an attempt
     counts whether or not the gateway answers it. ``on_call`` is told once of
-    each call ``chat`` is asked to make, a call the limit stops included."""
+    each call ``chat`` is asked to make, a call the limit stops included.
+    ``clock`` times the deadline of a call (``MODEL_CALL_DEADLINE_SECONDS``)."""
 
     def __init__(
         self,
@@ -144,13 +262,21 @@ class ModelClient:
         run_id: uuid.UUID,
         max_calls: int,
         on_call: CallObserver | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._http = http
         self._max_calls = max_calls
         self._on_call = on_call
+        self._clock = clock
         self._calls = 0
         self._lock = threading.Lock()
         self._headers = {
+            # No content coding asked for: the gateway is in the same cluster
+            # and nothing is saved. This does not stop a gateway that codes the
+            # reply anyway (httpx decodes it, and one chunk could then hold a
+            # thousand times what arrived, before the cap is read), so
+            # ``_exchange`` refuses a coded reply before it reads a chunk.
+            "Accept-Encoding": "identity",
             "X-Meridian-Tenant": tenant,
             "X-Meridian-Agent": agent,
             "X-Meridian-Run": str(run_id),
@@ -195,8 +321,74 @@ class ModelClient:
         if data_class is not None:
             headers[DATA_CLASS_HEADER] = data_class
         propagate.inject(headers)
+        answer = self._exchange(body, headers)
+        if answer.filtered:
+            self._observe("failed", "filtered")
+            raise ModelCallFilteredError(
+                withheld=answer.withheld, drafter=answer.drafter
+            ) from None
+        if not 200 <= answer.status_code < 300:
+            refused = answer.status_code in REFUSED_STATUSES
+            self._observe("failed", "refused" if refused else "error")
+            raise ModelCallError(answer.status_code)
         try:
-            response = self._http.post(CHAT_PATH, json=body, headers=headers)
+            reply = _Reply.model_validate(json.loads(answer.payload))
+        except (ValueError, ValidationError):
+            self._observe("failed", "error")
+            raise ModelCallError(0) from None
+        self._observe("completed")
+        return ChatResult(
+            text=reply.output.text,
+            deployment=reply.deployment,
+            provider=reply.provider,
+            model=reply.model,
+            mode=reply.mode,
+            input_tokens=reply.usage.input_tokens,
+            output_tokens=reply.usage.output_tokens,
+            finish_reason=reply.output.finish_reason,
+        )
+
+    def _exchange(self, body: dict[str, Any], headers: dict[str, str]) -> _Answer:
+        """Send one request and read the answer as a stream, against the call's
+        deadline. The clock is read once the headers are in and after every
+        chunk, so the call ends at the deadline plus at most one read timeout;
+        the response is closed on every way out, which closes a connection
+        whose body was not read to its end. A failure is counted and raised as
+        the HTTP client's own would be."""
+        started = self._clock()
+        try:
+            with self._http.stream(
+                "POST", CHAT_PATH, json=body, headers=headers
+            ) as response:
+                self._check_deadline(started)
+                status = response.status_code
+                filtered = (
+                    status == HTTPStatus.BAD_REQUEST
+                    and response.headers.get(REFUSAL_HEADER) == REFUSAL_CONTENT_FILTER
+                )
+                withheld = (
+                    filtered
+                    and response.headers.get(COMPLETION_HEADER) == COMPLETION_WITHHELD
+                )
+                drafter = _drafter_of(response.headers) if withheld else None
+                chunks: list[bytes] = []
+                size = 0
+                if 200 <= status < 300:
+                    if _is_compressed(response.headers):
+                        raise _ReplyTooLarge
+                    for chunk in response.iter_bytes():
+                        size += len(chunk)
+                        if size > MAX_REPLY_BYTES:
+                            raise _ReplyTooLarge
+                        chunks.append(chunk)
+                        self._check_deadline(started)
+            return _Answer(status, filtered, b"".join(chunks), withheld, drafter)
+        except _ReplyTooLarge:
+            # Counted on the decoded bytes, as they come, or a coded reply
+            # refused unread; nothing of the body is kept or named, and the
+            # response is closed on the way out.
+            self._observe("failed", "error")
+            raise ModelCallError(0) from None
         except httpx.TimeoutException:
             # Neither the transport's message nor its cause is kept.
             self._observe("failed", "timeout")
@@ -213,29 +405,7 @@ class ModelClient:
             # is, for the run to fail as it would have.
             self._observe("failed", "error")
             raise
-        if (
-            response.status_code == HTTPStatus.BAD_REQUEST
-            and response.headers.get(REFUSAL_HEADER) == REFUSAL_CONTENT_FILTER
-        ):
-            self._observe("failed", "filtered")
-            raise ModelCallFilteredError from None
-        if not 200 <= response.status_code < 300:
-            refused = response.status_code in REFUSED_STATUSES
-            self._observe("failed", "refused" if refused else "error")
-            raise ModelCallError(response.status_code)
-        try:
-            reply = _Reply.model_validate(response.json())
-        except (ValueError, ValidationError):
-            self._observe("failed", "error")
-            raise ModelCallError(0) from None
-        self._observe("completed")
-        return ChatResult(
-            text=reply.output.text,
-            deployment=reply.deployment,
-            provider=reply.provider,
-            model=reply.model,
-            mode=reply.mode,
-            input_tokens=reply.usage.input_tokens,
-            output_tokens=reply.usage.output_tokens,
-            finish_reason=reply.output.finish_reason,
-        )
+
+    def _check_deadline(self, started: float) -> None:
+        if self._clock() - started > MODEL_CALL_DEADLINE_SECONDS:
+            raise _DeadlinePassed("")

@@ -1,6 +1,7 @@
 """The runtime's gateway client sets the identity headers itself."""
 
 import json
+import logging
 import subprocess
 import sys
 import uuid
@@ -19,15 +20,32 @@ from meridian.platform.common.telemetry import (
     make_tracer_provider,
 )
 from meridian.platform.gateway.app import (
+    COMPLETION_HEADER as GATEWAY_COMPLETION_HEADER,
+)
+from meridian.platform.gateway.app import (
+    COMPLETION_WITHHELD as GATEWAY_COMPLETION_WITHHELD,
+)
+from meridian.platform.gateway.app import (
+    DEPLOYMENT_HEADER as GATEWAY_DEPLOYMENT_HEADER,
+)
+from meridian.platform.gateway.app import MODE_HEADER as GATEWAY_MODE_HEADER
+from meridian.platform.gateway.app import PROVIDER_HEADER as GATEWAY_PROVIDER_HEADER
+from meridian.platform.gateway.app import (
     REFUSAL_CONTENT_FILTER as GATEWAY_REFUSAL_CONTENT_FILTER,
 )
 from meridian.platform.gateway.app import REFUSAL_HEADER as GATEWAY_REFUSAL_HEADER
 from meridian.platform.gateway.models import ChatOutput, ChatResponse, Usage
 from meridian.platform.registry.models import DataClass
 from meridian.runtime.model_client import (
+    COMPLETION_HEADER,
+    COMPLETION_WITHHELD,
+    DEPLOYMENT_HEADER,
+    MODE_HEADER,
+    PROVIDER_HEADER,
     REFUSAL_CONTENT_FILTER,
     REFUSAL_HEADER,
     ChatResult,
+    Drafter,
     ModelCallError,
     ModelCallFilteredError,
     ModelCallLimitError,
@@ -293,6 +311,220 @@ def test_a_filtered_call_keeps_no_body_message_or_cause() -> None:
     assert error.__suppress_context__
 
 
+WITHHELD_HEADERS = {
+    REFUSAL_HEADER: REFUSAL_CONTENT_FILTER,
+    COMPLETION_HEADER: COMPLETION_WITHHELD,
+    DEPLOYMENT_HEADER: "aoai-sdc-gpt-4o",
+    PROVIDER_HEADER: "azure-openai",
+    MODE_HEADER: "live",
+}
+
+
+def refusing_client(
+    headers: dict[str, str], status: int = 400, body: object | None = None
+) -> httpx.Client:
+    return httpx.Client(
+        base_url="http://gateway.invalid",
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(
+                status, json={} if body is None else body, headers=headers
+            )
+        ),
+    )
+
+
+def test_the_runtime_marker_of_a_withheld_completion_is_the_gateways() -> None:
+    assert (
+        COMPLETION_HEADER,
+        COMPLETION_WITHHELD,
+        DEPLOYMENT_HEADER,
+        PROVIDER_HEADER,
+        MODE_HEADER,
+    ) == (
+        GATEWAY_COMPLETION_HEADER,
+        GATEWAY_COMPLETION_WITHHELD,
+        GATEWAY_DEPLOYMENT_HEADER,
+        GATEWAY_PROVIDER_HEADER,
+        GATEWAY_MODE_HEADER,
+    )
+    assert (
+        COMPLETION_HEADER,
+        COMPLETION_WITHHELD,
+        DEPLOYMENT_HEADER,
+        PROVIDER_HEADER,
+        MODE_HEADER,
+    ) == (
+        "X-Meridian-Completion",
+        "withheld",
+        "X-Meridian-Deployment",
+        "X-Meridian-Provider",
+        "X-Meridian-Mode",
+    )
+
+
+def test_a_client_of_the_refusal_header_alone_reads_a_withheld_one_as_filtered() -> (
+    None
+):
+    # Built from the refusal header's constant alone, as a runtime from before
+    # the second header reads a 400: no other header is looked at. This test
+    # restates that reading and is close to a tautology on its own; the proof
+    # that the gateway's withheld answer still carries ``content-filter`` is
+    # ``test_a_refused_prompt_names_no_deployment_and_a_withheld_completion_names_it``
+    # in ``tests/meridian/gateway/test_gateway_guardrails.py``.
+    answer = httpx.Response(400, json={}, headers=WITHHELD_HEADERS)
+
+    reads_a_filtered_call = (
+        answer.status_code == 400
+        and answer.headers.get(REFUSAL_HEADER) == REFUSAL_CONTENT_FILTER
+    )
+
+    assert reads_a_filtered_call
+    assert COMPLETION_HEADER in answer.headers  # the second mark is only beside it
+
+
+@pytest.mark.parametrize("value", ["", "Withheld", "refused", "withheld "])
+def test_a_completion_header_with_any_other_value_is_a_filtered_call_with_no_mark(
+    value: str,
+) -> None:
+    headers = {**WITHHELD_HEADERS, COMPLETION_HEADER: value}
+
+    with pytest.raises(ModelCallFilteredError) as raised:
+        model(refusing_client(headers)).chat([{"role": "user", "content": "hi"}])
+
+    assert raised.value.withheld is False
+    assert raised.value.drafter is None
+
+
+def test_a_withheld_completion_is_a_filtered_call_with_the_deployment_named() -> None:
+    seen: list[tuple[str, str | None]] = []
+    client = ModelClient(
+        refusing_client(WITHHELD_HEADERS),
+        tenant="claims-triage",
+        agent="claims-triage",
+        run_id=RUN_ID,
+        max_calls=1,
+        on_call=lambda outcome, reason: seen.append((outcome, reason)),
+    )
+
+    with pytest.raises(ModelCallFilteredError) as raised:
+        client.chat([{"role": "user", "content": "hi"}])
+
+    assert raised.value.status_code == 400
+    assert raised.value.withheld is True
+    assert raised.value.drafter == Drafter("aoai-sdc-gpt-4o", "azure-openai", "live")
+    assert seen == [("failed", "filtered")]
+
+
+def test_a_refused_prompt_is_a_filtered_call_that_names_no_deployment() -> None:
+    headers = {
+        k: v for k, v in WITHHELD_HEADERS.items() if k != COMPLETION_HEADER
+    }  # the provenance headers alone mark nothing
+
+    with pytest.raises(ModelCallFilteredError) as raised:
+        model(refusing_client(headers)).chat([{"role": "user", "content": "hi"}])
+
+    assert raised.value.withheld is False
+    assert raised.value.drafter is None
+
+
+@pytest.mark.parametrize(
+    "dropped",
+    [
+        pytest.param({DEPLOYMENT_HEADER: "Not An ID"}, id="deployment-with-spaces"),
+        pytest.param({DEPLOYMENT_HEADER: "AOAI"}, id="deployment-in-capitals"),
+        pytest.param({DEPLOYMENT_HEADER: "a" * 65}, id="deployment-too-long"),
+        pytest.param({DEPLOYMENT_HEADER: ""}, id="deployment-empty"),
+        pytest.param({PROVIDER_HEADER: "azure openai"}, id="provider-with-a-space"),
+        pytest.param({PROVIDER_HEADER: "-azure"}, id="provider-leading-hyphen"),
+        pytest.param({MODE_HEADER: "production"}, id="mode-outside-the-three"),
+        pytest.param({MODE_HEADER: "Live"}, id="mode-in-capitals"),
+    ],
+)
+def test_a_provenance_header_outside_its_pattern_is_dropped_not_carried(
+    dropped: dict[str, str],
+) -> None:
+    headers = {**WITHHELD_HEADERS, **dropped}
+
+    with pytest.raises(ModelCallFilteredError) as raised:
+        model(refusing_client(headers)).chat([{"role": "user", "content": "hi"}])
+
+    assert raised.value.withheld is True
+    assert raised.value.drafter is None
+
+
+@pytest.mark.parametrize("missing", [DEPLOYMENT_HEADER, PROVIDER_HEADER, MODE_HEADER])
+def test_a_withheld_completion_with_a_header_missing_names_no_deployment(
+    missing: str,
+) -> None:
+    headers = {k: v for k, v in WITHHELD_HEADERS.items() if k != missing}
+
+    with pytest.raises(ModelCallFilteredError) as raised:
+        model(refusing_client(headers)).chat([{"role": "user", "content": "hi"}])
+
+    assert raised.value.withheld is True
+    assert raised.value.drafter is None
+
+
+def client_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    """What the client itself logged: httpx logs each request at INFO."""
+    return [r for r in caplog.records if r.name == "meridian.runtime.model_client"]
+
+
+def test_a_provenance_header_outside_its_pattern_is_said_once_without_its_value(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    canary = "CANARY claimant text"
+    headers = {**WITHHELD_HEADERS, DEPLOYMENT_HEADER: canary}
+
+    with caplog.at_level(logging.DEBUG), pytest.raises(ModelCallFilteredError):
+        model(refusing_client(headers, body={"detail": canary})).chat(
+            [{"role": "user", "content": "hi"}]
+        )
+
+    (record,) = client_records(caplog)
+    assert record.levelno == logging.WARNING
+    assert "ValidationError" in record.getMessage()
+    assert canary not in record.getMessage() + repr(record.args)
+    assert record.exc_info is None
+    assert canary not in caplog.text
+
+
+def test_a_withheld_completion_with_good_headers_logs_nothing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.DEBUG), pytest.raises(ModelCallFilteredError):
+        model(refusing_client(WITHHELD_HEADERS)).chat(
+            [{"role": "user", "content": "hi"}]
+        )
+
+    assert client_records(caplog) == []
+
+
+def test_a_provider_word_in_a_header_is_never_kept_by_the_error() -> None:
+    canary = "CANARY claimant text"
+    headers = {**WITHHELD_HEADERS, DEPLOYMENT_HEADER: canary}
+
+    with pytest.raises(ModelCallFilteredError) as raised:
+        model(refusing_client(headers, body={"detail": canary})).chat(
+            [{"role": "user", "content": "hi"}]
+        )
+
+    error = raised.value
+    assert canary not in str(error) + repr(error.args) + repr(error.drafter)
+    assert error.__cause__ is None
+    assert error.__context__ is None
+
+
+def test_the_withheld_value_on_a_status_other_than_400_is_a_plain_error() -> None:
+    with pytest.raises(ModelCallError) as raised:
+        model(refusing_client(WITHHELD_HEADERS, status=502)).chat(
+            [{"role": "user", "content": "hi"}]
+        )
+
+    assert type(raised.value) is ModelCallError
+    assert raised.value.status_code == 502
+
+
 @pytest.mark.parametrize("status", [403, 413, 422, 429, 500, 502, 503, 504])
 def test_every_other_non_2xx_stays_a_plain_model_call_error(status: int) -> None:
     http, _ = client_for(status=status)
@@ -334,6 +566,41 @@ def test_a_live_reply_with_a_finish_reason_and_an_unknown_field_parses() -> None
         output_tokens=1,
         finish_reason="length",
     )
+
+
+@pytest.mark.parametrize(
+    "named",
+    [
+        pytest.param({"deployment": "Not An ID"}, id="deployment-with-spaces"),
+        pytest.param({"deployment": "AOAI"}, id="deployment-in-capitals"),
+        pytest.param({"deployment": "a" * 65}, id="deployment-too-long"),
+        pytest.param({"deployment": ""}, id="deployment-empty"),
+        pytest.param({"provider": "azure openai"}, id="provider-with-a-space"),
+        pytest.param({"provider": "-azure"}, id="provider-leading-hyphen"),
+        pytest.param({"provider": "a" * 65}, id="provider-too-long"),
+        pytest.param({"provider": ""}, id="provider-empty"),
+    ],
+)
+def test_a_reply_naming_a_deployment_outside_the_id_pattern_is_no_usable_answer(
+    named: dict[str, str],
+) -> None:
+    # The stored proposal records both words as provenance, so a success is
+    # held to the same bounded words as a withheld completion's headers.
+    calls: list[tuple[str, str | None]] = []
+    client = ModelClient(
+        reply_client({**GATEWAY_REPLY, **named}),
+        tenant="claims-triage",
+        agent="claims-triage",
+        run_id=uuid.uuid4(),
+        max_calls=10,
+        on_call=lambda outcome, reason: calls.append((outcome, reason)),
+    )
+
+    with pytest.raises(ModelCallError) as raised:
+        client.chat([{"role": "user", "content": "hi"}])
+
+    assert raised.value.status_code == 0
+    assert calls == [("failed", "error")]
 
 
 def test_a_mode_the_runtime_does_not_know_is_no_usable_answer() -> None:

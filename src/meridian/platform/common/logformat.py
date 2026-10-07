@@ -40,8 +40,11 @@ be worth reading and safe to keep:
   string, HTTP version, status) in its h11 and httptools protocols alike; the
   line keeps ``method``, ``path``, ``http_version`` and ``status``, and nothing
   of the client's address, which behind an edge is a person's. The path is cut
-  at the first ``?`` of the raw target, then decoded (uvicorn percent-encodes
-  it, so an address in it would pass the redaction encoded), redacted and cut
+  at the first ``?`` of the raw target, the userinfo of every ``//…@`` in it
+  is cut, then it is decoded until it stops changing, the userinfo cut again
+  after each round (uvicorn percent-encodes it, so an address in it would pass
+  the redaction encoded; at most ``PATH_UNQUOTE_ROUNDS`` rounds, and a path
+  that a further round would still change is ``PATH_OVER_ENCODED``), redacted and cut
   at ``PATH_MAX_CHARS`` with ``PATH_CUT_MARKER``; a decoded newline, quote or
   control character is escaped by the encoder like any other text. A record of
   ``uvicorn.access`` whose arguments are not that shape is written as its bare
@@ -69,6 +72,7 @@ factory itself (a settings error is uvicorn's traceback on standard error).
 
 import json
 import logging
+import re
 import sys
 import traceback
 from contextlib import suppress
@@ -77,7 +81,7 @@ from typing import Any
 from urllib.parse import unquote
 
 from meridian.platform.common.logredaction import WITHHELD
-from meridian.platform.guardrails import redact
+from meridian.platform.guardrails import EMAIL_PLACEHOLDER, redact
 
 ACCESS_LOGGER = "uvicorn.access"
 UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", ACCESS_LOGGER)
@@ -99,6 +103,11 @@ ACCESS_ARGUMENTS = 5
 # request can send a path of any length, and a line is read in Loki.
 PATH_MAX_CHARS = 256
 PATH_CUT_MARKER = "[cut]"
+# A path is unquoted until it stops changing, at most this many times.
+PATH_UNQUOTE_ROUNDS = 3
+# What the field holds for a path that a further round would still change: a
+# short bracketed word like the redaction's placeholders, and nothing of the path.
+PATH_OVER_ENCODED = "[encoded]"
 # The ``exception`` field, after redaction, is cut here with the same marker: a
 # deeply nested exception group gave 166 KB of indentation and frames.
 EXCEPTION_MAX_CHARS = 8192
@@ -129,13 +138,56 @@ def _access_fields(record: logging.LogRecord) -> dict[str, Any] | None:
     }
 
 
+# What follows two slashes (or two backslashes, which some clients read as the
+# same) up to the next separator is an authority wherever it stands in the
+# target: a user name before the last "@" of it, or before the placeholder the
+# record's redaction made of an address, is cut. A plain path segment holds
+# its "@" (no two separators before it), and so does a path after the
+# authority's own slash.
+_SEPARATORS = r"[/\\]{2}"
+_USERINFO = re.compile(rf"(?<={_SEPARATORS})[^/\\?#]*@")
+_BEFORE_PLACEHOLDER = re.compile(
+    rf"(?<={_SEPARATORS})[^/\\?#]*(?={re.escape(EMAIL_PLACEHOLDER)})"
+)
+
+
+def _without_userinfo(target: str) -> str:
+    """``target`` without the ``user:word@`` of every authority in it
+    (``scheme://user:word@host/path``, ``//user@host/path``, a URL inside a
+    path), which names a person. The userinfo ends at the last ``@`` before the
+    authority's slash. What a pattern cannot tell from a path is left: an
+    ``@`` after a slash (``http://user:pa/ss@host``: the authority is
+    ``user:pa``).
+
+    The record's arguments were redacted when the record was made, so a
+    ``word@host.example`` in the authority may already be ``[email]``, with the
+    user name before it: the authority then starts at the placeholder."""
+    return _BEFORE_PLACEHOLDER.sub("", _USERINFO.sub("", target))
+
+
 def _path_field(target: str) -> str:
     """The request target without its query, decoded, redacted and bounded.
 
     The query is cut at the first ``?`` BEFORE decoding: a decoded ``%3F`` is a
     character of the path. Redacting comes before the cut, so an address that
-    crosses the bound is not left in pieces."""
-    path = redact(unquote(target.partition("?")[0])).text
+    crosses the bound is not left in pieces.
+
+    The userinfo of any ``//…@`` is cut from the raw text first and again after
+    each round of decoding (a scheme encoded hides it from the first cut).
+    The decoding repeats until the text stops changing, at most
+    ``PATH_UNQUOTE_ROUNDS`` times (an address encoded twice is redacted as one
+    encoded once is); a text a further round would still change is
+    ``PATH_OVER_ENCODED`` and nothing of it."""
+    path = _without_userinfo(target.partition("?")[0])
+    for _ in range(PATH_UNQUOTE_ROUNDS):
+        decoded = _without_userinfo(unquote(path))
+        if decoded == path:
+            break
+        path = decoded
+    else:
+        if unquote(path) != path:
+            return PATH_OVER_ENCODED
+    path = redact(path).text
     if len(path) > PATH_MAX_CHARS:
         return path[:PATH_MAX_CHARS] + PATH_CUT_MARKER
     return path

@@ -96,16 +96,20 @@ IDENTITY = "meridian.platform.common.identity"
 # With no collector address a factory says once, through this logger, that its
 # metrics are not exported (S064): the one record of ours before uvicorn's.
 METRICS = "meridian.platform.common.metrics"
+# The two anonymous requests are refused and counted, and their count is
+# written when the lifespan ends (S069): with no database the write fails, and
+# the shared writer says so once, by the class of the error (T-49).
+SUMMARY = "meridian.platform.common.refusal_summary"
 MEASURED = {
-    "model-gateway": {IDENTITY},
-    "agent-runtime": {IDENTITY},
+    "model-gateway": {IDENTITY, SUMMARY},
+    "agent-runtime": {IDENTITY, SUMMARY},
     "claims-api": {
         "meridian.platform.common.http",
         "meridian.workloads.claims_triage.triaging",
     },
-    "policy-mcp": {IDENTITY},
-    "knowledge-mcp": {IDENTITY},
-    "claims-mcp": {IDENTITY},
+    "policy-mcp": {IDENTITY, SUMMARY},
+    "knowledge-mcp": {IDENTITY, SUMMARY},
+    "claims-mcp": {IDENTITY, SUMMARY},
 }
 
 

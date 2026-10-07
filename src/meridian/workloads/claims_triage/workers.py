@@ -30,7 +30,6 @@ from uuid import UUID
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from pydantic import BaseModel, ConfigDict, StrictBool, ValidationError
-from pydantic_core import ErrorDetails
 
 from meridian.platform.common.wire import WireModel
 from meridian.runtime.failures import GraphFailure
@@ -39,7 +38,18 @@ from meridian.runtime.tool_client import ToolClient
 from meridian.runtime.tracing import WORKER_KEY
 
 from .assessment import Assessed, assess
-from .models import DECISION_NOTES, ClaimFacts, Outcome
+
+# ``DATA_KEY`` and ``invalid_fields`` are the models' own, as the Claims API's
+# modules use them; ``DATA_KEY`` is still offered here, as it was before.
+from .models import (
+    DATA_KEY as DATA_KEY,
+)
+from .models import (
+    DECISION_NOTES,
+    ClaimFacts,
+    Outcome,
+    invalid_fields,
+)
 from .posted_text import POSTED_TEXT_FLAG
 from .proposal import TriageProposal
 from .rules import (
@@ -60,10 +70,6 @@ from .wording import (
 
 logger = logging.getLogger(__name__)
 
-# What stands for a key of the data in a location: ``extra="forbid"`` puts the
-# key an unknown field was sent under in the error's location, and the key is
-# the caller's. The same character as ``triaging.DATA_KEY``.
-DATA_KEY = "*"
 # The line of a policy whose wording the table of exclusion counts does not know.
 NO_COUNT = "the table of exclusion clauses has no count for the wording"
 
@@ -129,24 +135,6 @@ def policy_of(state: ClaimState) -> PolicyRecord:
     if state["policy"] is None:
         raise GraphFailure("missing-policy")
     return PolicyRecord.model_validate(state["policy"])
-
-
-def invalid_fields(exc: ValidationError) -> tuple[tuple[str, str], ...]:
-    """What failed to validate, as ``(dotted location, error type)`` pairs and
-    nothing else: never the message, the input or the context, which quote the
-    claim. The same as the Claims API's own (``triaging.invalid_fields``, which
-    a test compares this with); it is not imported, as the API module pulls the
-    web framework and the database driver into the graph. A key of the data is
-    replaced (``DATA_KEY``): it is the caller's."""
-    errors = exc.errors(include_url=False, include_input=False, include_context=False)
-    return tuple((_dotted(error), error["type"]) for error in errors)
-
-
-def _dotted(error: ErrorDetails) -> str:
-    parts = [str(part) for part in error["loc"]]
-    if error["type"] == "extra_forbidden" and parts:
-        parts[-1] = DATA_KEY
-    return ".".join(parts)
 
 
 def claim_of(state: ClaimState) -> ClaimFacts:

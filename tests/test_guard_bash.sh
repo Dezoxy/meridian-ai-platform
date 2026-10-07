@@ -218,10 +218,15 @@ amp_command="$(amp_shape "$bound")"
 jq -nc --arg c "$amp_command" '{tool_input:{command:$c}}' > "$big_input"
 cpu="$( { time bash "$hook" < "$big_input" > /dev/null; } 2>&1 )"
 cpu_seconds="$(awk '{ print $1 + $2 }' <<<"$cpu")"
-if awk -v s="$cpu_seconds" 'BEGIN { exit !(s < 1.5) }'; then
-  echo "ok   the worst shape under the byte bound takes ${cpu_seconds} s of CPU, under 1.5"
+# 3 s, not 1.5: the hosted runner took 1.736, 1.746 and 1.745 s for this shape
+# with nothing changed in the hook (pull requests 108 and 109), where the
+# development machine takes about 0.8 s. The bound is there to catch a pattern
+# that grows faster again, not the runner's speed; the watchdog, not this
+# number, is what answers a hook that runs long.
+if awk -v s="$cpu_seconds" 'BEGIN { exit !(s < 3) }'; then
+  echo "ok   the worst shape under the byte bound takes ${cpu_seconds} s of CPU, under 3"
 else
-  echo "FAIL the worst shape under the byte bound takes ${cpu_seconds} s of CPU, not under 1.5"
+  echo "FAIL the worst shape under the byte bound takes ${cpu_seconds} s of CPU, not under 3"
   fail=1
 fi
 ask_for "the worst shape followed by a denied segment is denied, not skipped" deny \

@@ -23,6 +23,12 @@ USABLE_ADDRESSES = [
     "https://svc.invalid:8443/base/path",
     "http://127.0.0.1:8000",
     "http://[::1]:8000",
+    # The row says "refuses what the client refuses", not "connects": the client
+    # parses each of these, so the check leaves them alone.
+    "http://1.2.3",
+    "http://host_name",
+    "http://-host",
+    "http://0x7f.1",
 ]
 # Each shape breaks one rule; the user and password carry the secret.
 REFUSED_ADDRESSES = {
@@ -59,6 +65,17 @@ REFUSED_ADDRESSES = {
     "an empty query": "http://svc.invalid/v1?",
     "a fragment": f"http://svc.invalid/v1#{SECRET}",
     "an empty fragment": "http://svc.invalid/v1#",
+    # The rules above pass each of these; the HTTP client refuses them (S069).
+    "an IPv4 address with a part above 255": "http://999.999.999.999",
+    "an IPv4 address with a port and a part above 255": "http://256.1.1.1:80",
+    "a host with a combining mark": "http://hóst.example.com",
+    "a host with an emoji": "http://\U0001f600.example.com",
+    "an IPv6 literal that is a future version": "http://[v1.x]",
+    # ``httpx.URL`` builds each of these and raises only when its host is read
+    # (an IDNA error, which is no ``InvalidURL``); the first request would fail.
+    "a host that is only the IDNA prefix": "http://xn--/",
+    "a host that is the IDNA prefix and one letter": "http://xn--a/",
+    "an IDNA host that quotes a word": f"http://xn--{SECRET}.example/",
 }
 
 
@@ -76,6 +93,25 @@ def test_a_refused_service_address_names_the_rule_and_not_the_address(
     assert problem
     for fragment in (SECRET, "operator", "svc.invalid"):
         assert fragment not in problem
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        "http://999.999.999.999",
+        "http://256.1.1.1:80",
+        "http://hóst.example.com",
+        "http://\U0001f600.example.com",
+        "http://[v1.x]",
+        "http://xn--/",
+        "http://xn--a/",
+    ],
+)
+def test_an_address_only_the_http_client_refuses_gets_the_fixed_sentence(
+    address: str,
+) -> None:
+    assert service_url_problem(address) == "is not a usable URL"
+    assert service_base_url_problem(address) == "is not a usable URL"
 
 
 @pytest.mark.parametrize(
