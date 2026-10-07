@@ -1,0 +1,63 @@
+# Source files over the 800-line ceiling that scripts/check_file_sizes.py lets
+# stand, each with the line count it has now and why. One line per file:
+#
+#   path  allowed-lines  reason of five words or more
+#
+# The list is a ratchet: an entry can only be lowered or removed. A file over
+# its count fails (it grew), a file under its count but still over 800 fails
+# until its entry is lowered to the count it has now, and a file that is now 800
+# lines or under, or is gone, fails until its line is removed. A new file over
+# 800 lines is not added here: it is split. Every line starts as the first run
+# of the check found it (2026-10-07).
+
+infra/terraform/aws.sh 812 over the ceiling before the check existed; a row of S074 homes its split
+scripts/check_docs_consistency.py 828 copied unchanged from development-base, whose copy is the one to split
+src/meridian/platform/registry/checks.py 857 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/common/test_http.py 860 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/common/test_identity.py 889 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/db/test_migration_rules.py 976 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/db/test_privileges.py 1198 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/evaluation/test_cli_eval.py 1065 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/evaluation/test_report.py 1033 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/gateway/test_azure_openai_provider.py 1937 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/gateway/test_budget.py 1113 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/gateway/test_gateway_budgets.py 1515 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/gateway/test_gateway_embeddings.py 1540 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/gateway/test_gateway_fallback.py 925 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/gateway/test_gateway_guardrails.py 1007 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/gateway/test_recorded.py 1028 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/guardrails/test_redaction_differential.py 801 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/knowledge_mcp/test_knowledge_server.py 1183 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/knowledge_mcp/test_search.py 888 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/registry/test_checks.py 1068 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/runtime/test_runtime_app.py 3160 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/runtime/test_tool_client.py 1091 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/test_alert_rules.py 900 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/test_aws_kubeadm_bootstrap.py 1690 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/test_aws_kubeadm_module.py 1461 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/test_aws_script.py 1491 cut once from a larger file; a row of S074 homes cutting it again or keeping it
+tests/meridian/test_aws_script_plan.py 1512 cut once from a larger file; a row of S074 homes cutting it again or keeping it
+tests/meridian/test_certificate_refused_request.py 852 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/test_gcp_kubeadm_bootstrap.py 1461 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/test_gcp_kubeadm_module.py 1266 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/test_gcp_module.py 1472 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/test_helm_chart.py 823 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/test_helm_identity.py 1086 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/test_kind_cluster_holder.py 1199 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/test_kind_kubectl_bounds.py 992 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/test_kind_namespace_policies.py 847 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/test_kind_upkeep_script.py 845 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/test_smoke_alert_rules.py 826 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/test_smoke_network_policy.py 864 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/test_telemetry_ca.py 821 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/test_triage_stack.py 852 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/toolserver/test_tool_server.py 2433 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/workloads/claims_triage/test_adjuster_pages.py 3097 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/workloads/claims_triage/test_assessment.py 1027 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/workloads/claims_triage/test_claim_moves.py 2429 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/workloads/claims_triage/test_claimant_pages.py 2743 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/workloads/claims_triage/test_claims_app.py 2079 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/workloads/claims_triage/test_injection.py 1580 over the ceiling before the check existed; a row of S074 homes its split
+tests/meridian/workloads/claims_triage/test_rules.py 1406 over the ceiling before the check existed; a row of S074 homes its split
+tests/test_check_docs_consistency.py 928 over the ceiling before the check existed; a row of S074 homes its split
+tests/test_terraform_redact.py 825 over the ceiling before the check existed; a row of S074 homes its split

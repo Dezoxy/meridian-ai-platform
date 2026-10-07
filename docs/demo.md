@@ -233,12 +233,13 @@ make registry   # the registry against its schemas and the tool contracts
 ### 11 to 13: what stops a bad change
 
 ```bash
-make lint       # ends with "Contracts: 6 kept, 0 broken."
+make lint       # "Contracts: 6 kept, 0 broken.", then the file size check's line
 ```
 
 The import contracts are the architecture's rules as a failing build: no
 agent framework in a platform package, no provider SDK outside the
-gateway.
+gateway. The file size check that follows them fails a source file over 800
+lines unless `scripts/file-size-exceptions.txt` lists it.
 
 Open [`data/evaluation/README.md`](../data/evaluation/README.md): the 47
 golden claims run through the real services on every pull request, answered
