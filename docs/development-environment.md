@@ -55,9 +55,12 @@ pins in `infra/kind/pins.env`, the `Makefile` and the workflows:
 - Node.js, for the edit and session hooks under `.claude/hooks/node/` and
   the MCP server in `.mcp.json`;
 - `terraform` and `az` only for the Azure steps (S007, S020), and `terraform`
-  with Docker for `make aws-validate` and `make aws-scan` (S036), which need
-  no account; the `aws` CLI is the owner's, for a plan or an apply, and a
-  session holds no credential for it.
+  with Docker for `make aws-validate` and `make aws-scan` (S036) and for
+  `make gcp-validate` and `make gcp-scan` (S078), which need no account and no
+  project; the `aws` CLI is the owner's, for a plan or an apply, and a
+  session holds no credential for it. Nobody plans or applies the Google Cloud
+  module, so `gcloud` is nobody's tool here and no session holds a credential
+  for it.
 
 Three things the laptop never showed, and what the virtual machine
 answered on 2026-10-06:
@@ -167,8 +170,10 @@ For the virtual machine both are recorded below.
   `apply`, `import`, `state` writes), and asks before `make aws-plan`,
   `make aws-apply`, a `terraform plan` of that module and an `aws` call that
   is not a read (the same runbook's section on the AWS environment lists what
-  it does not see). A known limit, older than this
-  change: the hook has ten seconds, and with the machine loaded (a load
+  it does not see). It knows no Google Cloud command beyond two `gcloud`
+  verbs and no `gcp-*` target: no credential for Google Cloud exists on the
+  machine, which is what stands in the way (T-100). A known limit, older than
+  this change: the hook has ten seconds, and with the machine loaded (a load
   average near 70) a command that carries a 70 KB heredoc, or one of
   4,000 segments, took it that long (1.3 s when idle), and Claude Code
   does not block a call whose hook ran out of time. So the hook arms a
