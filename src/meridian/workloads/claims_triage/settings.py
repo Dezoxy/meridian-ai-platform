@@ -4,11 +4,16 @@ import os
 from collections.abc import Mapping
 from typing import Annotated, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from meridian.platform.common.db import DATABASE_URL_ENV
 from meridian.platform.common.env import HttpUrl, require_env
 from meridian.platform.common.tls import ClientTls
+from meridian.workloads.claims_triage.file_download import (
+    DOWNLOADS_ENABLED_ENV,
+    check_uploads_stand_beside,
+    downloads_enabled_of,
+)
 from meridian.workloads.claims_triage.lifecycle import (
     DOCUMENTS_DEADLINE_DAYS,
     DOCUMENTS_DEADLINE_ENV,
@@ -74,6 +79,16 @@ class ClaimsSettings(BaseModel):
     uploads_rate_per_minute: int = Field(
         DEFAULT_RATE_PER_MINUTE, ge=MIN_RATE_PER_MINUTE, le=MAX_RATE_PER_MINUTE
     )
+    # Whether the adjuster's route that serves a stored file back exists (S070
+    # F4b): off unless the chart says so, and it needs the uploads on.
+    downloads_enabled: bool = False
+
+    @model_validator(mode="after")
+    def downloads_need_uploads(self) -> Self:
+        check_uploads_stand_beside(
+            downloads=self.downloads_enabled, uploads=self.uploads_enabled
+        )
+        return self
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] = os.environ) -> Self:
@@ -90,4 +105,5 @@ class ClaimsSettings(BaseModel):
             uploads_ceiling_bytes=ceiling_bytes_of(environ.get(UPLOADS_CEILING_ENV)),
             uploads_ceiling_rows=ceiling_rows_of(environ.get(UPLOADS_ROWS_ENV)),
             uploads_rate_per_minute=rate_per_minute_of(environ.get(UPLOADS_RATE_ENV)),
+            downloads_enabled=downloads_enabled_of(environ.get(DOWNLOADS_ENABLED_ENV)),
         )

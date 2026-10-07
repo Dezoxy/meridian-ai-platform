@@ -1,9 +1,10 @@
 """The adjuster's list of the files a claimant sent (S070 F4a): a table on the
 claim page with each file's kind, type, size, received time and SHA-256, and the
-words "not scanned" on every row. There is no link and no file identifier in the
-page: the download does not exist yet. The list is read with the tenant's
-filter as the claim is. A ``claim.file_stored`` row in the audit trail reads as
-every other event does.
+words "not scanned" on every row. With the download off, which is the default,
+there is no link and no file identifier in the page; the download's own tests
+hold the page byte for byte, and the links with it on. The list is read with
+the tenant's filter as the claim is. A ``claim.file_stored`` row in the audit
+trail reads as every other event does.
 """
 
 import hashlib

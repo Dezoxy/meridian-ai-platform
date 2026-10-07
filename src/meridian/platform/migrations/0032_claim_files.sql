@@ -13,8 +13,8 @@
 --
 -- What it is for. A claimant may attach a file to a claim, with the upload
 -- route switched on (it is off by default), and the adjuster's page lists the
--- claim's files (F4a). A download of the bytes is NOT built: F4b will build it,
--- behind a switch of its own, and until then nothing selects the content. This
+-- claim's files (F4a). A download of the bytes exists (F4b), behind a switch of
+-- its own that is off by default; with it off nothing selects the content. This
 -- file has not been applied anywhere outside disposable test databases, which
 -- is why its comments can still be corrected. Nothing reads the file: no text is taken out of it, no model
 -- sees it and no rule changes, so a file is not a document arrival and moves

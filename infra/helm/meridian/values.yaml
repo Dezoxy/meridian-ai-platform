@@ -385,8 +385,9 @@ route:
   # on the Claims API. Off here and on kind, apart from `route.enabled`: turning
   # the pages on does not turn uploads on, and the chart refuses uploads while
   # the route is off. Not to be exposed beyond the machine before sign-in
-  # (S021): the route is as open as the pages. To turn it on for one run on
-  # kind, see infra/kind/values/meridian.yaml.
+  # (S021): the route is as open as the pages, so the chart refuses uploads (and
+  # downloads, below) unless the route's host name ends in .localhost. To turn it
+  # on for one run on kind, see infra/kind/values/meridian.yaml.
   uploads:
     enabled: false
     # The buffer for this route alone, as an exact byte count in a string (a
@@ -406,6 +407,29 @@ route:
     # of Second, Minute, Hour, Day, Week, Month, Year.
     rateLimit:
       requests: 6
+      unit: Minute
+  # The adjuster's download of a stored file (S070 F4b, T-38): a second, named
+  # rule on the uploads route for GET and HEAD of
+  # /adjuster/claims/{claim_id}/files/{file_id}, a BackendTrafficPolicy for that
+  # rule alone, and MERIDIAN_CLAIMS_DOWNLOADS=on on the Claims API. It exists
+  # after this change and is off here and on kind. It needs route.uploads.enabled
+  # (there is nothing to download otherwise). The adjuster's pages have no sign-in
+  # before S021, so whoever reaches the host can read every stored file by walking
+  # the claim IDs: so the chart turns this on, and uploads, only for a route host
+  # name that ends in .localhost, a name that resolves to the machine itself.
+  # That stops a release for a cloud name; it does not stop a forwarded port or
+  # a variable set by hand outside the chart. To try it on kind, see
+  # infra/kind/values/meridian.yaml.
+  downloads:
+    enabled: false
+    # A LOCAL rate limit for the download rule alone, apart from the uploads':
+    # one bucket for every caller (no identity to key on), per Envoy proxy pod.
+    # 30 a minute is five times the uploads' allowance and about one adjuster
+    # opening the files of several claims; past it Envoy answers 429. The rule
+    # takes the first route's 64Ki request buffer and no larger one (a GET has no
+    # body).
+    rateLimit:
+      requests: 30
       unit: Minute
 
 # The Jobs run to completion: the migration as the database owner role, the seed

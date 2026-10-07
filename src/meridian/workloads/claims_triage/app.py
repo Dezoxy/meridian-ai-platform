@@ -77,6 +77,7 @@ from meridian.workloads.claims_triage.claimant_uploads import (
     TWIN_PATH,
     add_claimant_upload_twin,
 )
+from meridian.workloads.claims_triage.file_download import add_download_route
 from meridian.workloads.claims_triage.lifecycle import (
     ADJUSTER_APPROVED,
     ADJUSTER_REJECTED,
@@ -473,6 +474,10 @@ def create_app(
         )
         # The claimant's form posts to the twin, which runs the same handler.
         add_claimant_upload_twin(app, upload)
+    if settings.downloads_enabled:
+        # The adjuster's download of a stored file (S070 F4b): its own switch, and
+        # settings refuse it without the uploads. Off, its path is no route.
+        add_download_route(app, dsn=dsn, tenant=tenant, tracer=tracer)
     add_brief_routes(app, dsn=dsn, tenant=tenant, http=http, tracer=tracer)
     add_adjuster_pages(
         app,
@@ -485,6 +490,7 @@ def create_app(
         triage_again=lambda claim_id, page_run: triage_again(
             dsn, tenant, http, tracer, claim_id, page_run=page_run, meters=meters
         ),
+        downloads_enabled=settings.downloads_enabled,
     )
     add_claimant_pages(
         app,

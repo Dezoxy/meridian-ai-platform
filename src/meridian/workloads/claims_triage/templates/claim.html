@@ -26,13 +26,16 @@
 
 <h2>Files the claimant sent</h2>
 {% if files %}
+{% if downloads %}
+<p>These files come from an unauthenticated upload and are not scanned.</p>
+{% endif %}
 <table>
 <thead>
 <tr><th scope="col">Kind</th><th scope="col">Media type</th><th scope="col">Size</th><th scope="col">Received</th><th scope="col">SHA-256</th><th scope="col">Scan</th></tr>
 </thead>
 <tbody>
-{% for kind, media_type, size, received, short, full in files %}
-<tr><td>{{ kind }}</td><td>{{ media_type }}</td><td>{{ size }}</td><td>{{ received }}</td><td><span title="{{ full }}">{{ short }}</span></td><td>not scanned</td></tr>
+{% for kind, media_type, size, received, short, full, href in files %}
+<tr><td>{{ kind }}</td><td>{{ media_type }}</td><td>{{ size }}</td><td>{{ received }}</td><td><span title="{{ full }}">{{ short }}</span></td><td>not scanned{% if href %} <a href="{{ href }}" rel="noopener noreferrer">download</a>{% endif %}</td></tr>
 {% endfor %}
 </tbody>
 </table>

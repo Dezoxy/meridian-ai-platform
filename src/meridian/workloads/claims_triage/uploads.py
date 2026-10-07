@@ -3,8 +3,9 @@
 A file's bytes are stored with its claim (``claims.claim_files``). The claimant's
 form and the adjuster's list of a claim's files (F4a) show its kind, size and
 time, and for the adjuster its type and hash, "not scanned". The download that
-serves the bytes back is NOT built: F4b will build it, with its own switch and
-review, and ``file_content`` below has no caller until then. Nothing reads the
+serves the bytes back to the adjuster is ``file_download``'s (F4b): its own
+route, behind its own switch (off by default, and the chart turns it on only for
+a local host name), and ``file_content`` below is its read. Nothing reads the
 file: no text is extracted, nothing is sent to a model, no rule changes. An
 upload is NOT a document arrival (the design's advisor reading): it moves no
 claim, stores no document name, starts no triage and calls no runtime, so no
@@ -362,9 +363,9 @@ def file_content(
     conn: psycopg.Connection, tenant: str, claim_id: str, file_id: uuid.UUID
 ) -> FileContent | None:
     """One file's bytes and type, by claim and identifier: ``None`` unless the
-    tenant's claim holds that file. It has no caller until F4b, the download,
-    which is built with its own review and switch; it is here so that the one
-    query that selects ``content`` is written once, with its tenant filter."""
+    tenant's claim holds that file. The caller is the download (``file_download``,
+    F4b), which exists when its switch is on; this is where the one query that
+    selects ``content`` is written, once, with its tenant filter."""
     if conn.execute(CLAIM_EXISTS_SQL, (claim_id, tenant)).fetchone() is None:
         return None
     row = conn.execute(FILE_CONTENT_SQL, (claim_id, file_id)).fetchone()

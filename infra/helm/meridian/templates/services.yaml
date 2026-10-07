@@ -107,10 +107,17 @@ spec:
             {{- if eq .name "MERIDIAN_CLAIMS_UPLOADS" }}
             {{- fail (printf "services.%s.env sets MERIDIAN_CLAIMS_UPLOADS: the switch of the upload route comes from route.uploads.enabled and from nowhere else, which also turns on the edge's route and limits for it, so no values env item may set it" $name) }}
             {{- end }}
+            {{- if eq .name "MERIDIAN_CLAIMS_DOWNLOADS" }}
+            {{- fail (printf "services.%s.env sets MERIDIAN_CLAIMS_DOWNLOADS: the switch of the download route comes from route.downloads.enabled and from nowhere else, which also turns on the edge's rule and limit for it and the guard that keeps it local, so no values env item may set it" $name) }}
+            {{- end }}
             {{- include "meridian.envItem" (dict "root" $ "item" .) | nindent 12 }}
             {{- end }}
             {{- if and (eq $name "claims-api") $.Values.route.uploads.enabled }}
             - name: MERIDIAN_CLAIMS_UPLOADS
+              value: "on"
+            {{- end }}
+            {{- if and (eq $name "claims-api") $.Values.route.downloads.enabled }}
+            - name: MERIDIAN_CLAIMS_DOWNLOADS
               value: "on"
             {{- end }}
             {{- if include "meridian.usesRateStore" (dict "root" $ "name" $name) }}

@@ -141,6 +141,14 @@ SECURITY_HEADERS = {
     "Cross-Origin-Resource-Policy": "same-origin",
     "Cache-Control": "no-store",
 }
+# The one response of the pages that carries a Content-Security-Policy of its own:
+# the adjuster's file download (``file_download``), which sandboxes the bytes it
+# serves. The route sets this key in the request's scope when it builds that
+# response, and only then does the middleware below keep the policy the response
+# already holds; every other response under the pages' prefixes, an error page of
+# the download's own path included, gets the pages' policy.
+OWN_POLICY_SCOPE_KEY = "meridian.own_response_policy"
+POLICY_HEADER = "Content-Security-Policy"
 
 ClaimId = Annotated[str, Path(pattern=CLAIM_ID_PATTERN)]
 # Each takes the claim, the move and the run the page showed (empty for a claim
@@ -256,7 +264,8 @@ class ClaimView:
     to the adjuster (``None`` for a claim in another state, or a move with no
     reason). ``documents_refused``: documents were posted after the deadline
     since a referral for overdue documents. ``files`` are the files the claimant
-    sent, in arrival order (S070); the page lists them and links to none."""
+    sent, in arrival order (S070); the page lists them, and links to each only
+    when the download is on (``render_claim``'s ``downloads``)."""
 
     claim_id: str
     state: str
@@ -329,7 +338,9 @@ def require_same_origin(request: Request) -> None:
 
 class SecurityHeadersMiddleware:
     """Add the pages' headers to every response under ``/adjuster/`` and
-    ``/claimant/``: a 404, a 405, a 413 and a 422 as well as a page. The JSON
+    ``/claimant/``: a 404, a 405, a 413 and a 422 as well as a page. They replace
+    a header the response set, with one exception: the policy of a response whose
+    route marked the request (``OWN_POLICY_SCOPE_KEY``, the download). The JSON
     routes are not touched."""
 
     def __init__(self, app: ASGIApp) -> None:
@@ -346,6 +357,8 @@ class SecurityHeadersMiddleware:
             if message["type"] == "http.response.start":
                 headers = MutableHeaders(scope=message)
                 for name, value in SECURITY_HEADERS.items():
+                    if name == POLICY_HEADER and scope.get(OWN_POLICY_SCOPE_KEY):
+                        continue
                     headers[name] = value
                 if scope["path"] == STYLESHEET_PATH and message["status"] == HTTP_OK:
                     headers["Cache-Control"] = STYLESHEET_CACHE_CONTROL
@@ -455,7 +468,11 @@ def render_queue(
     )
 
 
-def render_claim(view: ClaimView, notice: Notice | None = None) -> str:
+def render_claim(
+    view: ClaimView, notice: Notice | None = None, *, downloads: bool = False
+) -> str:
+    """The claim's page. ``downloads``: the download is on, so each listed file
+    has a link to it; off, the page is what it was without the download."""
     proposal = view.proposal
     payable = _euros(proposal.payable_amount) if proposal else ""
     # The recorded word again, for a run that did not complete; not beside a
@@ -504,7 +521,9 @@ def render_claim(view: ClaimView, notice: Notice | None = None) -> str:
         # Jinja would print ``None``: a claim with no run is the empty string.
         run="" if view.run_id is None else str(view.run_id),
         queue_path=QUEUE_PATH,
-        # No identifier, no link: the download does not exist yet.
+        downloads=downloads,
+        # The link, and the file's identifier in it, only with the download on;
+        # empty otherwise, and then the page holds no identifier.
         files=[
             (
                 f.kind,
@@ -513,6 +532,7 @@ def render_claim(view: ClaimView, notice: Notice | None = None) -> str:
                 _when(f.received_at),
                 f.sha256[:12],
                 f.sha256,
+                f"{QUEUE_PATH}/{view.claim_id}/files/{f.file_id}" if downloads else "",
             )
             for f in view.files
         ],
@@ -631,10 +651,13 @@ def add_adjuster_pages(
     tracer: Tracer,
     decide: DecideFn,
     triage_again: TriageAgainFn,
+    downloads_enabled: bool = False,
 ) -> None:
     """Add the queue, the claim, the decision and triage forms and the
     stylesheet to the Claims API. ``decide`` is the API's one decision path and
-    ``triage_again`` the one that sends a claim back or tries it again (S048)."""
+    ``triage_again`` the one that sends a claim back or tries it again (S048).
+    ``downloads_enabled``: the claim page links to each file (the route itself is
+    ``file_download``'s)."""
     stylesheet = (PACKAGE_DIR / "static" / "adjuster.css").read_bytes()
     app.add_middleware(SecurityHeadersMiddleware)
 
@@ -707,7 +730,7 @@ def add_adjuster_pages(
                 return render_error(*claim_database_failure(exc, claim_id))
         if view is None:
             return render_error(HTTP_NOT_FOUND, NO_SUCH_CLAIM_DETAIL)
-        return HTMLResponse(render_claim(view))
+        return HTMLResponse(render_claim(view, downloads=downloads_enabled))
 
     # The proposal the page above shows, as JSON, for ``meridian eval run``
     # (T-80): the claim's ID, its state and the proposal, and nothing of the
@@ -747,7 +770,8 @@ def add_adjuster_pages(
         if view is None:
             return render_error(failure.status, failure.detail)
         notice = Notice(failure.status, failure.detail)
-        return HTMLResponse(render_claim(view, notice), status_code=failure.status)
+        page = render_claim(view, notice, downloads=downloads_enabled)
+        return HTMLResponse(page, status_code=failure.status)
 
     def answered(
         call: Callable[[], DecisionResponse | ClaimMoveResponse | DecisionFailure],

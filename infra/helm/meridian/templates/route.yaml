@@ -10,6 +10,25 @@ the upload paths alone (below).
 {{- if and .Values.route.uploads.enabled (not .Values.route.enabled) }}
 {{- fail "route.uploads.enabled is true, but route.enabled is false: the upload route is a second route on the edge and has nothing to stand beside; turn the route on (route.enabled, route.hostname, route.parentRef) or turn uploads off" }}
 {{- end }}
+{{- if and .Values.route.downloads.enabled (not .Values.route.uploads.enabled) }}
+{{- fail "route.downloads.enabled is true, but route.uploads.enabled is false: the download serves the files the upload route stores and has nothing to serve without it; turn uploads on or turn downloads off" }}
+{{- end }}
+{{- /*
+The local-only guard for both file switches. Until sign-in exists (S021) the
+upload route takes a file from anyone who reaches the host and the download
+serves every stored file to anyone who reaches the host, by walking the claim
+IDs (threat model T-38, T-69). So the chart turns either switch on only for a
+route host name that ends in `.localhost`: a name that resolves to the machine
+itself and cannot be reached from another one. On kind the edge's port is bound
+to 127.0.0.1 as well (infra/kind/cluster.yaml). S021 removes this guard when sign-in
+exists. What it does not stop: a forwarded port, or the variable set by hand
+outside the chart.
+*/ -}}
+{{- if or .Values.route.uploads.enabled .Values.route.downloads.enabled }}
+{{- if not (hasSuffix ".localhost" .Values.route.hostname) }}
+{{- fail (printf "route.uploads.enabled or route.downloads.enabled is true, but route.hostname %q does not end in .localhost: until sign-in exists (S021) the upload and download routes take and serve files for anyone who reaches the host, so the chart turns them on only for a name that resolves to this machine; use a *.localhost name or turn them off" .Values.route.hostname) }}
+{{- end }}
+{{- end }}
 {{- if .Values.route.enabled }}
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -110,6 +129,44 @@ spec:
       backendRefs:
         - name: claims-api
           port: {{ .Values.port }}
+{{- if .Values.route.downloads.enabled }}
+    {{- /*
+    The download (S070 F4b): a second rule of this route, named so that a
+    policy can target it alone, for GET and HEAD of
+    /adjuster/claims/{claim_id}/files/{file_id}. The claim ID has the shape of the
+    others and the file ID is the app's own (a lower-case, hyphenated UUID:
+    file_download.FILE_ID_PATTERN, which a test holds equal to this). Why a rule of
+    this route and not a third match of the first rule: a BackendTrafficPolicy
+    attaches to a whole HTTPRoute or, by `sectionName`, to one rule of it, and the
+    first rule's policy carries the uploads' 1,126,400 byte buffer and six
+    requests a minute for every match of that rule. A GET of a file would spend
+    the uploads' allowance and be buffered at the uploads' size. The Gateway
+    API's HTTPRouteRule `name` (CRDs of the Gateway API v1.6.1 the pinned
+    Envoy Gateway v1.9.2 chart installs) and the policy's `sectionName` ("HTTPRoute:
+    HTTPRouteRule name", in the policy's CRD) were read there; neither was run
+    on a cluster, nor was which of the route's policy and the rule's policy an
+    Envoy Gateway applies to this rule ("only the most specific configuration
+    takes effect", the policy CRD says of merging). The kind run reads it: 31
+    GETs of a file in a minute must end in a 429 and an upload must still be
+    counted by the uploads' limit alone. Should the rule's policy not attach, the
+    route's own applies and the download is limited by the uploads' bucket,
+    which is stricter, not looser. A route of its own would need no such
+    reading, at the price of a second route to explain.
+    */}}
+    - name: downloads
+      matches:
+        - method: GET
+          path:
+            type: RegularExpression
+            value: ^/adjuster/claims/CLM-[0-9]{4}/files/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+        - method: HEAD
+          path:
+            type: RegularExpression
+            value: ^/adjuster/claims/CLM-[0-9]{4}/files/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+      backendRefs:
+        - name: claims-api
+          port: {{ .Values.port }}
+{{- end }}
 ---
 {{- /*
 The upload route's own limits, in a policy of its own so that the first one is
@@ -141,5 +198,35 @@ spec:
         - limit:
             requests: {{ .Values.route.uploads.rateLimit.requests }}
             unit: {{ .Values.route.uploads.rateLimit.unit }}
+{{- if .Values.route.downloads.enabled }}
+---
+{{- /*
+The download rule's own limit (S070 F4b), a policy that targets the rule named
+`downloads` of the uploads route and nothing else (`sectionName`; see the rule
+above for what was read and what only a cluster shows). A local rate limit, as the
+uploads': one bucket for every caller of the rule, per proxy pod, 30 a minute by
+default. The buffer is the first route's own, 64Ki, and no larger: a GET has no
+body, so the uploads' buffer is neither needed nor wanted here.
+*/}}
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: claims-api-downloads
+  namespace: {{ .Release.Namespace }}
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: claims-api-uploads
+      sectionName: downloads
+  requestBuffer:
+    limit: {{ .Values.route.requestBufferLimit }}
+  rateLimit:
+    local:
+      rules:
+        - limit:
+            requests: {{ .Values.route.downloads.rateLimit.requests }}
+            unit: {{ .Values.route.downloads.rateLimit.unit }}
+{{- end }}
 {{- end }}
 {{- end }}

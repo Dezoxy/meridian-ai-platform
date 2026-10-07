@@ -94,3 +94,8 @@ route:
   # the app's route). Not before sign-in (S021) on a machine others reach.
   #   uploads:
   #     enabled: true
+  # The adjuster's download of a stored file (S070 F4b) is off here too, and it is
+  # its own switch: to try it as well, add `downloads:` with `enabled: true` beside
+  # `uploads:` (a rule of that route for GET and HEAD of a file, 30 requests a
+  # minute, and the app's route). The chart refuses either switch unless the host
+  # name above ends in .localhost, as it does; the pages have no sign-in before S021.
