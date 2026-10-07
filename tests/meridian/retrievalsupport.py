@@ -110,7 +110,9 @@ def _golden_queries(
     outcomes = {o["claim_id"]: o for o in _load(source, "expected-outcomes.json")}
     queries: list[LabelledQuery] = []
     for claim in _load(source, "claims.json"):
-        policy = policies[claim["policy_number"]]
+        # None for the claim on a policy number no policy has: it cites nothing,
+        # so no query is made from it.
+        policy = policies.get(claim["policy_number"])
         relevant = tuple(
             citation["clause"]
             for citation in outcomes[claim["claim_id"]]["citations"]

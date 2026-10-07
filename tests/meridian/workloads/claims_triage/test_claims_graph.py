@@ -56,12 +56,21 @@ from meridian.runtime.tool_client import (
 )
 from meridian.runtime.tracing import NodeSpans
 from meridian.workloads.claims_triage import assessment as assessment_module
+from meridian.workloads.claims_triage import triaging, workers
 from meridian.workloads.claims_triage import wording as wording_module
-from meridian.workloads.claims_triage import workers
 from meridian.workloads.claims_triage.assessment import ASSESSMENT_OUTPUT_TOKENS
 from meridian.workloads.claims_triage.graph import build
-from meridian.workloads.claims_triage.models import DECISION_NOTES
+from meridian.workloads.claims_triage.models import (
+    DECISION_NOTES,
+    ClaimFacts,
+    ClaimSubmission,
+)
+from meridian.workloads.claims_triage.posted_text import (
+    POSTED_TEXT_FLAG,
+    input_for_run,
+)
 from meridian.workloads.claims_triage.proposal import TriageProposal
+from meridian.workloads.claims_triage.rules import PolicyRecord
 from meridian.workloads.claims_triage.wording import AMOUNTS_PROBE, TIMING_PROBE
 from meridian.workloads.claims_triage.workers import ApprovalOutcome
 
@@ -343,7 +352,8 @@ WITHHELD_FROM_THE_MODEL = "CLM-0012"
 @pytest.mark.parametrize("claim_id", list(CLAIMS))
 def test_the_graph_reproduces_the_oracle_on_every_golden_claim(claim_id: str) -> None:
     expected = EXPECTED[claim_id]
-    policy = POLICIES[CLAIMS[claim_id]["policy_number"]]
+    # Empty for the claim on a policy number no policy has: it cites nothing
+    policy = POLICIES.get(CLAIMS[claim_id]["policy_number"], {})
     model = golden_model(claim_id)
     tools = StubTools()
     withheld = claim_id == WITHHELD_FROM_THE_MODEL
@@ -702,12 +712,16 @@ def test_the_citation_of_an_excluding_clause_carries_the_policys_version(
     ]
 
 
-def test_a_wording_version_that_the_table_does_not_know_is_never_complete() -> None:
-    output, _, _ = triage("CLM-0011", tools=tools_for_version("2031-07"))
+def test_a_wording_version_that_the_table_does_not_know_fails_the_run() -> None:
+    """Was a referral as ``unverified`` with the gap ``exclusion_clauses`` (S014);
+    since S067 the run fails, before the model is asked."""
+    model = StubModel()
 
-    assert output["gaps"] == ["exclusion_clauses"]
-    assert (output["route"], output["reason"]) == ("adjuster", "unverified")
-    assert output["recommendation"] is None
+    with pytest.raises(GraphFailure) as raised:
+        triage("CLM-0011", model, tools_for_version("2031-07"))
+
+    assert raised.value.code == "wording-version-unknown"
+    assert model.calls == []
 
 
 # -- the calls ----------------------------------------------------------------
@@ -939,16 +953,21 @@ def test_a_truncated_history_is_a_gap_and_not_a_failure() -> None:
 
 
 def test_a_claim_that_is_not_valid_facts_fails_the_run() -> None:
-    with pytest.raises(ValueError, match="validation error"):
+    """Was a ``ValidationError`` that quoted the claim and ended the run as
+    ``unexpected``; since S067 a ``GraphFailure`` with a fixed code."""
+    with pytest.raises(GraphFailure) as raised:
         triage("CLM-0011", peril="meteor")
+
+    assert failure_reason(raised.value) == "claim-not-valid"
 
 
 def test_a_claim_that_still_carries_the_claimant_is_refused_by_the_graph() -> None:
     model, tools = StubModel(), StubTools()
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(GraphFailure) as raised:
         run_graph(model, tools, CLAIMS["CLM-0011"])
 
+    assert raised.value.code == "claim-not-valid"
     assert model.calls == []
     assert tools.calls == []
 
@@ -1771,3 +1790,507 @@ def test_the_runtime_loads_the_workload_graph_through_the_registry() -> None:
     factory = load_graph_factory("claims-triage", load_registry(REGISTRY_DIR))
 
     assert factory is build
+
+
+# -- a wording version the table does not know (S067) -------------------------
+
+UNKNOWN_VERSION = "2031-07"
+NO_COUNT = "the table of exclusion clauses has no count for the wording"
+WORKERS_LOGGER = f"{LOGGER}.workers"
+
+
+def tools_of_version(
+    claim_id: str,
+    version: str,
+    *,
+    dropping: Callable[[dict[str, Any]], bool] = lambda chunk: False,
+) -> StubTools:
+    """Tools whose policy and search answers carry ``version``; the search
+    leaves out the clauses ``dropping`` picks."""
+    policy = StubTools._policy({"policy_number": CLAIMS[claim_id]["policy_number"]})
+    policy["policy"]["wording_version"] = version
+
+    def versioned(_: int, answer: dict[str, Any]) -> dict[str, Any]:
+        kept = [c for c in answer["chunks"] if not dropping(c)]
+        return {**answer, "wording_version": version, "chunks": kept}
+
+    return StubTools(answers={"policy_lookup": policy}, tamper=versioned)
+
+
+def logged(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [record.getMessage() for record in caplog.records]
+
+
+def test_an_unknown_wording_version_fails_the_run_before_the_model_is_asked() -> None:
+    model = StubModel()
+
+    with pytest.raises(GraphFailure) as raised:
+        triage("CLM-0011", model, tools_of_version("CLM-0011", UNKNOWN_VERSION))
+
+    assert failure_reason(raised.value) == "wording-version-unknown"
+    assert model.calls == []
+
+
+def test_an_unknown_wording_version_fails_a_claim_that_needs_no_model() -> None:
+    # CLM-0005 is a glass claim on a motor policy: no circumstance exclusion is a
+    # candidate, but the rules still read the count in their gaps.
+    model = StubModel()
+
+    with pytest.raises(GraphFailure) as raised:
+        triage("CLM-0005", model, tools_of_version("CLM-0005", UNKNOWN_VERSION))
+
+    assert raised.value.code == "wording-version-unknown"
+    assert model.calls == []
+
+
+def test_the_same_claim_with_a_version_the_table_knows_is_not_failed() -> None:
+    output, _, _ = triage("CLM-0005")
+
+    assert (output["route"], output["reason"]) == ("auto_approve", "within_threshold")
+
+
+@pytest.mark.parametrize(
+    "claim_id",
+    [
+        "CLM-0002",  # a lapsed policy
+        "CLM-0014",  # a loss after the period
+        "CLM-0020",  # a peril the motor product does not cover
+        "CLM-0022",  # a peril the home product does not cover
+    ],
+    ids=["lapsed", "outside-period", "peril-not-covered-motor", "peril-not-covered"],
+)
+def test_a_claim_whose_route_never_reads_the_table_routes_as_it_did(
+    claim_id: str,
+) -> None:
+    keys = ("route", "reason", "recommendation", "gaps")
+    known, _, _ = triage(claim_id)
+
+    unknown, _, _ = triage(claim_id, tools=tools_of_version(claim_id, UNKNOWN_VERSION))
+
+    assert [unknown[k] for k in keys] == [known[k] for k in keys]
+
+
+def test_a_claim_with_no_cover_clause_is_unverified_and_not_failed() -> None:
+    tools = tools_of_version(
+        "CLM-0011", UNKNOWN_VERSION, dropping=lambda c: c["clause"].startswith("2.")
+    )
+
+    output, _, _ = triage("CLM-0011", tools=tools)
+
+    assert (output["reason"], output["gaps"]) == ("unverified", ["cover_clause"])
+
+
+def test_the_log_line_names_the_wording_when_product_and_version_are_the_catalogues(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    with pytest.raises(GraphFailure):
+        triage("CLM-0011", tools=tools_of_version("CLM-0011", UNKNOWN_VERSION))
+
+    (record,) = [r for r in caplog.records if r.name == WORKERS_LOGGER]
+    assert record.getMessage() == f"{NO_COUNT} MOTOR-TPL {UNKNOWN_VERSION}"
+    assert record.levelno == logging.ERROR
+
+
+def terms_of_wording(product: str, version: str) -> None:
+    """``terms_of`` for a policy in force that has the cover clause of the home
+    wording, whose product and version are the given ones."""
+    claim = ClaimFacts.model_validate(facts("CLM-0016"))
+    record = StubTools._policy({"policy_number": CLAIMS["CLM-0016"]["policy_number"]})
+    policy = PolicyRecord.model_validate(
+        {**record["policy"], "product": product, "wording_version": version}
+    )
+    state = {"chunks": wording("HOME-STD")[1]}
+    workers.terms_of(claim, policy, cast(workers.ClaimState, state))
+
+
+@pytest.mark.parametrize(
+    ("product", "version"),
+    [
+        (f"{CANARY}-P", "2026-01"),
+        ("HOME-STD", f"{CANARY}-v"),
+        ("HOME-STD", "2026-1"),
+        ("HOME-STD", "2026-01\n"),
+        ("HOME-STD", "2026-001"),
+        ("HOME-STD", ""),
+        ("home-std", "2026-02"),
+    ],
+    ids=[
+        "product-canary",
+        "version-canary",
+        "version-short",
+        "version-newline",
+        "version-long",
+        "version-empty",
+        "product-case",
+    ],
+)
+def test_a_product_or_version_outside_the_catalogue_is_not_repeated_in_the_log(
+    product: str, version: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    with pytest.raises(GraphFailure) as raised:
+        terms_of_wording(product, version)
+
+    assert raised.value.code == "wording-version-unknown"
+    assert logged(caplog) == [
+        f"{NO_COUNT} of a product or version outside the catalogue"
+    ]
+
+
+def test_a_product_of_the_catalogue_with_a_version_of_its_form_is_named(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    with pytest.raises(GraphFailure):
+        terms_of_wording("HOME-STD", "2026-02")
+
+    assert logged(caplog) == [f"{NO_COUNT} HOME-STD 2026-02"]
+
+
+RECORDED = (1, 3, 7, 8, 9, 11, 15, 23, 26, 31, 34, 35, 37, 38)
+
+
+def test_the_model_is_asked_for_the_claims_the_recording_holds() -> None:
+    # Every golden policy's pair is in the table, so no claim fails and the 14
+    # requests of the recording (the evaluation baseline's triage calls) are
+    # still made, and no other.
+    asked = []
+    for claim_id in CLAIMS:
+        model = StubModel()
+        run_graph(model, StubTools(), facts(claim_id))
+        if model.calls:
+            asked.append(claim_id)
+
+    assert asked == [f"CLM-{number:04d}" for number in RECORDED]
+
+
+# -- a claim that is not valid facts (S067, row L565) --------------------------
+
+
+def test_a_claim_that_is_not_valid_fails_with_a_fixed_code_and_asks_nothing() -> None:
+    model, tools = StubModel(), StubTools()
+
+    with pytest.raises(GraphFailure) as raised:
+        run_graph(model, tools, facts("CLM-0011", peril="meteor"))
+
+    assert failure_reason(raised.value) == "claim-not-valid"
+    assert raised.value.__suppress_context__ is True
+    assert model.calls == [] and tools.calls == []
+
+
+def test_the_log_names_the_fields_that_failed_and_the_kind_of_each(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    claim = facts("CLM-0011", peril="meteor", claimed_amount="a lot")
+
+    with pytest.raises(GraphFailure):
+        run_graph(StubModel(), StubTools(), claim)
+
+    (record,) = [r for r in caplog.records if r.name == WORKERS_LOGGER]
+    assert record.levelno == logging.ERROR
+    assert record.getMessage() == (
+        "the claim of the run is not valid: ValidationError "
+        "(('peril', 'literal_error'), ('claimed_amount', 'int_type'))"
+    )
+
+
+def test_no_value_and_no_key_of_the_claim_is_in_a_log_record_or_the_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    claim: dict[str, Any] = {
+        name: f"{CANARY}-{name}" for name in ClaimFacts.model_fields
+    }
+    claim[f"{CANARY}-key"] = f"{CANARY}-extra"
+    claim["loss_location"] = {"city": f"{CANARY}-city", f"{CANARY}-sub": 1}
+    claim["documents"] = [f"{CANARY}-document"]
+
+    with pytest.raises(GraphFailure) as raised:
+        run_graph(StubModel(), StubTools(), claim)
+
+    held = [*logged(caplog), str(raised.value), repr(raised.value)]
+    assert raised.value.code == "claim-not-valid"
+    assert not any(CANARY in text for text in held)
+    assert any(f"('{triaging.DATA_KEY}', 'extra_forbidden')" in text for text in held)
+
+
+def test_the_fields_are_those_the_claims_api_logs_for_the_same_error() -> None:
+    claim = {**facts("CLM-0011"), "peril": "meteor", f"{CANARY}-key": 1}
+    with pytest.raises(ValidationError) as raised:
+        ClaimFacts.model_validate(claim)
+
+    assert workers.invalid_fields(raised.value) == triaging.invalid_fields(raised.value)
+
+
+@pytest.mark.parametrize(
+    "node", ["intake", "terms", "assessor", "propose", "request_approval"]
+)
+def test_every_node_of_the_supervisor_fails_an_invalid_claim_with_the_same_code(
+    node: str,
+) -> None:
+    graph = build(cast(ModelClient, StubModel()), cast(ToolClient, StubTools()))
+    state = {
+        "claim": facts("CLM-0011", peril="meteor"),
+        "policy": None,
+        "history": [],
+        "history_truncated": False,
+        "chunks": [],
+        "assessed": None,
+        "output": {},
+    }
+
+    with pytest.raises(GraphFailure) as raised:
+        graph.nodes[node].runnable.invoke(state)
+
+    assert raised.value.code == "claim-not-valid"
+
+
+@pytest.mark.parametrize("node", ["read_outcome", "write_note"])
+def test_each_node_after_the_pause_fails_an_invalid_claim_with_the_same_code(
+    node: str,
+) -> None:
+    view = cast(ToolClient, StubTools().for_worker(workers.APPROVALS))
+    outcome = workers.build_outcome(view)
+    state = {"claim": facts("CLM-0011", peril="meteor"), "decision": "approve"}
+
+    with pytest.raises(GraphFailure) as raised:
+        outcome.nodes[node].invoke(state)
+
+    assert raised.value.code == "claim-not-valid"
+
+
+# -- the screen of the text as posted (S067) -----------------------------------
+
+SCREEN_KEYS = ("route", "reason", "recommendation", "gaps", "assessment")
+
+
+def run_flagged(
+    model: StubModel, tools: StubTools, claim: dict[str, Any], flag: Any
+) -> dict[str, Any]:
+    """The state a run reaches when it is sent the flag beside the claim."""
+    graph = compiled(model, tools)
+    result = graph.invoke({"claim": claim, POSTED_TEXT_FLAG: flag}, THREAD)
+    result.pop("__interrupt__", None)
+    return result
+
+
+def test_a_flagged_run_makes_no_call_and_its_assessment_is_unavailable() -> None:
+    model = StubModel()
+
+    result = run_flagged(model, StubTools(), facts("CLM-0011"), True)
+
+    output = result["output"]
+    assert model.calls == []
+    assert output["assessment"] == "unavailable"
+    assert output["unavailable_because"] == "injection-suspected"
+    assert (output["route"], output["reason"]) == ("adjuster", "unverified")
+    assert output["recommendation"] is None
+
+
+def test_the_same_claim_with_the_flag_false_asks_the_model_as_before() -> None:
+    model = StubModel()
+
+    result = run_flagged(model, StubTools(), facts("CLM-0011"), False)
+
+    assert len(model.calls) == 1
+    assert result["output"]["assessment"] == "none_applies"
+
+
+def test_a_run_sent_no_flag_is_a_run_sent_false() -> None:
+    absent_model, false_model = StubModel(), StubModel()
+
+    absent = run_graph(absent_model, StubTools(), facts("CLM-0011"))
+    sent_false = run_flagged(false_model, StubTools(), facts("CLM-0011"), False)
+
+    assert POSTED_TEXT_FLAG not in absent
+    assert absent["output"] == sent_false["output"]
+    assert absent_model.calls == false_model.calls
+
+
+def test_special_category_data_wins_over_the_flag() -> None:
+    # CLM-0012 says "I was in hospital": the claimant's own words.
+    model = StubModel()
+
+    result = run_flagged(model, StubTools(), facts("CLM-0012"), True)
+
+    assert model.calls == []
+    assert result["output"]["unavailable_because"] == "special-data"
+
+
+def test_the_flag_wins_over_a_clause_that_addresses_the_model() -> None:
+    def poisoned(_: int, answer: dict[str, Any]) -> dict[str, Any]:
+        chunks = [
+            {**c, "title": f"{c['title']} {INJECTION}"}
+            if c["clause"].startswith("3.")
+            else c
+            for c in answer["chunks"]
+        ]
+        return {**answer, "chunks": chunks}
+
+    model = StubModel()
+    with pytest.raises(GraphFailure):
+        run_flagged(model, StubTools(tamper=poisoned), facts("CLM-0011"), False)
+
+    result = run_flagged(model, StubTools(tamper=poisoned), facts("CLM-0011"), True)
+
+    assert model.calls == []
+    assert result["output"]["unavailable_because"] == "injection-suspected"
+
+
+@pytest.mark.parametrize(
+    "claim_id",
+    [
+        "CLM-0002",  # a lapsed policy
+        "CLM-0014",  # a loss after the period
+        "CLM-0005",  # no candidate clause for the peril
+        "CLM-0020",  # a peril the motor product does not cover
+        "CLM-0022",  # a peril the home product does not cover
+    ],
+    ids=[
+        "lapsed",
+        "outside-period",
+        "no-candidate",
+        "not-covered-motor",
+        "not-covered",
+    ],
+)
+def test_a_claim_the_assessor_is_not_asked_about_is_unchanged_by_the_flag(
+    claim_id: str,
+) -> None:
+    plain_model, flagged_model = StubModel(), StubModel()
+
+    plain = run_graph(plain_model, StubTools(), facts(claim_id))["output"]
+    flagged = run_flagged(flagged_model, StubTools(), facts(claim_id), True)["output"]
+
+    assert flagged == plain
+    assert plain_model.calls == [] and flagged_model.calls == []
+
+
+@pytest.mark.parametrize("claim_id", list(CLAIMS))
+def test_the_flag_changes_a_golden_claim_only_where_the_model_is_asked(
+    claim_id: str,
+) -> None:
+    asked_model, flagged_model = golden_model(claim_id), golden_model(claim_id)
+
+    plain = run_graph(asked_model, StubTools(), facts(claim_id))["output"]
+    flagged = run_flagged(flagged_model, StubTools(), facts(claim_id), True)["output"]
+
+    if not asked_model.calls:
+        assert flagged == plain
+        return
+    assert flagged_model.calls == []
+    assert flagged["assessment"] == "unavailable"
+    assert flagged["unavailable_because"] == "injection-suspected"
+    assert flagged["recommendation"] is None
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["true", "", 1, 0, 1.0, None, {}, {"a": True}, [True]],
+    ids=["str", "empty-str", "one", "zero", "float", "null", "object", "dict", "list"],
+)
+def test_a_flag_that_is_not_a_boolean_fails_the_run_before_any_call(
+    value: Any,
+) -> None:
+    model, tools = StubModel(), StubTools()
+
+    with pytest.raises(GraphFailure) as raised:
+        run_flagged(model, tools, facts("CLM-0011"), value)
+
+    assert failure_reason(raised.value) == "posted-flag-not-valid"
+    assert model.calls == [] and tools.calls == []
+
+
+def test_a_flag_that_is_not_a_boolean_is_refused_by_the_assessor_too() -> None:
+    graph = build(cast(ModelClient, StubModel()), cast(ToolClient, StubTools()))
+    state = {**planted_state("policy", "chunks"), POSTED_TEXT_FLAG: "true"}
+
+    with pytest.raises(GraphFailure) as raised:
+        graph.nodes["assessor"].runnable.invoke(state)
+
+    assert raised.value.code == "posted-flag-not-valid"
+
+
+def test_the_state_has_a_key_of_its_own_for_the_flag() -> None:
+    assert POSTED_TEXT_FLAG in workers.ClaimState.__annotations__
+    assert POSTED_TEXT_FLAG not in ClaimFacts.model_fields
+
+
+def test_the_flag_stays_a_boolean_in_the_state_a_run_leaves() -> None:
+    result = run_flagged(StubModel(), StubTools(), facts("CLM-0011"), True)
+
+    assert result[POSTED_TEXT_FLAG] is True
+    assert_plain(result)
+
+
+def sent_to_run(submission: ClaimSubmission) -> dict[str, Any]:
+    """What the Claims API sends the runtime for a stored submission."""
+    return input_for_run(submission, triaging.facts_for_run(submission))
+
+
+def posted_case(case_id: str) -> dict[str, Any]:
+    cases = load("injection/cases.json")
+    (case,) = [c for c in cases if c["case"] == case_id]
+    return sent_to_run(ClaimSubmission.model_validate(case["claim"]))
+
+
+@pytest.mark.parametrize("case_id", ["CLM-1053", "CLM-1054"])
+def test_a_name_masked_case_is_stopped_with_no_model_call(case_id: str) -> None:
+    sent = posted_case(case_id)
+    model = StubModel()
+
+    result = compiled(model, StubTools()).invoke(sent, THREAD)
+
+    output = result["output"]
+    assert model.calls == []
+    assert output["assessment"] == "unavailable"
+    assert output["unavailable_because"] == "injection-suspected"
+
+
+@pytest.mark.parametrize("case_id", ["CLM-1053", "CLM-1054"])
+def test_the_same_run_without_the_flag_reaches_the_model(case_id: str) -> None:
+    # What the screen could not see before: the replaced copy reads clean.
+    claim = posted_case(case_id)["claim"]
+    model = StubModel()
+
+    run_graph(model, StubTools(), claim)
+
+    assert len(model.calls) == 1
+
+
+def test_a_clean_claim_is_sent_and_triaged_as_before() -> None:
+    claim = CLAIMS["CLM-0011"]
+    sent = sent_to_run(ClaimSubmission.model_validate(claim))
+    model = StubModel()
+
+    result = compiled(model, StubTools()).invoke(sent, THREAD)
+
+    assert sent[POSTED_TEXT_FLAG] is False
+    assert len(model.calls) == 1
+    assert result["output"]["assessment"] == "none_applies"
+
+
+def test_a_paused_run_still_has_the_flag_in_its_checkpoint_and_after_the_resume() -> (
+    None
+):
+    saver = MemorySaver()
+    compiled(StubModel(), StubTools(), saver).invoke(
+        {"claim": facts("CLM-0011"), POSTED_TEXT_FLAG: True}, THREAD
+    )
+    tools = StubTools(recorded="approve")
+    graph = compiled(StubModel(), tools, saver)
+
+    paused_state = graph.get_state(THREAD)
+    resume(graph, {})
+
+    # A graph built anew on the same saver reads the flag from the stored
+    # checkpoint, not from the object that ran the first leg.
+    assert paused_state.next == ("await_decision",)
+    assert paused_state.values[POSTED_TEXT_FLAG] is True
+    assert graph.get_state(THREAD).values[POSTED_TEXT_FLAG] is True
+    assert graph.get_state(THREAD).values["decision"] == "approve"

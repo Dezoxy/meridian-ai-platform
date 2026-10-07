@@ -41,6 +41,7 @@ from meridian.workloads.claims_triage.evaluation import RULE_GRADERS
 from meridian.workloads.claims_triage.evaluation_http import (
     CLAIM_ID,
     EVALUATION,
+    FILES_DISAGREE,
     NOT_A_CLAIM_ID,
 )
 from meridian.workloads.claims_triage.models import ClaimFacts
@@ -77,7 +78,7 @@ def test_the_plugin_satisfies_the_protocol_and_names_its_workload() -> None:
 def test_it_submits_every_golden_claim_in_claim_id_order_to_claims() -> None:
     submissions = EVALUATION.submissions(SYNTHETIC_DIR)
 
-    assert len(submissions) == len(CLAIMS) == 40
+    assert len(submissions) == len(CLAIMS) == 47
     assert [s.case for s in submissions] == sorted(c["claim_id"] for c in CLAIMS)
     assert {s.path for s in submissions} == {"/claims"}
     by_id = {c["claim_id"]: c for c in CLAIMS}
@@ -322,6 +323,47 @@ def test_a_proposal_that_is_not_a_proposal_is_graded_as_none() -> None:
     (case,) = report_of(answers).cases
 
     assert not any(case.grades.values())
+
+
+def golden_copy_without_policy_of(directory: Path, claim_id: str) -> None:
+    """The golden set's three files, with the policy of ``claim_id`` left out."""
+    number = next(c for c in CLAIMS if c["claim_id"] == claim_id)["policy_number"]
+    for name in ("claims.json", "expected-outcomes.json"):
+        (directory / name).write_bytes((SYNTHETIC_DIR / name).read_bytes())
+    policies = json.loads((SYNTHETIC_DIR / "policies.json").read_text("utf-8"))
+    kept = [p for p in policies if p["policy_number"] != number]
+    assert len(kept) == len(policies) - 1
+    (directory / "policies.json").write_text(json.dumps(kept), encoding="utf-8")
+
+
+def test_a_claim_on_no_policy_is_graded_when_the_label_says_so() -> None:
+    unknown = next(
+        c["claim_id"]
+        for c in CLAIMS
+        if c["policy_number"]
+        not in {
+            p["policy_number"]
+            for p in json.loads((SYNTHETIC_DIR / "policies.json").read_text("utf-8"))
+        }
+    )
+
+    (case,) = report_of({unknown: answer(unknown, drafted("replay"))}).cases
+
+    assert case.case == unknown
+    assert case.grades["completed"] is True
+    assert case.grades["reason"] is False  # the stand-in proposal is not this claim's
+
+
+def test_a_claim_with_no_policy_and_another_reason_is_files_disagree_not_a_key_error(
+    tmp_path: Path,
+) -> None:
+    golden_copy_without_policy_of(tmp_path, "CLM-0001")
+    answers = {"CLM-0001": answer("CLM-0001", drafted("replay"))}
+
+    with pytest.raises(ReportError) as raised:
+        EVALUATION.report(answers, tmp_path, REGISTRY)
+
+    assert str(raised.value) == FILES_DISAGREE
 
 
 def test_an_answer_for_a_case_the_golden_set_does_not_hold_is_refused() -> None:

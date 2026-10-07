@@ -19,7 +19,7 @@ says so before a viewer asks:
   chat answer is canned text and its embedding is a hashed bag of words. A
   triage that needs the model's answer therefore gets none it can trust and
   sends the claim to a person. A real model, `gpt-4o` on Azure OpenAI in
-  Sweden Central, answered the 40 golden claims from a laptop; CI replays
+  Sweden Central, answered the first 40 golden claims from a laptop; CI replays
   that recording on every pull request (minutes 10 to 12).
 - **Nothing runs in Azure**, and on kind there is no sign-in and no TLS at
   the edge. The services do prove which service calls them, by mutual TLS
@@ -235,10 +235,10 @@ The import contracts are the architecture's rules as a failing build: no
 agent framework in a platform package, no provider SDK outside the
 gateway.
 
-Open [`data/evaluation/README.md`](../data/evaluation/README.md): the 40
+Open [`data/evaluation/README.md`](../data/evaluation/README.md): the 47
 golden claims run through the real services on every pull request, answered
 from the recording of `gpt-4o`, graded by rules and compared with a
-reviewed baseline (38 of 40 on the recommendation, 40 of 40 on the route
+reviewed baseline (45 of 47 on the recommendation, 47 of 47 on the route
 and every other grader). A changed prompt has no recording and fails the
 gate until it is recorded and reviewed again. `make eval` runs it locally
 in a few minutes; in a demo, show the python job of the latest pull
@@ -271,7 +271,7 @@ Each of these was tried on kind on 2026-10-04. Use claim IDs above
 
 ## Afterwards
 
-- `make demo` has 40 golden claims, one per run. There is no reset short
+- `make demo` has 47 golden claims, one per run. There is no reset short
   of a new cluster: claims and their audit rows are not deleted by design.
 - `make down` deletes the cluster and everything in it; `make up` and
   `make deploy` bring a fresh one in about seven minutes.

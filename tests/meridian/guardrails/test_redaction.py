@@ -61,6 +61,9 @@ def test_the_placeholders_are_fixed_and_safe_inside_a_json_string() -> None:
         "iban": "[iban]",
         "card": "[card]",
         "phone": "[phone]",
+        "tax_number": "[tax-number]",
+        "account": "[account]",
+        "national_id": "[national-id]",
     }
     for placeholder in PLACEHOLDERS.values():
         assert json.loads(json.dumps(placeholder)) == placeholder
@@ -160,7 +163,7 @@ def test_a_card_before_a_year_is_still_replaced() -> None:
 LUHN_PASSING_NON_CARDS = [
     ("2021-01-10 22914", "2021011022914"),
     ("13 July 2026 12 34567 1000", "202612345671000"),
-    ("2026-07-13 06 30 1234561", "2026071306301234561"),
+    ("2026-07-13 06 39 1234562", "2026071306391234562"),
 ]
 
 
@@ -273,8 +276,6 @@ def test_a_phone_number_keeps_the_text_after_its_last_digit() -> None:
         "4111 1111 1111 1112",
         "GB82 WEST 1234 5698 7654 33",
         "HU42 1177 3016 1111 1018 0000 0001",
-        "06 30 123 4567",
-        "06301234567",
         "@anna_example is a handle",
         "write to anna@ soon",
         "anna@example",
@@ -345,7 +346,7 @@ def test_a_redaction_copies_the_mapping_it_is_given() -> None:
 def test_the_golden_set_and_the_wordings_pass_through_unchanged(
     claim_descriptions: dict[str, str], wording_texts: dict[str, str]
 ) -> None:
-    assert len(claim_descriptions) == 40
+    assert len(claim_descriptions) == 47
     assert len(wording_texts) == 4
 
     for text in [*claim_descriptions.values(), *wording_texts.values()]:
