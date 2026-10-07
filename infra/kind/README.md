@@ -186,6 +186,7 @@ digests were read from the registries on 2026-10-06 (each is an index with
 | kube-prometheus-stack | `quay.io/prometheus/node-exporter:v1.12.1-distroless` | `prometheus-node-exporter.image.digest` | not pinned: switched off on kind (S063); on again, it needs a pin |
 | tempo | `docker.io/grafana/tempo:3.1.0` | `tempo.tag` as `tag@digest` | yes, through the tag key |
 | loki | `docker.io/grafana/loki:3.7.8` | `loki.image.tag`, `.digest` | yes |
+| loki | `docker.io/nginxinc/nginx-unprivileged:1.31-alpine` | `gateway.image.tag`, `.digest`: the chart's gateway in front of Loki (S072) | yes |
 | otel-collector | `ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector:0.162.0` | `image.repository`, `.tag`, `.digest` (before S063) | yes |
 | log-agent | `ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.162.0` | `image.repository`, `.tag`, `.digest`: the contrib build of the collector's release, which has the receiver that reads files (S064; digest read 2026-10-06) | yes |
 

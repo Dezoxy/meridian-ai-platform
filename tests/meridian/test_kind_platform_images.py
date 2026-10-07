@@ -58,7 +58,8 @@ IMAGES_BY_RELEASE = {
         "GRAFANA_SIDECAR_IMAGE",
     },
     "tempo": {"TEMPO_IMAGE"},
-    "loki": {"LOKI_IMAGE"},
+    # Loki and its gateway, the chart's nginx (S072, contract M3).
+    "loki": {"LOKI_IMAGE", "LOKI_GATEWAY_IMAGE"},
     "otel-collector": {"OTEL_COLLECTOR_IMAGE"},
     # The contrib build of the same collector, as a DaemonSet (S064).
     "log-agent": {"LOG_AGENT_IMAGE"},

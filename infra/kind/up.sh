@@ -230,7 +230,10 @@ apply_certificate_policy() {
 
 # Publish the public certificate of the collector's authority (S063) as the
 # ConfigMap telemetry-ca (key ca.crt) in `meridian`, for the services to mount
-# and trust it, and (S064) in `logging`, for the log agent. Only the field
+# and trust it, (S064) in `logging`, for the log agent, and (S072, contract M3) in
+# `observability`, which Grafana's environment reads to trust Loki's gateway
+# (a public certificate in a ConfigMap, so Grafana never holds a Secret of
+# the authority's). Only the field
 # tls.crt of the authority's Secret is read (a jsonpath; never the object and
 # never tls.key), once, the text is checked to be a certificate and not to hold
 # a key, and nothing is printed. Server-side apply, on every run: a renewed
@@ -246,14 +249,14 @@ publish_telemetry_ca() {
     die "could not read tls.crt of the Secret telemetry-ca in observability (is the Certificate telemetry-ca Ready? kubectl -n observability get certificate)"
   [[ "${pem}" == "-----BEGIN CERTIFICATE-----"* && "${pem}" != *"PRIVATE KEY"* ]] ||
     die "tls.crt of the Secret telemetry-ca in observability does not hold a certificate; the ConfigMap telemetry-ca was not changed"
-  for namespace in meridian logging; do
+  for namespace in meridian logging observability; do
     kctl -n "${namespace}" create configmap telemetry-ca --from-literal=ca.crt="${pem}" \
       --dry-run=client -o json |
       jq '.metadata.labels = {"app.kubernetes.io/part-of": "meridian"}
         | del(.metadata.creationTimestamp)' |
       kctl -n "${namespace}" apply --server-side --force-conflicts -f - >/dev/null
   done
-  log "telemetry: the authority's public certificate is the ConfigMap telemetry-ca in meridian and in logging"
+  log "telemetry: the authority's public certificate is the ConfigMap telemetry-ca in meridian, in logging and in observability"
 }
 
 # Create the Grafana admin Secret once. The password is generated here, goes to
@@ -448,7 +451,8 @@ kctl wait --for=condition=Ready certificaterequestpolicy/meridian-services \
   certificaterequestpolicy/telemetry-ca \
   certificaterequestpolicy/otel-collector \
   certificaterequestpolicy/otel-collector-client \
-  certificaterequestpolicy/tempo-receiver --timeout=2m >/dev/null ||
+  certificaterequestpolicy/tempo-receiver \
+  certificaterequestpolicy/loki-gateway --timeout=2m >/dev/null ||
   die "the certificate policies were not Ready in 2m: read the Ready condition of each (kubectl get certificaterequestpolicy -o yaml) and approver-policy's pod (kubectl -n cert-manager get pods; logs deploy/cert-manager-approver-policy)"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/service-ca.yaml" >/dev/null
 # Helm returns when cert-manager runs (its startupapicheck hook has proved the
@@ -463,14 +467,16 @@ kctl wait --for=condition=Ready clusterissuer/meridian-services \
 # Certificate being Ready means the authority's was issued before it. The
 # release of the collector, further on, mounts the Secrets they make: the server
 # certificate's and, since S072 (contract M1), the client certificate's; Tempo's
-# release mounts the receiver certificate's (contract M2). All three are waited
-# for here, before the first store is installed (a Secret that does not exist
-# leaves the pod in ContainerCreating and stops `make up` at that release).
+# release mounts the receiver certificate's (contract M2) and Loki's mounts the
+# gateway's (contract M3). All four are waited for here, before the first store
+# is installed (a Secret that does not exist leaves the pod in ContainerCreating
+# and stops `make up` at that release).
 log "telemetry: the CA for the collector's certificate, in observability"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/telemetry-ca.yaml" >/dev/null
 kctl -n observability wait --for=condition=Ready certificate/otel-collector \
-  certificate/otel-collector-client certificate/tempo-receiver --timeout=5m >/dev/null ||
-  die "the Certificate otel-collector, otel-collector-client or tempo-receiver in observability was not Ready in 5m: read the CertificateRequests of the Certificates telemetry-ca, otel-collector, otel-collector-client and tempo-receiver (kubectl -n observability get certificaterequest; describe each) for their Approved or Denied condition, the Ready condition of the policies telemetry-ca, otel-collector, otel-collector-client and tempo-receiver (the add-on's pod logs say why one was not applied), and the Certificates' events"
+  certificate/otel-collector-client certificate/tempo-receiver \
+  certificate/loki-gateway --timeout=5m >/dev/null ||
+  die "the Certificate otel-collector, otel-collector-client, tempo-receiver or loki-gateway in observability was not Ready in 5m: read the CertificateRequests of the Certificates telemetry-ca, otel-collector, otel-collector-client, tempo-receiver and loki-gateway (kubectl -n observability get certificaterequest; describe each) for their Approved or Denied condition, the Ready condition of the policies telemetry-ca, otel-collector, otel-collector-client, tempo-receiver and loki-gateway (the add-on's pod logs say why one was not applied), and the Certificates' events"
 publish_telemetry_ca
 
 # The operator runs in `meridian`, with the chart's `config.clusterWide=false`
@@ -560,10 +566,22 @@ install_release tempo observability "${TEMPO_CHART}" "${TEMPO_VERSION}" \
   "${GRAFANA_COMMUNITY_REPO}" tempo.yaml \
   --set "tempo.tag=${TEMPO_IMAGE_TAG}@${TEMPO_IMAGE_DIGEST}"
 log "observability: Loki"
+# Loki is written through its gateway, which asks for the collector's client
+# certificate (S072, contract M3); its Secret, loki-gateway-tls, was waited for
+# above, and the image pin of the gateway is LOKI_GATEWAY_IMAGE_* in pins.env.
+# On a WARM cluster three things move before the collector's new release (the
+# last): the NetworkPolicy file, applied early, closes Loki's 3100 to the old
+# collector pod; Grafana's datasource already points at the gateway (the stack's
+# release, above), so Grafana's Loki reads fail until this release is Ready; and
+# the old collector's exporter still sends to Loki's own port and is refused. So
+# the logs of that window are dropped and smoke's read-backs wait for the
+# collector's release, as for Tempo above. On a first install no sender exists.
 install_release loki observability "${LOKI_CHART}" "${LOKI_VERSION}" \
   "${GRAFANA_COMMUNITY_REPO}" loki.yaml \
   --set "loki.image.tag=${LOKI_IMAGE_TAG}" \
-  --set "loki.image.digest=${LOKI_IMAGE_DIGEST}"
+  --set "loki.image.digest=${LOKI_IMAGE_DIGEST}" \
+  --set "gateway.image.tag=${LOKI_GATEWAY_IMAGE_TAG}" \
+  --set "gateway.image.digest=${LOKI_GATEWAY_IMAGE_DIGEST}"
 log "observability: OpenTelemetry Collector"
 install_release otel-collector observability "${OTEL_COLLECTOR_CHART}" \
   "${OTEL_COLLECTOR_VERSION}" "${OTEL_REPO}" otel-collector.yaml \

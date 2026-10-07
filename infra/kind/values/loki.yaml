@@ -66,11 +66,128 @@ read:
 backend:
   replicas: 0
 
+# The gateway (S072, contract M3): the chart's own nginx in front of Loki, and the
+# only way in. Loki's port takes connections from this pod alone (the
+# NetworkPolicy in manifests/observability-networkpolicy.yaml), so what decides
+# who may write is here. ONE listener, TLS 1.3, and a client certificate that is
+# OPTIONAL at the handshake (`ssl_verify_client optional`): the push locations
+# answer 403 unless the client's certificate verified against the telemetry
+# authority; every other location (the reads and the probe) is served to a client
+# that presents none. So Grafana reads over TLS and holds no key, and what the
+# collector presents (otel-collector-client-tls) is the only thing that writes.
+# Why not a client certificate REQUIRED on the one port: the kubelet's probe and
+# Grafana would need one too, and Grafana's would then be a writer's.
+#
+# The chart emits no `ssl_*` directive: `ssl: true` only adds `ssl` to the
+# `listen` lines, and the certificate, the client CA and the protocol come from
+# `serverSnippet`. The write check is added WITHOUT owning the chart's nginx file:
+# two `map`s in `httpSnippet` decide, for each request, whether its path is one
+# that writes and whether the client's certificate verified, and `locationSnippet`
+# (which the chart puts in every location, `location = /` included) answers 403
+# for the pair "writes, not verified". The paths that write are the push paths
+# (`/otlp...`, `/loki/api/v1/push`, `/api/prom/push`) and the other paths the
+# chart's gateway would pass to Loki that change what Loki holds: deleting log
+# lines, creating rules, flushing and the ingester's own endpoints. The chart's
+# "everything else goes to Loki" stays as it is, for the reads. The map is read
+# against the chart's template at this pin (18.13.7): a chart bump that adds a
+# location is a reason to read it again (tests/meridian/test_telemetry_loki_
+# gateway.py evaluates the map against the paths the chart lists).
+#
+# `$ssl_client_verify` is SUCCESS only for a certificate that chains to
+# `ssl_client_certificate` (the telemetry authority, the ca.crt of the Secret
+# below); NONE when the client presented none; FAILED:<reason> for one that does
+# not verify. nginx also checks the certificate's purpose for a client (extended
+# key usage `client auth` when the certificate has one), so Tempo's and the
+# collector's SERVER certificates should not pass as a writer's: not seen, a
+# cluster check. Any client certificate this authority signs for client use
+# passes: the policy lets it sign exactly one.
+#
+# One replica and one container: the chart's metrics sidecar (a second image and
+# a syslog access log) is off. nginx's own workers are about 5 processes of a few
+# MiB each, so 32Mi requested and 64Mi limited (the namespace's limits already
+# add up to about 4.5 GiB against 7.65 GiB for Docker, infra/kind/README.md
+# Memory); the gateway's use is read on the cluster and is not known yet. The
+# pod meets the Pod Security level `restricted` by the chart's own defaults
+# (non-root 101, read-only root filesystem, no capabilities, RuntimeDefault),
+# and mounts no service-account token (`gateway.automountServiceAccountToken` is
+# false in the chart; `defaults.automountServiceAccountToken` above agrees).
+# Loki's own listener, probes and Service are not changed.
+#
+# Port 8443 for the container and the Service alike (unprivileged nginx binds
+# above 1024), so the NetworkPolicy's pod port is the Service's port and the
+# exporter's URL. The probe is HTTPS: the kubelet does not verify the server's
+# certificate and presents no client certificate, which `optional` admits.
+# `enableIPv6` is off: the pod's `listen [::]` would fail to start on an IPv4-only
+# pod network. The body limit is raised from the chart's 4M, because a push the
+# collector batches could be larger than that and nginx would answer 413 (a
+# refused push drops logs); Loki itself had no such limit on this path.
+#
+# The Secret loki-gateway-tls (a Certificate in manifests/telemetry-ca.yaml;
+# up.sh waits for it before this release) is mounted read-only in a directory of
+# its own, outside /etc/nginx (the chart's ConfigMap owns that path). Whether
+# nginx reads a renewed certificate without a restart is not established: it
+# reads the files when it starts and when it is reloaded, and nothing here
+# reloads it, so after a renewal the Deployment is restarted (the runbook
+# certificate-expiry.md).
+gateway:
+  enabled: true
+  replicas: 1
+  containerPort: 8443
+  service:
+    port: 8443
+  metrics:
+    enabled: false
+  # The chart's hard anti-affinity to its own pods would keep the new pod of a
+  # rolling update Pending on this cluster's one node (the old one is still
+  # there): a null removes it, as Helm reads a null. One replica, so it spreads
+  # nothing.
+  affinity: null
+  resources:
+    requests:
+      cpu: 20m
+      memory: 32Mi
+    limits:
+      memory: 64Mi
+  readinessProbe:
+    httpGet:
+      scheme: HTTPS
+  nginxConfig:
+    ssl: true
+    enableIPv6: false
+    clientMaxBodySize: 10M
+    httpSnippet: |
+      map $uri $loki_write_path {
+        default 0;
+        ~^/otlp 1;
+        ~^/(api/prom|loki/api/v1)/(push|rules|delete) 1;
+        ~^/(flush|ingester) 1;
+      }
+      map "$loki_write_path:$ssl_client_verify" $loki_write_denied {
+        default 0;
+        "1:SUCCESS" 0;
+        ~^1: 1;
+      }
+    locationSnippet: |
+      if ($loki_write_denied) { return 403; }
+    serverSnippet: |
+      ssl_certificate /etc/loki-gateway/tls/tls.crt;
+      ssl_certificate_key /etc/loki-gateway/tls/tls.key;
+      ssl_client_certificate /etc/loki-gateway/tls/ca.crt;
+      ssl_verify_client optional;
+      ssl_protocols TLSv1.3;
+  extraVolumes:
+    - name: tls
+      secret:
+        secretName: loki-gateway-tls
+        defaultMode: 288 # 0440
+  extraVolumeMounts:
+    - name: tls
+      mountPath: /etc/loki-gateway/tls
+      readOnly: true
+
 chunksCache:
   enabled: false
 resultsCache:
-  enabled: false
-gateway:
   enabled: false
 minio:
   enabled: false

@@ -16,7 +16,9 @@
 #   otel-collector        the collector's server certificate (90 days)
 #   otel-collector-client the collector's client certificate (90 days; S072)
 #   tempo-receiver        the server certificate of Tempo's OTLP receiver (90
-#                         days; S072, the last document of this file)
+#                         days; S072)
+#   loki-gateway          the server certificate of Loki's gateway (90 days;
+#                         S072, the last document of this file)
 #
 # Why an authority of its own and not the `meridian-services` issuer: S056 made
 # "that issuer signs only for the `meridian` namespace and its URI prefix" the
@@ -123,7 +125,8 @@ spec:
 # present to the telemetry stores that write-protect their ports. It is issued
 # and mounted (values/otel-collector.yaml). Contract M1 changed no behaviour;
 # since contract M2 the exporter to Tempo presents it (Tempo's receiver asks for
-# it, the Certificate below), and the exporters to Loki and Prometheus do not yet.
+# it, the Certificate below), and since contract M3 the exporter to Loki does, to
+# Loki's gateway; the exporter to Prometheus does not yet.
 #
 # Its own Certificate and its own policy (otel-collector-client in
 # certificate-policy.yaml), not the usage `client auth` added to the server
@@ -186,6 +189,43 @@ spec:
   dnsNames:
     - tempo.observability.svc
     - tempo.observability.svc.cluster.local
+  issuerRef:
+    name: telemetry-ca
+    kind: Issuer
+    group: cert-manager.io
+---
+# The SERVER certificate of Loki's gateway (S072, contract M3): the one TLS
+# listener of the chart's nginx in front of Loki (values/loki.yaml), which the
+# collector's exporter verifies and which Grafana reads through. The gateway asks
+# a client for a certificate at the handshake, optionally, and answers 403 on the
+# paths that write unless it verified against this authority: the collector's
+# client certificate (above) is what passes. The Secret is mounted by Loki's
+# release, so up.sh waits for the Certificate before it. Its own policy
+# (loki-gateway in certificate-policy.yaml): exactly these two names, the two
+# server usages, 90 days. The names are the gateway Service's (loki-gateway, the
+# chart's name for it) and the host the collector's exporter dials
+# (values/otel-collector.yaml), in the short and the fully qualified form as the
+# collector's own certificate has both. Lifetime and key as its neighbours. Whether
+# nginx reads a renewed certificate without a restart is not established: it does
+# not by itself.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: loki-gateway
+  namespace: observability
+spec:
+  secretName: loki-gateway-tls
+  duration: 2160h # 90 days, named: the policy caps it and cannot read a missing one
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always # a new key at every renewal
+  usages:
+    - digital signature
+    - server auth
+  dnsNames:
+    - loki-gateway.observability.svc
+    - loki-gateway.observability.svc.cluster.local
   issuerRef:
     name: telemetry-ca
     kind: Issuer

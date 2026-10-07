@@ -46,7 +46,11 @@
 #                    namespace and from no pod to the collector
 #   tempo            4317 (OTLP gRPC) from the collector; 3200 (query) from
 #                    Grafana
-#   loki             3100 from the collector (OTLP) and from Grafana (query);
+#   loki-gateway     8443 from the collector (OTLP, with its client certificate)
+#                    and from Grafana (query, with none): the one TLS listener of
+#                    the chart's nginx in front of Loki (S072, contract M3)
+#   loki             3100 from the gateway's pods alone (not the collector, not
+#                    Grafana: S072, contract M3);
 #                    7946 TCP and UDP from its own pods: the single binary
 #                    joins the memberlist it makes through its own Service
 #                    (join_members, with abort_if_cluster_join_fails: true).
@@ -136,11 +140,12 @@
 #   Grafana          the API server (its two sidecars watch the ConfigMaps
 #                    labelled for dashboards and datasources in this namespace)
 #                                                                   egress-node
-#                    Prometheus 9090, Tempo 3200, Loki 3100: its datasources
-#                                                                   egress-grafana
-#   collector        Tempo 4317, Prometheus 9090 (OTLP at /api/v1/otlp) and Loki
-#                    3100: its three exporters; no API server (no token, no
-#                    k8sattributes)                           egress-otel-collector
+#                    Prometheus 9090, Tempo 3200, Loki's gateway 8443: its
+#                    datasources                                    egress-grafana
+#   collector        Tempo 4317, Prometheus 9090 (OTLP at /api/v1/otlp) and
+#                    Loki's gateway 8443: its three exporters; no API server (no
+#                    token, no k8sattributes)                 egress-otel-collector
+#   Loki's gateway   Loki 3100 and DNS: its one upstream       egress-loki-gateway
 #   Loki             its own pods, 7946 TCP and UDP: the memberlist it joins
 #                    through its Service (the egress half of the ingress rule
 #                    above)                                          egress-loki
@@ -301,14 +306,15 @@ spec:
       app.kubernetes.io/component: single-binary
   policyTypes: [Ingress]
   ingress:
+    # Loki's own port takes connections from its gateway alone (S072, contract
+    # M3): neither the collector nor Grafana reaches it, so what writes is
+    # decided at the gateway, which asks for the collector's client certificate.
     - from:
         - podSelector:
             matchLabels:
-              app.kubernetes.io/name: opentelemetry-collector
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: grafana
-              app.kubernetes.io/instance: kube-prometheus-stack
+              app.kubernetes.io/name: loki
+              app.kubernetes.io/instance: loki
+              app.kubernetes.io/component: gateway
       ports:
         - port: 3100
           protocol: TCP
@@ -323,6 +329,35 @@ spec:
           protocol: TCP
         - port: 7946
           protocol: UDP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: loki-gateway
+  namespace: observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: loki
+      app.kubernetes.io/instance: loki
+      app.kubernetes.io/component: gateway
+  policyTypes: [Ingress]
+  ingress:
+    # The write listener's clients and the read path's, one port (the gateway
+    # has one TLS listener, values/loki.yaml): the collector, which writes with
+    # its client certificate, and Grafana, which reads with none. The gateway's
+    # own check, not this rule, is what keeps Grafana from writing.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: opentelemetry-collector
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: grafana
+              app.kubernetes.io/instance: kube-prometheus-stack
+      ports:
+        - port: 8443
+          protocol: TCP
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -565,14 +600,15 @@ spec:
       ports:
         - port: 3200
           protocol: TCP
+    # Loki is read through its gateway (S072, contract M3), not on its own port.
     - to:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: loki
               app.kubernetes.io/instance: loki
-              app.kubernetes.io/component: single-binary
+              app.kubernetes.io/component: gateway
       ports:
-        - port: 3100
+        - port: 8443
           protocol: TCP
 ---
 apiVersion: networking.k8s.io/v1
@@ -604,6 +640,34 @@ spec:
       ports:
         - port: 9090
           protocol: TCP
+    # Logs go to Loki's gateway, which asks for the client certificate (S072,
+    # contract M3), not to Loki's own port.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: loki
+              app.kubernetes.io/instance: loki
+              app.kubernetes.io/component: gateway
+      ports:
+        - port: 8443
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-loki-gateway
+  namespace: observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: loki
+      app.kubernetes.io/instance: loki
+      app.kubernetes.io/component: gateway
+  policyTypes: [Egress]
+  egress:
+    # Loki, on its own port, the gateway's one upstream (and DNS, which
+    # `egress-dns` gives every pod, because nginx resolves the upstream's name at
+    # each request): nothing else.
     - to:
         - podSelector:
             matchLabels:

@@ -118,6 +118,14 @@ grafana:
       check_for_updates: false
   testFramework:
     enabled: false
+  # The telemetry authority's public certificate, for the Loki datasource below
+  # (S072, contract M3): one environment variable from the ConfigMap telemetry-ca
+  # in this namespace (key ca.crt), which up.sh publishes before this release.
+  envValueFrom:
+    LOKI_GATEWAY_CA:
+      configMapKeyRef:
+        name: telemetry-ca
+        key: ca.crt
   # Grafana 13 peaks at start while it migrates its database and provisions
   # the chart's dashboards; 320Mi was OOM-killed once on a clean `make up`.
   resources:
@@ -174,12 +182,26 @@ grafana:
           filterBySpanID: false
           customQuery: true
           query: '{service_name=~".+"} | trace_id="$${__span.traceId}"'
+    # Loki is read through its gateway (S072, contract M3), over TLS and with NO
+    # client certificate: the gateway serves the reads to a client that presents
+    # none and answers 403 on the paths that write, so Grafana holds nothing that
+    # writes. Grafana trusts the telemetry authority for this datasource only, by
+    # `tlsAuthWithCACert` and the authority's public certificate in `tlsCACert`;
+    # provisioning expands `$LOKI_GATEWAY_CA` from the environment (the same
+    # expansion that makes "$$" a literal "$" above), and the environment gets it
+    # from the ConfigMap telemetry-ca that up.sh publishes in observability
+    # (grafana.envValueFrom): a public certificate, never the gateway's or the
+    # collector's Secret. That the expansion applies to this secure field is seen
+    # only on the cluster.
     - name: Loki
       uid: loki
       type: loki
       access: proxy
-      url: http://loki.observability.svc.cluster.local:3100
+      url: https://loki-gateway.observability.svc.cluster.local:8443
+      secureJsonData:
+        tlsCACert: $LOKI_GATEWAY_CA
       jsonData:
+        tlsAuthWithCACert: true
         derivedFields:
           - name: trace_id
             matcherType: label

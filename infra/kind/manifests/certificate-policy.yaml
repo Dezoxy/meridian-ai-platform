@@ -3,7 +3,7 @@
 # cert-manager's own approver is off (values/cert-manager.yaml) and
 # approver-policy runs in its place (values/approver-policy.yaml); up.sh applies
 # this file after the add-on and before manifests/service-ca.yaml and
-# manifests/telemetry-ca.yaml, and waits for the seven policies to be Ready.
+# manifests/telemetry-ca.yaml, and waits for the eight policies to be Ready.
 #
 # How approver-policy decides: a policy is appropriate for a request when its
 # selector matches and the requester may `use` the policy (RBAC, checked in the
@@ -98,6 +98,17 @@
 #                           policy of its own: `client auth` under Tempo's names
 #                           is denied, and so is `server auth` under the
 #                           collector's client name
+#   loki-gateway            the server certificate of Loki's gateway (S072,
+#                           manifests/telemetry-ca.yaml): the same issuer and
+#                           namespace again, the DNS names
+#                           loki-gateway.observability.svc and
+#                           loki-gateway.observability.svc.cluster.local (at
+#                           least one, and no other), the usages digital
+#                           signature and server auth, at most 90 days, which
+#                           the request must name. No URI, no address, no common
+#                           name and no CA. A policy of its own: `client auth`
+#                           under the gateway's names is denied, so the
+#                           gateway's name cannot be presented as a writer's
 #
 # The policies of S063 select one namespaced Issuer each, in `observability`
 # only, and that is also what denies: a request for either Issuer that its policy
@@ -113,8 +124,8 @@
 # account, `system:serviceaccount:cert-manager:cert-manager`, and it is the only
 # subject below. It may `use` meridian-services through a Role and RoleBinding in
 # `meridian`, meridian-services-ca the same way in `cert-manager`,
-# telemetry-ca, otel-collector, otel-collector-client and tempo-receiver the same
-# way in `observability`, and meridian-deny-unlisted through a ClusterRole and ClusterRoleBinding. So the
+# telemetry-ca, otel-collector, otel-collector-client, tempo-receiver and
+# loki-gateway the same way in `observability`, and meridian-deny-unlisted through a ClusterRole and ClusterRoleBinding. So the
 # namespace limit is held twice: by the policy's selector and by where its
 # binding is, and a request from another namespace meets only the policy that
 # denies.
@@ -373,6 +384,31 @@ spec:
   constraints:
     maxDuration: 2160h
 ---
+apiVersion: policy.cert-manager.io/v1alpha1
+kind: CertificateRequestPolicy
+metadata:
+  name: loki-gateway
+spec:
+  selector:
+    issuerRef:
+      name: telemetry-ca
+      kind: Issuer
+      group: cert-manager.io
+    namespace:
+      matchNames:
+        - observability
+  allowed:
+    dnsNames:
+      values:
+        - loki-gateway.observability.svc
+        - loki-gateway.observability.svc.cluster.local
+      required: true
+    usages:
+      - digital signature
+      - server auth
+  constraints:
+    maxDuration: 2160h
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -468,6 +504,31 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: tempo-receiver-use-policy
+subjects:
+  - kind: ServiceAccount
+    name: cert-manager
+    namespace: cert-manager
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: loki-gateway-use-policy
+  namespace: observability
+rules:
+  - apiGroups: ["policy.cert-manager.io"]
+    resources: ["certificaterequestpolicies"]
+    verbs: ["use"]
+    resourceNames: ["loki-gateway"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: loki-gateway-use-policy
+  namespace: observability
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: loki-gateway-use-policy
 subjects:
   - kind: ServiceAccount
     name: cert-manager

@@ -29,6 +29,7 @@ from certpolicysupport import (
     COLLECTOR_POLICY,
     DENY_POLICY,
     KIND_DIR,
+    LOKI_GATEWAY_POLICY,
     POLICY_NAMES,
     TEMPO_RECEIVER_POLICY,
     allows,
@@ -68,6 +69,12 @@ COLLECTOR_CLIENT_TLS_NAME = "otel-collector-client-tls"
 # One name, made to say what it is and to resolve nowhere: no Service, no pod and
 # no cluster domain has it (`.meridian` is not the cluster's `.cluster.local`).
 COLLECTOR_CLIENT_NAMES = ["otel-collector.client.observability.meridian"]
+LOKI_GATEWAY = "loki-gateway"
+LOKI_GATEWAY_TLS_NAME = "loki-gateway-tls"
+LOKI_GATEWAY_NAMES = [
+    "loki-gateway.observability.svc",
+    "loki-gateway.observability.svc.cluster.local",
+]
 TEMPO = "tempo-receiver"
 TEMPO_TLS_NAME = "tempo-receiver-tls"
 TEMPO_NAMES = [
@@ -169,7 +176,7 @@ def decision(request: dict) -> str:
 # ── the manifest ─────────────────────────────────────────────────────────────
 
 
-def test_the_manifest_holds_two_issuers_and_four_certificates_in_observability() -> (
+def test_the_manifest_holds_two_issuers_and_five_certificates_in_observability() -> (
     None
 ):
     kinds = [(d["kind"], d["metadata"]["name"]) for d in documents(MANIFEST)]
@@ -181,6 +188,7 @@ def test_the_manifest_holds_two_issuers_and_four_certificates_in_observability()
         ("Certificate", COLLECTOR),
         ("Certificate", COLLECTOR_CLIENT),
         ("Certificate", TEMPO),
+        ("Certificate", LOKI_GATEWAY),
     ]
     # Namespaced, so that only a request in `observability` can name them.
     assert {d["metadata"]["namespace"] for d in documents(MANIFEST)} == {NAMESPACE}
@@ -197,7 +205,7 @@ def test_the_selfsigned_issuer_signs_the_authority_which_signs_the_collector() -
         "kind": "Issuer",
         "group": "cert-manager.io",
     }
-    for leaf in (COLLECTOR, COLLECTOR_CLIENT, TEMPO):
+    for leaf in (COLLECTOR, COLLECTOR_CLIENT, TEMPO, LOKI_GATEWAY):
         assert certificate(leaf)["spec"]["issuerRef"] == {
             "name": AUTHORITY,
             "kind": "Issuer",
@@ -292,15 +300,16 @@ def test_approver_policy_also_approves_for_the_manifests_two_issuers() -> None:
 # ── the policies against the evaluator ───────────────────────────────────────
 
 
-def test_the_policy_file_holds_the_four_policies_of_the_authority() -> None:
+def test_the_policy_file_holds_the_five_policies_of_the_authority() -> None:
     assert {
         AUTHORITY_POLICY,
         COLLECTOR_POLICY,
         COLLECTOR_CLIENT_POLICY,
         TEMPO_RECEIVER_POLICY,
+        LOKI_GATEWAY_POLICY,
     } <= set(policies())
     assert set(policies()) == POLICY_NAMES
-    assert len(policies()) == 7
+    assert len(policies()) == 8
 
 
 @pytest.mark.parametrize(
@@ -310,6 +319,7 @@ def test_the_policy_file_holds_the_four_policies_of_the_authority() -> None:
         (COLLECTOR_POLICY, AUTHORITY),
         (COLLECTOR_CLIENT_POLICY, AUTHORITY),
         (TEMPO_RECEIVER_POLICY, AUTHORITY),
+        (LOKI_GATEWAY_POLICY, AUTHORITY),
     ],
 )
 def test_each_new_policy_selects_one_namespaced_issuer_by_name_kind_and_namespace(
@@ -531,7 +541,9 @@ def test_a_request_aimed_at_the_other_new_issuer_is_denied() -> None:
     assert decision(request_of(leaf_for_ca_issuer)) == "denied"
 
 
-@pytest.mark.parametrize("subject", [COLLECTOR, COLLECTOR_CLIENT, TEMPO, AUTHORITY])
+@pytest.mark.parametrize(
+    "subject", [COLLECTOR, COLLECTOR_CLIENT, TEMPO, LOKI_GATEWAY, AUTHORITY]
+)
 def test_a_request_in_observability_for_the_meridian_services_issuer_is_denied(
     subject: str,
 ) -> None:
@@ -548,11 +560,14 @@ def test_a_request_in_observability_for_the_meridian_services_issuer_is_denied(
     assert not selects(policies()[COLLECTOR_POLICY], request)
     assert not selects(policies()[COLLECTOR_CLIENT_POLICY], request)
     assert not selects(policies()[TEMPO_RECEIVER_POLICY], request)
+    assert not selects(policies()[LOKI_GATEWAY_POLICY], request)
     assert not selects(policies()[AUTHORITY_POLICY], request)
     assert decision(request) == "denied"
 
 
-@pytest.mark.parametrize("subject", [COLLECTOR, COLLECTOR_CLIENT, TEMPO, AUTHORITY])
+@pytest.mark.parametrize(
+    "subject", [COLLECTOR, COLLECTOR_CLIENT, TEMPO, LOKI_GATEWAY, AUTHORITY]
+)
 @pytest.mark.parametrize("issuer", [AUTHORITY, SELF_SIGNED])
 @pytest.mark.parametrize("namespace", ["meridian", "cert-manager", "default"])
 def test_a_request_in_another_namespace_cannot_name_the_namespaced_issuers_at_all(
@@ -581,6 +596,7 @@ def test_a_request_in_another_namespace_cannot_name_the_namespaced_issuers_at_al
     assert not selects(policies()[COLLECTOR_POLICY], request)
     assert not selects(policies()[COLLECTOR_CLIENT_POLICY], request)
     assert not selects(policies()[TEMPO_RECEIVER_POLICY], request)
+    assert not selects(policies()[LOKI_GATEWAY_POLICY], request)
     assert not selects(policies()[AUTHORITY_POLICY], request)
     assert not selects(policies()[DENY_POLICY], request)
     assert decision(request) == "left waiting"
@@ -610,6 +626,7 @@ def test_the_deny_policys_selector_does_not_reach_the_namespaced_issuers() -> No
         COLLECTOR_POLICY,
         COLLECTOR_CLIENT_POLICY,
         TEMPO_RECEIVER_POLICY,
+        LOKI_GATEWAY_POLICY,
     ],
 )
 def test_each_new_policy_is_bound_in_observability_and_nowhere_else(name: str) -> None:
@@ -621,7 +638,7 @@ def test_each_new_policy_is_bound_in_observability_and_nowhere_else(name: str) -
         for d in documents(POLICY_FILE)
         if d["kind"] == "RoleBinding" and d["metadata"]["namespace"] == NAMESPACE
     ]
-    assert len(bindings) == 4
+    assert len(bindings) == 5
     for binding in bindings:
         assert binding["subjects"] == [REQUESTER]
         assert binding["roleRef"]["kind"] == "Role"
@@ -630,7 +647,7 @@ def test_each_new_policy_is_bound_in_observability_and_nowhere_else(name: str) -
 def test_every_use_rule_of_the_file_grants_one_policy_and_nothing_else() -> None:
     roles = [d for d in documents(POLICY_FILE) if d["kind"] in ("Role", "ClusterRole")]
 
-    assert len(roles) == 7
+    assert len(roles) == 8
     for role in roles:
         (rule,) = role["rules"]
         assert rule["apiGroups"] == ["policy.cert-manager.io"]
@@ -652,6 +669,7 @@ def test_the_new_roles_are_named_after_the_policies_they_grant() -> None:
         f"{COLLECTOR_POLICY}-use-policy": [COLLECTOR_POLICY],
         f"{COLLECTOR_CLIENT_POLICY}-use-policy": [COLLECTOR_CLIENT_POLICY],
         f"{TEMPO_RECEIVER_POLICY}-use-policy": [TEMPO_RECEIVER_POLICY],
+        f"{LOKI_GATEWAY_POLICY}-use-policy": [LOKI_GATEWAY_POLICY],
     }
 
 
@@ -664,6 +682,9 @@ def test_the_hours_of_the_policies_caps_are_the_certificates_lifetimes() -> None
         certificate(COLLECTOR_CLIENT)["spec"]["duration"]
     )
     assert cap(TEMPO_RECEIVER_POLICY) == hours(certificate(TEMPO)["spec"]["duration"])
+    assert cap(LOKI_GATEWAY_POLICY) == hours(
+        certificate(LOKI_GATEWAY)["spec"]["duration"]
+    )
     assert cap(AUTHORITY_POLICY) == hours(certificate(AUTHORITY)["spec"]["duration"])
 
 
@@ -759,17 +780,20 @@ def test_the_collector_mounts_both_secrets_read_only_in_directories_of_their_own
     assert not any(a.startswith(b + "/") for a in paths for b in paths)
 
 
-def test_only_the_tempo_exporter_of_the_collector_uses_the_client_certificate() -> None:
+def test_only_the_tempo_and_loki_exporters_of_the_collector_use_the_client_cert() -> (
+    None
+):
     config = collector_values()["config"]
     exporters = config["exporters"]
 
-    # S072, contract M2: the client mount is used by one exporter, Tempo's (the
-    # next stores' contracts add the others). The receiver's tls block is the four
-    # keys it had, and only Tempo's exporter has a tls block at all.
-    assert "client-tls" in json.dumps(exporters["otlp_grpc/tempo"])
-    for other in ("otlp_http/prometheus", "otlp_http/loki"):
-        assert "client-tls" not in json.dumps(exporters[other]), other
-        assert "tls" not in exporters[other], other
+    # S072, contracts M2 and M3: the client mount is used by two exporters,
+    # Tempo's and Loki's (the next store's contract adds Prometheus's). The
+    # receiver's tls block is the four keys it had, and only those two exporters
+    # have a tls block at all.
+    for used in ("otlp_grpc/tempo", "otlp_http/loki"):
+        assert "client-tls" in json.dumps(exporters[used]), used
+    assert "client-tls" not in json.dumps(exporters["otlp_http/prometheus"])
+    assert "tls" not in exporters["otlp_http/prometheus"]
     assert "client-tls" not in json.dumps(config["receivers"])
     assert "client-tls" not in json.dumps(config["service"])
     assert "client_ca_file" not in json.dumps(config)
@@ -781,7 +805,8 @@ def test_only_the_tempo_exporter_of_the_collector_uses_the_client_certificate() 
         "min_version",
     }
     assert [n for n, e in config["exporters"].items() if e and "tls" in e] == [
-        "otlp_grpc/tempo"
+        "otlp_grpc/tempo",
+        "otlp_http/loki",
     ]
     assert list(config["exporters"]) == [
         "debug",
@@ -812,18 +837,16 @@ def test_the_collector_reads_the_certificate_again_so_a_renewal_needs_no_restart
     assert 0 < hours(tls["reload_interval"]) <= 1
 
 
-def test_the_collectors_hops_to_prometheus_and_loki_stay_as_they_are() -> None:
-    # Split from the test that held all three hops (S072, contract M2): Tempo's is
-    # TLS now, below. These two stay clear text with their strings unchanged
-    # until the contracts for their stores.
+def test_the_collectors_hop_to_prometheus_stays_as_it_is() -> None:
+    # Split from the test that held all three hops (S072, contract M2: Tempo's is
+    # TLS below; contract M3: Loki's is mutual TLS to its gateway, in
+    # test_telemetry_loki_gateway.py). This one stays clear text with its string
+    # unchanged until the contract for its store.
     exporters = collector_values()["config"]["exporters"]
 
     assert exporters["otlp_http/prometheus"] == {
         "endpoint": "http://kube-prometheus-stack-prometheus.observability.svc."
         "cluster.local:9090/api/v1/otlp"
-    }
-    assert exporters["otlp_http/loki"] == {
-        "endpoint": "http://loki.observability.svc.cluster.local:3100/otlp"
     }
 
 
@@ -886,13 +909,13 @@ def test_up_s_wait_for_the_collectors_certificate_has_a_bound_and_a_remedy() -> 
     assert AUTHORITY_POLICY in message
 
 
-def test_the_policy_wait_names_all_seven_policies() -> None:
+def test_the_policy_wait_names_all_eight_policies() -> None:
     line = script_lines()[line_containing("certificaterequestpolicy")]
 
-    assert line.count("certificaterequestpolicy/") == 7
+    assert line.count("certificaterequestpolicy/") == 8
 
 
-def test_up_waits_for_the_three_leaf_certificates_before_the_stores() -> None:
+def test_up_waits_for_the_four_leaf_certificates_before_the_stores() -> None:
     lines = script_lines()
     waited = line_index("kctl -n observability wait --for=condition=Ready certificate/")
     tempo = line_index("install_release tempo ")
@@ -900,13 +923,15 @@ def test_up_waits_for_the_three_leaf_certificates_before_the_stores() -> None:
 
     # A Secret that does not exist leaves a pod in ContainerCreating and stops
     # `make up` at the release that mounts it: the client certificate (the
-    # collector's release) and Tempo's receiver certificate (Tempo's release,
-    # S072 contract M2) are waited for as the server certificate is, in the same
-    # bounded wait, before the first store is installed.
-    assert waited < tempo < collector
-    for name in (COLLECTOR, COLLECTOR_CLIENT, TEMPO):
+    # collector's release), Tempo's receiver certificate (Tempo's release, S072
+    # contract M2) and the gateway's (Loki's release, contract M3) are waited for
+    # as the server certificate is, in the same bounded wait, before the first
+    # store is installed.
+    loki = line_index("install_release loki ")
+    assert waited < tempo < loki < collector
+    for name in (COLLECTOR, COLLECTOR_CLIENT, TEMPO, LOKI_GATEWAY):
         assert f"certificate/{name} " in lines[waited]
-    assert lines[waited].count("certificate/") == 3
+    assert lines[waited].count("certificate/") == 4
     assert "--timeout=5m" in lines[waited]
     _, message = wait_and_die_message(
         "kctl -n observability wait --for=condition=Ready certificate/"
@@ -916,11 +941,13 @@ def test_up_waits_for_the_three_leaf_certificates_before_the_stores() -> None:
         COLLECTOR_CLIENT_POLICY,
         TEMPO,
         TEMPO_RECEIVER_POLICY,
+        LOKI_GATEWAY,
+        LOKI_GATEWAY_POLICY,
     ):
         assert name in message
 
 
-def test_the_seven_policy_names_are_the_same_in_the_four_places() -> None:
+def test_the_eight_policy_names_are_the_same_in_the_four_places() -> None:
     lines = script_lines()
     in_manifest = set(policies())
     in_up = re.findall(
@@ -938,12 +965,16 @@ def test_the_seven_policy_names_are_the_same_in_the_four_places() -> None:
         re.M,
     )
 
-    assert len(in_manifest) == 7
+    assert len(in_manifest) == 8
     # Each place lists each name once, and the lists are equal to the manifest's.
     for listed in (in_up, in_deploy.split(), in_smoke.split(), list(POLICIES)):
-        assert len(listed) == 7
+        assert len(listed) == 8
         assert set(listed) == in_manifest == POLICY_NAMES
-    assert {COLLECTOR_CLIENT_POLICY, TEMPO_RECEIVER_POLICY} <= in_manifest
+    assert {
+        COLLECTOR_CLIENT_POLICY,
+        TEMPO_RECEIVER_POLICY,
+        LOKI_GATEWAY_POLICY,
+    } <= in_manifest
 
 
 def run_publish(
@@ -1001,15 +1032,21 @@ def run_publish(
     return done, asked, objects
 
 
-def test_the_authoritys_certificate_is_published_to_meridian_and_to_logging(
+def test_the_authoritys_certificate_is_published_to_three_namespaces(
     tmp_path: Path,
 ) -> None:
     done, asked, objects = run_publish(tmp_path)
 
     assert done.returncode == 0, done.stderr
     # The six services and telemetrygen's Jobs mount it in `meridian`; the log
-    # agent (S064) mounts it in `logging`: one certificate, two copies.
-    assert [m["metadata"]["namespace"] for m in objects] == ["meridian", "logging"]
+    # agent (S064) mounts it in `logging`; Grafana's environment reads it in
+    # `observability` to trust Loki's gateway (S072, contract M3): one
+    # certificate, three copies.
+    assert [m["metadata"]["namespace"] for m in objects] == [
+        "meridian",
+        "logging",
+        "observability",
+    ]
     for manifest in objects:
         assert manifest["kind"] == "ConfigMap"
         assert manifest["metadata"]["name"] == AUTHORITY
@@ -1017,8 +1054,10 @@ def test_the_authoritys_certificate_is_published_to_meridian_and_to_logging(
         assert "creationTimestamp" not in manifest["metadata"]
     # Server-side and forced, as every other apply here: a rerun converges.
     applies = [c for c in asked if " apply " in c]
-    assert len(applies) == 2
-    for apply, namespace in zip(applies, ["meridian", "logging"], strict=True):
+    assert len(applies) == 3
+    for apply, namespace in zip(
+        applies, ["meridian", "logging", "observability"], strict=True
+    ):
         assert "--server-side" in apply
         assert "--force-conflicts" in apply
         assert f"-n {namespace} " in apply

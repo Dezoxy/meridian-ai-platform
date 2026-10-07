@@ -28,6 +28,8 @@ COLLECTOR_POLICY = "otel-collector"
 COLLECTOR_CLIENT_POLICY = "otel-collector-client"
 # Tempo's receiver's server certificate (S072, contract M2), same authority.
 TEMPO_RECEIVER_POLICY = "tempo-receiver"
+# The server certificate of Loki's gateway (S072, contract M3), same authority.
+LOKI_GATEWAY_POLICY = "loki-gateway"
 POLICY_NAMES = {
     SERVICES_POLICY,
     CA_POLICY,
@@ -36,6 +38,7 @@ POLICY_NAMES = {
     COLLECTOR_POLICY,
     COLLECTOR_CLIENT_POLICY,
     TEMPO_RECEIVER_POLICY,
+    LOKI_GATEWAY_POLICY,
 }
 
 

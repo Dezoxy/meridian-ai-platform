@@ -60,6 +60,9 @@ LOKI = {
     "app.kubernetes.io/instance": "loki",
     "app.kubernetes.io/component": "single-binary",
 }
+# Loki's gateway, the chart's nginx in front of it (S072, contract M3): the only
+# peer of Loki's own port.
+LOKI_GATEWAY = {**LOKI, "app.kubernetes.io/component": "gateway"}
 STATE_METRICS = {
     "app.kubernetes.io/name": "kube-state-metrics",
     "app.kubernetes.io/instance": "kube-prometheus-stack",
@@ -386,6 +389,7 @@ def test_observability_denies_ingress_and_egress_and_says_so() -> None:
         "otel-collector",
         "tempo",
         "loki",
+        "loki-gateway",
         "grafana",
         "prometheus",
         "prometheus-operator",
@@ -523,10 +527,18 @@ def test_each_pod_of_observability_admits_the_peers_that_call_it() -> None:
                 {"from": [grafana], "ports": tcp(3200)},
             ],
         ),
+        # Loki's gateway takes the collector's writes and Grafana's reads on its
+        # one TLS port; its check, not this rule, keeps Grafana from writing.
+        "loki-gateway": (
+            LOKI_GATEWAY,
+            [{"from": [collector, grafana], "ports": tcp(8443)}],
+        ),
         "loki": (
             LOKI,
             [
-                {"from": [collector, grafana], "ports": tcp(3100)},
+                # Loki's own port: its gateway alone, neither the collector nor
+                # Grafana (S072, contract M3).
+                {"from": [pods(LOKI_GATEWAY)], "ports": tcp(3100)},
                 # The single binary joins the memberlist it makes with its own
                 # Service (join_members, abort_if_cluster_join_fails: true).
                 {
@@ -571,14 +583,16 @@ def test_the_ports_the_policies_open_are_the_ones_the_values_call() -> None:
     ]["exporters"]
 
     # Grafana's datasources and the collector's exporters, as the values name them.
-    assert sources == {"Tempo": 3200, "Loki": 3100}
+    assert sources == {"Tempo": 3200, "Loki": 8443}
     assert sources["Tempo"] in rule_ports(policies["tempo"])
-    assert sources["Loki"] in rule_ports(policies["loki"])
+    # Loki is read, and written, through its gateway (S072, contract M3).
+    assert sources["Loki"] in rule_ports(policies["loki-gateway"])
+    assert rule_ports(policies["loki"]) == {3100, 7946}
     assert urlsplit("//" + exporters["otlp_grpc/tempo"]["endpoint"]).port in rule_ports(
         policies["tempo"]
     )
     assert urlsplit(exporters["otlp_http/loki"]["endpoint"]).port in rule_ports(
-        policies["loki"]
+        policies["loki-gateway"]
     )
     assert urlsplit(exporters["otlp_http/prometheus"]["endpoint"]).port in rule_ports(
         policies["prometheus"]
