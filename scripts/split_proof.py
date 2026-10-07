@@ -14,6 +14,15 @@ grew:
   they had there.
 - Every banner line (``# ──`` or ``# -- title ---``) of the old file is in one
   new file, once.
+- Every other comment line at column 0 of the old file (one parted from its
+  unit by a blank line, a trailing or an orphan one) is in the new files or the
+  support modules: counted by text, so a line is lost when fewer are held than
+  the old file had. A support module's own comment lines at its revision do not
+  count towards that.
+- No unit of a support module is a test (``test_*`` function, ``Test*`` class)
+  or an autouse fixture: pytest neither collects nor applies them there. A
+  support module's units that were already there at the revision are not
+  looked at.
 - What the new files and support modules hold that neither the old file nor the
   support module's own revision had is listed (imports and module docstrings
   aside; a docstring is listed as a count of lines). A support module's units
@@ -54,6 +63,9 @@ class Unit:
     key: str
     text: str
     order: int
+    # What pytest would do with the unit in a test file and not in a support
+    # module: "a test", "a test class", "an autouse fixture", or "" for none.
+    problem: str = ""
 
 
 @dataclass
@@ -83,6 +95,36 @@ def key_of(node: ast.stmt) -> str:
     if isinstance(node, ast.AnnAssign):
         return "AnnAssign " + ast.unparse(node.target)
     return f"{type(node).__name__} {ast.unparse(node)[:60]}"
+
+
+def pytest_problem(node: ast.stmt) -> str:
+    """What pytest would collect or apply if ``node`` were in a test file."""
+    if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+        if node.name.startswith("test_"):
+            return "a test"
+        for decorator in node.decorator_list:
+            if not isinstance(decorator, ast.Call):
+                continue
+            named = ast.unparse(decorator.func).rsplit(".", 1)[-1] == "fixture"
+            for keyword in decorator.keywords:
+                is_false = (
+                    isinstance(keyword.value, ast.Constant)
+                    and keyword.value.value is False
+                )
+                if named and keyword.arg == "autouse" and not is_false:
+                    return "an autouse fixture"
+    if isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+        return "a test class"
+    return ""
+
+
+def comment_lines(source: str) -> list[str]:
+    """The comment lines at column 0 that are not banners, in order."""
+    return [
+        line
+        for line in source.splitlines()
+        if line.startswith("#") and not is_banner(line)
+    ]
 
 
 def is_docstring(node: ast.stmt, index: int) -> bool:
@@ -118,7 +160,7 @@ def units_of(source: str) -> tuple[list[Unit], int, list[str]]:
             above.insert(0, lines[cursor])
             cursor -= 1
         text = "\n".join([*above, *lines[start - 1 : end]])
-        units.append(Unit(key_of(node), text, len(units)))
+        units.append(Unit(key_of(node), text, len(units), pytest_problem(node)))
     banners = [line for line in lines if is_banner(line)]
     return units, docstring_lines, banners
 
@@ -143,10 +185,13 @@ def prove(group: Group, ref: str, known: set[tuple[str, str]]) -> list[str]:
     new_units: list[tuple[str, Unit]] = []
     docstrings: dict[str, int] = {}
     banners_new: list[str] = []
+    comments_new: Counter[str] = Counter()
     for path in group.new:
-        units, doc_lines, banners = units_of(read(path))
+        new_source = read(path)
+        units, doc_lines, banners = units_of(new_source)
         docstrings[path] = doc_lines
         banners_new += banners
+        comments_new.update(comment_lines(new_source))
         last_order = -1
         for unit in units:
             match = old_by_key.get(unit.key)
@@ -163,13 +208,23 @@ def prove(group: Group, ref: str, known: set[tuple[str, str]]) -> list[str]:
             units_of(before_source) if before_source else ([], 0, [])
         )
         before = {u.key: u for u in before_units}
-        units, doc_lines, banners = units_of(read(path))
+        support_source = read(path)
+        units, doc_lines, banners = units_of(support_source)
         banners_new += (Counter(banners) - Counter(before_banners)).elements()
+        comments_new.update(
+            Counter(comment_lines(support_source))
+            - Counter(comment_lines(before_source or ""))
+        )
         for unit in units:
             if unit.key in before and before[unit.key].text == unit.text:
                 if unit.key in old_by_key:
                     failures.append(f"collision: {unit.key} was already in {path}")
                 continue
+            if unit.problem:
+                failures.append(
+                    f"support: {unit.key} in {path} is {unit.problem}, which "
+                    "pytest neither collects nor applies in a support module"
+                )
             if unit.key in old_by_key:
                 found[unit.key].append((path, unit))
             elif (unit.key, unit.text) not in known:
@@ -184,6 +239,12 @@ def prove(group: Group, ref: str, known: set[tuple[str, str]]) -> list[str]:
             failures.append(f"twice: {unit.key} in {where}")
         elif places[0][1].text != unit.text:
             failures.append(f"changed: {unit.key} in {places[0][0]}")
+    old_comments = comment_lines(old_source)
+    missing = Counter(old_comments) - comments_new
+    for number, line in enumerate(old_source.splitlines(), start=1):
+        if line in missing and line in old_comments and missing[line] > 0:
+            missing[line] -= 1
+            failures.append(f"comment lost: line {number} of {group.old}")
     for banner in (Counter(old_banners) - Counter(banners_new)).elements():
         failures.append(f"banner lost: {banner}")
     for banner in (Counter(banners_new) - Counter(old_banners)).elements():

@@ -69,7 +69,8 @@ def test_a_measurement_at_the_limit_is_retaken_because_callers_require_less(
 def test_the_retaking_is_bounded_and_the_least_of_the_attempts_answers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    ratios = [16.0 - attempt for attempt in range(ATTEMPTS)]
+    # Over the limit and under twice the limit, so each is taken again.
+    ratios = [2.0 * MAX_GROWTH - 1 - attempt for attempt in range(ATTEMPTS)]
     left = script(monkeypatch, [*ratios, 2.0])
 
     grown, attempts = measure_growth(nothing, 1, 4)
@@ -77,6 +78,28 @@ def test_the_retaking_is_bounded_and_the_least_of_the_attempts_answers(
     assert (grown, attempts) == (min(ratios), ATTEMPTS)
     assert min(ratios) >= MAX_GROWTH
     assert left == [SMALL, SMALL * 2.0], "an attempt past the bound was taken"
+
+
+def test_a_measurement_at_twice_the_limit_is_not_taken_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A real quadratic call fails at once: noise does not make sixteen of four.
+    left = script(monkeypatch, [2.0 * MAX_GROWTH, 4.0])
+
+    grown, attempts = measure_growth(nothing, 1, 4)
+
+    assert (grown, attempts) == (2.0 * MAX_GROWTH, 1)
+    assert len(left) == 2
+
+
+def test_a_measurement_just_under_twice_the_limit_is_taken_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script(monkeypatch, [2.0 * MAX_GROWTH - 1, 4.0])
+
+    grown, attempts = measure_growth(nothing, 1, 4)
+
+    assert (grown, attempts) == (4.0, 2)
 
 
 def test_growth_answers_the_least_measurement_as_a_number(
@@ -123,8 +146,27 @@ def test_a_linear_call_measures_under_the_limit() -> None:
     assert grown < MAX_GROWTH
 
 
-def test_a_quadratic_call_measures_over_the_limit_on_every_attempt() -> None:
+def test_a_quadratic_call_measures_well_over_linear_on_every_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    times: list[float] = []
+    real = cputime.best_time
+
+    def spy(call: Callable[[int], object], argument: int) -> float:
+        times.append(real(call, argument))
+        return times[-1]
+
+    monkeypatch.setattr(cputime, "best_time", spy)
+
     grown, attempts = measure_growth(quadratic, 400, 1_600)
 
-    assert grown > MAX_GROWTH
-    assert attempts == ATTEMPTS
+    # Every attempt is over half the limit, so noise on one cannot fail this;
+    # a quadratic stops at the first attempt at twice the limit and is taken
+    # again, to the bound, while its attempts are between the limit and that.
+    ratios = [
+        large / small for small, large in zip(times[::2], times[1::2], strict=True)
+    ]
+    assert len(ratios) == attempts
+    assert all(ratio > MAX_GROWTH / 2 for ratio in ratios), ratios
+    assert grown == min(ratios)
+    assert attempts == ATTEMPTS or grown >= 2 * MAX_GROWTH or grown < MAX_GROWTH

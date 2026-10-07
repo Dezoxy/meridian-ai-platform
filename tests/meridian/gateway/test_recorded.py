@@ -7,6 +7,7 @@ throwaway PostgreSQL. Nothing here reaches a network.
 import contextlib
 import hashlib
 import json
+import sys
 import threading
 import uuid
 from collections.abc import Callable, Iterator
@@ -416,16 +417,45 @@ def test_a_recorded_provider_answers_no_embedding() -> None:
     assert (raised.value.kind, raised.value.sent) == ("not-recorded", False)
 
 
+# Longer than any start-up of a thread, never reached by a run that works: it
+# ends a barrier that would otherwise wait for a thread that never started.
+BARRIER_TIMEOUT_SECONDS = 30
+# The interpreter's switch interval while a test runs threads: each thread's work
+# takes about 2 ms, under the default 5 ms, so without this the threads ran one
+# after another and a lock-free count went undetected (S074, M-1).
+SWITCH_INTERVAL_SECONDS = 1e-6
+
+
+@pytest.fixture
+def interleaved_threads() -> Iterator[None]:
+    """Switch threads very often for the test, and put the interval back."""
+    saved = sys.getswitchinterval()
+    sys.setswitchinterval(SWITCH_INTERVAL_SECONDS)
+    try:
+        yield
+    finally:
+        sys.setswitchinterval(saved)
+
+
 def run_in_threads(work: Callable[[int], None], count: int = 8) -> None:
-    threads = [threading.Thread(target=work, args=(i,)) for i in range(count)]
+    """Run ``work(i)`` in ``count`` threads that all begin together: each waits
+    at a barrier until every thread is running, so their work overlaps."""
+    barrier = threading.Barrier(count, timeout=BARRIER_TIMEOUT_SECONDS)
+
+    def together(index: int) -> None:
+        barrier.wait()
+        work(index)
+
+    threads = [threading.Thread(target=together, args=(i,)) for i in range(count)]
     for thread in threads:
         thread.start()
     for thread in threads:
         thread.join()
 
 
-def test_misses_and_hits_are_counted_exactly_under_threads() -> None:
-    provider = RecordedProvider(recording_of({request_key(REQUEST): answer()}))
+def hammer(provider: RecordedProvider) -> None:
+    """Eight threads, each asking 50 requests the recording does not hold and 50
+    times the one it holds."""
     # One registry load, shared: a deployment is frozen, and the provider
     # does not read it; loading it per call cost 800 loads of the registry.
     shared = deployment()
@@ -437,6 +467,13 @@ def test_misses_and_hits_are_counted_exactly_under_threads() -> None:
             provider.chat(shared, REQUEST, timeout_seconds=5.0)
 
     run_in_threads(work)
+
+
+@pytest.mark.usefixtures("interleaved_threads")
+def test_misses_and_hits_are_counted_exactly_under_threads() -> None:
+    provider = RecordedProvider(recording_of({request_key(REQUEST): answer()}))
+
+    hammer(provider)
 
     assert len(provider.missed) == 8 * 50
     assert provider.unused() == ()
@@ -561,6 +598,7 @@ def test_the_returned_recording_is_a_copy() -> None:
     assert len(provider.recording({}).entries) == 1
 
 
+@pytest.mark.usefixtures("interleaved_threads")
 def test_a_recording_made_under_threads_holds_every_key() -> None:
     provider = RecordingProvider(Inner())
     shared = deployment()

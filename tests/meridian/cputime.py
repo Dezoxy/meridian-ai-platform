@@ -12,7 +12,14 @@ neighbour on the same core slows it, so every run of a window of some tens of
 milliseconds can take twice as long as in a quiet one, and the least of five
 runs inside that window is no help. A linear call measured 8.52 against 8 that
 way, at a load of 10. The slow window ends; a quadratic call measures sixteen in
-every window, so taking it again never lets one through.
+every window, so taking it again never lets one through (and a measurement at
+twice the limit is not taken again).
+
+What the retry costs in what the tests catch: the least of up to four attempts
+passes growth the single attempt mostly failed, so a test now catches growth of
+roughly n^1.7 (10.6 times for four times the input) and worse, not n^1.5 (8
+times): at a load of 9 to 12, 87 % of n^1.5 runs passed with the retry (25 %
+without), 2.5 % of n^1.7 runs, and no quadratic run (S074 review).
 """
 
 import time
@@ -21,6 +28,9 @@ from collections.abc import Callable
 RUNS = 5
 MAX_GROWTH = 8
 ATTEMPTS = 4
+# A growth this far over the limit is not noise: a real quadratic call measures
+# sixteen, twice the limit, so it fails at the first attempt, not the fourth.
+GIVE_UP_GROWTH = 2 * MAX_GROWTH
 # The small run must take far longer than the clock can tell apart, or a ratio
 # of two tiny numbers wanders. The smallest small run of the callers is about
 # 0.3 ms (measured at a load of 10, S074); this sits at a third of that, so that
@@ -61,7 +71,7 @@ def measure_growth[T](
             f"time (the floor is {floor:.2e} s): use a longer one"
         )
         least = min(least, best_time(call, large) / small_time)
-        if least < MAX_GROWTH:
+        if least < MAX_GROWTH or least >= GIVE_UP_GROWTH:
             return least, attempt
     return least, ATTEMPTS
 

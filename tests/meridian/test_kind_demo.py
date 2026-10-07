@@ -494,9 +494,11 @@ def test_a_trace_that_never_settles_is_read_a_fixed_number_of_times(
     assert len(reads) == 2  # both traces
     # The deadline is counted by the script's clock, which the wait between two
     # readings moves: never more readings than the count says, however fast the
-    # machine is, and not fewer than half of it unless the machine took half the
-    # timeout of real time over them.
-    assert all(MAX_READINGS // 2 <= count <= MAX_READINGS for count in reads), reads
+    # machine is. That the script does read past its settling count before the
+    # deadline is held by the growing and alternating tests below (more than
+    # SETTLE_POLLS and more than four readings); no lower bound here reads the
+    # wall clock.
+    assert all(count <= MAX_READINGS for count in reads), reads
 
 
 @requires_demo_tools

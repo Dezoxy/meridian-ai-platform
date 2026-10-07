@@ -11,6 +11,7 @@ name of the test's own, dropped afterwards: a test never builds, patches or
 drops the real template.
 """
 
+import ast
 import hashlib
 import re
 import secrets
@@ -35,6 +36,7 @@ from dbsupport import (
 )
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
+from servicesupport import REPO_ROOT
 
 from meridian.platform.migrations import runner
 
@@ -342,11 +344,18 @@ def test_a_build_that_fails_leaves_nothing_behind_and_a_retry_builds(
     own_template_name: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    broken = (*PACKAGED_MIGRATIONS, ("9998_planted.sql", "SELECT 1 / 0;"))
+    planted = ("9998_planted.sql", "SELECT 1 / 0;")
     with monkeypatch.context() as patched:
-        # The builder passes the list read at import, so the failure is planted
-        # there; patching the runner's own list no longer reaches the build.
-        patched.setattr(dbsupport, "PACKAGED_MIGRATIONS", broken)
+        # The failure is planted where the builder hands its list to the
+        # runner, as in the second-net test below: patching the runner's own
+        # list or the public name does not reach the build.
+        patched.setattr(
+            dbsupport,
+            "apply_migrations",
+            lambda conn, files=None: runner.apply_migrations(
+                conn, files=[*files, planted]
+            ),
+        )
 
         with pytest.raises(psycopg.errors.DivisionByZero):
             ensure_template(db_admin_dsn, db_passwords, name=own_template_name)
@@ -395,6 +404,57 @@ def test_a_patched_migration_list_does_not_change_the_template(
         drop_database(handle)
     assert ledger == _packaged_ledger()
     assert template_name() == template_name(PACKAGED_MIGRATIONS)
+
+
+def test_a_rebound_public_list_changes_neither_the_template_nor_its_name(
+    db_admin_dsn: str,
+    db_passwords: dict[str, str],
+    own_template_name: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The list the builder applies, the check compares and the name hashes is
+    # kept under a private name: rebinding the public one (a test that applies a
+    # prefix of the files) leaves a template of all the files under the real
+    # name, not a template of the prefix that passes its own check.
+    real_files = tuple(runner.migration_files())
+    real_ledger = [
+        (name, hashlib.sha256(text.encode("utf-8")).hexdigest())
+        for name, text in real_files
+    ]
+    monkeypatch.setattr(dbsupport, "PACKAGED_MIGRATIONS", real_files[:3])
+
+    ensure_template(db_admin_dsn, db_passwords, name=own_template_name)
+
+    handle = copy_database(db_admin_dsn, db_passwords, own_template_name)
+    try:
+        ledger = _ledger_of(handle)
+    finally:
+        drop_database(handle)
+    assert ledger == real_ledger
+    assert len(real_ledger) > 3
+    assert template_name() == template_name(real_files)
+
+
+def test_no_call_under_src_gives_apply_migrations_a_list_of_files() -> None:
+    # The runner's ``files`` argument is for the tests' template builder only:
+    # a caller that passed its own list could apply files the package does not
+    # hold, in an order nothing sorts. ``meridian db migrate`` calls it bare.
+    calls: list[tuple[str, int]] = []
+    given: list[str] = []
+    for path in sorted((REPO_ROOT / "src").rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, ast.Call):
+                continue
+            called = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+            if called != "apply_migrations":
+                continue
+            calls.append((path.name, node.lineno))
+            if len(node.args) > 1 or any(
+                k.arg in (None, "files") for k in node.keywords
+            ):
+                given.append(f"{path.name}:{node.lineno}")
+    assert calls, "no call found: the walker reads nothing"
+    assert given == []
 
 
 def test_a_template_that_does_not_match_the_packaged_files_is_refused(

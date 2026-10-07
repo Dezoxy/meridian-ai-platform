@@ -73,14 +73,17 @@ WINDOW_SECONDS = 61
 # The date the API stamps before a test moves it: a form posted with
 # ``submit_in_page`` sets it to the claim's own report date first.
 STAMP_AT_START = date(2026, 9, 1)
-# What one tool call of the stack may take: six times the product's ten seconds.
-# The stack runs the runtime, three tool servers and a database in one process,
-# and under machine load a call passed the product's bound with nothing wrong
-# (S074); a call that really hangs still ends the test, a minute later. The
-# stack's tests are not about a tool's time bound: the ones that are
-# (``runtime/test_tool_client``, ``toolserver/test_tool_server`` and their
-# neighbours) never build a stack and keep the product's values.
-STACK_TOOL_SECONDS = 60.0
+# What one tool call of the stack may take: three times the product's ten
+# seconds. The stack runs the runtime, three tool servers and a database in one
+# process, and under machine load a call passed the product's bound with nothing
+# wrong (S074); a call that really hangs still ends the test, half a minute
+# later. A run makes at most 16 calls, so a stack test that hangs on every one
+# waits 16 x 30 = 480 s, under the runtime's lease (600 s) and CI's job limit
+# (900 s); 60 s would have been 960 s, over both. The stack's tests are not
+# about a tool's time bound: the ones that are (``runtime/test_tool_client``,
+# ``toolserver/test_tool_server`` and their neighbours) never build a stack and
+# keep the product's values.
+STACK_TOOL_SECONDS = 30.0
 
 
 def bound_the_stack_tools() -> None:
