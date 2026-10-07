@@ -12,9 +12,10 @@ those probes, a real renewal of its certificate and the restart that followed
 it, the smoke line for its ingress rule and the gateway's calls counted by it
 (what each run showed, and what none did, is below; S073's runs of
 2026-10-06 and 2026-10-07 saw the fault of the probes and their fix, under
-"What you see"). Tested without a cluster
-and not seen on one: the gateway's refusal as a 503, a frozen store restarted
-by its probe, `make deploy`'s refusal of an old Secret and a rotation. Run
+"What you see"). Seen on kind on 2026-10-07 (run R11, below): the gateway's
+refusal as a 503, with the store scaled to 0 for 10 seconds. Tested without a
+cluster and not seen on one: a frozen store restarted by its probe, `make
+deploy`'s refusal of an old Secret and a rotation. Run
 outside a cluster, against the pinned Redis image: the ACL file that `make up`
 makes (the gateway's connection and script ran under that user, every other
 command was refused), the store's probes over TLS (healthy, frozen by a looping
@@ -105,9 +106,10 @@ the answer is to read the command's own error above that line; and the alert's
 condition (a share or a majority, each with a count, below), unit-tested with
 promtool.
 
-Not seen on a cluster, so tested without one: a 503 from the gateway when the
-store is down or refuses (the demo did not run in the seconds the store was down
-for the renewal); the alert `MeridianRateStoreRefusing` firing (it was loaded
+A 503 from the gateway when the store is down or refuses was not seen in these
+three runs (the demo did not run in the seconds the store was down for the
+renewal); it was seen on 2026-10-07, run R11 (below). Not seen on a cluster, so
+tested without one: the alert `MeridianRateStoreRefusing` firing (it was loaded
 and healthy, and never fired); a second gateway replica; a rotation of the
 store's password; the probe user's restart of a frozen store (freezing the store
 takes the gateway's credential, which no session prints); `make deploy`'s
@@ -117,6 +119,22 @@ without a restart were seen, outside a renewal); the audit row of an upkeep
 credit, read on the cluster; a TLS 1.2 client or a bulk over 1 MB refused by the
 store on the cluster (it ran with both settings and counted the gateway's calls,
 and neither refusal was tried there); memory and CPU under a real load.
+
+**A 503 seen: run R11** (S073, 2026-10-07, 11:53 to 11:55 UTC, on kind; the
+embeddings there are the replay provider's, so nothing cost money). The store
+was scaled to 0 at 11:53:02 and back at 11:53:12, down for 10 seconds. An
+ingest Job made against the gateway in that time failed, and its one log line
+was `the model gateway refused the embedding call (model gateway answered 503;
+kind rate-store-unavailable)`. The audit log held two rows at 11:53:07 with one
+run ID: the gateway's (`model.call`, `refused`, `rate-store-unavailable`) and
+the ingestion's (`knowledge.ingest`, `refused`, `gateway-failed`). The
+gateway's log had one ERROR line, "the rate store is unavailable
+(RateStoreUnavailable): the rate store did not answer (TimeoutError)". The
+gateway pod stayed Ready with no restart, and the chunks were untouched. A
+second ingestion made after the store was back succeeded with the same gateway
+pod; `make smoke` 62 seconds later: 46 PASS, 0 FAIL, 0 SKIP. Not seen in that
+run: `MeridianRateStoreRefusing` (one refused call is under its thresholds, by
+design) and `MeridianServiceUnavailable` (10 seconds, far under five minutes).
 
 The refusal is the design working: with no window known, no call is made
 (the owner's decision of 2026-10-06; the gateway never falls back to windows of
@@ -166,7 +184,8 @@ its own). The price is that this one pod stands in front of every model call.
   loaded in Prometheus and healthy on kind (2026-10-06); neither was seen
   firing there, and kind notifies no one (S028).
 - The gateway stays ready: `/healthz` does not touch the store, so no pod
-  restarts.
+  restarts (seen on kind, run R11, 2026-10-07: Ready, no restart and the same
+  start time through the 10 seconds the store was down).
 - **The store not Ready about two hours after its start**, with no restart
   before it, the pod's events saying `Readiness probe failed: rate-store-readiness:
   line 0: can't fork: Resource temporarily unavailable` (and `failed to exec in
@@ -226,8 +245,8 @@ two cases this is:
 
 | Class | Meaning | Look at |
 |---|---|---|
-| `ConnectionError` | Nothing answered at the address: the pod is down, restarting or not ready, the Service has no endpoint, a policy drops the packets, or (not measured) the TLS handshake failed because the certificate is expired or is not the services' CA's. Measured with the store stopped | The pod's state and `endpoints`; the Certificate; the policy |
-| `TimeoutError` | The store took a connection and did not answer in a quarter of a second: busy or paused. Not measured | The store's output and its CPU and memory |
+| `ConnectionError` | Nothing answered at the address: the pod is down, restarting or not ready, a policy drops the packets, or (not measured) the TLS handshake failed because the certificate is expired or is not the services' CA's. Measured with the store stopped | The pod's state and `endpoints`; the Certificate; the policy |
+| `TimeoutError` | The store took a connection and did not answer in a quarter of a second: busy or paused (not measured); or the connection was not made in a second. Seen on kind with the Service at no endpoint (the store scaled to 0; run R11, 2026-10-07): this class, not `ConnectionError` | The store's output and its CPU and memory |
 | `AuthenticationError` | The store answered and refused the credential: the gateway's password and the store's ACL file disagree. Measured with a wrong password | [A rotated password](#a-password-was-rotated-or-the-two-disagree) |
 | `ResponseError` | The store answered with an error. Measured for three causes, which the log line does not tell apart: the ACL file lacks a command the gateway sends (one made by an older `make up`), a script that runs for ever (the store answers BUSY to everyone), and a tenant's key that holds a member the gateway's script cannot read (one tenant only, below) | The store's output and its CPU: `Slow script detected` with the CPU pinned is the second, and the pod restarts itself within about a minute; without it, the first or the third (below) |
 
@@ -251,7 +270,9 @@ Wait, then look at why. The store is one pod with no volume and no
 persistence, and the Deployment replaces it (`Recreate`: the old pod goes
 before the new one starts, so a restart refuses calls for the seconds it
 takes). The gateway opens a connection per cold call and checks a pooled one
-before it reuses it, so it recovers without a restart.
+before it reuses it, so it recovers without a restart (seen on kind, run R11,
+2026-10-07: after the store was down for 10 seconds the same gateway pod
+admitted calls again, with no restart).
 
 **A restart of the store hands every tenant its windows again.** The windows
 are not persisted, so for up to a minute a tenant may use its full request and

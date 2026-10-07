@@ -1448,8 +1448,11 @@ kind on 2026-10-06 (third run): the store running under this configuration
 with the gateway's calls counted by it, its probes passing, its certificate's
 renewal followed by one restart, and the policy's ingress rule enforced on a
 pod without the gateway's label. Not seen on a cluster: a store frozen by a
-script and restarted by its probe, a TLS 1.2 client or an oversized bulk
-refused, and the 503 of a store that is down.
+script and restarted by its probe, and a TLS 1.2 client or an oversized bulk
+refused. Seen on kind on 2026-10-07 (run R11): the 503 of a store that is down
+(scaled to 0 for 10 seconds): an ingest Job ended on it with the word
+`rate-store-unavailable`, the gateway stayed Ready with no restart, and it
+admitted calls again with the same pod once the store answered.
 
 The namespace denies all traffic by default: the NetworkPolicy
 `default-deny` selects every pod in `meridian`, whatever its labels, and
