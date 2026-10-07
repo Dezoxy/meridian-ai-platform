@@ -671,7 +671,9 @@ def test_up_applies_observabilitys_policies_through_the_function_before_releases
         if line.startswith("install_release kube-prometheus-stack ")
     ]
 
-    assert len(calls) == 3
+    # The database's, the CloudNativePG operator's (S072, contract C),
+    # cert-manager's and observability's.
+    assert len(calls) == 4
     assert path_line.startswith("readonly OBSERVABILITY_POLICY_FILE=")
     assert lines[applied - 1].startswith("log ")
     assert applied < first_release < stack

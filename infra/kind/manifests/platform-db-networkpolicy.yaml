@@ -11,7 +11,12 @@
 #   8000  from the CloudNativePG operator: its status extraction asks each
 #         instance manager over HTTP. Without this rule the Cluster turned
 #         "Instance Status Extraction Error: HTTP communication issue" within 40
-#         seconds (measured on the owner's cluster); with it, it stayed healthy
+#         seconds (measured on the owner's cluster); with it, it stayed healthy.
+#         The operator's pod is in this namespace since S072 (contract C; it
+#         ran in another namespace until then, which is history, and that rule
+#         named it): the rule selects its pod by its two labels and names no
+#         namespace. The operator's own policy (cnpg-operator-networkpolicy.yaml)
+#         is the other half: it may reach these pods on 8000 and nothing else
 #   any   from the pods of the same Cluster: a replica or a join Job, none today
 #
 # Egress, three rules and nothing else, each with a peer; the database pod
@@ -64,12 +69,10 @@ spec:
         - port: 5432
           protocol: TCP
     - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: cnpg-system
-          podSelector:
+        - podSelector:
             matchLabels:
               app.kubernetes.io/name: cloudnative-pg
+              app.kubernetes.io/instance: cnpg
       ports:
         - port: 8000
           protocol: TCP

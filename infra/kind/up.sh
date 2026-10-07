@@ -2,7 +2,8 @@
 # Create the local platform on kind: `make up`. Safe to run again; it converges.
 #   1. kind cluster "meridian" (only if absent), credentials in infra/kind/kubeconfig
 #   2. namespaces (with Pod Security labels), the NetworkPolicies, Envoy Gateway and
-#      the edge Gateway: the database's, cert-manager's and observability's (each
+#      the edge Gateway: the database's, the CloudNativePG operator's,
+#      cert-manager's and observability's (each
 #      applied with the API server's address, read from the `kubernetes`
 #      EndpointSlice in `default` on every run, so a cluster whose node got
 #      another address is repaired by running this again),
@@ -14,7 +15,9 @@
 #      services' certificates, and the CA of its own in `observability` that
 #      signs the collector's certificate (its public certificate goes into the
 #      ConfigMap telemetry-ca in `meridian` and in `logging`, on every run)
-#   3. CloudNativePG operator and the platform-db cluster (PostgreSQL 17, pgvector),
+#   3. CloudNativePG operator (in `meridian`, with a Role there and no ClusterRole
+#      over every namespace: S072, contract C; the comment above its install says
+#      how to take that out) and the platform-db cluster (PostgreSQL 17, pgvector),
 #      the database "meridian" and its eleven roles (the owner, six services, the
 #      scheduled sweep's, the gateway's ledger upkeep's, the policy seed's and
 #      the knowledge ingestion's); their password Secrets are created first,
@@ -77,6 +80,10 @@ readonly RATE_STORE_PROBE_COMMANDS='+ping'
 # server's addresses (S063). The placeholder is not a CIDR, so the API server
 # refuses the file as it stands; a test keeps this string equal to the file's.
 readonly DATABASE_POLICY_FILE="${KIND_DIR}/manifests/platform-db-networkpolicy.yaml"
+# The CloudNativePG operator's own policy: it runs in `meridian` (S072, contract
+# C), where the chart's default-deny selects its pod. The one egress rule for TCP
+# 6443 takes the same placeholder; its webhook port has no ingress rule.
+readonly CNPG_OPERATOR_POLICY_FILE="${KIND_DIR}/manifests/cnpg-operator-networkpolicy.yaml"
 # cert-manager's policies take the same placeholder, on the one egress rule for
 # TCP 6443 (S063, contract FB); the webhooks' port 10250 has no ingress rule.
 readonly CERT_MANAGER_POLICY_FILE="${KIND_DIR}/manifests/cert-manager-networkpolicy.yaml"
@@ -352,6 +359,9 @@ kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/namespaces.
 log "network: the database's NetworkPolicy, with the API server's address (before the database exists)"
 apply_api_server_policy "${DATABASE_POLICY_FILE}" "the database's"
 
+log "network: the CloudNativePG operator's NetworkPolicy, with the API server's address (before the operator exists)"
+apply_api_server_policy "${CNPG_OPERATOR_POLICY_FILE}" "the CloudNativePG operator's"
+
 log "network: cert-manager's NetworkPolicies, with the API server's address (before cert-manager is installed)"
 apply_api_server_policy "${CERT_MANAGER_POLICY_FILE}" "cert-manager's"
 
@@ -422,9 +432,40 @@ kctl -n observability wait --for=condition=Ready certificate/otel-collector \
   die "the Certificate otel-collector in observability was not Ready in 5m: read the CertificateRequests of the Certificates telemetry-ca and otel-collector (kubectl -n observability get certificaterequest; describe each) for their Approved or Denied condition, the Ready condition of the policies telemetry-ca and otel-collector (the add-on's pod logs say why one was not applied), and the Certificates' events"
 publish_telemetry_ca
 
-log "database: CloudNativePG operator"
-install_release cnpg cnpg-system "${CNPG_OPERATOR_CHART}" "${CNPG_OPERATOR_VERSION}" \
+# The operator runs in `meridian`, with the chart's `config.clusterWide=false`
+# (S072, contract C): its rules over Secrets, ConfigMaps, pods (and pods/exec) and
+# roles are one Role in `meridian`, where the Cluster is, and no longer a
+# ClusterRole over every namespace; the ClusterRole is left with nodes (read), the
+# webhook configurations (get, patch) and image catalogs (read). One of the four
+# cluster-wide writers of Secrets is gone, and no namespace of its own is made
+# for it. Its pod is selected by its own policy (CNPG_OPERATOR_POLICY_FILE,
+# applied above) and by the chart's default-deny, which `make deploy` adds.
+#
+# Fall-back, written before the first cold run: this change is implemented in
+# files and tested without a cluster; it has not run on kind. If one cold `make
+# up` does not bring the database up under the confined operator, take the change
+# out again (the release back in a namespace of its own, without
+# `config.clusterWide=false`, the policy file and its call removed, the database
+# policy's rule for the operator back to a namespace and a pod selector) and
+# record the operator's reach as accepted with "tried, and what failed". What
+# "does not bring the database up" looks like: the install of platform-db ends
+# with "helm release platform-db failed" and a webhook call refused or timed out
+# (the operator's webhooks fail closed: its pod unreachable from the API server);
+# or the wait for cluster/platform-db below ends after 10m with the Cluster not
+# Ready; or the wait for the roles ends with cannotReconcile. The operator's log
+# (the pod of the Deployment cnpg-cloudnative-pg in `meridian`) would say, for a
+# policy that is too narrow, a timeout dialling the API server's address on 6443
+# or "Instance Status Extraction Error: HTTP communication issue" (its call to
+# the instance manager on 8000); for a Role that is too narrow, "forbidden" and
+# the verb and resource it lacked.
+# A cluster from before this change keeps the release in the namespace of its
+# own, and Helm does not move a release: run `make down` (it deletes the kind
+# cluster: only a disposable one, and never to clear a fault nobody has looked at)
+# and then `make up`.
+log "database: CloudNativePG operator (in meridian, with a Role there instead of rules over every namespace)"
+install_release cnpg meridian "${CNPG_OPERATOR_CHART}" "${CNPG_OPERATOR_VERSION}" \
   "${CNPG_REPO}" cnpg.yaml \
+  --set "config.clusterWide=false" \
   --set "image.tag=${CNPG_OPERATOR_IMAGE_TAG}@${CNPG_OPERATOR_IMAGE_DIGEST}"
 ensure_database_secrets
 ensure_rate_store_secret

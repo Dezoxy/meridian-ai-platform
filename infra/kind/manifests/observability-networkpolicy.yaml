@@ -30,8 +30,12 @@
 #                    (its default-deny leaves every pod of `meridian` without
 #                    egress, and only a pod that is given the collector's
 #                    address has a rule for it, tests/meridian/test_helm_
-#                    network_policy.py), and smoke's telemetrygen Jobs run in `meridian`
-#                    with a policy of their own (smoke-networkpolicy.yaml). A
+#                    network_policy.py), smoke's telemetrygen Jobs run in `meridian`
+#                    with a policy of their own (smoke-networkpolicy.yaml), and the
+#                    CloudNativePG operator's pod, which is in `meridian` since
+#                    S072, has no rule towards the collector: the operator's own
+#                    policy (cnpg-operator-networkpolicy.yaml) names DNS, the API
+#                    server and the database's pods and nothing else. A
 #                    pod of any other namespace (default, kube-system,
 #                    cert-manager, this one, `logging` but for the agent) cannot
 #                    push a trace, a log or a metric under a name that is not
