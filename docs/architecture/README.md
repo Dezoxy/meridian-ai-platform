@@ -133,10 +133,12 @@ every `.md` file in that folder.
 | Requirements | [constraints](requirements/constraints.md) · [quality attributes](requirements/quality-attributes.md) |
 | Security | [threat model](security/threat-model.md) · [data classification](security/data-classification.md) |
 | Deployment | [Azure platform](deployment/azure-platform.md): every Azure service the platform uses or designs, the residency rule in words no cloud owns, and, in its last section, a comparison of a managed and a self-managed cluster (not a plan) |
+| Code | [import layering](code/import-layering.md): which Python package may import which, as the six import-linter contracts enforce it, with one Mermaid diagram of the layers. Not a component view: none exists yet |
 
 Only `overview/` is imported into the model by `!docs`. Registers reach it by
 symlink (`overview/10-constraints.md`, `11-quality-attributes.md`,
-`22-data-classification.md`, `23-threat-model.md`, `30-azure-platform.md`).
+`22-data-classification.md`, `23-threat-model.md`, `30-azure-platform.md`,
+`40-import-layering.md`).
 The security and quality registers came before the code they govern, so later
 steps cite their IDs instead of inventing them. Add other concern documents
 when there is something true to say: reliability when something runs, and
@@ -167,6 +169,11 @@ Mermaid. The rule is "Model or Mermaid" in
   machine.
 - `make mermaid` regenerates the derived blocks and renders every fence, which
   catches syntax errors that GitHub would show as an error box.
+  The `derived diagrams` job of the `docs` workflow runs both halves on
+  every pull request, so a fence that does not parse fails a required
+  check. Under rootless Docker `make mermaid-render` and `make pdf` cannot
+  write their PNGs (the container's user is not the folder's owner); there
+  the pull request's job is the proof.
 
 ## Not documented here
 
