@@ -15,7 +15,7 @@ import httpx
 from opentelemetry import propagate
 from pydantic import ValidationError
 
-from meridian.runtime.models import RunResponse, RunState
+from meridian.platform.common.runwire import RunResponse, RunState
 from meridian.workloads.claims_triage.lifecycle import (
     AGENT,
     RUNTIME_CONNECT_TIMEOUT_SECONDS,
