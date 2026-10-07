@@ -193,6 +193,7 @@ readonly LOG_AGENT_SHAPE_FILTER='
 readonly JOB_TIMEOUT=120s
 telemetry_pushed="" # set to yes by check 4 when telemetrygen's push from meridian passed: check 8's control
 log_agent_shipped="" # set to yes by check 4 when the Claims API's line was found in Loki: the streams line's control
+
 # ── 4. telemetry ─────────────────────────────────────────────────────────────
 # start_job SIGNAL COUNT_FLAG: one Job that sends one item of SIGNAL (traces,
 # logs or metrics) for service ${service}. Named uniquely, so reruns never clash.
@@ -513,6 +514,7 @@ check_telemetry_log_agent() {
     fail "telemetry: the edge did not answer 404 for ${CLAIMS_EDGE_ORIGIN}${marker}: it answered $(telemetry_answer "${status}")"
     return
   fi
+  # shellcheck disable=SC2154  # grafana_url is set by open_grafana, poll_result and poll_error by poll (shared.sh)
   if poll '.data.result[0].values[0][1] // empty' -G \
     "${grafana_url}/api/datasources/proxy/uid/loki/loki/api/v1/query_range" \
     --data-urlencode "query={service_name=\"${LOG_AGENT_SERVICE}\"} | path=\"${marker}\" | status=\"404\"" \
@@ -609,6 +611,7 @@ check_telemetry() {
   # The control of check 8's collector line: a pod the policies admit reached the
   # collector over TLS in this run. Set before the read-backs, which prove
   # something else (that the stores answered) and can fail on their own.
+  # shellcheck disable=SC2034  # read by check_network_collector (check 8), which smoke.sh still holds
   telemetry_pushed=yes
 
   open_grafana || return 0 # it printed the FAIL line

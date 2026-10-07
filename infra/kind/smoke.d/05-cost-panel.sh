@@ -40,12 +40,14 @@ readonly COST_SERIES=(meridian_gateway_tokens_total meridian_gateway_cost_EUR_to
 readonly GRAFANA_ACCOUNT=system:serviceaccount:observability:kube-prometheus-stack-grafana
 # ... and for kube-state-metrics (release name + "-kube-state-metrics").
 readonly KSM_ACCOUNT=system:serviceaccount:observability:kube-prometheus-stack-kube-state-metrics
+
 # ── 5. cost panel ────────────────────────────────────────────────────────────
 # run_dashboard_query TITLE EXPR: one instant query through Grafana's datasource
 # proxy; Prometheus must answer status success. Counts it in ${queries_run};
 # on a refusal returns 1 with "<title>: <error>" in ${query_error}.
 run_dashboard_query() {
   local title=$1 expr=$2 body status error
+  # shellcheck disable=SC2154  # grafana_url is set by open_grafana (shared.sh)
   body="$(gcurl -G "${grafana_url}/api/datasources/proxy/uid/prometheus/api/v1/query" \
     --data-urlencode "query=${expr}" 2>&1)" || true
   queries_run=$((queries_run + 1))
@@ -124,9 +126,11 @@ check_dashboard() {
   local uid=$1 file=$2 served title file_exprs served_exprs problem
   if ! poll '(select(.meta.provisioned == true) | .dashboard) // empty | tojson' \
     "${grafana_url}/api/dashboards/uid/${uid}"; then
+    # shellcheck disable=SC2154  # poll_error is set by poll (shared.sh)
     fail "dashboard: Grafana has no provisioned dashboard ${uid} after ${POLL_TIMEOUT}s (run make up) (last answer: ${poll_error})"
     return
   fi
+  # shellcheck disable=SC2154  # poll_result is set by poll (shared.sh)
   served="${poll_result}"
   title="$(clean_lines "$(jq -r '.title // empty' <<<"${served}" 2>/dev/null)")"
   if ! file_exprs="$(dashboard_targets <"${file}" | jq -c 'map(.expr)')"; then

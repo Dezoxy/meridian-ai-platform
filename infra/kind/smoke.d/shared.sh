@@ -7,12 +7,14 @@
 # runs), is cancelled, and psql's message ends in the FAIL line of that check
 # instead of the line hanging (the pgvector lines of check 2 keep the first line
 # of it too since S073, K4: a read that failed is not "not installed").
+# shellcheck disable=SC2034  # read by 02-database.sh, 05-cost-panel.sh and 09-service-identity.sh
 readonly PSQL_OPTIONS='-c statement_timeout=5s -c lock_timeout=3s'
 # The collector's OTLP HTTP port: the one the six services push to
 # (telemetry.otlpEndpoint in values/meridian.yaml; a test keeps them equal), the
 # one the collector's ingress admits the pods of `meridian` on, and, since S063,
 # the one telemetrygen pushes to (--otlp-http). Never 4317, OTLP over gRPC, which
 # the collector's ingress admits from no one.
+# shellcheck disable=SC2034  # read by 04-telemetry.sh and by check 8, which smoke.sh still holds
 readonly COLLECTOR_ENDPOINT=otel-collector.observability.svc.cluster.local:4318
 readonly GRAFANA_SERVICE=svc/kube-prometheus-stack-grafana
 readonly POLL_TIMEOUT=120
@@ -91,6 +93,7 @@ poll() {
       poll_error="$(clean_lines "${body:0:160}")"
     else
       status=$?
+      # shellcheck disable=SC2034  # read by 04-telemetry.sh, 05-cost-panel.sh, 07-sweep.sh and 11-alert-rules.sh
       poll_error="curl exit ${status}: $(clean_lines "$(<"${err_file}")")"
     fi
     sleep "${POLL_INTERVAL}"

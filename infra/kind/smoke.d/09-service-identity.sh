@@ -203,6 +203,7 @@ identity_answer="" # set by identity_status
 identity_primary="" # set by identity_mark_start: the primary pod of platform-db
 identity_mark=""    # set by identity_mark_start: the database's clock before the 403
 identity_mark_problem="" # set by identity_mark_start: why there is no mark
+
 # ── 9. service identity ──────────────────────────────────────────────────────
 # identity_status MODE: the probe's answer for MODE in ${identity_answer}: the
 # HTTP status it printed, or "error: ..." with what it wrote on stderr when it

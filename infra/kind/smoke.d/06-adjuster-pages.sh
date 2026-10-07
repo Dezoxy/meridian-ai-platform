@@ -15,6 +15,7 @@ readonly ADJUSTER_BANNER="Synthetic data only."
 readonly CLAIMANT_START_URL=http://claims.meridian.localhost:8088/claimant/claims
 # The second sentence of the claimant banner (templates/claimant_base.html).
 readonly CLAIMANT_BANNER="Every name, address and description you enter must be fictional: never a real person's."
+
 # ── 6. adjuster pages ────────────────────────────────────────────────────────
 # The pages are served by the Claims API (S016), through the edge, in the form
 # demo.sh reaches it. No line changes a claim: the second is refused by the

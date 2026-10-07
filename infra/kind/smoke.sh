@@ -18,6 +18,7 @@
 # The checks, in order: 01 edge, 02 database, 03 tools, 04 telemetry, 05 cost
 # panel, 06 adjuster pages, 07 sweep, 08 network policy, 09 service identity, 10
 # certificate policy, 11 alert rules.
+# Checks 08 and 10 are still in this file, below, until the last cut.
 #   8. network policy: six lines (S019, S062, S063, S066). Each opens a TCP connection and
 #                 nothing more; a path that no rule allows is a PASS only when it
 #                 times out, and a connection refused or a name that does not

@@ -74,6 +74,7 @@ readonly ALERT_GROUP_PREFIX="meridian."
 readonly ALERT_ERROR_LENGTH=120
 readonly ALERT_RULES_PATH=/api/datasources/proxy/uid/prometheus/api/v1/rules
 rules_body=""      # set by fetch_rules
+
 # ── 11. alert rules and health dashboard ─────────────────────────────────────
 # What the file holds, read with awk by the file's indentation (the group
 # names at four spaces, the rules at eight; a test compares both with a YAML
@@ -203,6 +204,7 @@ fetch_rules() {
     fail "alert rules: found no group in ${ALERT_RULES_FILE}"
     return 1
   fi
+  # shellcheck disable=SC2154  # grafana_url is set by open_grafana, poll_result by poll (shared.sh)
   if poll "select(.status == \"success\")
     | [.data.groups[] | select(.name | startswith(\"${ALERT_GROUP_PREFIX}\"))] as \$loaded
     | select((${wanted} - [\$loaded[].name] | length) == 0
@@ -214,6 +216,7 @@ fetch_rules() {
   rules_body="$(gcurl "${grafana_url}${ALERT_RULES_PATH}" 2>/dev/null || true)"
   status="$(jq -r '.status // empty' <<<"${rules_body}" 2>/dev/null || true)"
   if [[ "${status}" != success ]]; then
+    # shellcheck disable=SC2154  # poll_error is set by poll (shared.sh)
     fail "alert rules: Prometheus did not answer ${ALERT_RULES_PATH} with status success after ${POLL_TIMEOUT}s (last answer: ${poll_error})"
     return 1
   fi

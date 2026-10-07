@@ -61,6 +61,7 @@ readonly LEDGER_NEWEST_SQL='SELECT name FROM public.meridian_migrations ORDER BY
 # table and the knowledge table. QUERY_ERROR_LENGTH cuts the message of a
 # failed read of the database (meridian_query) where a FAIL line carries it.
 readonly QUERY_ERROR_LENGTH=160
+
 # ── 2. database ──────────────────────────────────────────────────────────────
 # platform_db_primary: the name of the database's primary pod and nothing else
 # on stdout; fails when there is none. Shared by the stores check below and the
@@ -190,6 +191,7 @@ check_stores() {
 # that the path is closed to every other address (see the header).
 check_database_api_server() {
   local shown
+  # shellcheck disable=SC2154  # api_server_addresses and api_server_problem are set by api_server_matches_policy (common.sh)
   if api_server_matches_policy; then
     shown="$(paste -sd ',' - <<<"${api_server_addresses}")"
     pass "database: the NetworkPolicy platform-db lets its pod reach TCP 6443 at the API server's address alone (${shown}, the endpoint of the kubernetes Service)"

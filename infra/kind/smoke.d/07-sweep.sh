@@ -127,6 +127,7 @@ readonly SWEEP_FINDINGS=(documents-overdue triage-not-started triage-abandoned r
 readonly SWEEP_ENDPOINT_ENV=OTEL_EXPORTER_OTLP_ENDPOINT
 readonly SWEEP_SERIES_WINDOW=15m
 sweep_job_finished="" # set by report_sweep: the Job whose success check 7's first line passed
+
 # ── 7. sweep ─────────────────────────────────────────────────────────────────
 # The API server's timestamps (the CronJob's creation and lastScheduleTime, a
 # Job's completionTime and conditions) are compared with each other and with
@@ -462,6 +463,7 @@ check_sweep_findings() {
     skip "sweep findings: not looked for, because Grafana could not be reached"
     return
   fi
+  # shellcheck disable=SC2154  # grafana_url is set by open_grafana (shared.sh)
   query_url="${grafana_url}/api/datasources/proxy/uid/prometheus/api/v1/query"
   query="$(sweep_findings_query)"
   if poll "([.data.result[]? | {(.metric.meridian_finding // \"\"): (.value[1] | tostring)}] | add // {}) as \$got
@@ -469,6 +471,7 @@ check_sweep_findings() {
     | if all(\$words[]; \$got[.] != null)
       then [\$words[] | \"\(.)=\(\$got[.])\"] | join(\", \") else empty end" \
     -G "${query_url}" --data-urlencode "query=${query}"; then
+    # shellcheck disable=SC2154  # poll_result is set by poll (shared.sh)
     pass "sweep findings: job/${job} succeeded and Prometheus has all ${#SWEEP_FINDINGS[@]} findings of ${SWEEP_SERIES} (job ${SWEEP_JOB_LABEL}) from the last ${SWEEP_SERIES_WINDOW}: $(clean_lines "${poll_result}")"
     return
   fi
