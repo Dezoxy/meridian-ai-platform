@@ -46,7 +46,7 @@ from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.platform.common.throttle import REFUSAL_AUDIT_SECONDS
 from meridian.platform.registry import load_registry
 from meridian.runtime import app as runtime_app
-from meridian.runtime import graphs, runs, tool_client
+from meridian.runtime import graphs, model_client, runs, tool_client
 from meridian.runtime.app import create_app
 from meridian.runtime.checkpoints import open_saver
 from meridian.runtime.failures import GraphFailure
@@ -2427,17 +2427,23 @@ def test_the_lease_of_a_running_run_is_ten_minutes() -> None:
 
 
 def test_the_longest_a_live_leg_can_last_is_under_the_lease() -> None:
-    # Four model calls of 30 s and sixteen tool calls of 10 s: 120 + 160 = 280 s.
-    # A lease the longest leg could outlast would let a takeover or the sweep
-    # end a run something is still working on. The 30 s of the gateway client is
-    # its timeout for each phase of a call, so this is the sum of the bounds the
-    # code names, not a hard ceiling.
-    model_seconds = runs.MAX_MODEL_CALLS_PER_RUN * runtime_app.GATEWAY_TIMEOUT_SECONDS
+    # Four model calls of 30 s plus one 30 s read timeout each (a call ends at
+    # its deadline plus at most one wait for bytes) and sixteen tool calls of
+    # 10 s (the whole call is under one deadline): 240 + 160 = 400 s. A lease
+    # the longest leg could outlast would let a takeover or the sweep end a run
+    # something is still working on. This is a ceiling: no call of either client
+    # runs past its figure (before S069 the 30 s was for each phase and each
+    # wait, so a trickling reply had no ceiling at all). One case stays outside
+    # it: headers that trickle, which each wait for bytes is still the bound of.
+    model_call = (
+        model_client.MODEL_CALL_DEADLINE_SECONDS + runtime_app.GATEWAY_TIMEOUT_SECONDS
+    )
+    model_seconds = runs.MAX_MODEL_CALLS_PER_RUN * model_call
     tool_seconds = runs.MAX_TOOL_CALLS_PER_RUN * tool_client.TOOL_TIMEOUT_SECONDS
 
     longest_leg = model_seconds + tool_seconds
 
-    assert (model_seconds, tool_seconds, longest_leg) == (120.0, 160.0, 280.0)
+    assert (model_seconds, tool_seconds, longest_leg) == (240.0, 160.0, 400.0)
     assert longest_leg < runs.RUNNING_LEASE_SECONDS
 
 

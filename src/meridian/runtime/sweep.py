@@ -24,8 +24,9 @@ from meridian.platform.common.audit import AuditEvent, record_event
 
 # How long a run may stay ``Running`` before a resume may take it over: a leg
 # that died, or whose last status write failed twice, leaves the run so. Well
-# above the longest a live leg can take (four model calls at the gateway's
-# 30 s timeout, sixteen tool calls), so a live leg is not taken over. The sweep
+# above the longest a live leg can take (four model calls, each at most the
+# 30 s deadline plus one 30 s read timeout, and sixteen tool calls of 10 s: 400 s;
+# a test multiplies the constants), so a live leg is not taken over. The sweep
 # ends an unfinished run only after the same time (``runs.py`` reads it from
 # here, so the runtime and the sweep cannot disagree).
 RUNNING_LEASE_SECONDS = 600

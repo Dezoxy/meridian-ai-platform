@@ -4,7 +4,9 @@ It sets the three ``X-Meridian-*`` headers and forwards the trace context, so
 graph code neither sets headers nor knows the gateway's address (T-08).
 """
 
+import json
 import threading
+import time
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -39,6 +41,13 @@ CALL_REASONS: frozenset[str] = frozenset(get_args(CallReason))
 # Told once for each call ``chat`` is asked to make, with the reason of a failure.
 CallObserver = Callable[[CallOutcome, CallReason | None], None]
 REFUSED_STATUSES = frozenset({HTTPStatus.TOO_MANY_REQUESTS, HTTPStatus.FORBIDDEN})
+# One model call as a whole, from the send to the last byte of the answer. The
+# HTTP client's own timeout (30 s) is for each phase and each wait for bytes, so
+# a reply that trickles never trips it. The gateway bounds all its attempts at
+# 25 s (a test keeps this above that), so a call the gateway answers in time,
+# with its own 504 included, is never cut here; 30 s is also the client's wait
+# for one read, so a call ends at this deadline plus at most one read timeout.
+MODEL_CALL_DEADLINE_SECONDS = 30.0
 
 
 class ModelCallError(Exception):
@@ -128,12 +137,28 @@ class _Reply(BaseModel):
     usage: Usage
 
 
+class _DeadlinePassed(httpx.TimeoutException):
+    """The call outlasted ``MODEL_CALL_DEADLINE_SECONDS``: a timeout like the
+    transport's, so it is counted and answered as one. Private and message-less."""
+
+
+@dataclass(frozen=True, slots=True)
+class _Answer:
+    """What the gateway said: the status, whether it marked a filtered 400, and
+    the body of a 2xx only (the body of any other status is never read)."""
+
+    status_code: int
+    filtered: bool
+    payload: bytes
+
+
 class ModelClient:
     """Built per run, over an injected client whose base URL is the gateway.
 
     ``max_calls`` bounds the calls of this client, so of one run; an attempt
     counts whether or not the gateway answers it. ``on_call`` is told once of
-    each call ``chat`` is asked to make, a call the limit stops included."""
+    each call ``chat`` is asked to make, a call the limit stops included.
+    ``clock`` times the deadline of a call (``MODEL_CALL_DEADLINE_SECONDS``)."""
 
     def __init__(
         self,
@@ -144,10 +169,12 @@ class ModelClient:
         run_id: uuid.UUID,
         max_calls: int,
         on_call: CallObserver | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._http = http
         self._max_calls = max_calls
         self._on_call = on_call
+        self._clock = clock
         self._calls = 0
         self._lock = threading.Lock()
         self._headers = {
@@ -195,8 +222,55 @@ class ModelClient:
         if data_class is not None:
             headers[DATA_CLASS_HEADER] = data_class
         propagate.inject(headers)
+        answer = self._exchange(body, headers)
+        if answer.filtered:
+            self._observe("failed", "filtered")
+            raise ModelCallFilteredError from None
+        if not 200 <= answer.status_code < 300:
+            refused = answer.status_code in REFUSED_STATUSES
+            self._observe("failed", "refused" if refused else "error")
+            raise ModelCallError(answer.status_code)
         try:
-            response = self._http.post(CHAT_PATH, json=body, headers=headers)
+            reply = _Reply.model_validate(json.loads(answer.payload))
+        except (ValueError, ValidationError):
+            self._observe("failed", "error")
+            raise ModelCallError(0) from None
+        self._observe("completed")
+        return ChatResult(
+            text=reply.output.text,
+            deployment=reply.deployment,
+            provider=reply.provider,
+            model=reply.model,
+            mode=reply.mode,
+            input_tokens=reply.usage.input_tokens,
+            output_tokens=reply.usage.output_tokens,
+            finish_reason=reply.output.finish_reason,
+        )
+
+    def _exchange(self, body: dict[str, Any], headers: dict[str, str]) -> _Answer:
+        """Send one request and read the answer as a stream, against the call's
+        deadline. The clock is read once the headers are in and after every
+        chunk, so the call ends at the deadline plus at most one read timeout;
+        the response is closed on every way out, which closes a connection
+        whose body was not read to its end. A failure is counted and raised as
+        the HTTP client's own would be."""
+        started = self._clock()
+        try:
+            with self._http.stream(
+                "POST", CHAT_PATH, json=body, headers=headers
+            ) as response:
+                self._check_deadline(started)
+                status = response.status_code
+                filtered = (
+                    status == HTTPStatus.BAD_REQUEST
+                    and response.headers.get(REFUSAL_HEADER) == REFUSAL_CONTENT_FILTER
+                )
+                chunks: list[bytes] = []
+                if 200 <= status < 300:
+                    for chunk in response.iter_bytes():
+                        chunks.append(chunk)
+                        self._check_deadline(started)
+            return _Answer(status, filtered, b"".join(chunks))
         except httpx.TimeoutException:
             # Neither the transport's message nor its cause is kept.
             self._observe("failed", "timeout")
@@ -213,29 +287,7 @@ class ModelClient:
             # is, for the run to fail as it would have.
             self._observe("failed", "error")
             raise
-        if (
-            response.status_code == HTTPStatus.BAD_REQUEST
-            and response.headers.get(REFUSAL_HEADER) == REFUSAL_CONTENT_FILTER
-        ):
-            self._observe("failed", "filtered")
-            raise ModelCallFilteredError from None
-        if not 200 <= response.status_code < 300:
-            refused = response.status_code in REFUSED_STATUSES
-            self._observe("failed", "refused" if refused else "error")
-            raise ModelCallError(response.status_code)
-        try:
-            reply = _Reply.model_validate(response.json())
-        except (ValueError, ValidationError):
-            self._observe("failed", "error")
-            raise ModelCallError(0) from None
-        self._observe("completed")
-        return ChatResult(
-            text=reply.output.text,
-            deployment=reply.deployment,
-            provider=reply.provider,
-            model=reply.model,
-            mode=reply.mode,
-            input_tokens=reply.usage.input_tokens,
-            output_tokens=reply.usage.output_tokens,
-            finish_reason=reply.output.finish_reason,
-        )
+
+    def _check_deadline(self, started: float) -> None:
+        if self._clock() - started > MODEL_CALL_DEADLINE_SECONDS:
+            raise _DeadlinePassed("")
