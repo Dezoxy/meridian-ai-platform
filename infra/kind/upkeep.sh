@@ -108,7 +108,7 @@ require_upkeep_secret() {
 # `make deploy` built (twelve hex digits of meridian), is a refusal.
 read_release_image() {
   local values repository
-  values="$(helmc -n "${NAMESPACE}" get values "${RELEASE}" -o json 2>/dev/null)" ||
+  values="$(helmc_bounded -n "${NAMESPACE}" get values "${RELEASE}" -o json 2>/dev/null)" ||
     die "the Helm release ${RELEASE} is not installed, so there is no image to run; run 'make deploy' first"
   repository="$(jq -r '.image.repository // empty' <<<"${values}" 2>/dev/null)" || repository=""
   tag="$(jq -r '.image.tag // empty' <<<"${values}" 2>/dev/null)" || tag=""
@@ -154,7 +154,7 @@ job_output_is_a_refusal() {
 }
 
 split_arguments
-need_tools kubectl helm jq
+need_tools kubectl helm jq timeout
 need_cluster
 require_upkeep_secret
 read_release_image

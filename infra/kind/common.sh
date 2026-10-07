@@ -31,8 +31,95 @@ export HELM_REPOSITORY_CONFIG=/dev/null
 log() { printf '==> %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
-kctl() { kubectl --kubeconfig "${KUBECONFIG_FILE}" --context "${KUBE_CONTEXT}" "$@"; }
+# The bounds of the scripts' kubectl calls (S073). Without one a call waits as
+# long as the API server is silent, so a frozen node hung `make smoke` or `make
+# deploy` with no word. kctl reads the call it is given and bounds it by what it
+# is; the values can be set in the environment for a slow machine.
+#  - An ordinary call gets --request-timeout, the time one request to the API
+#    server may take. A call that passes its own keeps it.
+#  - wait, rollout status, attach, port-forward, logs -f and get -w hold a stream
+#    or wait by design, and the flag would end them early: they get none. wait
+#    and rollout status carry their own --timeout at every call site (a test
+#    reads them); the other three are not used through kctl.
+#  - exec and a delete with --wait hold a stream too, and nothing else bounds the
+#    call that opens it: they run under the system's `timeout` for
+#    KCTL_OUTER_TIMEOUT seconds. A delete with --wait also carries --timeout.
+# Tested with stand-ins, not yet seen on a cluster.
+KCTL_REQUEST_TIMEOUT="${KCTL_REQUEST_TIMEOUT:-15s}"
+KCTL_OUTER_TIMEOUT="${KCTL_OUTER_TIMEOUT:-90}"
+# The seconds a read of the release by helm may take: `helm get` has no timeout
+# flag of its own.
+HELM_READ_TIMEOUT="${HELM_READ_TIMEOUT:-30}"
+readonly KCTL_REQUEST_TIMEOUT KCTL_OUTER_TIMEOUT HELM_READ_TIMEOUT
+# How long `timeout` waits after its signal before it kills the call.
+readonly KCTL_KILL_AFTER=5
+
+# kctl_classify ARGS...: sets ${kctl_class} to "request" (add the flag), "outer"
+# (run under timeout) or "none" (a stream, a wait, or a call that has its own
+# --request-timeout), and ${kctl_verb}. The words after `--` are the command of
+# an exec, not kubectl's, so they are not read; a namespace is skipped as the
+# value of its flag, so a namespace called `wait` decides nothing.
+kctl_classify() {
+  local word skip=0 sub="" follow=0 watch=0 waits=0 own=0
+  kctl_verb=""
+  kctl_class=request
+  for word in "$@"; do
+    [[ "${word}" == -- ]] && break
+    if ((skip)); then
+      skip=0
+      continue
+    fi
+    case "${word}" in
+      -n | --namespace | -s | --server | --context | --cluster | --user | --kubeconfig) skip=1 ;;
+      --request-timeout | --request-timeout=*) own=1 ;;
+      -f | --follow | --follow=true) [[ "${kctl_verb}" == logs ]] && follow=1 ;;
+      -w | --watch | --watch=true | --watch-only) [[ "${kctl_verb}" == get ]] && watch=1 ;;
+      --wait | --wait=true) [[ "${kctl_verb}" == delete ]] && waits=1 ;;
+      -*) ;;
+      *) if [[ -z "${kctl_verb}" ]]; then kctl_verb="${word}"; elif [[ -z "${sub}" ]]; then sub="${word}"; fi ;;
+    esac
+  done
+  if ((own)); then
+    kctl_class=none
+    return 0
+  fi
+  case "${kctl_verb}" in
+    wait | attach | port-forward) kctl_class=none ;;
+    rollout) [[ "${sub}" != status ]] || kctl_class=none ;;
+    logs) ((follow == 0)) || kctl_class=none ;;
+    get) ((watch == 0)) || kctl_class=none ;;
+    exec) kctl_class=outer ;;
+    delete) ((waits == 0)) || kctl_class=outer ;;
+  esac
+}
+
+kctl() {
+  local status=0
+  kctl_classify "$@"
+  case "${kctl_class}" in
+    request) kubectl --kubeconfig "${KUBECONFIG_FILE}" --context "${KUBE_CONTEXT}" --request-timeout="${KCTL_REQUEST_TIMEOUT}" "$@" ;;
+    none) kubectl --kubeconfig "${KUBECONFIG_FILE}" --context "${KUBE_CONTEXT}" "$@" ;;
+    outer)
+      # --foreground: the call is not put in a process group of its own, so a
+      # signal to the script's group (a terminal's ^C, smoke.sh's traps) reaches it.
+      timeout --foreground --kill-after="${KCTL_KILL_AFTER}" "${KCTL_OUTER_TIMEOUT}" \
+        kubectl --kubeconfig "${KUBECONFIG_FILE}" --context "${KUBE_CONTEXT}" "$@" || status=$?
+      if ((status == 124 || status == 137)); then
+        # Its own exit status can be either number too, so the line says "or".
+        printf 'kctl: kubectl %s ended with status %d: it ran past KCTL_OUTER_TIMEOUT (%ss), or the command it ran exited with that status\n' \
+          "${kctl_verb}" "${status}" "${KCTL_OUTER_TIMEOUT}" >&2
+      fi
+      return "${status}"
+      ;;
+  esac
+}
+
 helmc() { helm --kubeconfig "${KUBECONFIG_FILE}" --kube-context "${KUBE_CONTEXT}" "$@"; }
+# helmc for a call that reads the cluster and has no --timeout of its own.
+helmc_bounded() {
+  timeout --foreground --kill-after="${KCTL_KILL_AFTER}" "${HELM_READ_TIMEOUT}" \
+    helm --kubeconfig "${KUBECONFIG_FILE}" --kube-context "${KUBE_CONTEXT}" "$@"
+}
 
 need_tools() {
   local tool

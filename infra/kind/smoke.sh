@@ -1026,7 +1026,7 @@ skip() { printf 'SKIP  %s\n' "$*"; skips=$((skips + 1)); }
 # inject terminal escape sequences or extra lines.
 clean_lines() { printf '%s' "$1" | LC_ALL=C tr -cd '[:print:]\n' | paste -sd ';' -; }
 
-need_tools docker kubectl curl jq base64 openssl
+need_tools docker kubectl curl jq base64 openssl timeout
 require_local_docker
 need_cluster
 

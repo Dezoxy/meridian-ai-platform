@@ -97,6 +97,15 @@ readonly GATEWAY_SERVICE=model-gateway
 readonly JOB_TIMEOUT=420
 readonly JOB_INTERVAL=3
 readonly ROLLOUT_TIMEOUT=300s
+# The release is installed without --wait (the rollouts above are the wait), so
+# this bounds Helm's own work: as long as a rollout may take. S073.
+readonly HELM_UPGRADE_TIMEOUT=300s
+# How long a deleted Job may take to go, its pod's termination included. Under
+# kctl's KCTL_OUTER_TIMEOUT (90 s), which bounds the call whatever happens.
+readonly DELETE_TIMEOUT=60s
+# The deadlines of a psql in a pod, as smoke.sh's PSQL_OPTIONS (S062): a lock or
+# a statement that hangs ends the read, and the script goes on without the count.
+readonly PSQL_OPTIONS='-c statement_timeout=5s -c lock_timeout=3s'
 # cert-manager issues the services' certificates in seconds once its webhook and
 # the issuer are Ready (`make up` waited for both); two minutes is far more than
 # a first deploy needs.
@@ -113,7 +122,7 @@ readonly TOKEN_WINDOW_SECONDS=62
 # SECONDS at which this deploy saw its ingestion complete; empty when none ran.
 ingested_at=""
 
-need_tools docker kind kubectl helm jq
+need_tools docker kind kubectl helm jq timeout
 require_local_docker
 need_cluster
 docker info >/dev/null 2>&1 || die "the Docker daemon is not running; start Docker Desktop"
@@ -341,7 +350,7 @@ render_job() {
 # the Jobs run is idempotent.
 run_job() {
   local job="$1" chart_job="$2" state deadline
-  kctl -n "${NAMESPACE}" delete "job/${job}" --ignore-not-found --wait >/dev/null
+  kctl -n "${NAMESPACE}" delete "job/${job}" --ignore-not-found --wait --timeout="${DELETE_TIMEOUT}" >/dev/null
   log "job ${job}"
   render_job "${chart_job}" | kctl apply --server-side --force-conflicts -f - >/dev/null
   deadline=$((SECONDS + JOB_TIMEOUT))
@@ -371,7 +380,7 @@ run_job() {
 # does not create the namespace: make up did.
 install_release() {
   log "installing release ${RELEASE}"
-  helm_chart upgrade --install --take-ownership --server-side=true --force-conflicts >/dev/null ||
+  helm_chart upgrade --install --take-ownership --server-side=true --force-conflicts --timeout "${HELM_UPGRADE_TIMEOUT}" >/dev/null ||
     die "helm could not install release ${RELEASE} (its error is above; to see why: helm --kubeconfig ${KUBECONFIG_FILE} --kube-context ${KUBE_CONTEXT} -n ${NAMESPACE} status ${RELEASE}, or history ${RELEASE})"
 }
 
@@ -386,7 +395,7 @@ stored_chunk_count() {
     -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)" || return 1
   [[ -n "${primary}" ]] || return 1
   kctl -n "${NAMESPACE}" exec "${primary}" -c postgres -- \
-    psql -d meridian -tAc "${CHUNK_COUNT_SQL}" 2>/dev/null
+    env "PGOPTIONS=${PSQL_OPTIONS}" psql -d meridian -tAc "${CHUNK_COUNT_SQL}" 2>/dev/null
 }
 
 # The ingestion of this image's corpus, at most once per image. Its Job is kept
@@ -413,7 +422,7 @@ ingest_corpus() {
     fi
     log "job ${job} succeeded, but knowledge.chunks holds no rows or could not be read; ingesting again"
   fi
-  kctl -n "${NAMESPACE}" delete jobs -l app.kubernetes.io/name=meridian-ingest --ignore-not-found --wait >/dev/null
+  kctl -n "${NAMESPACE}" delete jobs -l app.kubernetes.io/name=meridian-ingest --ignore-not-found --wait --timeout="${DELETE_TIMEOUT}" >/dev/null
   run_job "${job}" ingest
   ingested_at=${SECONDS}
 }

@@ -1548,6 +1548,9 @@ def run_ingest_corpus(count: str) -> tuple[list[str], str]:
             "set -euo pipefail",
             "NAMESPACE=meridian; tag=abc; image=meridian:abc; ingested_at=''",
             *re.findall(r"^readonly CHUNK_COUNT_SQL=.*$", COMMON_SH, re.M),
+            *re.findall(
+                r"^readonly (?:PSQL_OPTIONS|DELETE_TIMEOUT)=.*$", DEPLOY_SH, re.M
+            ),
             'log() { echo "LOG $*"; }',
             'die() { echo "DIE $*"; exit 1; }',
             "job_state() { echo succeeded; }",
@@ -1706,6 +1709,7 @@ def run_ingest_then_token_window(
             "}",
             "NAMESPACE=meridian tag=abc image=stub:abc",
             *re.findall(r"^readonly TOKEN_WINDOW_SECONDS=\d+$", DEPLOY_SH, re.M),
+            *re.findall(r"^readonly DELETE_TIMEOUT=.*$", DEPLOY_SH, re.M),
             'ingested_at=""',
             function_definition(DEPLOY_SH, "ingest_corpus"),
             function_definition(DEPLOY_SH, "wait_for_token_window"),
