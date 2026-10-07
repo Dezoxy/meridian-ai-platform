@@ -111,6 +111,95 @@ def test_a_login_that_is_a_member_of_the_upkeep_role_is_no_finding(
     assert upkeep_memberships(admin) == 0
 
 
+@pytest.mark.parametrize(
+    "options",
+    [
+        "ADMIN TRUE, INHERIT FALSE, SET FALSE",
+        "INHERIT TRUE, SET FALSE",
+        "INHERIT FALSE, SET TRUE",
+    ],
+)
+def test_a_membership_counts_whatever_its_options_are(
+    admin: psycopg.Connection, options: str
+) -> None:
+    # The options are ignored for this role on purpose: INHERIT gives the owner's
+    # rights and SET reaches the owner as the current user.
+    parent = create_role(admin)
+    admin.execute(
+        sql.SQL("GRANT {} TO {} WITH ").format(
+            sql.Identifier(parent), sql.Identifier(UPKEEP_ROLE)
+        )
+        + sql.SQL(options)
+    )
+
+    assert upkeep_memberships(admin) == 1
+
+
+def failing(error: Exception):
+    def raises(conn: psycopg.Connection) -> None:
+        raise error
+
+    return raises
+
+
+def test_a_membership_check_whose_own_query_fails_is_not_called_a_failed_migration(
+    monkeypatch: pytest.MonkeyPatch, empty_database: DatabaseHandle
+) -> None:
+    monkeypatch.setenv(MIGRATIONS_DATABASE_URL_ENV, empty_database.dsn(OWNER))
+    monkeypatch.setattr(
+        "meridian.platform.cli.db.sweep_memberships",
+        failing(psycopg.OperationalError("lost")),
+    )
+
+    result = runner.invoke(app, ["db", "migrate"])
+
+    assert result.exit_code == 1
+    assert result.stdout.splitlines() == [name for name, _ in migration_files()]
+    assert result.stderr.splitlines() == [
+        "ERROR the migrations were applied and stay applied, but the membership "
+        "check did not run (OperationalError: no server message (connection "
+        "failed?)); run `meridian db migrate` again"
+    ]
+
+
+def test_the_upkeep_check_failing_on_its_own_says_the_same(
+    monkeypatch: pytest.MonkeyPatch, fresh_database: DatabaseHandle
+) -> None:
+    monkeypatch.setenv(MIGRATIONS_DATABASE_URL_ENV, fresh_database.dsn(OWNER))
+    monkeypatch.setattr(
+        "meridian.platform.cli.db.upkeep_memberships",
+        failing(psycopg.errors.QueryCanceled("cancelled")),
+    )
+
+    result = runner.invoke(app, ["db", "migrate"])
+
+    assert result.exit_code == 1
+    assert result.stdout.splitlines() == ["migrations: up to date"]
+    assert result.stderr.startswith(
+        "ERROR the migrations were applied and stay applied, but the membership "
+        "check did not run (QueryCanceled: "
+    )
+
+
+def test_a_failure_of_the_migration_itself_is_still_a_failed_migration(
+    monkeypatch: pytest.MonkeyPatch, fresh_database: DatabaseHandle
+) -> None:
+    monkeypatch.setenv(MIGRATIONS_DATABASE_URL_ENV, fresh_database.dsn(OWNER))
+    monkeypatch.setattr(
+        "meridian.platform.cli.db.apply_migrations",
+        failing(psycopg.OperationalError("lost")),
+    )
+
+    result = runner.invoke(app, ["db", "migrate"])
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr.splitlines() == [
+        "ERROR migration failed (OperationalError: no server message (connection "
+        "failed?))"
+    ]
+
+
 def test_a_grant_that_is_rolled_back_leaves_the_catalog_as_it_was(
     migrated_database: DatabaseHandle,
 ) -> None:

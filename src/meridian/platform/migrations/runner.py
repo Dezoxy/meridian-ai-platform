@@ -33,13 +33,25 @@ UPKEEP_ROLE = "gateway_upkeep"
 # The roles that reach ``claims_sweep`` through any chain of grants (``members``)
 # and the roles it reaches (``memberships``). UNION, not UNION ALL, so a role
 # reached twice is counted once. A role that does not exist has no rows.
+#
+# A grant counts as a member only when it grants something: its ``inherit_option``
+# or its ``set_option`` is true (PostgreSQL 16 and later). A row with ADMIN only,
+# which a role with CREATEROLE leaves for itself when it creates a role, gives its
+# holder no use of the role's grants, so on a managed database it must not fail
+# every migrate. SET counts although a ``SET ROLE`` session is confined by name
+# (its current user is the sweep's): that is the fail-closed reading. The other
+# direction (``memberships``) counts every row on purpose: a row of any kind
+# hands the sweep's role another role's standing, and the options are ignored.
+# ``upkeep_memberships`` uses that direction too.
 SWEEP_MEMBERSHIP_QUERY = """
 WITH RECURSIVE
 members(oid) AS (
     SELECT m.member FROM pg_auth_members m
-    JOIN pg_roles r ON r.oid = m.roleid WHERE r.rolname = %(role)s
+    JOIN pg_roles r ON r.oid = m.roleid
+    WHERE r.rolname = %(role)s AND (m.inherit_option OR m.set_option)
     UNION
     SELECT m.member FROM pg_auth_members m JOIN members ON m.roleid = members.oid
+    WHERE m.inherit_option OR m.set_option
 ),
 memberships(oid) AS (
     SELECT m.roleid FROM pg_auth_members m

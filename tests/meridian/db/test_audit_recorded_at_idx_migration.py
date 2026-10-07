@@ -25,9 +25,9 @@ INDEX = "events_recorded_at_idx"
 INDEX_COLUMNS = (
     "SELECT a.attname FROM pg_index AS i "
     "JOIN pg_class AS c ON c.oid = i.indexrelid "
-    "JOIN pg_attribute AS a ON a.attrelid = i.indrelid "
-    "AND a.attnum = ANY (i.indkey) "
-    "WHERE c.relname = %s ORDER BY a.attnum"
+    "CROSS JOIN LATERAL unnest(i.indkey::int2[]) WITH ORDINALITY AS k(attnum, pos) "
+    "JOIN pg_attribute AS a ON a.attrelid = i.indrelid AND a.attnum = k.attnum "
+    "WHERE c.relname = %s ORDER BY k.pos"
 )
 
 
@@ -66,6 +66,7 @@ def explain_with_scans_off(db: DatabaseHandle) -> Iterator[psycopg.Connection]:
     that a table of a few rows shows which indexes could serve a query."""
     with connect(db.dsn(OWNER), "test") as conn:
         conn.execute("SET enable_seqscan = off")
+        conn.execute("SET enable_bitmapscan = off")
         yield conn
 
 
@@ -79,7 +80,7 @@ def test_the_migration_is_recorded(migrated_database: DatabaseHandle) -> None:
     assert (migration_name(),) in recorded
 
 
-def test_the_index_is_a_plain_one_on_recorded_at_alone(
+def test_the_index_is_a_plain_one_on_recorded_at_then_seq(
     migrated_database: DatabaseHandle,
 ) -> None:
     columns = run(migrated_database, OWNER, INDEX_COLUMNS, (INDEX,))
@@ -91,11 +92,11 @@ def test_the_index_is_a_plain_one_on_recorded_at_alone(
         (INDEX,),
     )
 
-    assert columns == [("recorded_at",)]
+    assert columns == [("recorded_at",), ("seq",)]
     assert partial_or_unique == [(False,)]
 
 
-def test_the_oldest_rows_are_found_through_the_index(
+def test_the_index_holds_the_order_the_batch_asks_for_so_no_sort_is_needed(
     migrated_database: DatabaseHandle,
 ) -> None:
     with explain_with_scans_off(migrated_database) as conn:
@@ -108,6 +109,7 @@ def test_the_oldest_rows_are_found_through_the_index(
         )
 
     assert INDEX in plan
+    assert "Sort" not in plan
 
 
 def test_the_file_is_only_the_index_and_its_guard() -> None:

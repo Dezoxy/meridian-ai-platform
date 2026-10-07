@@ -29,8 +29,13 @@ NUMBER = re.compile(r"[0-9]{4}")
 # and a dollar-quoted body (a function's text). One pass, left to right, so an
 # apostrophe in a comment or a ``--`` in a string cannot confuse the next one.
 # What this misses is in the README's list, "What the check does not see".
+#
+# A double-quoted identifier is a fifth alternative that is KEPT as it is: an
+# apostrophe or a ``--`` inside one ("it's") would otherwise start a literal or a
+# comment and hide what follows.
 NOT_STATEMENTS = re.compile(
-    r"--[^\n]*|/\*.*?\*/|'(?:[^']|'')*'|\$(\w*)\$.*?\$\1\$", re.DOTALL
+    r"--[^\n]*|/\*.*?\*/|'(?:[^']|'')*'|\$(\w*)\$.*?\$\1\$|\"(?:[^\"]|\"\")*\"",
+    re.DOTALL,
 )
 TABLE = r'((?:"[^"]+"|\w+)(?:\s*\.\s*(?:"[^"]+"|\w+))?)(?![\w."])'
 ALTER_ADD_COLUMN = re.compile(
@@ -90,7 +95,8 @@ def strip(text: str, *, bodies: bool = False, literals: bool = False) -> str:
     def blank(match: re.Match[str]) -> str:
         tag = match.group(1)
         if tag is None:
-            return match.group(0) if literals and match.group(0)[0] == "'" else " "
+            kept = match.group(0)[0] == '"' or (literals and match.group(0)[0] == "'")
+            return match.group(0) if kept else " "
         if not bodies:
             return " "
         body = match.group(0)[len(tag) + 2 : -(len(tag) + 2)]
@@ -179,11 +185,25 @@ OTHER_LOCK_MODE = (
 # it on the index it rebuilds, with SHARE on the table. The CONCURRENTLY forms
 # are outside the rule: they take a weaker lock and cannot run in the runner's
 # transaction (README, "What the check does not see").
-NOT_CONCURRENTLY = r"(?!.*\bCONCURRENTLY\b)"
+#
+# The review of S068 added the schema, materialized view, view, index and sequence
+# forms, and a DROP of a function, type, domain or extension with CASCADE (it
+# drops what depends on it, triggers and columns, under their tables' locks).
+# CONCURRENTLY counts only as the word itself: not inside a quoted identifier
+# ("concurrently"), and not as the option turned off (REINDEX (CONCURRENTLY
+# false), a plain REINDEX).
+NOT_CONCURRENTLY = (
+    r"(?!.*(?<![\"\w])CONCURRENTLY\b(?![\"\w])"
+    r"(?!\s+(?:FALSE|OFF|NO|0|F)\b))"
+)
 ACCESS_EXCLUSIVE_STATEMENT = re.compile(
     r"ALTER\s+TABLE\b|DROP\s+TRIGGER\b|CLUSTER\b|CREATE\s+OR\s+REPLACE\s+VIEW\b"
     rf"|DROP\s+INDEX\b{NOT_CONCURRENTLY}|DROP\s+TABLE\b|DROP\s+VIEW\b|TRUNCATE\b"
     rf"|REINDEX\b{NOT_CONCURRENTLY}"
+    r"|DROP\s+(?:SCHEMA|MATERIALIZED\s+VIEW|SEQUENCE)\b"
+    rf"|REFRESH\s+MATERIALIZED\s+VIEW\b{NOT_CONCURRENTLY}"
+    r"|ALTER\s+(?:VIEW|MATERIALIZED\s+VIEW|INDEX)\b"
+    r"|DROP\s+(?:FUNCTION|TYPE|DOMAIN|EXTENSION)\b(?=.*\bCASCADE\b)"
     rf"|LOCK\s+(?:TABLE\s+)?(?!.*{OTHER_LOCK_MODE})",
     re.IGNORECASE | re.DOTALL,
 )
@@ -191,6 +211,14 @@ ACCESS_EXCLUSIVE_STATEMENT = re.compile(
 SET_LOCK_TIMEOUT = re.compile(
     r"SET\s+LOCAL\s+lock_timeout\s*(?:=|TO)\s*'?(?P<value>[0-9]+(?:\.[0-9]+)?)"
     r"\s*(?:ms|s|min|h|d)?'?",
+    re.IGNORECASE,
+)
+
+
+# What takes a timeout away again: RESET (a transaction's SET LOCAL is gone), or
+# a SET LOCAL to DEFAULT.
+LOCK_TIMEOUT_OFF = re.compile(
+    r"(?:RESET\s+lock_timeout|SET\s+LOCAL\s+lock_timeout\s*(?:=|TO)\s*DEFAULT)\b",
     re.IGNORECASE,
 )
 
@@ -223,6 +251,10 @@ def lock_timeout_refusal(name: str, text: str) -> str | None:
         match = SET_LOCK_TIMEOUT.match(statement)
         if match and float(match.group("value")) > 0:
             timeout_set = True
+            continue
+        if match or LOCK_TIMEOUT_OFF.match(statement):
+            # A later zero, RESET or DEFAULT takes the timeout away again.
+            timeout_set = False
             continue
         locking = ACCESS_EXCLUSIVE_STATEMENT.match(statement)
         if locking and not timeout_set:
@@ -816,3 +848,129 @@ def test_a_set_local_statement_timeout_is_not_a_lock_timeout_and_is_not_refused(
     both = lengthened + TIMEOUT + ALTER_AUDIT
     assert lock_timeout_refusal(BLIND_FILE, both) is None
     assert refusal(BLIND_FILE, both) is None
+
+
+# ── what the database review of S068 added ──────────────────────────────────
+# Each statement that took ACCESS EXCLUSIVE and was neither in the pattern nor in
+# the list joined the pattern, with a test that it is seen; each one that cannot
+# join is in the list, with a test that pins it as not seen. (This file is over
+# the length of a source file because the tests share this file's helpers, which
+# a second test module cannot import.)
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "DROP SCHEMA scratch CASCADE",
+        "DROP MATERIALIZED VIEW claims.summary",
+        "REFRESH MATERIALIZED VIEW claims.summary",
+        "ALTER VIEW claims.decided_claims RENAME TO decided",
+        "ALTER MATERIALIZED VIEW claims.summary RENAME TO summary2",
+        "ALTER INDEX audit.events_run_id_idx RENAME TO events_run_idx",
+        "DROP SEQUENCE audit.events_seq",
+        "DROP FUNCTION audit.forbid_change() CASCADE",
+        "DROP TYPE claims.state CASCADE",
+        "REINDEX (CONCURRENTLY false) TABLE audit.events",
+        "REINDEX (CONCURRENTLY off) TABLE audit.events",
+        'DROP INDEX audit."concurrently"',
+    ],
+)
+def test_the_statements_the_review_named_are_seen_and_need_a_timeout(
+    statement: str,
+) -> None:
+    text = statement + ";\n"
+
+    assert access_exclusive_statements(text) != []
+    assert lock_timeout_refusal(BLIND_FILE, text) is not None
+    assert lock_timeout_refusal(BLIND_FILE, TIMEOUT + text) is None
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "DROP FUNCTION audit.forbid_change()",
+        "REFRESH MATERIALIZED VIEW CONCURRENTLY claims.summary",
+        "REINDEX (CONCURRENTLY true) TABLE audit.events",
+        "DROP INDEX CONCURRENTLY IF EXISTS audit.events_run_id_idx",
+    ],
+)
+def test_a_drop_without_cascade_and_the_concurrent_forms_stay_outside_the_rule(
+    statement: str,
+) -> None:
+    text = statement + ";\n"
+
+    assert access_exclusive_statements(text) == []
+    assert lock_timeout_refusal(BLIND_FILE, text) is None
+
+
+def test_an_apostrophe_in_a_quoted_identifier_does_not_hide_what_follows() -> None:
+    text = 'CREATE TABLE audit."it\'s" (x integer);\n' + ALTER_AUDIT
+
+    assert access_exclusive_statements(text) == ["ALTER TABLE audit.events"]
+    assert lock_timeout_refusal(BLIND_FILE, text) is not None
+
+
+def test_two_dashes_in_a_quoted_identifier_do_not_hide_what_follows() -> None:
+    text = 'SELECT 1 AS "a--b"; ' + ALTER_AUDIT
+
+    assert access_exclusive_statements(text) == ["ALTER TABLE audit.events"]
+
+
+def test_a_quoted_identifier_is_kept_by_the_stripper_and_a_literal_is_not() -> None:
+    assert strip("SELECT \"a b\", 'x'").split() == ["SELECT", '"a', 'b",']
+
+
+@pytest.mark.parametrize(
+    "off",
+    [
+        "SET LOCAL lock_timeout = 0",
+        "SET LOCAL lock_timeout = '0'",
+        "RESET lock_timeout",
+        "SET LOCAL lock_timeout TO DEFAULT",
+    ],
+)
+def test_a_later_zero_or_reset_takes_the_timeout_away_again(off: str) -> None:
+    text = TIMEOUT + off + ";\n" + ALTER_AUDIT
+
+    assert lock_timeout_refusal(BLIND_FILE, text) is not None
+
+
+def test_a_later_positive_timeout_after_a_reset_counts_again() -> None:
+    text = TIMEOUT + "RESET lock_timeout;\n" + TIMEOUT + ALTER_AUDIT
+
+    assert lock_timeout_refusal(BLIND_FILE, text) is None
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "CREATE TRIGGER t BEFORE INSERT ON audit.events "
+        "FOR EACH ROW EXECUTE FUNCTION audit.stamp_event()",
+        "CREATE OR REPLACE TRIGGER t BEFORE INSERT ON audit.events "
+        "FOR EACH ROW EXECUTE FUNCTION audit.stamp_event()",
+    ],
+)
+def test_a_trigger_s_creation_is_not_in_the_timeout_rule(statement: str) -> None:
+    # It takes SHARE ROW EXCLUSIVE on the table and blocks its writers, as a
+    # CREATE INDEX does, and the rule is for ACCESS EXCLUSIVE.
+    text = statement + ";\n"
+
+    assert access_exclusive_statements(text) == []
+    assert lock_timeout_refusal(BLIND_FILE, text) is None
+
+
+def test_an_update_in_a_function_the_same_file_then_calls_is_not_seen() -> None:
+    function = (
+        "CREATE FUNCTION claims.set_flag() RETURNS void LANGUAGE sql AS\n"
+        "    $$ UPDATE claims.claims SET flag = 1 $$;\n"
+    )
+    text = joined(ADD_TO_CLAIMS, function, "SELECT claims.set_flag();\n")
+
+    assert backfills(text) == []
+    assert refusal(BLIND_FILE, text) is None
+
+
+def test_a_drop_of_a_table_made_earlier_in_the_file_still_asks_for_a_timeout() -> None:
+    # A false positive, harmless: the table is the file's own and nobody reads it.
+    text = "CREATE TABLE claims.scratch (x integer);\nDROP TABLE claims.scratch;\n"
+
+    assert access_exclusive_statements(text) == ["DROP TABLE claims.scratch"]
+    assert lock_timeout_refusal(BLIND_FILE, text) is not None

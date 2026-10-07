@@ -151,15 +151,25 @@ def _fail_on(exc: psycopg.Error, kind: str | None) -> NoReturn:
     _fail(f"gateway upkeep failed ({type(exc).__name__}): {detail}")
 
 
+QUERY_CANCELED = "57014"
+
+
+class CountCancelled(Exception):
+    """A count that the statement timeout cancelled (only raised for a caller
+    that asked for it: ``_upkeep(..., on_cancel=True)``)."""
+
+
 def _upkeep[T](
     work: Callable[[psycopg.Connection], T],
     *,
     read_only: bool = False,
     kind: str | None = None,
+    on_cancel: bool = False,
 ) -> T:
     """Run ``work`` in one transaction as the upkeep role. What it returns is
     printed by the caller after the commit, so no line says a change was made
-    that was not."""
+    that was not. With ``on_cancel`` a statement cancelled by the timeout raises
+    ``CountCancelled`` for the caller to word; any other failure exits as ever."""
     dsn = os.environ.get(UPKEEP_DATABASE_URL_ENV)
     if not dsn:
         _fail(f"{UPKEEP_DATABASE_URL_ENV} is not set")
@@ -168,6 +178,8 @@ def _upkeep[T](
             conn.read_only = read_only
             return work(conn)
     except psycopg.Error as exc:
+        if on_cancel and exc.diag.sqlstate == QUERY_CANCELED:
+            raise CountCancelled from None
         _fail_on(exc, kind)
     except UnicodeError:
         # Text that cannot be encoded or decoded (a stray byte in an argument or
@@ -523,6 +535,44 @@ def _audit_limit(limit: int) -> int:
     return limit
 
 
+AUDIT_COUNT_CANCELLED = (
+    "the count did not finish inside the statement timeout, and nothing was "
+    "changed: the real run removes in batches and needs no count, and a nearer "
+    "--before counts faster"
+)
+
+
+def _count_audit(cutoff: datetime) -> int:
+    """What the expiry would take for this cutoff, counted in a read-only
+    transaction; raises ``CountCancelled`` when the timeout cancels the count."""
+    return _upkeep(
+        lambda conn: conn.execute(COUNT_AUDIT_EVENTS, (cutoff,)).fetchone()[0],
+        read_only=True,
+        on_cancel=True,
+    )
+
+
+def _say_what_remains(cutoff: datetime) -> None:
+    """After a real run: count once what is still older than the cutoff. A row
+    another session held, or one written by a transaction that began before the
+    cutoff, is left for a later run. A count the timeout cancels is said, and the
+    command still succeeds: the removal happened."""
+    try:
+        remaining = _count_audit(cutoff)
+    except CountCancelled:
+        typer.echo(
+            "the count of what remains did not finish inside the statement "
+            "timeout; the removal above happened"
+        )
+        return
+    if remaining:
+        typer.echo(
+            f"{remaining} audit rows older than the cutoff remain (rows another "
+            "session held, or written by a transaction that began before it): "
+            "run it again"
+        )
+
+
 def _utc_text(cutoff: datetime) -> str:
     return cutoff.isoformat().replace("+00:00", "Z")
 
@@ -601,10 +651,10 @@ def expire_audit(
     batch = _audit_limit(limit)
     text = _utc_text(cutoff)
     if not confirm:
-        counted = _upkeep(
-            lambda conn: conn.execute(COUNT_AUDIT_EVENTS, (cutoff,)).fetchone()[0],
-            read_only=True,
-        )
+        try:
+            counted = _count_audit(cutoff)
+        except CountCancelled:
+            _fail(AUDIT_COUNT_CANCELLED)
         typer.echo(f"would remove audit rows before {text}: {counted}")
         typer.echo(f"in {-(-counted // batch)} batch(es) of at most {batch}")
         typer.echo("nothing removed: add --confirm to remove them")
@@ -615,3 +665,4 @@ def expire_audit(
         f"removed {total} audit rows before {text} in {batches} batch(es) "
         f"of at most {batch}"
     )
+    _say_what_remains(cutoff)

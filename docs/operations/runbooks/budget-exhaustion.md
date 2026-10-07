@@ -282,23 +282,59 @@ meridian gateway expire --before YYYY-MM --reason old-months --confirm
 ```
 
 **Expire old audit rows.** Status: implemented (S068) and tested against
-PostgreSQL; not run on a cluster. `audit.events` is insert-only for every role;
-the one way a row leaves is `meridian gateway expire-audit`, which calls an
-owner's database function that removes the rows recorded before `--before`,
-oldest first, in batches of `--limit` (default 1,000, at most 10,000), each
-batch its own transaction with one audit row (`audit.expire`, with the cutoff
-and the count). The audit rows are how a decision is reconstructed and who is
-named for it, so what this removes is the reconstruction. **No retention period
-is set and nothing is scheduled**: the cutoff is the operator's, there is no
-default, and the periods are the owner's to name. The function looks at a
-row's age only, not at whether its claim still exists: a row younger than a
-claim's life may be one the adjuster's page reads while the claim is shown, so
-a cutoff shorter than a claim's life shortens that trail. Run it without
-`--confirm` first: the dry run counts what would go and removes nothing, and
-the count is at this moment. `--before` is a date (00:00 UTC of that day) or a
+PostgreSQL; not run on a cluster. `audit.events` is insert-only for every role
+except through one function: `meridian gateway expire-audit` calls an owner's
+database function that removes the rows recorded before `--before`, oldest
+first, in batches of `--limit` (default 1,000, at most 10,000), each batch its
+own transaction with one audit row (`audit.expire`, with the cutoff and the
+count). An owner, a superuser or a managed database's administrator can still
+switch the trigger off, and nothing records it. The audit rows are how a decision
+is reconstructed and who is named for it, so what this removes is the
+reconstruction. **No retention period is set and nothing is scheduled**: the
+cutoff is the operator's, there is no default, and the periods are the owner's
+to name. The function looks at a row's age only, not at whether its claim still
+exists: a row younger than a claim's life may be one the adjuster's page reads
+while the claim is shown, so a cutoff shorter than a claim's life shortens that
+trail. **There is no undo.** Rows the upkeep role wrote (every `audit.expire` row,
+a credit, a closed reservation, a ledger expiry) are never removed by this
+function, so the trail of removals is permanent; a period for them would need a
+function of its own.
+
+Run it without `--confirm` first: the dry run counts what would go and removes
+nothing, and the count is at this moment. On a very large range the count can be
+cancelled by the 10 s statement timeout: the command says so and that nothing was
+changed; the real run removes in batches and needs no count, and a nearer
+`--before` counts faster. `--before` is a date (00:00 UTC of that day) or a
 timestamp with an offset (`2026-09-01T12:00:00+02:00`); one without an offset is
 refused. A failure between batches leaves what was removed removed, each batch
-with its row, and the command says so.
+with its row, and the command says so. After the loop the command counts once
+what is still older than the cutoff and says so when it is not zero (a row
+another session held, or one written by a transaction that began before the
+cutoff): run it again. For a backlog use `--limit 10000` (a thousand-row batch
+is a connection and an audit row each).
+
+What to do around a large run, from the database review:
+
+- **One expiry at a time.** A second one at the same time skips the rows the
+  first holds and leaves them for itself; neither waits.
+- **Read before and after:** `SELECT n_live_tup, n_dead_tup, last_autovacuum FROM
+  pg_stat_user_tables WHERE relid = 'audit.events'::regclass;`, as the owner.
+- **Space is not returned.** Removed rows leave dead tuples at the start of the
+  file; autovacuum takes them once they pass about a fifth of the table, and the
+  space is reused by new inserts, not given back to the disk. After a large run
+  the OWNER (not `gateway_upkeep`) runs a plain `VACUUM (ANALYZE) audit.events`,
+  which takes no exclusive lock. **Never `VACUUM FULL`, `CLUSTER` or a
+  `REINDEX` of the table while services run**: each takes an exclusive lock and
+  every service's audit write then waits and fails closed. Until vacuum has run,
+  each later batch's index scan steps over the earlier batches' dead entries, so
+  a long run slows batch by batch, more so while a long transaction holds the
+  cleanup horizon back.
+- **Write-ahead log and disk.** Every removed row is written to the log, and the
+  vacuum writes more (the review estimated 1 to 3 MB per 10,000 rows; not
+  measured): size the volume and expect replication lag on a large run.
+- **Backups.** Expired rows stay in backups and archived log until those roll
+  off: state the backup retention beside the audit period (GDPR's storage
+  limitation).
 
 ```sh
 meridian gateway expire-audit --before YYYY-MM-DD --reason old-audit

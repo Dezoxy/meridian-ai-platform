@@ -549,7 +549,10 @@ def test_a_row_another_session_holds_is_skipped_and_not_waited_for(
             (PROBE,),
         )
 
-        removed = expire(fresh_database, cutoff, 10)
+        # A limit of 3 over four rows with one held: the held row is skipped and
+        # does not count toward the limit, so three go (two, if the lock sat
+        # above the limit).
+        removed = expire(fresh_database, cutoff, 3)
     finally:
         holder.rollback()
         holder.close()

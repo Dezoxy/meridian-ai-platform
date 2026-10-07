@@ -69,6 +69,29 @@ def _upkeep_finding(memberships: int) -> str:
     )
 
 
+def _error_text(exc: psycopg.Error) -> str:
+    """The error's class and only the server's own message: libpq's text can echo
+    part of a bad DSN."""
+    detail = exc.diag.message_primary or "no server message (connection failed?)"
+    return f"{type(exc).__name__}: {detail}"
+
+
+def _memberships(dsn: str) -> tuple[SweepMemberships, int]:
+    """The two membership checks, on a connection of their own after the files
+    are applied and their names printed. A check whose own query fails is not a
+    failed migration: the sentence says the files stay applied and the check did
+    not run, so the deploy stops (an unchecked confinement is not a clean one)."""
+    try:
+        with connect(dsn, APPLICATION_NAME) as conn:
+            return sweep_memberships(conn), upkeep_memberships(conn)
+    except psycopg.Error as exc:
+        _fail(
+            "the migrations were applied and stay applied, but the membership "
+            f"check did not run ({_error_text(exc)}); run `meridian db migrate` "
+            "again"
+        )
+
+
 @app.command()
 def migrate() -> None:
     """Apply the SQL migrations that are not yet applied.
@@ -83,18 +106,15 @@ def migrate() -> None:
     try:
         with connect(dsn, APPLICATION_NAME) as conn:
             applied = apply_migrations(conn)
-            found = sweep_memberships(conn)
-            upkeep_found = upkeep_memberships(conn)
     except MigrationError as exc:
         _fail(str(exc))
     except psycopg.Error as exc:
-        # Only the server's own message: libpq's text can echo part of a bad DSN.
-        detail = exc.diag.message_primary or "no server message (connection failed?)"
-        _fail(f"migration failed ({type(exc).__name__}): {detail}")
+        _fail(f"migration failed ({_error_text(exc)})")
     for name in applied:
         typer.echo(name)
     if not applied:
         typer.echo("migrations: up to date")
+    found, upkeep_found = _memberships(dsn)
     findings = []
     if found.members or found.memberships:
         findings.append(_sweep_finding(found))

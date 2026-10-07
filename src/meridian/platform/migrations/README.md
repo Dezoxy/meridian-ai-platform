@@ -67,20 +67,34 @@ it.
 The two files of S068 let audit rows expire. Implemented and tested, not run on
 a cluster; no retention period is set and nothing is scheduled.
 [`0027_audit_recorded_at_idx.sql`](0027_audit_recorded_at_idx.sql) is an index on
-`audit.events (recorded_at)` and nothing else, with the owner guard and `SET
-LOCAL lock_timeout` first. It is **not built concurrently**: the runner applies
-every file inside one transaction, and `CREATE INDEX CONCURRENTLY` cannot run in
-one. That is why the lock timeout is the mitigation: the build takes SHARE on
-the table, blocks every audit insert while it runs (about a quarter of a second
-at 635,000 rows, as 0014 measured), and gives up after 3 seconds of waiting for
-the lock.
+`audit.events (recorded_at, seq)`, the order the expiry's batch asks for, and
+nothing else, with the owner guard and `SET LOCAL lock_timeout` first. It is
+**not built concurrently**: the runner applies every file inside one
+transaction, and `CREATE INDEX CONCURRENTLY` cannot run in one. That is why the
+lock timeout is the mitigation: the build takes SHARE on the table, blocks every
+audit insert while it runs (0014 measured about a quarter of a second at 635,000
+rows for another index of this table; this one was not measured and is of the
+same order), and gives up after 3 seconds of waiting for the lock.
 [`0028_audit_expire.sql`](0028_audit_expire.sql) replaces the trigger function
-`audit.forbid_change()` and adds `gateway.expire_audit_events(p_before,
-p_reason, p_limit)`; see
+`audit.forbid_change()` and adds two functions of the owner's in the schema
+`gateway`, both executable by `gateway_upkeep` alone:
+`gateway.expire_audit_events(p_before, p_reason, p_limit)`, which removes at most
+`p_limit` rows (1 to 10,000) recorded before `p_before`, oldest first, and
+writes one `audit.expire` row; and `gateway.count_audit_events_before(p_before)`,
+the dry run's count, which changes nothing. They refuse with GU001 (a reason that
+is not a slug), GU002 (a NULL), GU401 (a cutoff in the future) and, for the
+expiry only, GU402 (a limit outside 1 to 10,000). **Rows the upkeep role wrote
+(`db_role = 'gateway_upkeep'`) are never removed by this path**, so every
+removal leaves a permanent row and the credential cannot erase its own acts. That
+is held in three places that must stay equal: the batch's predicate, the count's
+predicate and the trigger's pass condition; `test_audit_expiry_trail.py` holds
+them equal. See
 [What cannot follow the rule](#what-cannot-follow-the-rule-auditevents). It
 takes no lock on a table and sets no timeout. The role `gateway_upkeep` has a
 name narrower than its job now (it also expires audit rows), and still holds no
-right on the schema `audit` or on its table: it holds EXECUTE on the function.
+right on the schema `audit` or on its table: it holds EXECUTE on the functions.
+The count lets its holder learn how many events fell in any interval (volume, no
+content).
 
 ## An applied file never changes
 
@@ -137,13 +151,21 @@ exists.
 A test enforces the first rule for every file numbered above 0016:
 [`test_migration_rules.py`](../../../../tests/meridian/db/test_migration_rules.py)
 refuses a file whose first `ALTER TABLE`, `DROP TRIGGER`, `DROP INDEX`,
-`DROP TABLE`, `DROP VIEW`, `TRUNCATE`, `REINDEX`, `CLUSTER`,
-`CREATE OR REPLACE VIEW` or `LOCK TABLE` (in ACCESS EXCLUSIVE mode, which is the
-default) comes before a `SET LOCAL lock_timeout` with a positive value, and
-names the file and the statement. It cannot tell the forms of `ALTER TABLE`
-that take a weaker lock apart (a `VALIDATE CONSTRAINT`, below), so a file with
-one sets the timeout too, which costs nothing. What it does not see is
-[listed once](#what-the-check-does-not-see), below.
+`DROP TABLE`, `DROP VIEW`, `DROP SCHEMA`, `DROP MATERIALIZED VIEW`,
+`DROP SEQUENCE`, `REFRESH MATERIALIZED VIEW`, `ALTER VIEW`,
+`ALTER MATERIALIZED VIEW`, `ALTER INDEX`, `DROP FUNCTION`, `DROP TYPE`,
+`DROP DOMAIN` or `DROP EXTENSION` with `CASCADE`, `TRUNCATE`, `REINDEX`,
+`CLUSTER`, `CREATE OR REPLACE VIEW` or `LOCK TABLE` (in ACCESS EXCLUSIVE mode,
+which is the default) comes before a `SET LOCAL lock_timeout` with a positive
+value, and names the file and the statement. A later `SET LOCAL lock_timeout` of
+zero, a `RESET` or a `DEFAULT` takes the timeout away again. The `CONCURRENTLY`
+forms are outside the rule, but the word counts only as the word: `REINDEX
+(CONCURRENTLY false)` is a plain `REINDEX`, and a quoted `"concurrently"` is a
+name. A double-quoted identifier is kept as it is when comments and literals are
+removed, so an apostrophe or `--` inside one hides nothing. It cannot tell the
+forms of `ALTER TABLE` that take a weaker lock apart (a `VALIDATE CONSTRAINT`,
+below), so a file with one sets the timeout too, which costs nothing. What it
+does not see is [listed once](#what-the-check-does-not-see), below.
 
 ## The header
 
@@ -228,12 +250,21 @@ does not, for a column and for a constraint.
 
 ## What cannot follow the rule: `audit.events`
 
-The audit log is insert-only for every role, the owner included: triggers
-refuse `UPDATE`, `DELETE` and `TRUNCATE`. The one way a row leaves is
-`gateway.expire_audit_events` (0028): the trigger lets a `DELETE` through only
-when `current_user` is the table's owner and `session_user` is `gateway_upkeep`,
-which holds inside that owner's function called by a login of the upkeep role
-and nowhere else (the file's header lists each case that still raises). A
+The audit log is insert-only for every role, the owner included, except through
+one function: triggers refuse `UPDATE` and `TRUNCATE` for everyone, and a
+`DELETE` of a row unless it comes through `gateway.expire_audit_events` (0028).
+The trigger lets a `DELETE` through only when `current_user` is the table's
+owner, `session_user` is `gateway_upkeep` and the row was not written by the
+upkeep role, which holds inside that owner's function called by a login of the
+upkeep role and nowhere else (the file's header lists each case that still
+raises). **An owner, a superuser or a managed database's administrator can still
+switch the trigger off or around it** (`DROP` or `DISABLE TRIGGER`, a replaced
+trigger function, `session_replication_role`), and **nothing records it**; the
+role `meridian_owner` serves no request, and the check that it has no members
+and that the upkeep role owns nothing is **not built** (on a managed database
+the administrator is a member of the owner role by necessity). A test holds
+that only 0001 and 0028 name the trigger and its function, so a later file that
+touches them fails it and is reviewed. A
 backfill there cannot be written as a second file. [`0017_audit_order.sql`](0017_audit_order.sql) added
 `audit.events.seq` and says in its header what it did instead: `ADD COLUMN`
 with a volatile default, which fills the existing rows during the table
@@ -254,9 +285,14 @@ database of S020 starts empty, so 0017 runs over a table of a few rows. An
 applied file cannot change and no later file runs before it, so a database that
 held millions of audit rows with 0001 to 0016 applied and 0017 not could not
 take it: above the ceiling the runner fails closed, the transaction rolls back
-and the table is as it was. `test_audit_order_migration_timeout.py` shows that
-with the statement timeout turned down in place of the table turned up, and
-shows the same file applied under the default timeout. Two ways out exist on
+and the table is as it was. That is PostgreSQL's behaviour and is what the
+design relies on; the test shows less of it.
+`test_audit_order_migration_timeout.py` turns the statement timeout down in place
+of the table up: the cancel lands at the file's first heavy statement (the
+temporary index), and the test shows that the transaction rolls back as a whole
+(no sequence, no index, no ledger row). It does **not** show a cancel during the
+`CLUSTER` or the rewrite for the column, and it shows the same file applied under
+the default timeout. Two ways out exist on
 paper, and they are **designed, not built**: no command of this repository
 performs either.
 
@@ -280,7 +316,7 @@ that asks for a `SET LOCAL lock_timeout` before ACCESS EXCLUSIVE.
 
 | Not seen | Rule | Test that pins it |
 |---|---|---|
-| An `UPDATE` in a function's body (it defines, it does not run) | backfill | `test_an_update_in_a_functions_body_is_not_seen` |
+| An `UPDATE` in a function's body (it defines, it does not run), and one in a function the same file then calls | backfill | `test_an_update_in_a_functions_body_is_not_seen`, `test_an_update_in_a_function_the_same_file_then_calls_is_not_seen` |
 | An `UPDATE` in dynamic SQL (`EXECUTE`) | backfill | `test_an_update_in_dynamic_sql_is_not_seen` |
 | A lock statement in a `DO` block | timeout | `test_a_lock_statement_in_a_do_block_is_not_seen` |
 | A lock statement in dynamic SQL | timeout | `test_a_lock_statement_in_dynamic_sql_is_not_seen` |
@@ -292,6 +328,8 @@ that asks for a `SET LOCAL lock_timeout` before ACCESS EXCLUSIVE.
 | A nested block comment: the first `*/` ends it, so what follows is read as code, and a stray `*/` in front of a statement hides it | both | `test_a_nested_block_comment_is_not_stripped_whole`, `test_a_statement_after_a_nested_block_comment_is_not_seen` |
 | An `E'...'` literal with a backslash-escaped quote, read as two literals | both | `test_an_escape_string_literal_is_not_read_as_one` |
 | `CREATE INDEX`: deliberately outside, it takes SHARE and blocks writers, not readers | timeout | `test_a_create_index_is_not_in_the_timeout_rule` |
+| `CREATE TRIGGER` and `CREATE OR REPLACE TRIGGER`: deliberately outside, they take SHARE ROW EXCLUSIVE and block writers, as `CREATE INDEX` does | timeout | `test_a_trigger_s_creation_is_not_in_the_timeout_rule` |
+| `DROP TABLE` of a table the same file made (a false positive: it asks for a timeout it does not need) | timeout | `test_a_drop_of_a_table_made_earlier_in_the_file_still_asks_for_a_timeout` |
 | `DROP INDEX CONCURRENTLY` and `REINDEX ... CONCURRENTLY`: a weaker lock, and they cannot run in the runner's transaction | timeout | `test_a_concurrent_index_statement_is_not_seen` |
 | A database-level `ALTER ... SET` or privilege, or one reached through `format(... current_database())` | timeout | `test_a_database_level_setting_or_privilege_is_not_seen` |
 | `SET LOCAL statement_timeout`: read as "not a lock timeout", and nothing refuses a file that lengthens its own statement timeout (the effect on the runner is not shown by a test) | timeout | `test_a_set_local_statement_timeout_is_not_a_lock_timeout_and_is_not_refused` |
@@ -329,8 +367,17 @@ were applied and stay applied: the deploy's migrate Job stops, and a role has to
 be revoked before the next deploy goes on. A database where `claims_sweep` does
 not exist is no finding.
 
-List the memberships, one level (run the query again with each name it prints
-to follow a chain), as the owner role or a superuser:
+A grant counts as a member of `claims_sweep` only when it grants something: its
+`INHERIT` or its `SET` option is true (PostgreSQL 16 and later). A row with
+`ADMIN` only, which a role with `CREATEROLE` leaves for itself when it creates a
+role, gives its holder no use of the grants, so on a managed database it does not
+fail every migrate. `SET` counts although a `SET ROLE` session is confined by
+name (its current user is `claims_sweep`): that is the fail-closed reading. The
+other direction, what `claims_sweep` is a member of, counts every row and ignores
+the options on purpose.
+
+Any role may read the memberships. List them, one level (run the query again with
+each name it prints to follow a chain):
 
 ```sql
 SELECT g.rolname AS granted_role, m.rolname AS member
@@ -340,15 +387,25 @@ JOIN pg_roles m ON m.oid = a.member
 WHERE g.rolname = 'claims_sweep' OR m.rolname = 'claims_sweep';
 ```
 
-Remove one, with the names the query printed:
+Remove one, with the names the query printed. It needs a superuser or a role with
+`ADMIN` on the role named in the `REVOKE`; the owner role has no `ADMIN` on a
+role it did not create (PostgreSQL 16 and later), so it is not enough:
 
 ```sql
 REVOKE claims_sweep FROM the_member;   -- a role that is a member of the sweep
 REVOKE the_parent FROM claims_sweep;   -- a role the sweep is a member of
 ```
 
-The check sees a membership only when the command runs: one granted afterwards
-is seen at the next deploy, and until then the login is not confined.
+The check detects, it does not prevent: it sees a membership only when the
+command runs, so one granted afterwards is seen at the next deploy, and until
+then the login is not confined. The grant needs a superuser or a role with
+`ADMIN` on the sweep's role.
+
+If the check's own query fails (a lost connection, a cancel) after the files were
+applied, `meridian db migrate` prints the names of the files and then says that
+the migrations were applied and stay applied, that the membership check did not
+run (the error's class and the server's message), and to run the command again;
+it exits 1, because a confinement nobody checked is not a clean one.
 
 ## The upkeep role has no memberships
 
@@ -364,8 +421,13 @@ with one sentence that gives the count and names no role (after the sweep's
 sentence, when both have a finding). The files stay applied; take the
 membership back before the next deploy. A role that is a member OF
 `gateway_upkeep` is no finding: it can call the function and the trigger
-refuses it (a test shows it). List the memberships, one level, as the owner role
-or a superuser, and remove one with the names the query printed:
+refuses it (a test shows it). Every row counts here, whatever its `ADMIN`,
+`INHERIT` and `SET` options: `INHERIT` would give the upkeep login the owner's
+rights, `SET` reaches the owner as the current user, and a row that grants
+neither is not one a creator leaves for a role it did not make, so the options
+are ignored on purpose. Any role may list the memberships, one level; removing
+one needs a superuser or a role with `ADMIN` on the role named, not the owner
+role:
 
 ```sql
 SELECT g.rolname AS granted_role
@@ -376,5 +438,11 @@ WHERE m.rolname = 'gateway_upkeep';
 REVOKE the_parent FROM gateway_upkeep;
 ```
 
-As for the sweep, a membership granted after the command ran is seen at the next
-deploy.
+The check detects and does not prevent. A membership of the owner's role granted
+between two deploys gives the upkeep login the owner's rights (an unbounded,
+unrecorded removal of audit rows, and the power to drop the trigger) until the
+next `meridian db migrate` sees it; the grant needs a superuser or a role with
+`ADMIN` on the owner's role. Not checked: that the owner role has no members
+(on a managed database its administrator is a member by necessity) and that the
+upkeep role owns no object. The check does not look at who can set
+`session_replication_role` either.

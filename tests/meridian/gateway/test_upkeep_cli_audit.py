@@ -22,6 +22,7 @@ from upkeepsupport import audit_rows, run, utc_day
 
 from meridian.platform.cli import app
 from meridian.platform.cli import gateway as gateway_cli
+from meridian.platform.common.db import connect
 
 REASON = "retention-test"
 PROBE = "cli-probe"
@@ -323,6 +324,93 @@ def test_a_failure_between_batches_leaves_what_was_removed_removed_and_says_so(
     assert [row["reference"].rsplit(" ", 1)[1] for row in audit_rows(db)] == [
         "removed=2"
     ]
+
+
+# A count that the statement timeout cancels: the connection's timeout is turned
+# down and the count's statement sleeps, so PostgreSQL itself raises 57014.
+SLOW_COUNT = "SELECT pg_sleep(5) WHERE %s::timestamptz IS NOT NULL"
+
+
+@pytest.fixture
+def cancelled_counts(monkeypatch: pytest.MonkeyPatch, db: DatabaseHandle) -> None:
+    real_connect = gateway_cli.connect
+
+    def quick_timeout(dsn: str, application_name: str) -> psycopg.Connection:
+        conn = real_connect(dsn, application_name)
+        conn.execute("SET statement_timeout = '300ms'")
+        conn.commit()
+        return conn
+
+    monkeypatch.setattr(gateway_cli, "connect", quick_timeout)
+    monkeypatch.setattr(gateway_cli, "COUNT_AUDIT_EVENTS", SLOW_COUNT)
+
+
+def test_a_dry_run_whose_count_is_cancelled_says_what_that_means_and_changes_nothing(
+    cancelled_counts: None, db: DatabaseHandle
+) -> None:
+    cutoff = old_and_young(db)
+
+    result = runner.invoke(app, argv(shown(cutoff)))
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr.splitlines() == [
+        "ERROR the count did not finish inside the statement timeout, and "
+        "nothing was changed: the real run removes in batches and needs no "
+        "count, and a nearer --before counts faster"
+    ]
+    assert total(db) == 5
+
+
+def test_a_real_run_says_how_many_rows_older_than_the_cutoff_remain_when_some_do(
+    db: DatabaseHandle,
+) -> None:
+    cutoff = old_and_young(db, old=4, young=1)
+    holder = connect(db.dsn(OWNER), "test")
+    try:
+        holder.execute(
+            "SELECT 1 FROM audit.events WHERE service = %s ORDER BY seq LIMIT 1 "
+            "FOR UPDATE",
+            (PROBE,),
+        )
+
+        result = runner.invoke(app, argv(shown(cutoff), "--confirm", "--limit", "10"))
+    finally:
+        holder.rollback()
+        holder.close()
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines() == [
+        f"removed 3 audit rows before {shown(cutoff)} in 1 batch(es) of at most 10",
+        "1 audit rows older than the cutoff remain (rows another session held, "
+        "or written by a transaction that began before it): run it again",
+    ]
+
+
+def test_a_real_run_says_nothing_of_a_remainder_when_none_is_left(
+    db: DatabaseHandle,
+) -> None:
+    cutoff = old_and_young(db)
+
+    result = runner.invoke(app, argv(shown(cutoff), "--confirm"))
+
+    assert len(result.stdout.splitlines()) == 1
+
+
+def test_a_real_run_whose_final_count_is_cancelled_says_so_and_still_exits_zero(
+    cancelled_counts: None, db: DatabaseHandle
+) -> None:
+    cutoff = old_and_young(db, old=3, young=1)
+
+    result = runner.invoke(app, argv(shown(cutoff), "--confirm"))
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines() == [
+        f"removed 3 audit rows before {shown(cutoff)} in 1 batch(es) of at most 1000",
+        "the count of what remains did not finish inside the statement timeout; "
+        "the removal above happened",
+    ]
+    assert total(db) == 1 + 1
 
 
 def test_a_failure_in_the_first_batch_does_not_claim_a_removal(

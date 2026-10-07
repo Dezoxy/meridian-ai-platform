@@ -135,6 +135,67 @@ def test_both_directions_are_counted_apart(admin: psycopg.Connection) -> None:
     assert found == SweepMemberships(members=1, memberships=1)
 
 
+def grant_with(conn: psycopg.Connection, role: str, to: str, options: str) -> None:
+    """A grant with PostgreSQL 16's options, written out (``options`` is one of
+    this file's constants, never a value from outside)."""
+    conn.execute(
+        sql.SQL("GRANT {} TO {} WITH ").format(sql.Identifier(role), sql.Identifier(to))
+        + sql.SQL(options)
+    )
+
+
+ADMIN_ONLY = "ADMIN TRUE, INHERIT FALSE, SET FALSE"
+
+
+def test_a_member_with_admin_only_is_no_finding(admin: psycopg.Connection) -> None:
+    # What a role with CREATEROLE leaves for itself when it creates the role.
+    creator = create_role(admin)
+    grant_with(admin, SWEEP, creator, ADMIN_ONLY)
+
+    found = sweep_memberships(admin)
+
+    assert found == SweepMemberships(members=0, memberships=0)
+
+
+@pytest.mark.parametrize(
+    "options", ["INHERIT TRUE, SET FALSE", "INHERIT FALSE, SET TRUE"]
+)
+def test_a_member_with_inherit_alone_and_a_member_with_set_alone_each_are_one(
+    admin: psycopg.Connection, options: str
+) -> None:
+    login = create_role(admin)
+    grant_with(admin, SWEEP, login, options)
+
+    found = sweep_memberships(admin)
+
+    assert found == SweepMemberships(members=1, memberships=0)
+
+
+def test_a_chain_through_a_grant_of_admin_only_reaches_nobody(
+    admin: psycopg.Connection,
+) -> None:
+    middle = create_role(admin)
+    login = create_role(admin)
+    grant_with(admin, SWEEP, middle, ADMIN_ONLY)
+    grant(admin, middle, login)
+
+    found = sweep_memberships(admin)
+
+    assert found == SweepMemberships(members=0, memberships=0)
+
+
+def test_the_sweep_made_a_member_with_admin_only_is_still_one_membership(
+    admin: psycopg.Connection,
+) -> None:
+    # The options are ignored in this direction on purpose.
+    parent = create_role(admin)
+    grant_with(admin, parent, SWEEP, ADMIN_ONLY)
+
+    found = sweep_memberships(admin)
+
+    assert found == SweepMemberships(members=0, memberships=1)
+
+
 def test_a_grant_that_is_rolled_back_leaves_the_catalog_as_it_was(
     migrated_database: DatabaseHandle,
 ) -> None:

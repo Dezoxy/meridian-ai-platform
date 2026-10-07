@@ -1,10 +1,9 @@
--- 0027: an index on audit.events (recorded_at), for the expiry of 0028 (S068,
--- T-25).
+-- 0027: an index on audit.events (recorded_at, seq), for the expiry of 0028
+-- (S068, T-25).
 --
 -- Run by the owner role (meridian_owner), which owns the schema audit: the file
--- refuses to run as anyone else, a superuser included (an index built by a
--- superuser would be owned by it, and the owner could not drop or rebuild it
--- later). It adds one index. It changes no table, column, grant, trigger,
+-- refuses to run as anyone else, a superuser included, as every file of this
+-- step does. It adds one index. It changes no table, column, grant, trigger,
 -- function or row, and deletes nothing.
 --
 -- Why. 0028 lets audit rows expire, oldest first, in batches: its function
@@ -12,11 +11,13 @@
 -- table had no index on recorded_at (the primary key is event_id; the others
 -- are run_id and a partial one on reference), so every batch would scan the
 -- whole table. The index serves WHERE recorded_at < cutoff ORDER BY recorded_at,
--- seq LIMIT n by reading the oldest entries first (a test shows the plan). It
--- is on recorded_at alone, not partial and not unique: recorded_at is not
--- unique (every row of one transaction has the same value, 0017), and the
--- function's order breaks the tie with seq, which stays a sort of the few rows
--- of one batch.
+-- seq LIMIT n by reading the oldest entries first, in the order the batch asks
+-- for: recorded_at is not unique (every row of one transaction has the same
+-- value, 0017), so seq, the order of insertion, is the second key, and the plan
+-- needs no sort node whatever the size of a tie (a test shows the plan of the
+-- function's own statement). It is not partial and not unique. It costs eight
+-- bytes an entry and, as recorded_at only grows, each insert appends at the
+-- rightmost leaf, the cheapest of the table's indexes to maintain.
 --
 -- It is a file of its own on purpose: a later change of the function or of the
 -- trigger must not hold the lock below, and the file that builds an index on a
@@ -30,10 +31,13 @@
 -- and the file is run again. Once it has the lock the build blocks every audit
 -- insert (so every service's decision, refusal and tool call waits, and a
 -- failed audit write fails the call) for as long as it takes to read and sort
--- the table: about a quarter of a second at 635,000 rows, as 0014 measured for
--- an index on this table, and it grows with the table; the 10 s statement
--- timeout of the runner bounds it, and a build that cannot finish in that time
--- fails closed and leaves nothing.
+-- the table. 0014 measured about a quarter of a second at 635,000 rows for a
+-- different index of this table (a partial one on a text column); this one is of
+-- the same order of magnitude, a few tenths of a second at that size, and it
+-- grows with the table. It was not measured here. The build reads a table that
+-- 0017 left in the order of recorded_at, which helps. The 10 s statement timeout
+-- of the runner bounds it, and a build that cannot finish in that time fails
+-- closed and leaves nothing.
 -- The build is NOT concurrent, which would remove the block: the runner applies
 -- every file inside one transaction and CREATE INDEX CONCURRENTLY cannot run in
 -- one. That is why the lock timeout is the mitigation, and why the file is
@@ -58,4 +62,4 @@ BEGIN
 END
 $$;
 
-CREATE INDEX events_recorded_at_idx ON audit.events (recorded_at);
+CREATE INDEX events_recorded_at_idx ON audit.events (recorded_at, seq);
