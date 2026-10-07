@@ -10,10 +10,12 @@ import typer
 from meridian.platform.common.db import connect
 from meridian.platform.migrations.runner import (
     SWEEP_ROLE,
+    UPKEEP_ROLE,
     MigrationError,
     SweepMemberships,
     apply_migrations,
     sweep_memberships,
+    upkeep_memberships,
 )
 from meridian.platform.policy_mcp.seed import SeedError, seed_policies
 
@@ -55,12 +57,25 @@ def _sweep_finding(found: SweepMemberships) -> str:
     )
 
 
+def _upkeep_finding(memberships: int) -> str:
+    """The one sentence for the upkeep role being a member of another role
+    (T-25). It counts and names no role, as the sweep's does."""
+    return (
+        "the migrations were applied and stay applied, but "
+        f"{UPKEEP_ROLE} is a member of {memberships} role(s), and the audit "
+        "table's trigger lets a removal through for the owner's rights under "
+        "that login; list and take back the membership as the migrations' "
+        'README says under "The upkeep role has no memberships"'
+    )
+
+
 @app.command()
 def migrate() -> None:
     """Apply the SQL migrations that are not yet applied.
 
     Last, it reads the catalog and fails if a role is a member of
-    ``claims_sweep`` or the reverse; the files stay applied.
+    ``claims_sweep`` or the reverse, or if ``gateway_upkeep`` is a member of
+    any role; the files stay applied.
     """
     dsn = os.environ.get(MIGRATIONS_DATABASE_URL_ENV)
     if not dsn:
@@ -69,6 +84,7 @@ def migrate() -> None:
         with connect(dsn, APPLICATION_NAME) as conn:
             applied = apply_migrations(conn)
             found = sweep_memberships(conn)
+            upkeep_found = upkeep_memberships(conn)
     except MigrationError as exc:
         _fail(str(exc))
     except psycopg.Error as exc:
@@ -79,8 +95,15 @@ def migrate() -> None:
         typer.echo(name)
     if not applied:
         typer.echo("migrations: up to date")
+    findings = []
     if found.members or found.memberships:
-        _fail(_sweep_finding(found))
+        findings.append(_sweep_finding(found))
+    if upkeep_found:
+        findings.append(_upkeep_finding(upkeep_found))
+    for finding in findings[:-1]:
+        typer.echo(f"ERROR {finding}", err=True)
+    if findings:
+        _fail(findings[-1])
 
 
 @app.command("seed-policies")

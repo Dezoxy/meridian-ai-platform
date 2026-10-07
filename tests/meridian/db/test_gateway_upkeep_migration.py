@@ -419,11 +419,19 @@ def test_the_role_has_no_privilege_on_the_audit_schema_or_any_other_schema(
     ]
 
 
-def test_the_role_may_execute_the_three_functions_and_no_other_function(
+def test_the_role_may_execute_the_three_functions_and_the_audit_expiry_and_no_other(
     migrated_database: DatabaseHandle,
 ) -> None:
-    # The catalog prints a signature without the spaces after its commas.
-    expected = sorted(name.replace(", ", ",") for name in PUBLIC_FUNCTIONS)
+    # The catalog prints a signature without the spaces after its commas. The
+    # fourth and fifth are 0028's (the audit table's expiry and its count, in the
+    # schema gateway).
+    audit_expiry = [
+        "gateway.expire_audit_events(timestamp with time zone,text,integer)",
+        "gateway.count_audit_events_before(timestamp with time zone)",
+    ]
+    expected = sorted(
+        [name.replace(", ", ",") for name in PUBLIC_FUNCTIONS] + audit_expiry
+    )
     assert executable_by(migrated_database, ROLE) == expected
 
 

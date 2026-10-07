@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS public.meridian_migrations (
 
 
 SWEEP_ROLE = "claims_sweep"
+UPKEEP_ROLE = "gateway_upkeep"
 # The roles that reach ``claims_sweep`` through any chain of grants (``members``)
 # and the roles it reaches (``memberships``). UNION, not UNION ALL, so a role
 # reached twice is counted once. A role that does not exist has no rows.
@@ -81,6 +82,20 @@ def sweep_memberships(
         SWEEP_MEMBERSHIP_QUERY, {"role": role}
     ).fetchall()
     return SweepMemberships(members=members, memberships=memberships)
+
+
+def upkeep_memberships(conn: psycopg.Connection, role: str = UPKEEP_ROLE) -> int:
+    """Count the roles ``role`` is a member of, directly or through a chain.
+
+    The audit table's trigger (0028) lets a removal through for a session whose
+    session user is ``gateway_upkeep`` and whose current user is the table's
+    owner; no such session exists while the upkeep role is a member of no role.
+    0020's guard holds that when the file is applied and ``meridian db migrate``
+    calls this last, at every run. Members OF the role are no finding: they fail
+    closed at the trigger. A role that does not exist is no finding. It reads the
+    catalog only and leaves the transaction to the caller.
+    """
+    return sweep_memberships(conn, role).memberships
 
 
 def _packaged_files() -> list[tuple[str, str]]:

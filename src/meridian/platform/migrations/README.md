@@ -64,6 +64,24 @@ checks as 0022 does, for `meridian knowledge verify`. It leaves out the vector,
 takes no lock and sets none, and says in its header the statement that undoes
 it.
 
+The two files of S068 let audit rows expire. Implemented and tested, not run on
+a cluster; no retention period is set and nothing is scheduled.
+[`0027_audit_recorded_at_idx.sql`](0027_audit_recorded_at_idx.sql) is an index on
+`audit.events (recorded_at)` and nothing else, with the owner guard and `SET
+LOCAL lock_timeout` first. It is **not built concurrently**: the runner applies
+every file inside one transaction, and `CREATE INDEX CONCURRENTLY` cannot run in
+one. That is why the lock timeout is the mitigation: the build takes SHARE on
+the table, blocks every audit insert while it runs (about a quarter of a second
+at 635,000 rows, as 0014 measured), and gives up after 3 seconds of waiting for
+the lock.
+[`0028_audit_expire.sql`](0028_audit_expire.sql) replaces the trigger function
+`audit.forbid_change()` and adds `gateway.expire_audit_events(p_before,
+p_reason, p_limit)`; see
+[What cannot follow the rule](#what-cannot-follow-the-rule-auditevents). It
+takes no lock on a table and sets no timeout. The role `gateway_upkeep` has a
+name narrower than its job now (it also expires audit rows), and still holds no
+right on the schema `audit` or on its table: it holds EXECUTE on the function.
+
 ## An applied file never changes
 
 The ledger records each file's SHA-256, and the runner refuses a file whose
@@ -211,8 +229,12 @@ does not, for a column and for a constraint.
 ## What cannot follow the rule: `audit.events`
 
 The audit log is insert-only for every role, the owner included: triggers
-refuse `UPDATE`, `DELETE` and `TRUNCATE`. A backfill there cannot be written
-as a second file. [`0017_audit_order.sql`](0017_audit_order.sql) added
+refuse `UPDATE`, `DELETE` and `TRUNCATE`. The one way a row leaves is
+`gateway.expire_audit_events` (0028): the trigger lets a `DELETE` through only
+when `current_user` is the table's owner and `session_user` is `gateway_upkeep`,
+which holds inside that owner's function called by a login of the upkeep role
+and nowhere else (the file's header lists each case that still raises). A
+backfill there cannot be written as a second file. [`0017_audit_order.sql`](0017_audit_order.sql) added
 `audit.events.seq` and says in its header what it did instead: `ADD COLUMN`
 with a volatile default, which fills the existing rows during the table
 rewrite without firing a row trigger, so no `UPDATE` is needed. The price is
@@ -327,3 +349,32 @@ REVOKE the_parent FROM claims_sweep;   -- a role the sweep is a member of
 
 The check sees a membership only when the command runs: one granted afterwards
 is seen at the next deploy, and until then the login is not confined.
+
+## The upkeep role has no memberships
+
+Implemented (S068, T-25). What keeps the audit table's removal inside
+`gateway.expire_audit_events` is that `gateway_upkeep` is a member of no role:
+the trigger of 0028 lets a `DELETE` through for a session whose session user is
+`gateway_upkeep` and whose current user is the table's owner, and a login of
+the upkeep role can become the owner only by being a member of the owner's role.
+0020's guard holds that when the file is applied; nothing held it afterwards. So
+`meridian db migrate` also counts, at every run, the roles that `gateway_upkeep`
+is a member of, directly or through a chain, and on a count above zero exits 1
+with one sentence that gives the count and names no role (after the sweep's
+sentence, when both have a finding). The files stay applied; take the
+membership back before the next deploy. A role that is a member OF
+`gateway_upkeep` is no finding: it can call the function and the trigger
+refuses it (a test shows it). List the memberships, one level, as the owner role
+or a superuser, and remove one with the names the query printed:
+
+```sql
+SELECT g.rolname AS granted_role
+FROM pg_auth_members a
+JOIN pg_roles g ON g.oid = a.roleid
+JOIN pg_roles m ON m.oid = a.member
+WHERE m.rolname = 'gateway_upkeep';
+REVOKE the_parent FROM gateway_upkeep;
+```
+
+As for the sweep, a membership granted after the command ran is seen at the next
+deploy.

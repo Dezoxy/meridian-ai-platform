@@ -1,7 +1,8 @@
 """``meridian gateway``: the upkeep of the Model Gateway's ledger (S066).
 
-A thin command over the three functions of migration 0020, run as the database
-role ``gateway_upkeep``. That role can write no table: each function holds its
+A thin command over the functions of migrations 0020 and 0028 (``expire-audit``
+calls the audit expiry and its count), run as the database role
+``gateway_upkeep``. That role can write no table: each function holds its
 rule and writes its audit row in the transaction of its change (T-25, T-47), so
 this module only parses what the operator typed, calls one function and prints
 counts, IDs and amounts. It never prints the connection string, and it imports
@@ -13,7 +14,7 @@ import os
 import re
 import uuid
 from collections.abc import Callable
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Annotated, NoReturn
 
@@ -90,6 +91,11 @@ REFUSALS = {
         "there is nothing to remove before that month: "
         "run without --confirm to see the counts"
     ),
+    "GU401": (
+        "the cutoff is in the future: --before is at most now, and nothing "
+        "newer than it is removed"
+    ),
+    "GU402": "the limit is from 1 to 10000 rows a batch: give --limit in that range",
 }
 # What the dry run prints for a tenant or deployment that is not an ID: the ledger
 # is text from a database, and an escape sequence in it must not reach a terminal.
@@ -464,3 +470,148 @@ def expire(
         lambda conn: conn.execute(EXPIRE_LEDGER, (month, slug)).fetchone()
     )
     typer.echo(_counts("removed", month, *removed))
+
+
+# ── expire-audit ─────────────────────────────────────────────────────────────
+EXPIRE_AUDIT_EVENTS = "SELECT gateway.expire_audit_events(%s, %s, %s)"
+COUNT_AUDIT_EVENTS = "SELECT gateway.count_audit_events_before(%s)"
+# The function's own maximum (0028); the default is a tenth of it.
+MAX_AUDIT_BATCH = 10_000
+DEFAULT_AUDIT_BATCH = 1_000
+AUDIT_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+# A timestamp in ASCII digits; the offset is optional here only so that its
+# absence gets a sentence of its own.
+AUDIT_TIMESTAMP = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]{1,6})?)?"
+    r"(Z|[+-][0-9]{2}(:?[0-9]{2})?)?"
+)
+AUDIT_DRY_RUN_NOTE = (
+    "this is a count at this moment: a row another session holds is left for a "
+    "later run"
+)
+
+
+def _audit_cutoff(text: str) -> datetime:
+    """A bare date is 00:00 UTC of that day; a timestamp must carry its offset,
+    or it would mean this machine's zone. Returned in UTC."""
+    try:
+        if AUDIT_DATE.fullmatch(text):
+            return datetime.fromisoformat(text).replace(tzinfo=UTC)
+        if AUDIT_TIMESTAMP.fullmatch(text):
+            cutoff = datetime.fromisoformat(text)
+            if cutoff.tzinfo is not None:
+                return cutoff.astimezone(UTC)
+            raise typer.BadParameter(
+                "a timestamp needs its offset (Z or +hh:mm): without one it would "
+                "mean this machine's zone",
+                param_hint="'--before'",
+            )
+    except (ValueError, OverflowError):
+        pass
+    raise typer.BadParameter(
+        "a cutoff is a date, such as 2026-09-01 (00:00 UTC), or a timestamp with "
+        "an offset, such as 2026-09-01T12:00:00+02:00",
+        param_hint="'--before'",
+    )
+
+
+def _audit_limit(limit: int) -> int:
+    if not 1 <= limit <= MAX_AUDIT_BATCH:
+        raise typer.BadParameter(
+            f"a batch is from 1 to {MAX_AUDIT_BATCH} rows", param_hint="'--limit'"
+        )
+    return limit
+
+
+def _utc_text(cutoff: datetime) -> str:
+    return cutoff.isoformat().replace("+00:00", "Z")
+
+
+def _expire_audit_batches(cutoff: datetime, slug: str, limit: int) -> tuple[int, int]:
+    """Call the function until a call removes nothing; each call is its own
+    transaction. Returns the rows removed and the batches that removed some. A
+    failure after a batch says what stays removed, then exits as any failure."""
+    total = batches = 0
+    while True:
+        try:
+            removed = _upkeep(
+                lambda conn: conn.execute(
+                    EXPIRE_AUDIT_EVENTS, (cutoff, slug, limit)
+                ).fetchone()[0]
+            )
+        except typer.Exit:
+            if batches:
+                typer.echo(
+                    f"removed {total} audit rows in {batches} batch(es) before the "
+                    "failure: each batch is its own transaction with its own audit "
+                    "row, and what was removed stays removed",
+                    err=True,
+                )
+            raise
+        if removed == 0:
+            return total, batches
+        total += removed
+        batches += 1
+
+
+@app.command("expire-audit")
+def expire_audit(
+    before: Annotated[
+        str,
+        typer.Option(
+            "--before",
+            help="The cutoff: every audit row recorded before it goes. A date "
+            "(00:00 UTC of that day) or a timestamp with an offset, such as "
+            "2026-09-01T12:00:00+02:00. No default. Through `make gateway-upkeep` "
+            "only a date works (its words hold no colon or plus sign).",
+        ),
+    ],
+    reason: Annotated[
+        str,
+        typer.Option("--reason", help="Why: a slug, such as retention-2026. Audited."),
+    ],
+    limit: Annotated[
+        int,
+        typer.Option(
+            "--limit",
+            help=f"Rows a batch removes, 1 to {MAX_AUDIT_BATCH}; each batch is its "
+            "own transaction.",
+        ),
+    ] = DEFAULT_AUDIT_BATCH,
+    confirm: Annotated[
+        bool,
+        typer.Option(
+            "--confirm",
+            help="Remove what the dry run counts. Without it nothing is removed.",
+        ),
+    ] = False,
+) -> None:
+    """Remove audit rows older than --before, in batches.
+
+    Without --confirm it counts what would be removed and removes nothing. The
+    cutoff is the operator's decision: there is no default, nothing runs this on
+    a schedule, and the retention period is the owner's to choose. The function
+    looks at a row's age only, not at whether its claim still exists. With
+    --confirm it removes at most --limit rows at a time until a call removes
+    nothing, one audit row for each batch, and prints the total and the number
+    of batches.
+    """
+    cutoff = _audit_cutoff(before)
+    slug = _slug(reason)
+    batch = _audit_limit(limit)
+    text = _utc_text(cutoff)
+    if not confirm:
+        counted = _upkeep(
+            lambda conn: conn.execute(COUNT_AUDIT_EVENTS, (cutoff,)).fetchone()[0],
+            read_only=True,
+        )
+        typer.echo(f"would remove audit rows before {text}: {counted}")
+        typer.echo(f"in {-(-counted // batch)} batch(es) of at most {batch}")
+        typer.echo("nothing removed: add --confirm to remove them")
+        typer.echo(AUDIT_DRY_RUN_NOTE)
+        return
+    total, batches = _expire_audit_batches(cutoff, slug, batch)
+    typer.echo(
+        f"removed {total} audit rows before {text} in {batches} batch(es) "
+        f"of at most {batch}"
+    )

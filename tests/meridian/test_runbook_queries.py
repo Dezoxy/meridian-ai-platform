@@ -429,6 +429,35 @@ def test_the_upkeep_audit_query_does_not_list_a_row_another_role_wrote_as_the_up
     assert forged == [("model_gateway",)]
 
 
+def test_the_upkeep_audit_query_lists_an_audit_expiry_with_its_cutoff_and_count(
+    ledger_run: LedgerRun,
+) -> None:
+    db = ledger_run.db
+    run(
+        db,
+        OWNER,
+        "INSERT INTO audit.events (service, event, outcome) "
+        "VALUES ('runbook-probe', 'probe', 'completed')",
+    )
+    cutoff = run(db, OWNER, "SELECT clock_timestamp()")[0][0]
+    run(db, UPKEEP_ROLE, CREDIT, (TENANT, TOKENS_KIND, 10, "goodwill"))
+    expired = run(
+        db,
+        UPKEEP_ROLE,
+        "SELECT gateway.expire_audit_events(%s, %s, %s)",
+        (cutoff, "retention-test", 10),
+    )[0][0]
+    sql = runbook_query("runbooks/budget-exhaustion.md", "audit.events")
+
+    columns, rows = run_read_only(db, sql)
+
+    found = [dict(zip(columns, row, strict=True)) for row in rows]
+    assert expired > 0
+    assert found[0]["event"] == "audit.expire"
+    assert found[0]["reference"].endswith(f" removed={expired}")
+    assert found[0]["db_role"] == UPKEEP_ROLE
+
+
 def orphan_rows(db: DatabaseHandle) -> list[dict]:
     sql = runbook_query("runbooks/budget-exhaustion.md", "missing_cost_counter")
     columns, rows = run_read_only(db, sql)

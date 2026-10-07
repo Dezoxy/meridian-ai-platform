@@ -212,9 +212,10 @@ an `expire` that removes rows were not run there.
 `meridian gateway` is the supported way to close a reservation, credit a
 tenant or remove old ledger rows. It connects as the database role
 `gateway_upkeep`, from `MERIDIAN_GATEWAY_UPKEEP_DATABASE_URL` and no other
-variable. That role can write no table: it can only call three database
-functions, and each one holds its own rule and writes its audit row in the
-same transaction as the change. A refusal is one line, `ERROR GUnnn`
+variable. That role can write no table: it can only call database functions
+(the ledger's three, and since S068 the audit expiry and its count), and each
+one holds its own rule and writes its audit row in the same transaction as the
+change. A refusal is one line, `ERROR GUnnn`
 followed by what was refused and what to do, and changes nothing. The
 command prints counts, IDs and amounts, never the connection string. Every
 change takes a `--reason`, a slug of lower-case letters, digits and
@@ -278,6 +279,40 @@ expiry refuse.
 ```sh
 meridian gateway expire --before YYYY-MM --reason old-months
 meridian gateway expire --before YYYY-MM --reason old-months --confirm
+```
+
+**Expire old audit rows.** Status: implemented (S068) and tested against
+PostgreSQL; not run on a cluster. `audit.events` is insert-only for every role;
+the one way a row leaves is `meridian gateway expire-audit`, which calls an
+owner's database function that removes the rows recorded before `--before`,
+oldest first, in batches of `--limit` (default 1,000, at most 10,000), each
+batch its own transaction with one audit row (`audit.expire`, with the cutoff
+and the count). The audit rows are how a decision is reconstructed and who is
+named for it, so what this removes is the reconstruction. **No retention period
+is set and nothing is scheduled**: the cutoff is the operator's, there is no
+default, and the periods are the owner's to name. The function looks at a
+row's age only, not at whether its claim still exists: a row younger than a
+claim's life may be one the adjuster's page reads while the claim is shown, so
+a cutoff shorter than a claim's life shortens that trail. Run it without
+`--confirm` first: the dry run counts what would go and removes nothing, and
+the count is at this moment. `--before` is a date (00:00 UTC of that day) or a
+timestamp with an offset (`2026-09-01T12:00:00+02:00`); one without an offset is
+refused. A failure between batches leaves what was removed removed, each batch
+with its row, and the command says so.
+
+```sh
+meridian gateway expire-audit --before YYYY-MM-DD --reason old-audit
+meridian gateway expire-audit --before YYYY-MM-DD --reason old-audit --confirm
+```
+
+Through the Job only the date form works, because the script's words hold no
+colon or plus sign. The Job's deadline is two minutes and it ends the loop
+wherever it stands, so a large expiry is several runs: the batches that
+finished stay removed, and the next run goes on from there:
+
+```sh
+make gateway-upkeep ARGS="expire-audit --before YYYY-MM-DD --reason old-audit"
+make gateway-upkeep ARGS="expire-audit --before YYYY-MM-DD --reason old-audit --confirm"
 ```
 
 **The connection string** comes from a secret store, not from a command line
@@ -374,14 +409,16 @@ says what was done: `attempt=ID tokens=N micro_eur=N` for a closed
 reservation (what it had reserved), `credit=ID kind=KIND amount=N
 period=YYYY-MM-DD` for a credit, and `before=YYYY-MM usage=N counters=N
 credits=N` for an expiry, so a row still says how much after an expiry
-removed the ledger rows it was about. Read the rows as the queries above are
-read:
+removed the ledger rows it was about, and `before=TIMESTAMP removed=N` (the
+cutoff in UTC and the rows one batch removed) for `audit.expire`, the expiry of
+audit rows below. Read the rows as the queries above are read:
 
 ```sql
 SELECT seq, recorded_at, db_role, event, outcome, tenant, reference, reason
 FROM audit.events
 WHERE db_role = 'gateway_upkeep'
-  AND event IN ('ledger.reservation-closed', 'budget.credited', 'ledger.expired')
+  AND event IN ('ledger.reservation-closed', 'budget.credited', 'ledger.expired',
+                'audit.expire')
 ORDER BY seq DESC
 LIMIT 50;
 ```

@@ -32,6 +32,7 @@ MIGRATION = (
     / "migrations"
     / "0020_gateway_upkeep.sql"
 )
+AUDIT_MIGRATION = MIGRATION.with_name("0028_audit_expire.sql")
 RUNBOOK = REPO_ROOT / "docs" / "operations" / "runbooks" / "budget-exhaustion.md"
 # Planted in each connection string: no output may carry it. (Not named after
 # what it stands for: the repository's secret scan reads the name.)
@@ -325,13 +326,17 @@ def test_the_conversion_is_exact_where_a_float_is_not() -> None:
 
 # ── the database's refusals ─────────────────────────────────────────────────
 def migration_codes() -> set[str]:
-    """The GU codes the header of 0020 lists, one per line starting `--   GU`."""
-    text = MIGRATION.read_text(encoding="utf-8")
+    """The GU codes the headers of 0020 and 0028 list, one per line starting
+    `--   GU`."""
+    text = MIGRATION.read_text(encoding="utf-8") + AUDIT_MIGRATION.read_text(
+        encoding="utf-8"
+    )
     return set(re.findall(r"^--\s+(GU\d{3})\s", text, re.MULTILINE))
 
 
 def test_the_table_of_refusals_holds_every_code_the_migration_names() -> None:
-    assert len(migration_codes()) == 14
+    # 0020's fourteen and the two 0028 adds (GU401, GU402).
+    assert len(migration_codes()) == 16
     assert set(gateway_cli.REFUSALS) == migration_codes()
 
 
@@ -533,10 +538,10 @@ def registered_required_options(command: str) -> set[str]:
     }
 
 
-def test_the_runbook_names_each_of_the_four_commands() -> None:
+def test_the_runbook_names_each_of_the_five_commands() -> None:
     named = {words[2] for words in runbook_lines()}
 
-    assert named == {"reservations", "close", "credit", "expire"}
+    assert named == {"reservations", "close", "credit", "expire", "expire-audit"}
 
 
 @pytest.mark.parametrize("words", runbook_lines(), ids=" ".join)
