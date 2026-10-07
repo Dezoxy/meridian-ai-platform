@@ -11,6 +11,7 @@ from meridian.platform.registry.loader import (
     unreadable_directory,
 )
 from meridian.platform.registry.schemas import (
+    SCHEMAS_SUBDIR,
     schemas_not_updated,
     stale_schemas,
     write_schemas,
@@ -96,6 +97,14 @@ def validate(
     typer.echo(f"terraform outputs OK: {_count(compared, 'deployment')} {verb}")
 
 
+def _stale_schema_line(registry_dir: Path, name: str) -> str:
+    """One stale schema's line; a link gets none that sends the person to the
+    write, which refuses a link."""
+    if (registry_dir / SCHEMAS_SUBDIR / name).is_symlink():
+        return f"{SCHEMAS_SUBDIR}/{name} is a link: remove the link"
+    return f"{SCHEMAS_SUBDIR}/{name} is out of date: run `meridian registry schemas`"
+
+
 @app.command()
 def schemas(
     registry_dir: RegistryDirOption = DEFAULT_REGISTRY_DIR,
@@ -106,17 +115,14 @@ def schemas(
 ) -> None:
     """Write the JSON Schemas generated from the models."""
     if check:
+        if (registry_dir / SCHEMAS_SUBDIR).is_symlink():
+            _fail((f"{SCHEMAS_SUBDIR} is a link: remove the link",))
         try:
             stale = stale_schemas(registry_dir)
         except OSError as exc:
             _fail((unreadable_directory(registry_dir, exc),))
         if stale:
-            _fail(
-                tuple(
-                    f"schemas/{name} is out of date: run `meridian registry schemas`"
-                    for name in stale
-                )
-            )
+            _fail(tuple(_stale_schema_line(registry_dir, name) for name in stale))
         typer.echo("schemas OK: up to date")
         return
     try:
