@@ -159,14 +159,12 @@ its own). The price is that this one pod stands in front of every model call.
   as the group's others are); it ends when the refusals have left the 15-minute
   window. **What it does not see:** a store that restarts in a loop while few
   calls come (seconds of 503 a minute, every tenant's windows reset each time).
-  That wants a rule on the container's restart count, which is left for another
-  step; until then read the pod's restarts yourself
-  (`k get pod -l app.kubernetes.io/name=rate-store`, the RESTARTS column) when
-  the gateway's 503s come and go. Both alerts are rules checked by `make alerts`
-  (the new condition and its unit tests are not yet loaded on a cluster),
-  `MeridianRateStoreRefusing` as it was before was loaded in Prometheus and
-  healthy on kind (2026-10-06); neither was seen firing there, and kind
-  notifies no one (S028).
+  That is `MeridianRateStoreRestartLoop`'s, on the container's restart count
+  (see "The store restarts again and again" below). Both alerts are rules
+  checked by `make alerts` (the new condition and its unit tests are not yet
+  loaded on a cluster), `MeridianRateStoreRefusing` as it was before was
+  loaded in Prometheus and healthy on kind (2026-10-06); neither was seen
+  firing there, and kind notifies no one (S028).
 - The gateway stays ready: `/healthz` does not touch the store, so no pod
   restarts.
 - **The store not Ready about two hours after its start**, with no restart
@@ -327,11 +325,19 @@ newer than the server and restarts it until the clock catches up, at most every
 five minutes (the kubelet's back-off). It is accepted: no small fix exists
 without writable state, and it is stated in the template's header.
 
-No alert fires on a store that restarts in a loop while few calls come (see
-"What you see"): `MeridianRateStoreRefusing` needs at least two refused calls
-in 15 minutes and a share of the calls, and the pod is Available part of each
-cycle, so `MeridianServiceUnavailable` does not hold either. Read the
-RESTARTS column when the gateway's 503s come and go.
+`MeridianRateStoreRestartLoop` (S072, `warning`) fires when the store's
+container has restarted three times in 15 minutes, with no wait. A renewal's
+restart and a start's liveness restart are one each and do not add up to
+three; a loop of held connection slots (every 70 to 90 seconds) or of an
+expired certificate (about every minute) does, and so does the kubelet's
+slowest back-off (every 5 minutes). It exists because the loop can come while
+few calls do: `MeridianRateStoreRefusing` needs at least two refused calls in
+15 minutes and a share of the calls, and the pod is Available part of each
+cycle, so `MeridianServiceUnavailable` does not hold either. Read first the
+pod's events (`k describe pod -l app.kubernetes.io/name=rate-store`) and the
+list above: who holds connections, the Certificate's dates, the clock. The
+rule is loaded by `make up` and `make deploy`; not seen firing (implemented
+and unit-tested by `make alerts`).
 
 ### A script hangs
 

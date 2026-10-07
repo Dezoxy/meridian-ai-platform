@@ -2254,8 +2254,8 @@ series for the gateway's calls of the last 15 minutes), `meridian.gateway`
 `meridian.telemetry` (two recorded series of the same kind, for the
 runtime's completed model calls and the Claims API's stored triages, and
 three alerts that notice a series that is not there, and a fourth that
-notices the log agent not being ready). It holds 17 alert
-rules and three recording rules: six on the gateway, three on the workloads
+notices the log agent not being ready). It holds 18 alert
+rules and three recording rules: six on the gateway, four on the workloads
 and four on the certificates (the gateway's sixth, `MeridianRateStoreRefusing`,
 fires when, of the calls of the last 15 minutes that the rate store could have
 counted, more than 5 percent and at least 5, or more than half and at least 2,
@@ -2279,7 +2279,10 @@ for `logging` were seen on kind on 2026-10-06; a DaemonSet that does
 not exist leaves no series and so no alert, and smoke's line says it is not
 there). The CronJob of the sweep sets one instance ID
 (`service.instance.id=claims-sweep`), so its six series are the same from
-pass to pass (seen on kind on 2026-10-06). It
+pass to pass (seen on kind on 2026-10-06). The workloads' fourth alert,
+`MeridianRateStoreRestartLoop` (S072), fires on three restarts of the rate
+store's container in 15 minutes: implemented and unit-tested, loaded by `make
+up` and `make deploy`, not seen firing. It
 carries the label `release: kube-prometheus-stack`, which the chart's
 Prometheus selects rules by. Prometheus evaluates the rules; kind runs no
 Alertmanager, so nothing is notified, and the dashboard **Meridian:

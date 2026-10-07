@@ -47,6 +47,9 @@ OTHER_SERIES = {
     "kube_deployment_status_replicas_available",
     "kube_pod_status_ready",
     "kube_cronjob_status_last_successful_time",
+    # The container restart counter (S072: the rate store's restart loop); it
+    # carries the labels namespace, pod and container.
+    "kube_pod_container_status_restarts_total",
     # kube-state-metrics' two numbers of a DaemonSet (S064, G1: the log agent's
     # alert); both carry the labels namespace and daemonset.
     "kube_daemonset_status_number_ready",
@@ -201,7 +204,7 @@ def test_the_manifest_is_one_prometheus_rule_the_stack_selects() -> None:
 def test_every_alert_has_its_labels_annotations_and_a_runbook_that_exists() -> None:
     found = alerts()
 
-    assert len(found) == 17
+    assert len(found) == 18
     for alert in found:
         name = alert["alert"]
         assert alert["labels"]["severity"] in {"critical", "warning"}, name
@@ -387,6 +390,35 @@ def test_the_sweep_alert_names_the_cronjob_the_chart_renders() -> None:
     }
 
     assert cronjob in rendered
+
+
+def test_the_restart_loop_alert_names_the_container_the_chart_renders() -> None:
+    (alert,) = [a for a in alerts() if a["alert"] == "MeridianRateStoreRestartLoop"]
+    (container,) = set(re.findall(r'container="([^"]+)"', alert["expr"]))
+    rendered = {
+        c["name"]
+        for d in rendered_chart()
+        if d["kind"] == "Deployment" and d["metadata"]["name"] == "rate-store"
+        for c in d["spec"]["template"]["spec"]["containers"]
+    }
+
+    assert rendered == {container}
+
+
+def test_the_restart_loop_alert_needs_three_restarts_in_15_minutes() -> None:
+    (alert,) = [a for a in alerts() if a["alert"] == "MeridianRateStoreRestartLoop"]
+    expression = " ".join(alert["expr"].split())
+
+    # A count of changes over the 15-minute window, at least 3: a renewal's one
+    # restart and a start's one liveness restart are two. Not increase(), which
+    # extrapolates and which no expression of the file uses.
+    assert expression.startswith("changes(kube_pod_container_status_restarts_total{")
+    assert expression.endswith("}[15m]) >= 3")
+    assert alert in groups()["meridian.workloads"]
+    # The window is the wait; the severity is below the refusal alert's.
+    assert alert["for"] == "0m"
+    assert alert["labels"]["severity"] == "warning"
+    assert alert["annotations"]["runbook_url"] == RUNBOOK_PREFIX + "rate-store.md"
 
 
 def test_the_workload_alerts_stay_in_the_namespace_the_chart_installs_into() -> None:
