@@ -978,7 +978,7 @@ that day; the rest stand as their step recorded them.
 | Renovate has not run S075's three new rules: whether Docker Hub gives the Envoy chart a push date (else the chart waits indefinitely, `.github/renovate.json`), whether the `terraform` block's `description` key is accepted and whether the `agent-framework` label is made are unseen; nothing to code, a sentence to write when Renovate next runs (S078's branch edits the same file, so it is not touched before that merge) | S075 (S074's second half) | open; after Renovate's next run | S074 |
 | Sentences in `infra/` that a render of the add-ons' charts (2026-10-07) showed inexact: `manifests/cert-manager-networkpolicy.yaml` says the controller "reads every Secret" (near line 53), and cert-manager's controller also writes them; `manifests/telemetry-ca.yaml` (near lines 31 to 40) and `manifests/service-ca.yaml` (near line 18) list the readers of the authorities' keys without Envoy Gateway's controller, and say only the two operators write; `infra/kind/README.md` (near lines 253, 271, 294, 679, 2066 and 2090) and the comment in `smoke.sh` near line 205 name two cluster-wide readers or "the one switch"; the S063 section's sentence that the one switch drops every role the chart creates is history and stays, T-68 and row 708 say what the render showed | S072 (documents) | open: comments only, no behaviour; corrected with the cluster batch's edits to the same files | S072 |
 | `manifests/cert-manager-networkpolicy.yaml`, near lines 17 to 21, says the address the API server's calls arrive from "is not known, nobody has measured it", and `infra/kind/README.md` (near line 1631) and `manifests/observability-networkpolicy.yaml` (near lines 56 to 71) say the same of the other webhooks' port. Measured once on kind (S072, 2026-10-07): the calls of the API server to a pod arrive from the node's address on the pod network and pass a default-deny ingress. The sentence is to be corrected, and the peerless rules on 10250 (cert-manager's webhook, approver-policy's, the Prometheus operator's) bounded, in the cluster batch | S072 (measurement) | open | S072 |
-| Smoke's check 10 asks for a Certificate in `default` with the URI `.../sa/meridian-smoke-refused`. Since contract P the services' policy lists exact URIs, so that URI is also refused inside `meridian` and the check no longer proves the namespace selector alone (the test that held it says so: `test_the_request_is_in_a_namespace_the_services_policy_does_not_select`). Either `REFUSED_URI` becomes a listed name such as the gateway's and the old assertion returns, or the weaker check is accepted and the line says what it proves | S072 (contract P) | open: `smoke.sh` and its tests are outside the documents' contract; the verdict on the cluster should not change (the request is still denied by `meridian-deny-unlisted`), not seen | S072 |
+| Smoke's check 10 asks for a Certificate in `default` with the URI `.../sa/meridian-smoke-refused`. Since contract P the services' policy lists exact URIs, so that URI is also refused inside `meridian` and the check no longer proves the namespace selector alone (the test that held it says so: `test_the_request_is_in_a_namespace_the_services_policy_does_not_select`). Either `REFUSED_URI` becomes a listed name such as the gateway's and the old assertion returns, or the weaker check is accepted and the line says what it proves | S072 (contract P) | closed by S072 (F1), implemented and tested with stand-ins, not seen on kind: `REFUSED_URI` is the Claims API's listed URI, so the namespace selector is again the one reason for the refusal, and the test holds the URI, the duration and the usages against the policy's manifest; the cold run of the cluster batch sees it | S072 |
 | `BY_HAND` in `src/meridian/platform/cli/workload.py` lists what the scaffold leaves to a person (the service entry, a chart entry with a certificate) and does not say that a service with a Certificate needs its ID, and its `<service>.meridian.svc` name where it serves TLS, in the `meridian-services` policy's two lists or the issuer refuses its certificate (`config/registry/README.md` says so since contract P). Its test is read before the line is edited | S072 (contract P) | open | S072 |
 | Loki's chart renders a ClusterRole with no rules (`loki-clusterrole`) bound to the `loki` ServiceAccount, and a `loki-memcached` ServiceAccount although memcached is off, whose token key contract T's two keys do not touch; no pod uses either, so they grant and mount nothing. Envoy Gateway's chart leaves its certgen RBAC and its topology-injector webhook configuration on the cluster after the hook ran (no delete policy on them) and renders a cluster-wide ValidatingAdmissionPolicy. A value that switches the first two off was not looked for | S072 (render) | open; noticed, harmless as rendered | S072 |
 
@@ -15973,8 +15973,45 @@ webhooks' port (above).
     existing test bans the functions that lose a first export.
   - **M, no commit:** the measurement above, by the main session.
   - **D, this record:** the documents of the step so far.
-- **Not recorded here:** the reviews of the four contracts (the main
-  session adds them), and the cluster batch, which has not started.
+  - **F1, `6dda614`:** what the infrastructure review found (below).
+- **The infrastructure review** (`infra-reviewer`, on the tree with `main`
+  merged in, 86bf015; it rendered the chart twice and Loki and Tempo once
+  more, ran `make alerts` on a copy with the rule's threshold changed, and
+  ran a Pod Security checker of its own on the two operators' renders): the
+  four contracts may go into a pull request, nothing critical, nothing high.
+  - **Medium, fixed by F1.** P had made smoke's refused request mean less:
+    its URI was not on the new list, so the policy would have refused it in
+    `meridian` too, and four sentences and a test still said that only the
+    namespace refuses it. `REFUSED_URI` is now the Claims API's listed URI;
+    the test reads the list from the manifest and holds the request's
+    duration, usages and names against the policy; the sentences say what
+    is true. Tested with stand-ins; the cold run sees it.
+  - **Low, fixed by F1.** Two unit cases of the restart alert could not
+    fail on what their names claim (their evaluation times never put two
+    restarts into one window): each has one more evaluation, and a new case
+    holds "per pod, not summed" (two restarts of an old pod and one of its
+    replacement do not fire). On scratch copies the rule changed to `>= 2`
+    fails five cases, to `>= 4` two, and to a sum over pods three, the new
+    case among them. Stale sentences about the policy in `service-ca.yaml`
+    and the kind README, and one long comment line.
+  - **Low, stated and not changed.** `changes()` counts transitions between
+    scrapes, so two restarts inside one scrape interval count as one, and a
+    replaced kube-state-metrics pod starts a new series: a late alert, never
+    a false one (Prometheus keeps no storage across its own restart here,
+    which can make the alert flap). And the tests of T and of the two
+    namespaces' labels read values files and comments, not a render: a
+    chart that renames a key would pass them, and the next render or the
+    cold run is what catches it.
+  - Read and found sound, by the review's own renders: every Certificate
+    the chart renders is still approved under the exact lists (eight,
+    compared with the policy both ways; an empty list of DNS names is
+    admitted by the pinned CRD's own text); a rollout cannot fire the alert
+    (a new pod is a new series); neither Loki nor Tempo renders anything
+    that needs the API server; the three pods of the two operators'
+    namespaces meet `restricted` in the render.
+- **The cluster batch has started in files** and is not in this record's
+  pull request: contract W (the webhooks' port) is written and waits on a
+  branch of its own, and the egress contract is out.
 
 **Result / verification:** the implementers' claims, not the main session's
 runs (the main session runs every gate on the branch and fills the line
@@ -15993,6 +16030,12 @@ checks) and `make lint` ended 0; the whole suite at six workers beside the
 kind cluster and no other run with a database: 18,057 passed, 8 skipped (3
 min 58 s). The commit after it fills this line.
 
+After the review's fixes (F1, 6dda614), the same again: `make test` (343
+tests), `make docs` (14 checks) and `make lint` ended 0, and the whole suite
+at six workers: 18,057 passed, 8 skipped (4 min 5 s). The count is the same
+because F1 changed tests and added none to pytest (its new case is one of
+promtool's, run by `make alerts`: the implementer's run, `SUCCESS`).
+
 **Not seen** (nothing of the four contracts has met the cluster):
 
 - the pods of Tempo and Loki starting and working without a token (a chart
@@ -16001,8 +16044,8 @@ min 58 s). The commit after it fills this line.
 - the two namespaces' labels against the API server (the server-side dry run
   and the namespaces' warnings), and Envoy's proxy pods under `restricted`;
 - the services' policy refusing a request for an unlisted name (a new request
-  in `meridian`; smoke's check 10 in its changed meaning), and a cold `make
-  up` approving all eight Certificates under the exact lists;
+  in `meridian`), smoke's check 10 with the Claims API's listed URI (F1), and
+  a cold `make up` approving all eight Certificates under the exact lists;
 - `MeridianRateStoreRestartLoop` loaded in Prometheus, healthy, or firing;
 - the render's rights themselves: nobody asked the API server about any of the
   add-ons' accounts (`kubectl auth can-i` as a reader would show them; smoke
@@ -16014,17 +16057,18 @@ min 58 s). The commit after it fills this line.
 frees the lane, each seen by one cold `make up`; the measurement is first and
 is made):
 
-1. The webhooks' port: the peerless rules removed or given the node's
-   pod-network address, with `observability`'s egress written in the same
-   contract with the node's published address (both edit `up.sh` and the
-   test that fixes the order of the policies, so they go one after the
-   other).
+1. The webhooks' port and `observability`'s egress, one after the other
+   (both edit the same manifest and tests). The first is written and waits
+   on a branch of its own: the two webhooks that fail closed lose their
+   peerless rule, and the operator's rule keeps the port for Prometheus
+   alone, because its webhook and its metrics share it. The egress contract
+   is out.
 2. The CloudNativePG operator confined and released into `meridian`, with
    the fall-back above; then the policy of `envoy-gateway-system` (and of
    `cnpg-system` if the confinement is taken out).
 3. The server-side dry run of the labels, and the corrections of the new rows
-   (the comments the render and the measurement showed inexact; smoke's
-   check 10; the scaffold's `BY_HAND` line).
+   (the comments the render and the measurement showed inexact; the
+   scaffold's `BY_HAND` line).
 4. Rows that stay open and do not gate the close, if the owner wants them:
    the edge's access line, the log agent's counters, the rate store's own
    metrics, a client certificate at the collector.
@@ -16052,7 +16096,8 @@ means this record closed it, and the row's status is brought to say so):
 **New rows** (Part B's follow-up backlog, each homed at this step's cluster
 batch): the sentences in `infra/` the render showed inexact; the sentences
 the measurement answers (the webhooks' "nobody has measured it"); smoke's
-check 10 after the exact lists; the scaffold's `BY_HAND` line; Loki's empty
+check 10 after the exact lists (closed by F1, in files); the scaffold's
+`BY_HAND` line; Loki's empty
 ClusterRole and Envoy's hook leftovers.
 
 **Follow-ups:**
@@ -16764,3 +16809,7 @@ ClusterRole and Envoy's hook leftovers.
   node-exporter wait for the owner. T-03 unchanged; T-68, T-84, T-88, T-90
   and T-92 changed, no new threat. Two backlog rows closed, six partly
   closed (two of them only on the side of what was built in files), five new.
+  The infrastructure review of the four contracts found nothing critical or
+  high; its medium finding (smoke's refused request had stopped proving that
+  the namespace alone refuses it) and three low ones are fixed in the same
+  pull request, which closes one of the five new rows.
