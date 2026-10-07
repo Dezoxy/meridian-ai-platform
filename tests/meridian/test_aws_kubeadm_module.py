@@ -1366,6 +1366,41 @@ def test_the_readme_says_what_the_second_infrastructure_review_asked_it_to_say(
     assert sentence in readme_prose()
 
 
+README_SECURITY_REVIEW_OF_THE_WRAPPER = [
+    # M2: what the state holds, and that a write to it matters.
+    "The state holds more than the rendered boot scripts with the Elastic IP in "
+    "them. It also holds the owner's address",
+    "the budget's e-mail address and the account number (inside the ARNs",
+    "All of it is in clear, whatever Terraform masks on the screen",
+    "A write to the state is an integrity risk as well as a read",
+    "A state that was emptied makes the removal refuse",
+    "a forged one misleads the next plan",
+    "The state holds those values too, and more, in clear",
+    # L3, L4: what redact leaves.
+    "split over several lines has its first line hidden and its continuation "
+    "left as it is",
+    "An identifier in upper case survives",
+    "the identifier of an `aws_route`",
+    "A name shaped like an identifier",
+    # L6: the order of a removal by hand.
+    "Terminate the instances first, and release the Elastic IP after that",
+    "an address cannot be released while it is associated with an instance",
+]
+
+
+@pytest.mark.parametrize("sentence", README_SECURITY_REVIEW_OF_THE_WRAPPER)
+def test_the_readme_says_what_the_review_of_the_wrapper_asked_it_to_say(
+    sentence: str,
+) -> None:
+    assert sentence in readme_prose()
+
+
+def test_the_readme_no_longer_tells_the_removal_by_hand_to_start_with_the_address() -> (
+    None
+):
+    assert "the instances and the address first" not in readme_prose()
+
+
 def test_the_quota_item_comes_before_the_apply_items_and_the_wait_section() -> None:
     text = read(MODULE_DIR / "README.md")
 

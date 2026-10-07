@@ -565,6 +565,11 @@ file_sha256() {
   printf '%s\n' "${out%% *}"
 }
 
+# Which module this run is about, said first: a plan, an apply and a removal
+# print the names of resources, and the word after the command may have been
+# left out, which selects the managed module (the costlier one).
+log_module() { log "module: ${MODULE_NAME}"; }
+
 cmd_validate() {
   log "terraform fmt -check"
   tf_plain fmt -check -diff 2>&1 | redact ||
@@ -580,6 +585,7 @@ cmd_validate() {
 }
 
 cmd_plan() {
+  log_module
   refuse_files_that_change_the_plan
   load_aws_env
   prepare_state
@@ -632,14 +638,20 @@ cmd_plan() {
 # sentence says to plan again.
 require_a_plan_that_is_this_trees_and_fresh() {
   local record="${MODULE_DIR}/${PLAN_RECORD_FILE}" line_module line_commit line_time line_hash
-  local planned_commit planned_time planned_hash now age commit changes untracked
+  local planned_commit planned_time planned_hash now age commit changes untracked size
   stale() {
     drop_plan
     die "$1; run '${CMD_PLAN}' again"
   }
   [[ -f "${record}" ]] || stale "the saved plan has no record beside it of the module, the commit, the time and the file it was made as (a plan made from a module directory with uncommitted changes gets none)"
-  { IFS= read -r line_module && IFS= read -r line_commit && IFS= read -r line_time && IFS= read -r line_hash && ! IFS= read -r _; } <"${record}" ||
+  { IFS= read -r line_module && IFS= read -r line_commit && IFS= read -r line_time && IFS= read -r line_hash; } <"${record}" ||
     stale "the record beside the saved plan is not a module, a commit, a time and a SHA-256"
+  # The four lines are the whole record, byte for byte. A read of a fifth line
+  # sees the end of the file for a fifth line with no newline, and read drops a
+  # NUL, so what stands after the four lines, or inside one, is found by the size:
+  # the four lines and their four newlines, counted once each line has been held
+  # to its shape below (every character of a line that passes is one byte).
+  size="$(wc -c <"${record}" | tr -d ' ')"
   # The module's name is a lower-case word with dashes, nothing else, and it is
   # this command's own module: a record that names the other one (its files moved
   # or copied by hand) is refused whatever its hash says.
@@ -659,6 +671,8 @@ require_a_plan_that_is_this_trees_and_fresh() {
   [[ "${line_hash}" =~ ^sha256=([0-9a-f]{64})$ ]] ||
     stale "the record beside the saved plan is not a module, a commit, a time and a SHA-256"
   planned_hash="${BASH_REMATCH[1]}"
+  ((size == ${#line_module} + ${#line_commit} + ${#line_time} + ${#line_hash} + 4)) ||
+    stale "the record beside the saved plan is not a module, a commit, a time and a SHA-256"
   # The record is the script's and the plan file may not be: a plan written by
   # hand over it (a -target, another variable) would carry this record's commit.
   [[ "$(file_sha256 "${MODULE_DIR}/${PLAN_FILE}")" == "${planned_hash}" ]] ||
@@ -684,6 +698,7 @@ require_a_plan_that_is_this_trees_and_fresh() {
 # The plan and its record are removed either way: after a failed apply the plan
 # is stale and Terraform would refuse it.
 cmd_apply() {
+  log_module
   [[ -f "${MODULE_DIR}/${PLAN_FILE}" ]] || die "no ${PLAN_FILE}; run '${CMD_PLAN}' first"
   refuse_files_that_change_the_plan
   # apply runs no init, so a workspace file left since the plan is checked here.
@@ -712,6 +727,7 @@ cmd_apply() {
 # only when the state held something before and holds nothing after: over an
 # empty state Terraform would remove nothing and say it was done.
 cmd_destroy() {
+  log_module
   [[ -t 0 ]] ||
     die "destroy needs a terminal: run '${CMD_DESTROY}' yourself, in a terminal (this check stops an accident and a plain shell, not a session that makes itself a terminal; ${SHARED_README} says what does)"
   refuse_files_that_change_the_plan
@@ -724,8 +740,11 @@ cmd_destroy() {
     die "cannot read the state (terraform state list failed); nothing was touched, and the console is where to look"
   ((before > 0)) ||
     die "the state holds nothing, so Terraform would remove nothing: the file is ${STATE_PATH}. If the state was lost (a deleted checkout, another machine, another user), what it described may still exist and bill: look in the console, in the Region of the local file (${MODULE_README}, Removal, 'If the state is lost')"
-  log "the state holds ${before} resources"
-  log "terraform destroy: Terraform asks for the confirmation"
+  # Terraform's question names no module, and the word after the command may have
+  # been left out (which means the managed module): the owner reads the module
+  # here, in the last sentence above the question, before typing the answer.
+  log "module ${MODULE_NAME}: the state holds ${before} resources"
+  log "terraform destroy of module ${MODULE_NAME}: Terraform asks for the confirmation"
   local status=0
   tf_signed destroy 2>&1 | redact || status=$?
   ((status == 0)) ||

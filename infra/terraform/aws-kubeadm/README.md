@@ -192,8 +192,13 @@ pricing page and is not written here.
   `-out` writes. A plan file is as private as those three values and is not
   kept. The wrapper writes the plan under a private umask and removes it after
   the apply ("The saved plan").
+- **The state holds those values too, and more, in clear**: the address and the
+  e-mail address, the account number inside the ARNs, the boot scripts and the
+  Elastic IP ("What the plan shows" says what masks and what does not). It is as
+  private as the plan file, and a write to it is an integrity risk: an emptied
+  state makes the removal refuse, and a forged one misleads the next plan.
 
-These three are statements about how Terraform behaves, from general knowledge
+These four are statements about how Terraform behaves, from general knowledge
 and from the review of this module; none was run here.
 
 ## Running it by the wrapper
@@ -272,9 +277,27 @@ and a parameter's ARN with the account in it (`<arn>`); and compressed user data
 (`<user-data>`). A test runs a whole synthetic excerpt of this module's plan
 through it. It is a filter, not a guarantee, and it does not hide an IPv6
 address (this module makes none), a name that starts `meridian-aws-kubeadm`, or
-the text of a policy. The state holds the rendered boot scripts, with the
-Elastic IP in them, in clear: the provider's schema as this module's review read
-it, **not seen**. Read a plan before pasting it anywhere.
+the text of a policy. Its rules work line by line, which leaves four edges.
+Compressed user data that is split over several lines has its first line hidden
+and its continuation left as it is (Terraform prints it on one line, and in a
+plan both attributes are `(known after apply)`, so this matters only for a
+`show` or a `state pull` of the state, which nothing here runs). An identifier
+in upper case survives (AWS prints none), and so does the identifier of an
+`aws_route`, which this module does not make. A name shaped like an identifier
+(a `sg-` and eight hex digits, then a dash) is hidden as if it were one. No rule
+was changed for any of them.
+
+The state holds more than the rendered boot scripts with the Elastic IP in them.
+It also holds the owner's address (the source in the API server's
+security-group rule), the budget's e-mail address and the account number (inside
+the ARNs of the roles, the instance profiles and the parameter). All of it is in
+**clear**, whatever Terraform masks on the screen: `sensitive` is a display
+rule, and the state file keeps the value. The provider's schema is read from
+the module's files, **not seen**. Read a plan before pasting it anywhere, and
+treat the state like the plan file: private, and not pasted. A **write** to the
+state is an integrity risk as well as a read. A state that was emptied makes the
+removal refuse (it sees nothing to remove), and a forged one misleads the next
+plan.
 
 ### What the wrapper does not stop
 
@@ -322,9 +345,10 @@ instances and their root volumes, an Elastic IP, the VPC with its subnet,
 internet gateway, route table and security groups, two IAM roles with their
 instance profiles, the Parameter Store parameter
 `/meridian-aws-kubeadm/join-command` and the budget
-`meridian-aws-kubeadm-monthly`. Removing them in the console, the
-instances and the address first, is the way out when the state is gone; this
-is the list as the module's files declare it, **not seen**.
+`meridian-aws-kubeadm-monthly`. Removing them in the console is the way out when
+the state is gone. Terminate the instances first, and release the Elastic IP
+after that: an address cannot be released while it is associated with an
+instance. This is the list as the module's files declare it, **not seen**.
 
 ## What each instance role can do
 

@@ -140,6 +140,52 @@ def test_plan_records_the_module_the_commit_the_time_and_the_plan_files_hash(
     assert len(lines) == 4
 
 
+@pytest.mark.parametrize("subcommand", ["plan", "apply"])
+def test_plan_and_apply_say_which_module_they_are_about_before_anything_else(
+    tree: Tree, subcommand: str
+) -> None:
+    with_local_file(tree)
+    with_saved_plan(tree)
+
+    done = tree.run(subcommand)
+
+    assert done.returncode == 0, everything_printed(done)
+    assert done.stdout.splitlines()[0] == f"==> module: {tree.row.name}"
+
+
+def test_removal_says_which_module_it_is_about_before_anything_else(
+    tree: Tree,
+) -> None:
+    with_local_file(tree)
+
+    done = tree.run("destroy", terminal=True)
+
+    assert done.returncode == 0, done.stdout
+    assert done.stdout.splitlines()[0] == f"==> module: {tree.row.name}"
+
+
+def test_the_sentence_just_above_the_removals_question_names_the_module(
+    tree: Tree,
+) -> None:
+    """The owner types the confirmation under Terraform's own question, which
+    names no module. The last sentence of the script above it does, and so does
+    the one that says how many resources the state holds."""
+    with_local_file(tree)
+
+    done = tree.run("destroy", terminal=True, STUB_STATE_COUNT="4")
+
+    assert done.returncode == 0, done.stdout
+    lines = done.stdout.splitlines()
+    asked = next(i for i, line in enumerate(lines) if "Do you really want" in line)
+    script_lines = [line for line in lines[:asked] if line.startswith("==> ")]
+    assert f"module {tree.row.name}:" in script_lines[-1]
+    assert "Terraform asks" in script_lines[-1]
+    assert any(
+        f"module {tree.row.name}" in line and "4 resources" in line
+        for line in script_lines
+    )
+
+
 # ── the state ────────────────────────────────────────────────────────────────
 
 
@@ -467,6 +513,31 @@ HASH_LINE = "sha256=" + "0" * 64
         f"{MODULE_LINE} \n{COMMIT_LINE}\n{TIME_LINE}\n{HASH_LINE}\n",
         f"{MODULE_LINE.upper()}\n{COMMIT_LINE}\n{TIME_LINE}\n{HASH_LINE}\n",
         f"module=\n{COMMIT_LINE}\n{TIME_LINE}\n{HASH_LINE}\n",
+        # A name that is not a word of lower case and dashes, whatever it would
+        # do in a path or a shell.
+        f"module=../@MODULE@\n{COMMIT_LINE}\n{TIME_LINE}\n{HASH_LINE}\n",
+        f"{MODULE_LINE};id\n{COMMIT_LINE}\n{TIME_LINE}\n{HASH_LINE}\n",
+        f"module=$(id)\n{COMMIT_LINE}\n{TIME_LINE}\n{HASH_LINE}\n",
+        f"module={'a' * 32}\n{COMMIT_LINE}\n{TIME_LINE}\n{HASH_LINE}\n",  # too long
+        # A time that is negative, or one digit too long.
+        f"{MODULE_LINE}\n{COMMIT_LINE}\ntime=-1791305195\n{HASH_LINE}\n",
+        f"{MODULE_LINE}\n{COMMIT_LINE}\ntime=17913051950\n{HASH_LINE}\n",
+        # Line ends and blank lines that are not the script's own.
+        f"{MODULE_LINE}\r\n{COMMIT_LINE}\r\n{TIME_LINE}\r\n{HASH_LINE}\r\n",
+        f"{MODULE_LINE}\n{COMMIT_LINE}\n{TIME_LINE}\n{HASH_LINE}\r\n",
+        f"\n{MODULE_LINE}\n{COMMIT_LINE}\n{TIME_LINE}\n{HASH_LINE}\n",
+        f"{MODULE_LINE}\n{COMMIT_LINE}\n{TIME_LINE}\n{HASH_LINE}\n\n",
+        f"{MODULE_LINE}\n{COMMIT_LINE}\n{TIME_LINE}\n{HASH_LINE}",  # no last newline
+        # The record is the four lines and nothing after them: a fifth line that
+        # has no newline (the read of it sees the end of the file), and a NUL, in
+        # a line and after the last one.
+        f"{MODULE_LINE}\n{COMMIT_LINE}\n{TIME_LINE}\n{HASH_LINE}\njunk",
+        f"{MODULE_LINE}\n{COMMIT_LINE}\n{TIME_LINE}\n{HASH_LINE}\n{MODULE_LINE}",
+        f"{MODULE_LINE}\n{COMMIT_LINE}\n{TIME_LINE}\n{HASH_LINE}\x00",
+        f"{MODULE_LINE}\n{COMMIT_LINE}\n{TIME_LINE}\n{HASH_LINE}\n\x00",
+        f"{MODULE_LINE}\n{COMMIT_LINE}\n{TIME_LINE}\n{HASH_LINE}\x00junk\n",
+        f"{MODULE_LINE}\n{COMMIT_LINE}\x00\n{TIME_LINE}\n{HASH_LINE}\n",
+        f"{MODULE_LINE}\n{COMMIT_LINE}\n{TIME_LINE}\n{HASH_LINE[:20]}\x00{HASH_LINE[20:]}\n",
     ],
 )
 def test_a_record_that_is_not_a_module_a_commit_a_time_and_a_hash_is_not_trusted(
@@ -478,7 +549,12 @@ def test_a_record_that_is_not_a_module_a_commit_a_time_and_a_hash_is_not_trusted
 
     done = tree.run("apply")
 
-    assert_plan_refused_and_dropped(tree, done, "record")
+    # The sentence of the parse itself: the later checks (the plan file's hash,
+    # the commit) would refuse these records as well, with words of their own, so
+    # a record that got past the parse is told apart by what is said.
+    assert_plan_refused_and_dropped(
+        tree, done, "is not a module, a commit, a time and a SHA-256"
+    )
 
 
 def test_a_record_that_names_another_module_is_not_applied_though_the_hash_matches(
