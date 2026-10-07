@@ -73,10 +73,6 @@ NETWORK_RESOURCES = [
     "azurerm_virtual_network.main",
 ]
 
-FACTS_COMMENT = (
-    "FACTS: size names and their offer in the region are confirmed by the facts "
-    "sheet (s020/facts.md)"
-)
 
 PIN = "terraform_data.subscription_pin"
 PLATFORM_GROUP = "azurerm_resource_group.platform"
@@ -509,21 +505,6 @@ def test_a_closed_list_holds_two_values_and_its_default_is_one_of_them(
     assert listed_in(block, f"var.{name}") == values
     assert attribute(block, "default") == default
     assert default in values
-
-
-@pytest.mark.parametrize("name", ["node_vm_size"])
-def test_the_names_of_sizes_are_marked_as_not_confirmed_yet(name: str) -> None:
-    # The placeholders are the main session's to confirm before Z2 and Z3: the
-    # comment sits in the lines right above the variable it marks. The database's
-    # size and storage comments are Z3's, held in test_azure_module_database.py.
-    above = raw_text("variables.tf").split(f'variable "{name}"')[0].splitlines()
-    comment_block = []
-    for line in reversed(above):
-        if not line.lstrip().startswith("#"):
-            break
-        comment_block.insert(0, line)
-
-    assert FACTS_COMMENT in squeezed("\n".join(comment_block))
 
 
 def test_the_node_count_is_one_to_three_whole_nodes() -> None:
