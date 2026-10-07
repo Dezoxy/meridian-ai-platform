@@ -115,9 +115,9 @@ def schemas(
 ) -> None:
     """Write the JSON Schemas generated from the models."""
     if check:
-        if (registry_dir / SCHEMAS_SUBDIR).is_symlink():
-            _fail((f"{SCHEMAS_SUBDIR} is a link: remove the link",))
         try:
+            if (registry_dir / SCHEMAS_SUBDIR).is_symlink():
+                _fail((f"{SCHEMAS_SUBDIR} is a link: remove the link",))
             stale = stale_schemas(registry_dir)
         except OSError as exc:
             _fail((unreadable_directory(registry_dir, exc),))

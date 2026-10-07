@@ -136,6 +136,13 @@ def _refuse_a_stale_plan(root: Path, plan: Plan) -> None:
         raise ScaffoldError(STALE_PLAN)
 
 
+def _create_private(path: str, flags: int) -> int:
+    """The opener of a temporary file: ``flags`` are what ``open(..., "xb")`` asks
+    for (write only, create, fail if it exists), and the mode is the owner's alone
+    until ``_replace`` gives the file the mode of the one it replaces."""
+    return os.open(path, flags, 0o600)
+
+
 def _replace(path: Path, data: bytes, temporaries: list[Path]) -> None:
     """Replace ``path`` with ``data`` in one step, keeping its mode: the bytes go
     to a temporary file beside it, which then takes its place. The temporary's path
@@ -148,18 +155,13 @@ def _replace(path: Path, data: bytes, temporaries: list[Path]) -> None:
     temporaries.append(temporary)
     try:
         try:
-            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError:  # not ours, and not to be removed
+            # `open` owns the descriptor from the moment the opener returns it and
+            # closes it on every failure; this function never closes one by number.
+            with open(temporary, "xb", opener=_create_private) as stream:
+                stream.write(data)
+        except FileExistsError:  # only `open` raises it (a write cannot): not ours
             temporaries.remove(temporary)
             raise
-        try:
-            stream = os.fdopen(descriptor, "wb")
-        except BaseException:  # not taken over, so still this call's to close
-            with suppress(OSError):
-                os.close(descriptor)
-            raise
-        with stream:
-            stream.write(data)
         os.chmod(temporary, mode)
         os.replace(temporary, path)
         temporaries.remove(temporary)
@@ -453,8 +455,10 @@ def write_plan(root: Path, plan: Plan) -> None:
     included, for it no longer holds that nothing was written), and for an
     interrupt the same lines on standard error before it propagates. When
     something ends the undo itself, ``_end_unfinished`` says so in the same two
-    ways, with every path it touched not known to be settled, and the cause is the
-    error; an error of the undo after an interrupt leaves as the interrupt."""
+    ways, with every path it touched not known to be settled; the cause of the
+    ``ScaffoldWriteError`` is the undo's error, and an interrupt that leaves has
+    only a context, never a cause. An error of the undo after an interrupt leaves
+    as the interrupt."""
     targets = [(root / relative, text) for relative, text in plan.created.items()]
     if any(os.path.lexists(path) for path, _ in targets):
         raise ScaffoldError(PATH_EXISTS)

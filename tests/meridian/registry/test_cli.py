@@ -1,6 +1,7 @@
 """``meridian registry`` through Typer's test runner."""
 
 import json
+import os
 import re
 import shutil
 from pathlib import Path
@@ -652,6 +653,48 @@ def test_schemas_check_on_a_registry_dir_that_cannot_be_read_ends_in_an_error_li
     assert result.exit_code == 1, result.output
     assert result.stderr == (
         f"ERROR {registry_copy}: registry directory cannot be read: PermissionError\n"
+    )
+    assert result.stdout == ""
+    assert not isinstance(result.exception, PermissionError)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="a mode does not bind root")
+def test_schemas_check_on_a_registry_dir_without_a_search_bit_ends_in_an_error_line(
+    registry_copy: Path,
+) -> None:
+    registry_copy.chmod(0o600)
+    try:
+        result = runner.invoke(
+            app,
+            ["registry", "schemas", "--check", "--registry-dir", str(registry_copy)],
+        )
+    finally:
+        registry_copy.chmod(0o700)
+
+    assert result.exit_code == 1, result.output
+    assert result.stderr == (
+        f"ERROR {registry_copy}: registry directory cannot be read: PermissionError\n"
+    )
+    assert result.stdout == ""
+    assert not isinstance(result.exception, PermissionError)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="a mode does not bind root")
+def test_the_schemas_write_on_a_registry_dir_without_a_search_bit_ends_in_an_error_line(
+    registry_copy: Path,
+) -> None:
+    registry_copy.chmod(0o600)
+    try:
+        result = runner.invoke(
+            app, ["registry", "schemas", "--registry-dir", str(registry_copy)]
+        )
+    finally:
+        registry_copy.chmod(0o700)
+
+    assert result.exit_code == 1, result.output
+    assert result.stderr == (
+        f"ERROR {registry_copy / 'schemas'}: schemas cannot be updated: "
+        f"PermissionError; {FIX_AND_RERUN}\n"
     )
     assert result.stdout == ""
     assert not isinstance(result.exception, PermissionError)

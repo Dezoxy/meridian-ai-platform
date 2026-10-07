@@ -12,6 +12,7 @@ import yaml
 from meridian.platform.cli import scaffold, scaffold_services
 from meridian.platform.cli.scaffold_services import (
     SERVICES_AGENTS_UNUSABLE,
+    SERVICES_EDIT_UNVERIFIED,
     SERVICES_NOT_YAML,
     SERVICES_NOT_YAML_AT,
     SERVICES_RUNTIME_TWICE,
@@ -370,3 +371,63 @@ def test_a_text_nested_too_deep_to_compose_is_refused_as_not_yaml() -> None:
         services_edit(text, NAME)
 
     assert str(refused.value) == SERVICES_NOT_YAML
+
+
+def nested_in_the_runtimes_entry(depth: int) -> str:
+    return PLAIN + "    extra: " + "[" * depth + "]" * depth + "\n"
+
+
+def how_the_edit_ends(depth: int) -> str:
+    """``ok``, one of the two fixed refusals, or the class name of what escaped."""
+    try:
+        services_edit(nested_in_the_runtimes_entry(depth), NAME)
+    except ServicesEditError as refused:
+        if str(refused) == SERVICES_NOT_YAML:
+            return "not yaml"
+        if str(refused).startswith(SERVICES_EDIT_UNVERIFIED.split("{}")[0]):
+            return "unverified"
+        return "another refusal"
+    except Exception as escaped:
+        return type(escaped).__name__
+    return "ok"
+
+
+def composes(depth: int) -> bool:
+    try:
+        yaml.compose(nested_in_the_runtimes_entry(depth), Loader=yaml.SafeLoader)
+    except RecursionError:
+        return False
+    return True
+
+
+def the_shallowest_depth_that_does_not_compose() -> int:
+    composing, failing = 100, NESTING
+    while failing - composing > 1:
+        middle = (composing + failing) // 2
+        if composes(middle):
+            composing = middle
+        else:
+            failing = middle
+    return failing
+
+
+def ends_with_frames_between(depth: int, frames: int) -> str:
+    if frames == 0:
+        return how_the_edit_ends(depth)
+    return ends_with_frames_between(depth, frames - 1)
+
+
+def test_no_nesting_depth_near_the_parsers_limit_ends_in_an_exception() -> None:
+    # `compose` uses two frames per level and the check's `safe_load` a few more, so
+    # one depth just under the limit composes and then overflows the check; whether
+    # one does depends on the caller's depth, so both parities of it are tried.
+    limit = the_shallowest_depth_that_does_not_compose()
+
+    ends = {
+        (depth, frames): ends_with_frames_between(depth, frames)
+        for depth in range(limit - 4, limit + 2)
+        for frames in (0, 1)
+    }
+
+    allowed = {"ok", "not yaml", "unverified"}
+    assert {key: end for key, end in ends.items() if end not in allowed} == {}

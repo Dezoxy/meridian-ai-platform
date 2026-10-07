@@ -197,7 +197,14 @@ def services_edit(old: str, name: str) -> str:
         runtime = next(s for s in expected["services"] if s["id"] == RUNTIME_SERVICE)
         runtime["agents"].append(name)
         verified = yaml.safe_load(new) == expected
-    except (yaml.YAMLError, KeyError, TypeError, StopIteration, AttributeError):
+    except (
+        yaml.YAMLError,
+        KeyError,
+        TypeError,
+        StopIteration,
+        AttributeError,
+        RecursionError,  # `compose` fit the text; the loads that verify need more
+    ):
         verified = False
     if not verified:
         raise ServicesEditError(SERVICES_EDIT_UNVERIFIED.format(line))

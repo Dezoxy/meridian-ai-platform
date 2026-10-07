@@ -394,38 +394,64 @@ def test_an_error_after_an_error_in_the_write_still_ends_the_command_as_a_write_
     assert LEAKED not in str(refused.value) + "".join(refused.value.details)
 
 
-def test_replace_closes_the_descriptor_when_taking_it_over_is_interrupted(
+class InterruptedBuffer:
+    """Bytes whose buffer cannot be taken: the write that reads it is interrupted
+    after the file is open."""
+
+    def __buffer__(self, flags: int) -> memoryview:
+        raise KeyboardInterrupt
+
+
+def test_replace_closes_the_descriptor_it_opened_when_the_write_is_interrupted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Arrange: os.fdopen is interrupted before it has taken the descriptor over.
+    # Arrange: the descriptor `open` takes from the opener is recorded, and the
+    # write is interrupted once the file is open. Nothing may close one by number.
     target = tmp_path / "file.txt"
     target.write_text("old")
     temporaries: list[Path] = []
     opened: list[int] = []
+    closed_by_number: list[int] = []
+    real_open = os.open
+    real_close = os.close
 
-    def fdopen(descriptor: int, *args: Any, **kwargs: Any) -> Any:
-        opened.append(descriptor)
-        raise KeyboardInterrupt
+    def recording_open(*args: Any, **kwargs: Any) -> int:
+        opened.append(real_open(*args, **kwargs))
+        return opened[-1]
 
-    monkeypatch.setattr(os, "fdopen", fdopen)
+    def recording_close(descriptor: int) -> None:
+        closed_by_number.append(descriptor)
+        real_close(descriptor)
+
+    monkeypatch.setattr(os, "open", recording_open)
+    monkeypatch.setattr(os, "close", recording_close)
 
     # Act
     try:
-        with pytest.raises(KeyboardInterrupt):
-            scaffold_writes._replace(target, b"new", temporaries)
+        with pytest.raises(KeyboardInterrupt) as interrupted:
+            scaffold_writes._replace(
+                target,
+                InterruptedBuffer(),  # type: ignore[arg-type]
+                temporaries,
+            )
 
-        # Assert: the descriptor is closed, the temporary file is removed and
-        # un-noted as for any other interruption, and the file is untouched.
+        # Assert: the descriptor is closed, by the file object and not by number,
+        # while the interrupt's traceback still holds the frame (a file object left
+        # to the garbage collector would close it later), the temporary file is
+        # removed and un-noted as for any other interruption, and the file is
+        # untouched.
+        assert interrupted.traceback
         (descriptor,) = opened
         with pytest.raises(OSError, match="Bad file descriptor"):
             os.fstat(descriptor)
+        assert closed_by_number == []
         assert temporaries == []
         assert [path.name for path in tmp_path.iterdir()] == ["file.txt"]
         assert target.read_text() == "old"
     finally:
         for descriptor in opened:
             with suppress(OSError):
-                os.close(descriptor)
+                real_close(descriptor)
 
 
 class OnceFalse(str):
