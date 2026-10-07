@@ -67,6 +67,11 @@ from meridian.workloads.claims_triage.claim_dates import (
     REPORTED_ON_LABEL,
     day_gaps,
 )
+from meridian.workloads.claims_triage.claim_files import (
+    FileSummary,
+    list_files,
+    size_text,
+)
 from meridian.workloads.claims_triage.lifecycle import (
     DOCUMENTS_OVERDUE,
     DOCUMENTS_REFUSED_EVENT,
@@ -250,7 +255,8 @@ class ClaimView:
     ``referral_reason`` is the reason of the move that brought a waiting claim
     to the adjuster (``None`` for a claim in another state, or a move with no
     reason). ``documents_refused``: documents were posted after the deadline
-    since a referral for overdue documents."""
+    since a referral for overdue documents. ``files`` are the files the claimant
+    sent, in arrival order (S070); the page lists them and links to none."""
 
     claim_id: str
     state: str
@@ -267,6 +273,7 @@ class ClaimView:
     triages: int = 0
     referral_reason: str | None = None
     documents_refused: bool = False
+    files: tuple[FileSummary, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -497,6 +504,18 @@ def render_claim(view: ClaimView, notice: Notice | None = None) -> str:
         # Jinja would print ``None``: a claim with no run is the empty string.
         run="" if view.run_id is None else str(view.run_id),
         queue_path=QUEUE_PATH,
+        # No identifier, no link: the download does not exist yet.
+        files=[
+            (
+                f.kind,
+                f.media_type,
+                size_text(f.size_bytes),
+                _when(f.received_at),
+                f.sha256[:12],
+                f.sha256,
+            )
+            for f in view.files
+        ],
     )
 
 
@@ -553,6 +572,8 @@ def load_claim(dsn: str, tenant: str, claim_id: str) -> ClaimView | None:
         if state in DECIDED_STATES:
             decision = conn.execute(DECISION_SQL, (claim_id, run_id)).fetchone()
         trail = conn.execute(TRAIL_SQL, (claim_id, tenant, TRAIL_LIMIT)).fetchall()
+        # Read with the tenant's filter, as the claim is: never the content.
+        files = list_files(conn, tenant, claim_id)
         # A decision with no run has nothing to resume, so nothing to send again.
         # How the run ended is asked of the database, not read off the listed
         # rows: the page lists at most TRAIL_LIMIT of them.
@@ -583,6 +604,7 @@ def load_claim(dsn: str, tenant: str, claim_id: str) -> ClaimView | None:
         triages=triages,
         referral_reason=referral_reason,
         documents_refused=documents_refused,
+        files=files,
     )
 
 

@@ -38,6 +38,7 @@ from meridian.platform.common.db import connect
 from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.workloads.claims_triage import uploads
 from meridian.workloads.claims_triage.app import create_app
+from meridian.workloads.claims_triage.claim_files import list_files
 from meridian.workloads.claims_triage.settings import ClaimsSettings
 from meridian.workloads.claims_triage.uploads import (
     CLAIM_LOCK_CLASS,
@@ -54,7 +55,6 @@ from meridian.workloads.claims_triage.uploads import (
     STORE_LOCK_CLASS,
     UPLOAD_BODY_LIMIT_BYTES,
     file_content,
-    list_files,
 )
 
 TENANT = "claims-triage"

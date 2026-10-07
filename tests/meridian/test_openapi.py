@@ -544,6 +544,13 @@ def test_the_upload_route_is_listed_when_the_switch_is_on_and_not_when_it_is_off
     )
 
 
+def test_the_upload_routes_html_twin_is_in_no_contract() -> None:
+    # The claimant's form posts to it; it is a page, as the other pages are.
+    for name in ("claims", "claims-uploads"):
+        assert not [p for p in SPECS[name]["paths"] if p.startswith("/claimant")]
+        assert "/claimant/claims/{claim_id}/files" not in SPECS[name]["paths"]
+
+
 def test_the_upload_route_answers_201_with_a_stored_file_and_names_its_errors() -> None:
     spec = SPECS["claims-uploads"]
 

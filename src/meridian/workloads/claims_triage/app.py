@@ -73,6 +73,10 @@ from meridian.workloads.claims_triage.claimant import (
     add_claimant_pages,
     claimant_too_large,
 )
+from meridian.workloads.claims_triage.claimant_uploads import (
+    TWIN_PATH,
+    add_claimant_upload_twin,
+)
 from meridian.workloads.claims_triage.lifecycle import (
     ADJUSTER_APPROVED,
     ADJUSTER_REJECTED,
@@ -359,10 +363,14 @@ def create_app(
         tracer_provider=tracer_provider,
         close=close,
         too_large=claimant_too_large,
-        # The one route that takes a file has a limit of its own, and only when
-        # it exists: with the switch off its path keeps the 64 KiB of the rest.
+        # The two routes that take a file, the JSON one and its HTML twin, have a
+        # limit of their own, and only when they exist: with the switch off their
+        # paths keep the 64 KiB of the rest.
         route_body_limits=(
-            {("POST", UPLOAD_PATH): UPLOAD_BODY_LIMIT_BYTES}
+            {
+                ("POST", UPLOAD_PATH): UPLOAD_BODY_LIMIT_BYTES,
+                ("POST", TWIN_PATH): UPLOAD_BODY_LIMIT_BYTES,
+            }
             if settings.uploads_enabled
             else None
         ),
@@ -452,7 +460,7 @@ def create_app(
         )
 
     if settings.uploads_enabled:
-        add_upload_routes(
+        upload = add_upload_routes(
             app,
             dsn=dsn,
             tenant=tenant,
@@ -463,6 +471,8 @@ def create_app(
                 rate_per_minute=settings.uploads_rate_per_minute,
             ),
         )
+        # The claimant's form posts to the twin, which runs the same handler.
+        add_claimant_upload_twin(app, upload)
     add_brief_routes(app, dsn=dsn, tenant=tenant, http=http, tracer=tracer)
     add_adjuster_pages(
         app,
@@ -485,6 +495,7 @@ def create_app(
         today=today,
         deadline_days=settings.documents_deadline_days,
         meters=meters,
+        uploads_enabled=settings.uploads_enabled,
     )
     return app
 

@@ -38,8 +38,8 @@ import asyncio
 import hashlib
 import re
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime
 from http import HTTPStatus
 from typing import Literal, get_args
 
@@ -225,12 +225,6 @@ INSERT_FILE_SQL = (
     "(file_id, claim_id, kind, media_type, size_bytes, sha256, content, received_at) "
     "VALUES (%s, %s, %s, %s, %s, %s, %s, clock_timestamp())"
 )
-LIST_FILES_SQL = (
-    "SELECT f.file_id, f.kind, f.media_type, f.size_bytes, encode(f.sha256, 'hex'), "
-    "f.received_at FROM claims.claim_files AS f "
-    "JOIN claims.claims AS c ON c.claim_id = f.claim_id "
-    "WHERE f.claim_id = %s AND c.tenant = %s ORDER BY f.received_at, f.file_id"
-)
 # The one query that selects ``content``: by the claim (found with its tenant
 # first) and the file's identifier, never by the identifier alone.
 FILE_CONTENT_SQL = (
@@ -318,32 +312,11 @@ class StoredFile(WireModel):
 
 
 @dataclass(frozen=True, slots=True)
-class FileSummary:
-    """One file of a claim, as the adjuster's page lists it."""
-
-    file_id: uuid.UUID
-    kind: str
-    media_type: str
-    size_bytes: int
-    sha256: str
-    received_at: datetime
-
-
-@dataclass(frozen=True, slots=True)
 class FileContent:
     """One file's bytes and the type it is to be served as."""
 
     media_type: str
     content: bytes
-
-
-def list_files(
-    conn: psycopg.Connection, tenant: str, claim_id: str
-) -> tuple[FileSummary, ...]:
-    """The claim's files in arrival order: none for a claim the tenant does not
-    have. Never the content."""
-    rows = conn.execute(LIST_FILES_SQL, (claim_id, tenant)).fetchall()
-    return tuple(FileSummary(*row) for row in rows)
 
 
 def file_content(
@@ -595,11 +568,31 @@ REFUSALS = (
 REFUSALS[503] = REFUSALS[503] | {"headers": RETRY_AFTER}
 
 
-def busy(detail: str, claim_id: str) -> JSONResponse:
-    """The 503 that is not a database that is down: say what, and for how long
-    to wait."""
-    response = answer(503, detail, claim_id)
-    response.headers["Retry-After"] = str(BUSY_RETRY_SECONDS)
+@dataclass(frozen=True, slots=True)
+class UploadRefusal:
+    """A refusal the handler returns rather than raises: the 503 that is not a
+    database that is down (too many uploads at once, a lock that did not come in
+    time) and a database failure. ``retry_after`` is the seconds to wait, when the
+    caller is to wait. The other refusals are ``HTTPException`` s: the JSON route
+    lets its handler answer them, the claimant's form turns them into pages."""
+
+    status: int
+    detail: str
+    retry_after: int | None = None
+
+
+# What both routes run, the JSON route here and the claimant's form in
+# ``claimant_uploads``: one function, so the permits are one pool and the checks
+# and their order are the same by construction.
+type UploadHandler = Callable[[str, Request], Awaitable[StoredFile | UploadRefusal]]
+
+
+def refusal_response(refusal: UploadRefusal, claim_id: str) -> JSONResponse:
+    """The JSON route's answer to an ``UploadRefusal``: the shaped error with the
+    claim, and the wait when there is one."""
+    response = answer(refusal.status, refusal.detail, claim_id)
+    if refusal.retry_after is not None:
+        response.headers["Retry-After"] = str(refusal.retry_after)
     return response
 
 
@@ -610,9 +603,10 @@ def add_upload_routes(
     tenant: str,
     tracer: Tracer,
     limits: StoreLimits,
-) -> None:
+) -> UploadHandler:
     """Add ``POST /claims/{claim_id}/files``. Called only when the switch is on:
     with it off the route does not exist, and its path keeps the app's limit.
+    Returns the handler that the route and its HTML twin both run.
 
     The route's own brakes, none of which depends on the edge: a raw path with a
     ``%`` is refused, at most ``MAX_CONCURRENT_UPLOADS`` uploads are read and
@@ -622,21 +616,11 @@ def add_upload_routes(
     # and the acquire after it are not separated by anything that could run.
     permits = asyncio.Semaphore(MAX_CONCURRENT_UPLOADS)
 
-    @app.post(
-        UPLOAD_PATH,
-        status_code=201,
-        response_model=StoredFile,
-        tags=["claims"],
-        summary="Store a claimant's file (a PDF, a JPEG or a PNG) with the claim.",
-        dependencies=[Depends(refuse_cross_site), Depends(refuse_encoded_path)],
-        openapi_extra=REQUEST_BODY,
-        responses=REFUSALS,
-    )
-    async def upload_file(
-        claim_id: ClaimId, request: Request
-    ) -> StoredFile | JSONResponse:
+    async def handle_upload(
+        claim_id: str, request: Request
+    ) -> StoredFile | UploadRefusal:
         if permits.locked():
-            return busy(SATURATED_DETAIL, claim_id)
+            return UploadRefusal(503, SATURATED_DETAIL, BUSY_RETRY_SECONDS)
         # Released on every exit: a refusal, an exception, a client that goes
         # away (the task is cancelled; the store's thread, which the cancel
         # waits for, has finished by then).
@@ -656,5 +640,25 @@ def add_upload_routes(
                     # A statement cancelled by the 10 s bound is a wait for a
                     # lock that did not end, not a database that is down.
                     if exc.sqlstate == QUERY_CANCELED_SQLSTATE:
-                        return busy(LOCK_BUSY_DETAIL, claim_id)
-                    return answer(status, detail, claim_id)
+                        return UploadRefusal(503, LOCK_BUSY_DETAIL, BUSY_RETRY_SECONDS)
+                    return UploadRefusal(status, detail)
+
+    @app.post(
+        UPLOAD_PATH,
+        status_code=201,
+        response_model=StoredFile,
+        tags=["claims"],
+        summary="Store a claimant's file (a PDF, a JPEG or a PNG) with the claim.",
+        dependencies=[Depends(refuse_cross_site), Depends(refuse_encoded_path)],
+        openapi_extra=REQUEST_BODY,
+        responses=REFUSALS,
+    )
+    async def upload_file(
+        claim_id: ClaimId, request: Request
+    ) -> StoredFile | JSONResponse:
+        result = await handle_upload(claim_id, request)
+        if isinstance(result, UploadRefusal):
+            return refusal_response(result, claim_id)
+        return result
+
+    return handle_upload

@@ -21,8 +21,10 @@ from meridian.platform.gateway.app import create_app as create_gateway
 from meridian.platform.gateway.settings import GatewaySettings
 from meridian.runtime.app import create_app as create_runtime
 from meridian.runtime.settings import RuntimeSettings
+from meridian.workloads.claims_triage import claim_files as claim_files_module
 from meridian.workloads.claims_triage import uploads as upload_module
 from meridian.workloads.claims_triage.app import create_app
+from meridian.workloads.claims_triage.claimant_uploads import TWIN_PATH
 from meridian.workloads.claims_triage.settings import ClaimsSettings
 from meridian.workloads.claims_triage.uploads import (
     DEFAULT_CEILING_BYTES,
@@ -79,6 +81,10 @@ def methods_and_paths(app: FastAPI) -> list[tuple[str, str]]:
 APP_WITH_UPLOADS = claims_app(uploads=True)
 ROUTES = methods_and_paths(APP_WITH_UPLOADS)
 UPLOAD_ROUTE = ("POST", UPLOAD_PATH)
+# The JSON route's HTML twin (F4a) has the upload limit as well; its own tests
+# are in ``test_claimant_upload_twin.py``.
+TWIN_ROUTE = ("POST", TWIN_PATH)
+FILE_ROUTES = (UPLOAD_ROUTE, TWIN_ROUTE)
 
 
 def concrete(path: str) -> str:
@@ -338,13 +344,14 @@ def test_a_chunked_body_over_the_routes_limit_is_413_and_at_it_is_not() -> None:
 # ── every other route keeps 64 KiB ──────────────────────────────────────────
 def test_the_upload_route_is_in_the_app_the_routes_are_read_from() -> None:
     assert UPLOAD_ROUTE in ROUTES
+    assert TWIN_ROUTE in ROUTES
     assert ("POST", "/claims") in ROUTES
     assert ("POST", "/claims/{claim_id}/documents") in ROUTES
 
 
 @pytest.mark.parametrize(
     ("method", "path"),
-    [route for route in ROUTES if route != UPLOAD_ROUTE],
+    [route for route in ROUTES if route not in FILE_ROUTES],
     ids=lambda value: str(value),
 )
 # mutation: the per-route limit applied to all routes
@@ -372,7 +379,7 @@ def test_every_other_route_answers_a_streamed_body_just_over_64_kib_with_413() -
 
 @pytest.mark.parametrize(
     ("method", "path"),
-    [route for route in ROUTES if route != UPLOAD_ROUTE],
+    [route for route in ROUTES if route not in FILE_ROUTES],
     ids=lambda value: str(value),
 )
 def test_no_other_route_is_stopped_at_64_kib_less_than_it_was(
@@ -432,12 +439,15 @@ def limit_configuration(app: FastAPI) -> tuple[int, object]:
     return found.kwargs["max_bytes"], found.kwargs.get("route_limits")
 
 
-def test_the_claims_api_passes_one_entry_when_uploads_are_on_and_none_when_off() -> (
+def test_the_claims_api_passes_two_entries_when_uploads_are_on_and_none_when_off() -> (
     None
 ):
     assert limit_configuration(APP_WITH_UPLOADS) == (
         SMALL_BODY_LIMIT_BYTES,
-        {UPLOAD_ROUTE: UPLOAD_BODY_LIMIT_BYTES},
+        {
+            UPLOAD_ROUTE: UPLOAD_BODY_LIMIT_BYTES,
+            TWIN_ROUTE: UPLOAD_BODY_LIMIT_BYTES,
+        },
     )
     assert limit_configuration(claims_app(uploads=False)) == (
         SMALL_BODY_LIMIT_BYTES,
@@ -556,9 +566,12 @@ def test_the_row_floor_is_one_claims_five_files() -> None:
 
 # ── named columns everywhere, and the content in two queries only ───────────
 def sql_constants() -> dict[str, str]:
+    """The queries of the upload route and of the list the pages read (which is
+    in its own module: ``uploads.py`` cannot import the pages' modules back)."""
     return {
         name: value
-        for name, value in vars(upload_module).items()
+        for module in (upload_module, claim_files_module)
+        for name, value in vars(module).items()
         if name.endswith("_SQL") and isinstance(value, str)
     }
 

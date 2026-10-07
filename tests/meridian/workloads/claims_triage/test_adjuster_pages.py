@@ -795,7 +795,11 @@ def test_the_claim_page_leaves_out_the_claimants_name_and_email(
     assert response.status_code == 200
     assert CLAIMANT_NAME not in response.text
     assert CLAIMANT_EMAIL not in response.text
-    assert "claimant" not in response.text.lower()
+    # The word appears once, in the heading of the list of the files the claimant
+    # sent (S070): a heading the contract names, with no claimant data in it.
+    assert "claimant" not in response.text.lower().replace(
+        "files the claimant sent", ""
+    )
 
 
 def test_the_claim_page_shows_the_trail_of_the_claim_in_order_and_no_other(
