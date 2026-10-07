@@ -1579,8 +1579,9 @@ def test_a_call_with_no_slot_in_its_budget_fails_and_its_handler_never_runs(
     assert [row["outcome"] for row in completed] == ["completed"] * (
         MAX_CONCURRENT_CALLS + 1
     )
-    # One failed row with the tool and nothing of the run: the run's ID in
-    # ``_meta`` is not verified on this path, and the probe is nowhere in it.
+    # One failed row with the tool, and the run the row's own thread found to
+    # exist, with the tenant, agent and reference the run's row holds (the row
+    # stands for no other call); the probe is nowhere in it.
     assert (shed["outcome"], shed["reason"], shed["tool"], shed["suppressed"]) == (
         "failed",
         "timed-out",
@@ -1588,10 +1589,10 @@ def test_a_call_with_no_slot_in_its_budget_fails_and_its_handler_never_runs(
         0,
     )
     assert (shed["tenant"], shed["agent"], shed["run_id"], shed["reference"]) == (
-        None,
-        None,
-        None,
-        None,
+        TENANT,
+        AGENT,
+        world.run_id,
+        CLAIM,
     )
     assert CANARY not in repr(shed)
 
@@ -1631,7 +1632,7 @@ def test_a_shed_call_is_logged_once_with_its_run_and_tool_and_nothing_else(
     assert POLICY not in caplog.text
 
 
-def test_the_span_of_a_shed_call_names_the_reason_and_the_tool_and_not_the_run(
+def test_the_span_of_a_shed_call_names_the_reason_and_the_tool_and_follows_the_row(
     world: World, exporter: InMemorySpanExporter
 ) -> None:
     held = Held()
@@ -1653,9 +1654,11 @@ def test_the_span_of_a_shed_call_names_the_reason_and_the_tool_and_not_the_run(
         if s.name == "tool.call" and s.attributes.get("meridian.reason") == "timed-out"
     ]
     assert span.attributes["meridian.tool_outcome"] == "failed"
-    # The run's ID in ``_meta`` is not verified on this path: the log line may
-    # name it, the span and the audit row do not.
-    assert "meridian.run_id" not in span.attributes
+    # The span names the run as the audit row does, and only then: the row's
+    # own thread found it to exist, and its tenant and agent are the run's.
+    assert span.attributes["meridian.run_id"] == str(world.run_id)
+    assert span.attributes["meridian.tenant"] == TENANT
+    assert span.attributes["meridian.agent"] == AGENT
     assert span.attributes["meridian.tool"] == "policy_lookup"
     assert uuid.UUID(span.attributes["meridian.call_id"])
 

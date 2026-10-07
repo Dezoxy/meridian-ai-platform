@@ -296,6 +296,11 @@ Negative / accepted trade-offs:
 - **The resume value differs:** LangGraph passes the runtime's value to the
   graph and the second host drops it. Both workloads read the decision from the
   Claims API's record, so neither acts on it, and the protocol says neither.
+  *Note, 2026-10-07 (S069):* the runtime now refuses a resume that carries a
+  value (a 422: `input` must be `{}`), so neither host is handed one and the
+  two no longer differ on it. The first half of the sentence above was true
+  when it was written; LangGraph can no longer be given a value to replay.
+  Implemented and tested; not run on a cluster.
 
 The dependency, read from `pyproject.toml`, `uv.lock` and the installed
 metadata:

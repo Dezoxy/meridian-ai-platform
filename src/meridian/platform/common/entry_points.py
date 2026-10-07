@@ -244,7 +244,7 @@ def _located_in(root: Path, module: str) -> bool:
     ``find_spec`` raised, and nothing else of it."""
     try:
         spec = importlib.util.find_spec(module)
-    except Exception as exc:
+    except (Exception, SystemExit) as exc:
         failure = LoadFailure(safe_class_name(exc))
     else:
         if spec is None or not spec.has_location:
@@ -289,7 +289,8 @@ def load_trusted_entry_point(
         raise EntryPointRefused(Refusal.OUTSIDE_ROOT)
     try:
         loaded = entry.load()
-    except Exception as exc:
+    except (Exception, SystemExit) as exc:
+        # A module must not end the service by importing; an interrupt passes.
         failure = LoadFailure(safe_class_name(exc))
     else:
         if not _loaded_in(trusted_root, module):

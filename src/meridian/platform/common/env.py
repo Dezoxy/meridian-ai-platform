@@ -35,7 +35,7 @@ def service_url_problem(value: str) -> str | None:
     in it (``urlsplit`` drops a tab, a carriage return and a line feed without a
     word), it parses (a bad port, port 0 and an empty port are refused), its
     scheme is http or https with a host name, and it names no user, password,
-    query or fragment. A path is allowed."""
+    query or fragment, and the HTTP client parses it too. A path is allowed."""
     if any(ch.isspace() or not ch.isprintable() for ch in value):
         return "is not a usable URL"
     try:
@@ -55,6 +55,19 @@ def service_url_problem(value: str) -> str | None:
         # The same log line would carry a ``?token=`` too; a bare ``?`` or
         # ``#`` parses to an empty part and is refused all the same.
         return "must not carry a query or a fragment"
+    # Imported here, not at the top: every service reads its settings through
+    # this module, and the scheduled sweep (a job that must load no web stack)
+    # is one of them. The client loads only when an address is checked.
+    import httpx
+
+    try:
+        # The host is read: ``httpx.URL`` builds an address whose host is not
+        # valid IDNA (``http://xn--/``) and raises only on that read, with an
+        # ``idna.IDNAError``, which is a ``UnicodeError`` and no ``InvalidURL``.
+        httpx.URL(value).host  # noqa: B018
+    except (httpx.InvalidURL, UnicodeError):
+        # The client's own text quotes the address: it is dropped, not chained.
+        return "is not a usable URL"
     return None
 
 

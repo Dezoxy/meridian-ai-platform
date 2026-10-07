@@ -21,9 +21,8 @@ one more reason in the same rows, ``rate-store-unavailable``, throttled like the
 others: no limit is known, so no call is made.
 """
 
-import logging
-
 from meridian.platform.common.http import HTTP_PAYLOAD_TOO_LARGE
+from meridian.platform.common.refusal_summary import write_ended_summaries
 from meridian.platform.common.throttle import RefusalAuditThrottle
 from meridian.platform.gateway.budget import BudgetRefusalReason, Caller
 from meridian.platform.gateway.ratelimit import (
@@ -32,10 +31,7 @@ from meridian.platform.gateway.ratelimit import (
 )
 from meridian.platform.gateway.walk import AuditWriter, caller_fields
 
-logger = logging.getLogger(__name__)
-
 MODEL_CALL_EVENT = "model.call"
-SUPPRESSED_OUTCOME = "suppressed"
 
 HTTP_TOO_MANY_REQUESTS = 429
 HTTP_SERVICE_UNAVAILABLE = 503
@@ -103,34 +99,10 @@ class RefusalAudit:
         return True
 
     def write_ended(self, *, everything: bool = False) -> None:
-        """Write one summary row for each count the throttle hands out: the
-        flood has been quiet for two windows, or ``everything`` at shutdown.
-        It never raises an ``Exception``: the request it rides on is not the
-        one refused. A write that fails puts back that count and every count
-        not yet written, so the next request tries again, and logs the class of
-        the exception and nothing else (T-03, T-56); a ``BaseException`` puts
-        them back and is re-raised."""
-        ended = self._throttle.take_ended(everything=everything)
-        for written, (tenant, reason, count) in enumerate(ended):
-            try:
-                self._audit(
-                    MODEL_CALL_EVENT,
-                    SUPPRESSED_OUTCOME,
-                    tenant=tenant,
-                    reason=reason,
-                    suppressed=count,
-                )
-            except Exception as error:
-                self._restore(ended[written:])
-                logger.warning(
-                    "the summary of suppressed refusals could not be written (%s)",
-                    type(error).__name__,
-                )
-                return
-            except BaseException:
-                self._restore(ended[written:])
-                raise
-
-    def _restore(self, counts: list[tuple[str | None, str, int]]) -> None:
-        for tenant, reason, count in counts:
-            self._throttle.restore(tenant, reason, count)
+        """Write one summary row for each count the throttle hands out, by the
+        writer every service shares (``common/refusal_summary``): the flood has
+        been quiet for two windows, or ``everything`` at shutdown. It never
+        raises an ``Exception``; a write that fails puts the counts back."""
+        write_ended_summaries(
+            self._throttle, self._audit, MODEL_CALL_EVENT, everything=everything
+        )
