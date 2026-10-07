@@ -80,6 +80,7 @@ from meridian.workloads.claims_triage.triaging import (
     run_input_with_documents,
     run_taken_triage,
     take_over_lapsed_triage,
+    unbuildable,
 )
 
 logger = logging.getLogger(__name__)
@@ -222,16 +223,20 @@ def _prepared(
 def _move_answer(
     result: ClaimResponse | DecisionFailure,
 ) -> ClaimMoveResponse | DecisionFailure:
-    """A triage's answer as the moves' answer."""
+    """A triage's answer as the moves' answer; one the move's model refuses is
+    the failure ``triaging.unbuildable`` gives, as for the triage's own."""
     if isinstance(result, DecisionFailure):
         return result
-    return ClaimMoveResponse(
-        claim_id=result.claim_id,
-        state=result.state,
-        run_id=result.run_id,
-        run_status=result.run_status,
-        proposal=result.proposal,
-    )
+    try:
+        return ClaimMoveResponse(
+            claim_id=result.claim_id,
+            state=result.state,
+            run_id=result.run_id,
+            run_status=result.run_status,
+            proposal=result.proposal,
+        )
+    except ValidationError as exc:
+        return unbuildable(result.claim_id, exc, result.run_id)
 
 
 def refuse_stale_page(page_run: str | None, run_id: UUID | None) -> None:
@@ -595,7 +600,8 @@ def add_documents(
     ended answers its status and runs nothing, and one still paused reads the
     recorded ``request_documents`` and completes with its note. A failure after
     the commit (the triage's, or its 409 when another request took it over, as
-    ``RefusedAfterStoring``) is marked ``stored``; one before or in it is not."""
+    ``RefusedAfterStoring``; or an answer its model refuses, a 500) is marked
+    ``stored``; one before or in it is not."""
     with start_span(tracer, "claims.documents") as span:
         set_span_attributes(
             span, {"meridian.claim_id": claim_id, "meridian.tenant": tenant}
