@@ -83,6 +83,7 @@ class Kit:
             "subject": MARKER,
             "roles": frozenset({ROLE_MARKER}),
             "expires_at": ENDS,
+            "via": "cookie",
         }
         return Principal(**{**fields, **changes})
 
@@ -184,6 +185,19 @@ CASES: dict[str, Case] = {
     ),
     "token-expired": (lambda k: bearer(k.token(exp=NOW - 3600)), 401),
     "token-not-yet-valid": (lambda k: bearer(k.token(nbf=NOW + 3600)), 401),
+    "token-issued-in-the-future": (lambda k: bearer(k.token(iat=NOW + 3600)), 401),
+    "token-nbf-of-400-digits": (
+        lambda k: bearer(
+            k.signed_by_hand(
+                {**k.issuer.claims(sub=MARKER, roles=[ROLE_MARKER]), "nbf": 10**400}
+            )
+        ),
+        401,
+    ),
+    "token-without-nbf": (
+        lambda k: bearer(k.token(roles=["platform-admin"], drop=("nbf",))),
+        200,
+    ),
     "token-no-subject": (lambda k: bearer(k.token(drop=("sub",))), 401),
     "token-no-expiry": (lambda k: bearer(k.token(drop=("exp",))), 401),
     "token-nan-expiry": (lambda k: bearer(k.token(exp=float("nan"))), 401),
@@ -277,7 +291,18 @@ def build_app(signin: Signin, exporter: InMemorySpanExporter) -> TestClient:
     ) -> dict[str, bool]:
         return {"ok": True}
 
-    return TestClient(app)
+    @app.get("/me")
+    def me(who: Annotated[Principal, Depends(signin.principal())]) -> Principal:
+        # What a route must not do, done on purpose: the answer is the principal.
+        return who
+
+    @app.get("/boom")
+    def boom(who: Annotated[Principal, Depends(signin.principal())]) -> None:
+        # A bug after authentication that puts the person into its message.
+        raise RuntimeError(f"failed for {who.subject} with {sorted(who.roles)}")
+
+    # The 500 answer is the point of /boom: the app must answer it, not re-raise.
+    return TestClient(app, raise_server_exceptions=False)
 
 
 def span_texts(exporter: InMemorySpanExporter) -> list[str]:
@@ -376,7 +401,7 @@ def test_a_key_url_that_is_down_leaks_nothing_either(
     with caplog.at_level(logging.DEBUG):
         response = client.get("/admin", headers={"Authorization": f"Bearer {token}"})
 
-    assert response.status_code == 401
+    assert response.status_code == 503
     assert any("keys-unavailable" in r.getMessage() for r in caplog.records)
     everything = [
         *(r.getMessage() + str(r.__dict__) for r in caplog.records),
@@ -386,3 +411,108 @@ def test_a_key_url_that_is_down_leaks_nothing_either(
     ]
     for needle in forbidden_in(token):
         assert not [t for t in everything if needle in t]
+
+
+def places_holding(
+    needles: set[str], caplog: pytest.LogCaptureFixture, exporter: InMemorySpanExporter
+) -> list[str]:
+    """Where in the logs (every part of a record, the exception too) and spans
+    any of the needles is."""
+    texts = {
+        "log": [
+            part
+            for r in caplog.records
+            for part in (
+                r.getMessage(),
+                str(r.msg),
+                str(r.args),
+                str(r.exc_text),
+                repr(r.exc_info),
+                str(r.__dict__),
+            )
+        ],
+        "span": span_texts(exporter),
+    }
+    return [
+        f"{place}: {needle}"
+        for place, found in texts.items()
+        for text in found
+        for needle in needles
+        if needle in text
+    ]
+
+
+def credential_of(kit: Kit, how: str) -> tuple[dict[str, Any], set[str]]:
+    """A request that signs the marked person in, and the credential's texts."""
+    if how == "bearer":
+        token = kit.token()
+        return {"headers": {"Authorization": f"Bearer {token}"}}, forbidden_in(token)
+    cookie = kit.cookie()
+    return {"cookies": {cookie_name("staff"): cookie}}, forbidden_in(cookie)
+
+
+@pytest.mark.parametrize("how", ["bearer", "cookie"])
+def test_a_route_that_returns_the_principal_carries_these_six_fields_and_no_token(
+    how: str,
+    kit: Kit,
+    signin_settings: SigninSettings,
+    signin_keys: KeySet,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    exporter = InMemorySpanExporter()
+    client = build_app(
+        Signin(signin_settings, signin_keys, kit.sessions, lambda: NOW), exporter
+    )
+    request, credential = credential_of(kit, how)
+    for name, value in request.get("cookies", {}).items():
+        client.cookies.set(name, value)
+
+    with caplog.at_level(logging.DEBUG):
+        response = client.get("/me", headers=request.get("headers"))
+
+    # Serialised, a principal is the caller's own subject, roles and issuer, and
+    # exactly these fields: a field added to ``Principal`` (a token, say) changes
+    # this answer and fails here, so adding one is a decision.
+    assert response.status_code == 200
+    assert response.json() == {
+        "population": "staff",
+        "issuer": kit.issuer.name,
+        "subject": MARKER,
+        "roles": [ROLE_MARKER],
+        "expires_at": ENDS,
+        "via": how,
+    }
+    # The credential itself is in neither the answer, the logs nor the spans, and
+    # the person is in no log or span either.
+    own = {MARKER, ROLE_MARKER}
+    assert not [n for n in credential - own if n in response.text]
+    assert places_holding(credential | own, caplog, exporter) == []
+
+
+@pytest.mark.parametrize("how", ["bearer", "cookie"])
+def test_a_route_that_raises_after_authentication_leaks_neither_credential_nor_person(
+    how: str,
+    kit: Kit,
+    signin_settings: SigninSettings,
+    signin_keys: KeySet,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    exporter = InMemorySpanExporter()
+    client = build_app(
+        Signin(signin_settings, signin_keys, kit.sessions, lambda: NOW), exporter
+    )
+    request, credential = credential_of(kit, how)
+    for name, value in request.get("cookies", {}).items():
+        client.cookies.set(name, value)
+
+    with caplog.at_level(logging.DEBUG):
+        response = client.get("/boom", headers=request.get("headers"))
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "internal error"}
+    # Not vacuous: the request was traced and the failure was logged by class.
+    assert any(s.startswith("GET") for s in span_texts(exporter))
+    assert any("RuntimeError" in r.getMessage() for r in caplog.records)
+    needles = credential | {MARKER, ROLE_MARKER}
+    assert not [n for n in needles if n in response.text + str(dict(response.headers))]
+    assert places_holding(needles, caplog, exporter) == []

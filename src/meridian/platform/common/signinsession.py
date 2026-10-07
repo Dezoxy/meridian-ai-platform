@@ -1,17 +1,21 @@
 """The session cookie: a signed value that holds what the pages need and no
-token (S021, T-05).
+token (S021, T-05). Designed for S021 and wired to no route: nothing in the
+services seals or opens a cookie yet, and the switch that would turn sign-in on
+is off.
 
-After a person signs in, the app sets one cookie. It holds the population, the
-issuer, the subject, the roles and the expiry, and nothing else: no access
-token, no ID token, no refresh token. There is no server-side store, so the app
-cannot end a session early; it can only let it run out, which is why the expiry
-is the token's and is capped (``MAX_SESSION_SECONDS``), and why the check of
-the expiry, the signature and the population runs on every request.
+When a route uses it, a person who has signed in gets one cookie. It holds the
+population, the issuer, the subject, the roles and the expiry, and nothing else:
+no access token, no ID token, no refresh token. There is no server-side store,
+so a session cannot be ended early; it can only run out, which is why the
+expiry is the token's and is capped (``MAX_SESSION_SECONDS``) both when the
+cookie is sealed and when it is opened (a cookie signed with a key that leaked
+is capped too), and why the check of the expiry, the signature and the
+population runs on every request.
 
 Format: ``v1.<payload>.<mac>``. The payload is compact JSON, base64url without
 padding; the MAC is HMAC-SHA-256 of ``v1.<payload>`` under the key, base64url
 without padding. The MAC is compared as text, in constant time, with the one
-the app computes: that makes the encoding canonical (a cookie with a changed
+the module computes: that makes the encoding canonical (a cookie with a changed
 bit in the unused end of its last base64 character, or with a character
 appended, is a different text and fails), and it makes a truncated or extended
 value fail without a decoder to be careful about. The payload is parsed only
@@ -22,16 +26,22 @@ by making the old one the previous one and ending it after one session length.
 Every key is tried on every cookie, whichever matches, so the time taken does
 not say which key signed it.
 
+A key is given as base64 of at least ``MIN_SESSION_KEY_BYTES`` random bytes (see
+``SessionKeys.from_env``): a key of characters picked by a person is rejected
+at the start.
+
 The cookie's attributes are a function of one setting (``SessionSettings``):
 ``HttpOnly``, ``SameSite=Lax``, ``Path=/`` and ``Secure``, unless the edge is
 plain HTTP, which is accepted only on kind.
 """
 
 import base64
+import binascii
 import hashlib
 import hmac
 import json
 import math
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Self
@@ -40,6 +50,8 @@ from starlette.responses import Response
 
 from meridian.platform.common.env import SettingsError
 from meridian.platform.common.signin import (
+    ENVIRONMENT_ENV,
+    KIND_ENVIRONMENT,
     MAX_ROLE_CHARS,
     MAX_ROLES,
     MAX_SUBJECT_CHARS,
@@ -52,10 +64,6 @@ from meridian.platform.common.signin import (
 SESSION_KEY_ENV = "MERIDIAN_SESSION_KEY"
 SESSION_KEY_PREVIOUS_ENV = "MERIDIAN_SESSION_KEY_PREVIOUS"
 EDGE_PLAIN_HTTP_ENV = "MERIDIAN_SESSION_EDGE_PLAIN_HTTP"
-# The variable the gateway reads for the same fact (``MERIDIAN_ENVIRONMENT``);
-# it is named here so that ``common`` does not import the gateway.
-ENVIRONMENT_ENV = "MERIDIAN_ENVIRONMENT"
-KIND_ENVIRONMENT = "kind"
 # The version in front of the value. A change of format is a new number, and a
 # cookie of the old one is refused, so every session ends once and none is
 # misread.
@@ -63,6 +71,16 @@ VERSION = "v1"
 # HMAC-SHA-256's own output size: a key shorter than the hash carries less
 # than the hash's strength. ``openssl rand -base64 48`` makes 64 characters.
 MIN_SESSION_KEY_BYTES = 32
+# A random 32-byte key has about 30 different byte values; a long run of one
+# repeated character, which is valid base64, has a handful.
+MIN_DISTINCT_KEY_BYTES = 16
+# One alphabet or the other, never both: standard base64 is what ``openssl rand
+# -base64`` prints and what a Kubernetes Secret created from it holds; the URL-safe
+# one is what ``python -c "import secrets; print(secrets.token_urlsafe(48))"``
+# prints. Padding may be left off, as that command leaves it.
+_STANDARD_BASE64 = r"[A-Za-z0-9+/]+={0,2}"
+_URL_SAFE_BASE64 = r"[A-Za-z0-9_-]+={0,2}"
+_KEY_TEXT = re.compile(f"{_STANDARD_BASE64}|{_URL_SAFE_BASE64}")
 # The most a session lasts whatever the token says: a working day. The cookie
 # ends with the token's life when that is shorter, which is the usual case
 # (an Entra access token lives about an hour, no refresh is made).
@@ -84,6 +102,31 @@ def _b64(data: bytes) -> str:
 
 def _unb64(text: str) -> bytes:
     return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+def _decoded_key(text: str) -> bytes | None:
+    """The bytes of a base64 key text, or None when it is not base64 in one
+    alphabet. Never raises, so no library error is on the way to a caller."""
+    if not _KEY_TEXT.fullmatch(text):
+        return None
+    standard = text.replace("-", "+").replace("_", "/")
+    try:
+        return base64.b64decode(standard + "=" * (-len(standard) % 4), validate=True)
+    except binascii.Error:
+        return None
+
+
+def _key_of(text: str, variable: str) -> bytes:
+    """The key a variable's text holds. The error names the variable, not the
+    text: it would be key material."""
+    raw = _decoded_key(text.removesuffix("\n"))
+    if raw is None or len(raw) < MIN_SESSION_KEY_BYTES:
+        problem = f"{variable} must be base64 of at least {MIN_SESSION_KEY_BYTES} bytes"
+    elif len(set(raw)) < MIN_DISTINCT_KEY_BYTES:
+        problem = f"{variable} must be random bytes, not a repeated pattern"
+    else:
+        return raw
+    raise SettingsError(problem)
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,16 +154,19 @@ class SessionKeys:
     @classmethod
     def from_env(cls, environ: Mapping[str, str]) -> Self:
         """The keys from ``MERIDIAN_SESSION_KEY`` and, optionally,
-        ``MERIDIAN_SESSION_KEY_PREVIOUS``, as the bytes of the text. Raise
+        ``MERIDIAN_SESSION_KEY_PREVIOUS``. Each is base64 (standard or URL-safe,
+        padding optional) of at least ``MIN_SESSION_KEY_BYTES`` bytes with at
+        least ``MIN_DISTINCT_KEY_BYTES`` different values, and one trailing
+        newline, which a mounted Secret file often has, is dropped first. Raise
         ``SettingsError`` naming the variable; never the value."""
         current = environ.get(SESSION_KEY_ENV)
         if not current:
             raise SettingsError(f"{SESSION_KEY_ENV} is required")
         previous = environ.get(SESSION_KEY_PREVIOUS_ENV) or None
-        return cls(
-            current=current.encode("utf-8"),
-            previous=None if previous is None else previous.encode("utf-8"),
-        )
+        newest = _key_of(current, SESSION_KEY_ENV)
+        if previous is None:
+            return cls(current=newest)
+        return cls(current=newest, previous=_key_of(previous, SESSION_KEY_PREVIOUS_ENV))
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,20 +209,27 @@ def cookie_attributes(settings: SessionSettings) -> dict[str, Any]:
     }
 
 
+def _session_end(principal: Principal, now: float) -> int:
+    """When a session for ``principal`` sealed at ``now`` ends: the principal's
+    expiry or ``MAX_SESSION_SECONDS`` from ``now``, whichever is sooner."""
+    return min(principal.expires_at, math.floor(now) + MAX_SESSION_SECONDS)
+
+
 def set_session_cookie(
     response: Response,
-    value: str,
     principal: Principal,
     settings: SessionSettings,
     now: float,
 ) -> None:
-    """Set the cookie ``seal_session`` made for ``principal`` on ``response``;
-    the browser drops it when the session ends."""
-    remaining = min(principal.expires_at - math.floor(now), MAX_SESSION_SECONDS)
+    """Seal a session for ``principal`` and set it on ``response``; the browser
+    drops it when the session ends. The cookie and its ``Max-Age`` come from the
+    same principal in one place, so they cannot be paired with another's. Raise
+    what ``seal_session`` raises, so a principal that has ended gets no cookie."""
+    value = seal_session(principal, settings.keys, now)
     response.set_cookie(
         cookie_name(principal.population),
         value,
-        max_age=max(0, remaining),
+        max_age=_session_end(principal, now) - math.floor(now),
         **cookie_attributes(settings),
     )
 
@@ -197,7 +250,7 @@ def seal_session(principal: Principal, keys: SessionKeys, now: float) -> str:
     with the principal's expiry or ``MAX_SESSION_SECONDS`` from ``now``,
     whichever is sooner. Raise ``Unauthenticated`` for a principal that has
     already expired, ``ValueError`` (a fixed text) for one too large to fit."""
-    ends = min(principal.expires_at, math.floor(now) + MAX_SESSION_SECONDS)
+    ends = _session_end(principal, now)
     if ends <= now:
         raise Unauthenticated(Reason.EXPIRED)
     payload = {
@@ -242,7 +295,7 @@ def _signed(cookie: str, keys: SessionKeys) -> str | Reason:
 
 
 def _principal_of(payload: str) -> Principal | None:
-    """The principal in a payload whose MAC held. A payload this app signed has
+    """The principal in a payload whose MAC held. A payload this module signed has
     the right shape; one that does not (a bug, or an older release's) is
     refused the same way."""
     try:
@@ -269,15 +322,19 @@ def _principal_of(payload: str) -> Principal | None:
         subject=subject,
         roles=frozenset(roles),
         expires_at=ends,
+        via="cookie",
     )
 
 
 def open_session(
     cookie: str, keys: SessionKeys, now: float, population: Population
 ) -> Principal:
-    """The principal in a cookie, or ``Unauthenticated``: refused when it is of
-    another version, altered or cut short, over the size bound, expired, or the
-    other population's. Nothing of the cookie is in the exception."""
+    """The principal in a cookie (``via`` is ``"cookie"``), or
+    ``Unauthenticated``: refused when it is of another version, altered or cut
+    short, over the size bound, expired, the other population's, or ends later
+    than ``MAX_SESSION_SECONDS`` from ``now``, which no sealed cookie does
+    (a cookie signed with a key that leaked, and kept as the previous one, is
+    refused as well). Nothing of the cookie is in the exception."""
     signed = _signed(cookie, keys)
     if isinstance(signed, Reason):
         raise Unauthenticated(signed)
@@ -288,4 +345,6 @@ def open_session(
         raise Unauthenticated(Reason.SESSION_POPULATION)
     if now >= principal.expires_at:
         raise Unauthenticated(Reason.EXPIRED)
+    if principal.expires_at > now + MAX_SESSION_SECONDS:
+        raise Unauthenticated(Reason.SESSION_TOO_LONG)
     return principal

@@ -6,11 +6,12 @@ import hashlib
 import hmac
 import json
 import secrets
-from typing import Any
+from typing import Any, get_args
 
 import pytest
 from starlette.responses import Response
 
+from meridian.platform.common import signin, signinsession
 from meridian.platform.common.env import SettingsError
 from meridian.platform.common.signin import (
     MAX_ROLES,
@@ -21,6 +22,7 @@ from meridian.platform.common.signin import (
 from meridian.platform.common.signinsession import (
     COOKIE_NAME_PREFIX,
     ENVIRONMENT_ENV,
+    KIND_ENVIRONMENT,
     MAX_COOKIE_BYTES,
     MAX_SESSION_SECONDS,
     MIN_SESSION_KEY_BYTES,
@@ -34,18 +36,22 @@ from meridian.platform.common.signinsession import (
     seal_session,
     set_session_cookie,
 )
+from meridian.platform.gateway import settings as gateway
 
 NOW = 1_800_000_000.0
 ENDS = int(NOW) + 600
+ISSUER = "https://id.example.test/realms/meridian-staff"
 
 
 def principal(**changes: Any) -> Principal:
+    """A principal as a cookie opens it: ``via`` is ``cookie``."""
     fields: dict[str, Any] = {
         "population": "staff",
-        "issuer": "https://id.example.test/realms/meridian-staff",
+        "issuer": ISSUER,
         "subject": "subject-1",
         "roles": frozenset({"adjuster", "auditor"}),
         "expires_at": ENDS,
+        "via": "cookie",
     }
     return Principal(**{**fields, **changes})
 
@@ -100,6 +106,20 @@ def test_a_sealed_cookie_opens_to_the_same_principal(keys: SessionKeys) -> None:
     assert open_session(cookie, keys, NOW, "staff") == principal()
 
 
+def test_a_cookie_sealed_from_a_bearer_principal_opens_as_a_cookie_principal(
+    keys: SessionKeys,
+) -> None:
+    bearer = principal(via="bearer")
+
+    cookie = seal_session(bearer, keys, NOW)
+    opened = open_session(cookie, keys, NOW, "staff")
+
+    assert opened.via == "cookie"
+    assert opened.issuer == bearer.issuer == ISSUER
+    assert opened == principal()
+    assert "via" not in payload_of(cookie)
+
+
 def test_the_cookie_is_versioned_and_compact(keys: SessionKeys) -> None:
     cookie = seal_session(principal(), keys, NOW)
 
@@ -152,6 +172,36 @@ def test_a_session_never_lasts_longer_than_the_cap(keys: SessionKeys) -> None:
 
     assert payload_of(cookie)["e"] == int(NOW) + MAX_SESSION_SECONDS
     assert reason_of(cookie, keys, NOW + MAX_SESSION_SECONDS) is Reason.EXPIRED
+
+
+def test_the_cap_at_open_lets_the_cap_itself_through_and_not_a_second_more(
+    keys: SessionKeys, seal_a: bytes
+) -> None:
+    payload = payload_of(seal_session(principal(), keys, NOW))
+    cap = int(NOW) + MAX_SESSION_SECONDS
+    at_cap = resign({**payload, "e": cap}, seal_a)
+    over = resign({**payload, "e": cap + 1}, seal_a)
+
+    assert open_session(at_cap, keys, NOW, "staff").expires_at == cap
+    assert reason_of(over, keys) is Reason.SESSION_TOO_LONG
+    # What the cap lets through at one moment is still inside it a moment later.
+    assert open_session(at_cap, keys, NOW + 100, "staff").expires_at == cap
+    assert open_session(over, keys, NOW + 1, "staff").expires_at == cap + 1
+
+
+def test_the_cap_is_enforced_at_open_whichever_key_signed_the_cookie(
+    seal_a: bytes, seal_b: bytes
+) -> None:
+    # A cookie made with a key that leaked, kept as the previous one, and given
+    # an expiry 1000 days ahead.
+    far = {
+        **payload_of(seal_session(principal(), SessionKeys(current=seal_a), NOW)),
+        "e": int(NOW) + 1000 * 24 * 3600,
+    }
+    rotated = SessionKeys(current=seal_b, previous=seal_a)
+
+    assert reason_of(resign(far, seal_b), rotated) is Reason.SESSION_TOO_LONG
+    assert reason_of(resign(far, seal_a), rotated) is Reason.SESSION_TOO_LONG
 
 
 def test_a_principal_that_has_expired_is_not_sealed(keys: SessionKeys) -> None:
@@ -372,22 +422,32 @@ def test_the_keys_are_not_in_the_repr(seal_a: bytes, seal_b: bytes) -> None:
 
 
 # ── settings from the environment ───────────────────────────────────────────
-GOOD = {"MERIDIAN_SESSION_KEY": "k" * 40}
+KEY_BYTES = secrets.token_bytes(48)
+OLDER_BYTES = secrets.token_bytes(48)
+KEY = base64.b64encode(KEY_BYTES).decode()
+GOOD = {"MERIDIAN_SESSION_KEY": KEY}
+KEY_VARIABLE = "MERIDIAN_SESSION_KEY"
+PREVIOUS_VARIABLE = "MERIDIAN_SESSION_KEY_PREVIOUS"
 
 
-def test_the_keys_are_read_from_the_environment() -> None:
-    env = {**GOOD, "MERIDIAN_SESSION_KEY_PREVIOUS": "p" * 40}
+def base64_of(raw: bytes, *, url_safe: bool = False, padded: bool = True) -> str:
+    text = (base64.urlsafe_b64encode if url_safe else base64.b64encode)(raw).decode()
+    return text if padded else text.rstrip("=")
+
+
+def test_the_keys_are_read_from_the_environment_as_base64() -> None:
+    env = {**GOOD, PREVIOUS_VARIABLE: base64_of(OLDER_BYTES)}
 
     settings = SessionSettings.from_env(env)
 
-    assert settings.keys.current == b"k" * 40
-    assert settings.keys.previous == b"p" * 40
+    assert settings.keys.current == KEY_BYTES
+    assert settings.keys.previous == OLDER_BYTES
     assert settings.secure is True
 
 
 def test_no_previous_key_is_none() -> None:
     assert SessionSettings.from_env(GOOD).keys.previous is None
-    empty = {**GOOD, "MERIDIAN_SESSION_KEY_PREVIOUS": ""}
+    empty = {**GOOD, PREVIOUS_VARIABLE: ""}
     assert SessionSettings.from_env(empty).keys.previous is None
 
 
@@ -396,11 +456,99 @@ def test_a_missing_key_stops_the_start_naming_the_variable() -> None:
         SessionSettings.from_env({})
 
 
-def test_a_short_key_in_the_environment_stops_the_start_and_is_not_quoted() -> None:
-    with pytest.raises(SettingsError) as error:
-        SessionSettings.from_env({"MERIDIAN_SESSION_KEY": "short-canary"})
+@pytest.mark.parametrize("url_safe", [False, True])
+@pytest.mark.parametrize("padded", [False, True])
+def test_a_key_is_accepted_in_either_base64_alphabet_with_or_without_padding(
+    url_safe: bool, padded: bool
+) -> None:
+    # These six bytes are `+vv8/f7/` in the standard alphabet and `-vv8_f7_` in
+    # the URL-safe one, so each form really uses its own characters. 47 bytes
+    # need padding in the standard form.
+    raw = bytes(range(250, 256)) + secrets.token_bytes(41)
+    text = base64_of(raw, url_safe=url_safe, padded=padded)
 
-    assert "canary" not in str(error.value)
+    keys = SessionSettings.from_env({KEY_VARIABLE: text}).keys
+
+    assert keys.current == raw
+
+
+def test_one_trailing_newline_is_dropped_and_no_more() -> None:
+    kept = SessionSettings.from_env({KEY_VARIABLE: KEY + "\n"})
+    assert kept.keys.current == KEY_BYTES
+    inside = KEY[:9] + "\n" + KEY[9:]
+    for text in (KEY + "\n\n", KEY + "\r\n", KEY + " ", " " + KEY, inside):
+        with pytest.raises(SettingsError, match=KEY_VARIABLE):
+            SessionSettings.from_env({KEY_VARIABLE: text})
+
+
+def test_a_key_that_mixes_the_two_alphabets_is_refused() -> None:
+    raw = bytes(range(250, 256)) + secrets.token_bytes(42)
+    mixed = base64_of(raw).replace("+", "-", 1)  # "-" with a "/" still in it
+    assert "-" in mixed and "/" in mixed
+
+    with pytest.raises(SettingsError, match=KEY_VARIABLE):
+        SessionSettings.from_env({KEY_VARIABLE: mixed})
+
+
+def test_the_length_floor_is_in_bytes_after_decoding() -> None:
+    at_floor = secrets.token_bytes(MIN_SESSION_KEY_BYTES)
+    below = secrets.token_bytes(MIN_SESSION_KEY_BYTES - 1)
+
+    accepted = SessionSettings.from_env({KEY_VARIABLE: base64_of(at_floor)})
+    assert accepted.keys.current == at_floor
+    with pytest.raises(SettingsError, match=KEY_VARIABLE):
+        SessionSettings.from_env({KEY_VARIABLE: base64_of(below)})
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "k" * 40,  # base64 of 30 bytes: too short
+        "password" * 6,  # base64 of 36 bytes, but not random
+        "a" * 64,  # base64 of 48 equal-looking bytes
+        "A" * 64,  # 48 zero bytes
+        "not base64 at all, not even close to it!!",
+        "!" * 64,
+    ],
+)
+def test_a_key_of_characters_a_person_picked_stops_the_start(text: str) -> None:
+    with pytest.raises(SettingsError, match=KEY_VARIABLE):
+        SessionSettings.from_env({KEY_VARIABLE: text})
+
+
+def test_the_diversity_floor_is_sixteen_different_bytes() -> None:
+    def key_of_distinct(count: int) -> str:
+        return base64_of(bytes(range(count)) * (48 // count) + bytes(48 % count))
+
+    assert SessionSettings.from_env({KEY_VARIABLE: key_of_distinct(16)}).keys.current
+    with pytest.raises(SettingsError, match=KEY_VARIABLE):
+        SessionSettings.from_env({KEY_VARIABLE: key_of_distinct(15)})
+
+
+@pytest.mark.parametrize("variable", [KEY_VARIABLE, PREVIOUS_VARIABLE])
+def test_a_bad_key_stops_the_start_naming_its_variable_and_holding_no_key(
+    variable: str,
+) -> None:
+    marker = "key!CANARY!3f9a"  # "!" is in neither alphabet
+    env = {**GOOD, variable: marker * 4}
+
+    with pytest.raises(SettingsError) as error:
+        SessionSettings.from_env(env)
+
+    raised = error.value
+    assert variable in str(raised)
+    for place in (str(raised), repr(raised), str(raised.args), repr(vars(raised))):
+        assert marker not in place
+    assert raised.__cause__ is None
+    assert raised.__context__ is None
+
+
+def test_the_environment_variable_and_the_kind_value_are_the_gateways() -> None:
+    # The modules repeat the gateway's names because ``common`` may not import
+    # the gateway (an import-linter contract); this test may, and ties them.
+    assert signinsession.ENVIRONMENT_ENV == signin.ENVIRONMENT_ENV
+    assert ENVIRONMENT_ENV == gateway.ENVIRONMENT_ENV
+    assert KIND_ENVIRONMENT in get_args(gateway.Environment)
 
 
 def test_a_plain_http_edge_is_accepted_only_on_kind() -> None:
@@ -441,23 +589,41 @@ def set_cookie_line(response: Response) -> str:
     return response.headers["set-cookie"]
 
 
+def value_of(response: Response) -> str:
+    """The cookie's value, as the browser would send it back."""
+    return set_cookie_line(response).split(";")[0].partition("=")[2]
+
+
 def test_the_cookie_is_http_only_lax_path_root_and_secure(keys: SessionKeys) -> None:
     response = Response()
-    cookie = seal_session(principal(), keys, NOW)
 
-    set_session_cookie(response, cookie, principal(), SessionSettings(keys), NOW)
+    set_session_cookie(response, principal(), SessionSettings(keys), NOW)
 
     line = set_cookie_line(response)
-    assert line.startswith(f"{cookie_name('staff')}={cookie}")
+    assert line.startswith(f"{cookie_name('staff')}={value_of(response)}")
     attributes = {part.strip().lower() for part in line.split(";")[1:]}
     assert {"httponly", "secure", "samesite=lax", "path=/", "max-age=600"} <= attributes
+
+
+def test_the_cookie_set_is_the_principals_own_and_ends_when_its_max_age_does(
+    keys: SessionKeys,
+) -> None:
+    response = Response()
+    mine = principal(subject="mine", expires_at=int(NOW) + 100)
+
+    set_session_cookie(response, mine, SessionSettings(keys), NOW)
+
+    value = value_of(response)
+    assert "Max-Age=100" in set_cookie_line(response)
+    assert open_session(value, keys, NOW, "staff") == mine
+    assert reason_of(value, keys, NOW + 100) is Reason.EXPIRED
 
 
 def test_on_a_plain_http_edge_only_secure_is_dropped(keys: SessionKeys) -> None:
     response = Response()
     settings = SessionSettings(keys, secure=False)
 
-    set_session_cookie(response, "value", principal(), settings, NOW)
+    set_session_cookie(response, principal(), settings, NOW)
 
     attributes = {part.strip().lower() for part in set_cookie_line(response).split(";")}
     assert "secure" not in attributes
@@ -468,25 +634,24 @@ def test_the_cookie_does_not_outlive_the_cap(keys: SessionKeys) -> None:
     response = Response()
     far = principal(expires_at=int(NOW) + 10 * MAX_SESSION_SECONDS)
 
-    set_session_cookie(response, "value", far, SessionSettings(keys), NOW)
+    set_session_cookie(response, far, SessionSettings(keys), NOW)
 
     assert f"Max-Age={MAX_SESSION_SECONDS}" in set_cookie_line(response)
-
-
-def test_the_cookie_of_a_principal_that_has_ended_has_no_time_left(
-    keys: SessionKeys,
-) -> None:
-    response = Response()
-
-    set_session_cookie(
-        response,
-        "value",
-        principal(expires_at=int(NOW) - 5),
-        SessionSettings(keys),
-        NOW,
+    assert open_session(value_of(response), keys, NOW, "staff").expires_at == (
+        int(NOW) + MAX_SESSION_SECONDS
     )
 
-    assert "Max-Age=0" in set_cookie_line(response)
+
+def test_a_principal_that_has_ended_gets_no_cookie_at_all(keys: SessionKeys) -> None:
+    response = Response()
+
+    with pytest.raises(Unauthenticated) as refused:
+        set_session_cookie(
+            response, principal(expires_at=int(NOW) - 5), SessionSettings(keys), NOW
+        )
+
+    assert refused.value.reason is Reason.EXPIRED
+    assert "set-cookie" not in response.headers
 
 
 def test_clearing_the_cookie_keeps_the_attributes(keys: SessionKeys) -> None:

@@ -7,9 +7,7 @@ from typing import Any
 import pytest
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
-from pydantic import ValidationError
 
-from meridian.platform.common.env import SettingsError
 from meridian.platform.common.signin import (
     ALGORITHMS,
     LEEWAY_SECONDS,
@@ -23,9 +21,8 @@ from meridian.platform.common.signin import (
     SigninRefusal,
     SigninSettings,
     Unauthenticated,
-    bearer_token_of,
+    Unavailable,
     check_bearer,
-    roles_of,
 )
 from meridian.platform.common.signinkeys import (
     KEY_MAX_AGE_SECONDS,
@@ -56,6 +53,7 @@ def test_a_good_token_names_the_principal(
         subject="subject-1",
         roles=frozenset({"adjuster", "auditor"}),
         expires_at=int(signin_issuer.now) + 600,
+        via="bearer",
     )
     assert principal.has_role("auditor")
     assert not principal.has_role("platform-admin")
@@ -71,8 +69,9 @@ def test_the_principal_does_not_show_its_subject_or_roles(
     assert "canary" not in repr(principal) + str(principal)
 
 
-def test_the_algorithms_list_is_exactly_rs256() -> None:
-    assert ALGORITHMS == ["RS256"]
+def test_the_algorithms_are_exactly_rs256_and_cannot_be_changed() -> None:
+    assert ALGORITHMS == ("RS256",)
+    assert isinstance(ALGORITHMS, tuple)
 
 
 # ── algorithms: refused before any key is looked at ─────────────────────────
@@ -361,22 +360,7 @@ def test_the_time_is_the_one_given_not_the_machines(
 
 
 # ── claims that must be there, and be what they should ──────────────────────
-@pytest.mark.parametrize("claim", ["sub", "exp", "nbf", "iss", "aud"])
-def test_a_missing_required_claim_is_refused(
-    claim: str,
-    signin_issuer: Any,
-    signin_settings: SigninSettings,
-    signin_keys: KeySet,
-) -> None:
-    token = signin_issuer.mint(drop=(claim,))
-
-    assert refusal_of(token, signin_settings, signin_keys, signin_issuer.now) in (
-        Reason.CLAIMS,
-        Reason.ISSUER,
-        Reason.AUDIENCE,
-    )
-
-
+# (a claim that is missing, ``nbf`` and ``iat``: test_signin_claims.py)
 @pytest.mark.parametrize(
     "overrides",
     [
@@ -482,15 +466,18 @@ def test_an_unknown_key_id_is_refused_after_the_one_fetch(
     assert signin_issuer.calls == 1
 
 
-def test_with_the_key_url_down_and_nothing_cached_a_good_token_is_refused(
+def test_with_the_key_url_down_and_nothing_cached_a_good_token_is_unavailable_not_401(
     signin_issuer: Any, signin_settings: SigninSettings, signin_keys: KeySet
 ) -> None:
     token = signin_issuer.mint()
     signin_issuer.down = True
 
-    reason = refusal_of(token, signin_settings, signin_keys, signin_issuer.now)
+    with pytest.raises(Unavailable) as refused:
+        check_bearer(token, signin_settings, signin_keys, signin_issuer.now)
 
-    assert reason is Reason.KEYS_UNAVAILABLE
+    assert refused.value.reason is Reason.KEYS_UNAVAILABLE
+    assert Unavailable.status == 503
+    assert not isinstance(refused.value, Unauthenticated)
 
 
 def test_with_the_key_url_down_a_cached_key_still_verifies_a_good_token(
@@ -549,9 +536,17 @@ def test_a_restart_of_the_issuer_the_next_token_verifies_after_one_refetch(
     ],
 )
 def test_the_roles_claim_must_be_a_list_of_strings(
-    claim: object, expected: set[str]
+    claim: object,
+    expected: set[str],
+    signin_issuer: Any,
+    signin_settings: SigninSettings,
+    signin_keys: KeySet,
 ) -> None:
-    assert roles_of(claim) == frozenset(expected)
+    token = signin_issuer.mint(roles=claim)
+
+    principal = check_bearer(token, signin_settings, signin_keys, signin_issuer.now)
+
+    assert principal.roles == frozenset(expected)
 
 
 @pytest.mark.parametrize("roles", ["adjuster", 7, [["adjuster"]], {"a": "b"}])
@@ -631,89 +626,5 @@ def test_a_refusal_is_its_reason_and_carries_nothing_of_the_token(
     assert "canary" not in repr(error)
 
 
-@pytest.mark.parametrize(
-    ("header", "expected"),
-    [
-        ("Bearer abc.def.ghi", "abc.def.ghi"),
-        ("bearer abc.def.ghi", "abc.def.ghi"),
-        ("BEARER abc", "abc"),
-        ("Bearer", None),
-        ("Bearer ", None),
-        ("Bearer a b", None),
-        ("Bearer  a", None),
-        ("Basic abc", None),
-        ("abc", None),
-        ("", None),
-    ],
-)
-def test_the_bearer_token_is_read_from_the_header(
-    header: str, expected: str | None
-) -> None:
-    assert bearer_token_of(header) == expected
-
-
-# ── the settings ────────────────────────────────────────────────────────────
-GOOD_ENV = {
-    "MERIDIAN_SIGNIN_STAFF_ISSUER": "https://id.example.test/realms/staff",
-    "MERIDIAN_SIGNIN_STAFF_AUDIENCE": "meridian-api",
-    "MERIDIAN_SIGNIN_STAFF_KEYS_URL": "http://keycloak.identity.svc:8080/certs",
-}
-
-
-def test_the_settings_are_read_from_the_population_s_variables() -> None:
-    settings = SigninSettings.from_env(GOOD_ENV, "staff")
-
-    assert settings.population == "staff"
-    assert settings.issuer == "https://id.example.test/realms/staff"
-    assert settings.audience == "meridian-api"
-    assert settings.keys_url == "http://keycloak.identity.svc:8080/certs"
-    assert settings.roles_claim == "roles"
-
-
-def test_the_roles_claim_is_read_when_given() -> None:
-    env = {**GOOD_ENV, "MERIDIAN_SIGNIN_STAFF_ROLES_CLAIM": "groups"}
-
-    assert SigninSettings.from_env(env, "staff").roles_claim == "groups"
-
-
-def test_the_other_population_has_variables_of_its_own() -> None:
-    with pytest.raises(SettingsError, match="MERIDIAN_SIGNIN_CLAIMANT_ISSUER"):
-        SigninSettings.from_env(GOOD_ENV, "claimant")
-
-
-@pytest.mark.parametrize("name", list(GOOD_ENV))
-def test_a_missing_variable_stops_the_start_naming_it(name: str) -> None:
-    env = {k: v for k, v in GOOD_ENV.items() if k != name}
-
-    with pytest.raises(SettingsError, match=name):
-        SigninSettings.from_env(env, "staff")
-
-
-@pytest.mark.parametrize(
-    "overrides",
-    [
-        {"MERIDIAN_SIGNIN_STAFF_ISSUER": "id.example.test"},
-        {"MERIDIAN_SIGNIN_STAFF_ISSUER": "https://u:p@id.example.test/r"},
-        {"MERIDIAN_SIGNIN_STAFF_ISSUER": "https://id.example.test/r?x=1"},
-        {"MERIDIAN_SIGNIN_STAFF_KEYS_URL": "ftp://id.example.test/certs"},
-        {"MERIDIAN_SIGNIN_STAFF_KEYS_URL": "https://u:canary@id.example.test/c"},
-        {"MERIDIAN_SIGNIN_STAFF_AUDIENCE": "two words"},
-        {"MERIDIAN_SIGNIN_STAFF_AUDIENCE": "x" * 257},
-        {"MERIDIAN_SIGNIN_STAFF_ROLES_CLAIM": "with space"},
-    ],
-)
-def test_a_bad_setting_stops_the_start_and_the_error_holds_no_value(
-    overrides: dict[str, str],
-) -> None:
-    with pytest.raises(ValidationError) as error:
-        SigninSettings.from_env({**GOOD_ENV, **overrides}, "staff")
-
-    text = str(error.value)
-    assert "canary" not in text
-    for value in overrides.values():
-        assert value not in text
-
-
-def test_the_settings_cannot_be_changed(signin_settings: SigninSettings) -> None:
-    with pytest.raises(ValidationError):
-        signin_settings.audience = "another"  # type: ignore[misc]
+# (the bearer header's parsing is in test_signin_guard.py; the settings are in
+# test_signin_claims.py)
