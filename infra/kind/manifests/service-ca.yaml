@@ -23,15 +23,16 @@
 # Who can ask for a certificate (S056): cert-manager's built-in approver is off
 # and approver-policy decides, by the policies in certificate-policy.yaml, which
 # up.sh applies before this file. The `meridian-services` issuer signs a request
-# only from the `meridian` namespace, with a URI under
-# spiffe://meridian.kind/ns/meridian/sa/, a `*.meridian.svc` DNS name, the three
-# usages the services use and at most 90 days; a request from any other
-# namespace is denied, and so is one that asks for a CA. This file's CA
-# certificate has a policy of its own, in `cert-manager` only. What is left:
-# whoever can create a Certificate in `meridian` has any service's identity
-# issued, because the policy checks the namespace and the URI prefix and not
-# which service; and whoever can change a policy or its binding undoes the
-# limit. On kind that is the cluster's administrator.
+# only from the `meridian` namespace, with one of eight listed URIs under
+# spiffe://meridian.kind/ns/meridian/sa/ and, where it names any, one of six
+# listed DNS names (S072: lists the chart's Certificates must match, no
+# wildcard), the three usages the services use and at most 90 days; a request
+# from any other namespace is denied, and so is one that asks for a CA. This
+# file's CA certificate has a policy of its own, in `cert-manager` only. What is
+# left: whoever can create a Certificate in `meridian` has any listed service's
+# identity issued, because the policy checks the namespace and the listed names
+# and not which service; and whoever can change a policy or its binding undoes
+# the limit. On kind that is the cluster's administrator.
 #
 # The CA keeps its key at renewal by an explicit setting, `privateKey:
 # rotationPolicy: Never`, not by a default: cert-manager's default is `Always`

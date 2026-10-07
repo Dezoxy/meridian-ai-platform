@@ -20,6 +20,7 @@ from kindsupport import KIND_DIR
 VALUES = KIND_DIR / "values"
 COLLECTOR_FILE = VALUES / "otel-collector.yaml"
 TEMPO_FILE = VALUES / "tempo.yaml"
+LOKI_FILE = VALUES / "loki.yaml"
 USER = 10001
 # What `restricted` asks of a container (runAsNonRoot, allowPrivilegeEscalation
 # false, drop ALL, a seccomp profile), the user the image already runs as, and a
@@ -109,6 +110,24 @@ def test_tempos_container_meets_restricted_as_user_10001() -> None:
     # `securityContext` (the pod's: user 10001, runAsNonRoot, fsGroup) is left at
     # the chart's default and is not repeated here.
     assert values["tempo"]["securityContext"] == RESTRICTED_CONTAINER
+
+
+def test_tempo_mounts_no_service_account_token() -> None:
+    values = load(TEMPO_FILE)
+
+    # One key drives both the ServiceAccount and the pod in the chart.
+    assert values["serviceAccount"]["automountServiceAccountToken"] is False
+
+
+def test_loki_mounts_no_service_account_token_in_the_pod_or_the_service_account() -> (
+    None
+):
+    values = load(LOKI_FILE)
+
+    # Loki's chart has two keys: `defaults` flips the pod, `serviceAccount`
+    # flips the ServiceAccount; either one alone leaves the other mounted.
+    assert values["defaults"]["automountServiceAccountToken"] is False
+    assert values["serviceAccount"]["automountServiceAccountToken"] is False
 
 
 def test_tempo_still_writes_only_under_the_volume_it_is_given() -> None:

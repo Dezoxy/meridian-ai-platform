@@ -294,6 +294,13 @@ Residual risk (the register's row for the store holds the full text):
   store and capture the gateway's password. That is as it was since S056 and
   needs write access to the namespace, which could mount the Secret directly.
   This record does not change it.
+  *Note, 2026-10-07 (S072):* the policy no longer admits any `*.meridian.svc`
+  name: it lists the eight URIs and six DNS names the chart renders, and a
+  test holds the lists equal to the chart's Certificates. A request for a
+  listed name, the store's included, is still approved whoever created the
+  Certificate, because the requester of every Certificate is cert-manager's own
+  account; so the residual stands for a listed name, and the sentence above was
+  true when it was written. Implemented and tested; not run on a cluster.
 - A rotation of the password has an outage between the two restarts: the ACL
   file holds one hash.
 - The server's `TIME` is wall-clock time; a step backwards of the store's

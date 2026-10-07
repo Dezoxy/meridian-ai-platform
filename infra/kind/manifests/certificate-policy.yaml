@@ -22,14 +22,20 @@
 #
 #   meridian-services       the services' certificates: issuer
 #                           `meridian-services`, requested in `meridian`; a URI
-#                           of the form spiffe://meridian.kind/ns/meridian/sa/*
-#                           (required, the chart's identity prefix), a DNS name
-#                           of the form *.meridian.svc, the usages digital
+#                           (required) out of the eight the chart renders, the
+#                           identity prefix spiffe://meridian.kind/ns/meridian/sa/
+#                           and a service ID (the six services, the rate store
+#                           and the ingestion Job's `meridian-ingest`), a DNS
+#                           name out of the six of the services that serve TLS
+#                           (<service>.meridian.svc), the usages digital
 #                           signature, client auth and server auth, and at most
 #                           90 days (cert-manager's default lifetime), which
-#                           the request must name. No CA and no common name:
-#                           neither is allowed, so a request that sets one is
-#                           denied
+#                           the request must name. No wildcard: a request for a
+#                           name that is not listed is denied, and
+#                           test_certificate_policy.py renders the chart and
+#                           holds both lists equal to what its Certificates ask
+#                           for. No CA and no common name: neither is allowed,
+#                           so a request that sets one is denied
 #   meridian-services-ca    the CA's own request, which the policy above does not
 #                           permit (it is a CA, with a common name, signed by the
 #                           self-signed issuer, in `cert-manager`): issuer
@@ -89,9 +95,14 @@
 # binding is, and a request from another namespace meets only the policy that
 # denies.
 #
-# What is left: whoever may create a Certificate in `meridian` has any service's
-# identity issued (the policy checks the namespace and the URI prefix, not which
-# service), and whoever may change a policy or its binding undoes the limit.
+# What is left: the lists stop a request for a NEW name; they do not stop a
+# second Certificate for a listed one. The requester of every Certificate is
+# cert-manager's own account, so a policy cannot tell who created it, and
+# whoever may create a Certificate in `meridian` still has any listed service's
+# identity issued (T-92: the rate store's included). The policy checks the
+# namespace and the names, not which service asks. A service added to the chart
+# must be added to both lists here in the same change, or its certificate is
+# denied. Whoever may change a policy or its binding undoes the limit.
 apiVersion: policy.cert-manager.io/v1alpha1
 kind: CertificateRequestPolicy
 metadata:
@@ -108,11 +119,23 @@ spec:
   allowed:
     uris:
       values:
-        - spiffe://meridian.kind/ns/meridian/sa/*
+        - spiffe://meridian.kind/ns/meridian/sa/agent-runtime
+        - spiffe://meridian.kind/ns/meridian/sa/claims-api
+        - spiffe://meridian.kind/ns/meridian/sa/claims-mcp
+        - spiffe://meridian.kind/ns/meridian/sa/knowledge-mcp
+        - spiffe://meridian.kind/ns/meridian/sa/meridian-ingest
+        - spiffe://meridian.kind/ns/meridian/sa/model-gateway
+        - spiffe://meridian.kind/ns/meridian/sa/policy-mcp
+        - spiffe://meridian.kind/ns/meridian/sa/rate-store
       required: true
     dnsNames:
       values:
-        - "*.meridian.svc"
+        - agent-runtime.meridian.svc
+        - claims-mcp.meridian.svc
+        - knowledge-mcp.meridian.svc
+        - model-gateway.meridian.svc
+        - policy-mcp.meridian.svc
+        - rate-store.meridian.svc
     usages:
       - digital signature
       - client auth

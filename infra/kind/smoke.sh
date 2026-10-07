@@ -571,12 +571,12 @@
 #                 one request that the issuer must refuse (S062), the one
 #                 change this check makes: a CertificateRequest named
 #                 meridian-smoke-refused-<pid>-<random> in the namespace
-#                 default, for the issuer meridian-services, with a URI under
-#                 the Meridian prefix and a duration that policy allows, so
-#                 that only its namespace refuses it: the namespace selector
-#                 of meridian-services does not list default, and the policy
-#                 meridian-deny-unlisted, which selects the issuer from every
-#                 namespace, permits nothing. It passes when the request is
+#                 default, for the issuer meridian-services, with a URI that
+#                 policy lists (the Claims API's) and a duration and usages it
+#                 allows, so that only its namespace refuses it: the
+#                 namespace selector of meridian-services does not list
+#                 default, and the policy meridian-deny-unlisted, which
+#                 selects the issuer from every namespace, permits nothing. It passes when the request is
 #                 Denied and the approver's whole message, judged before it
 #                 is cut, names meridian-deny-unlisted as a policy that
 #                 evaluated the request and does not name meridian-services
@@ -981,9 +981,11 @@ readonly DATABASE_CERTIFICATE_RENEWAL_DAYS=7
 readonly DATABASE_CERTIFICATE_MARGIN_SECONDS=$((DATABASE_CERTIFICATE_RENEWAL_DAYS * 86400 / 2))
 # The request the issuer must refuse (check 10's fourth line): a
 # CertificateRequest in REFUSED_NAMESPACE for the issuer REFUSED_ISSUER, with a
-# URI that meridian-services allows in `meridian` and a duration it allows, so
-# nothing about the request's shape refuses it, only its namespace (a test keeps
-# these equal to certificate-policy.yaml's). The name is
+# URI that meridian-services lists (the Claims API's own: since S072 the policy
+# lists each URI, so an unlisted one would be refused in `meridian` too) and a
+# duration and usages it allows, so nothing about the request's shape refuses
+# it, only its namespace (a test keeps these equal to certificate-policy.yaml's
+# lists). The name is
 # REFUSED_NAME_PREFIX and a suffix, the label is what the next run finds a
 # leftover by (only one older than REFUSED_LEFTOVER_AGE seconds is deleted), and
 # the answer is read for up to REFUSED_ATTEMPTS tries, REFUSED_INTERVAL seconds
@@ -996,7 +998,7 @@ readonly REFUSED_NAMESPACE=default
 readonly REFUSED_ISSUER=meridian-services
 readonly REFUSED_LABEL=meridian-smoke=refused-request
 readonly REFUSED_NAME_PREFIX=meridian-smoke-refused-
-readonly REFUSED_URI=spiffe://meridian.kind/ns/meridian/sa/meridian-smoke-refused
+readonly REFUSED_URI=spiffe://meridian.kind/ns/meridian/sa/claims-api
 readonly REFUSED_DURATION=1h0m0s
 readonly REFUSED_ATTEMPTS=15
 readonly REFUSED_INTERVAL=2
@@ -3289,9 +3291,11 @@ check_builtin_approver_off() {
 # a request that the issuer must refuse. It is a CertificateRequest, not a
 # Certificate, so that the key is made here, with openssl, and never leaves this
 # machine (a Certificate has cert-manager make it, in a Secret in the cluster).
-# The request is for the issuer meridian-services with a URI that issuer signs in
-# `meridian`; it is made in REFUSED_NAMESPACE, which no policy but the denying
-# one selects, so it must be Denied. Approved, or carrying a certificate, is a
+# The request is for the issuer meridian-services with a URI that policy lists
+# (the Claims API's, and no DNS name, as that service's own Certificate), so
+# that the policy would approve it in `meridian`; it is made in
+# REFUSED_NAMESPACE, which no policy but the denying one selects, so it must be
+# Denied. Approved, or carrying a certificate, is a
 # FAIL: the issuer signed a request it must refuse. The request is deleted
 # right after it is read, by the EXIT trap when the run ends first, and, when a
 # run was killed, at the start of the next one by name, from a list of the
