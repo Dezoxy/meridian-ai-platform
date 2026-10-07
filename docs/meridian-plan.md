@@ -14733,6 +14733,13 @@ of the step's branch at 3270162, before this record):
   that reads a kind script, the chart or the smoke script, 2,551 passed; the
   main session's run of the nine changed or touched test files, 394 passed,
   and `make test`, `make docs` and `make lint` ended 0.
+- **The final tree** (`main` with S078 merged in as well; 483502d): `make
+  test` (343 tests), `make docs` (14 checks) and `make lint` ended 0; the
+  whole suite at six workers beside the kind cluster and no other run with a
+  database: 17,681 passed, 8 skipped (3 min 41 s). This run is after K12 and
+  K13, so the sentence above that CI's run would be the only whole-suite
+  evidence for K12 no longer holds: this is it. The commit after it fills
+  this line.
 
 **Not seen** (the first half's list; the second half's items are above):
 
