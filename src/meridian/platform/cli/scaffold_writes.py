@@ -7,17 +7,17 @@ is made, so an interrupt between the note and the write is undone too; the undo
 puts back every file that still holds the bytes this command wrote, leaves a file
 the person saved since and says so, and names each path it could not restore. When
 something ends the undo itself (a second interrupt, an exit, an error), what it had
-done is known to the caller, which says so and names every path of the plan that is
-not known to be settled, to be checked by hand. A temporary file ``_replace`` makes
-is noted before it exists, removed by the undo and named like any other path when
-it stays. The fixed line "check the working tree" is written before the paths are
-listed.
+done is known to the caller, which says so and names every path the command wrote
+(or noted, to write) that is not known to be settled, to be checked by hand. A
+temporary file ``_replace`` makes is noted before it exists, removed by the undo
+and named like any other path when it stays; once gone, it is not named. The fixed
+line "check the working tree" is written before the paths are listed. An error the
+undo raises after an interrupt does not replace it: the lines are said and the
+interrupt is what ends the command.
 
 What cannot be closed: an interrupt that comes before that first line is written
 (after the undo has returned, while the error is built) leaves the person no
-line, and a kill the process cannot catch leaves nothing said at all; and an
-error the undo raises after an interrupt ends the command as a write error
-(exit 1), not as the interrupt.
+line, and a kill the process cannot catch leaves nothing said at all.
 
 The errors and the plan are here and not in ``scaffold``, which imports this
 module: the write needs them and must not import its importer. ``scaffold``
@@ -152,7 +152,13 @@ def _replace(path: Path, data: bytes, temporaries: list[Path]) -> None:
         except FileExistsError:  # not ours, and not to be removed
             temporaries.remove(temporary)
             raise
-        with os.fdopen(descriptor, "wb") as stream:
+        try:
+            stream = os.fdopen(descriptor, "wb")
+        except BaseException:  # not taken over, so still this call's to close
+            with suppress(OSError):
+                os.close(descriptor)
+            raise
+        with stream:
             stream.write(data)
         os.chmod(temporary, mode)
         os.replace(temporary, path)
@@ -370,39 +376,63 @@ def _say(message: str, lines: Iterable[str]) -> None:
         pass
 
 
+# What the command noted before each write: the new files, the directories, the
+# edited files with their old and new bytes, and the temporary files.
+_Noted = tuple[list[Path], list[Path], list[tuple[Path, bytes, bytes]], list[Path]]
+
+
 def _end_unfinished(
     root: Path,
     plan: Plan,
-    directories: list[Path],
-    temporaries: list[Path],
+    noted: _Noted,
     outcome: dict[str, str | None],
     ended: BaseException,
+    first: BaseException,
 ) -> NoReturn:
     """End ``write_plan`` after ``ended`` (an interrupt, an exit or an error) ended
-    the undo itself. What it left is in ``outcome``; the plan knows every path it
-    creates or replaces, and ``temporaries`` those of the files being replaced, so
-    each one the undo had not settled is named to be checked by hand. An error
-    becomes a ``ScaffoldWriteError`` with the lines as details, an interrupt or an
-    exit is said on standard error and goes on: the fixed line first, then the paths,
-    which are worked out only as they are written."""
+    the undo itself, ``first`` being what ended the write. What the undo left is in
+    ``outcome``; ``noted`` is what the command noted, the new files, directories,
+    edited files and temporary files, so that each path of it the undo had not
+    settled is named to be checked by hand. An error that ends the undo of an error
+    becomes a ``ScaffoldWriteError`` with the lines as details. Otherwise the lines
+    are said on standard error and what ended the command goes on: an interrupt or
+    an exit that ended the undo, or else ``first``, the interrupt that ended the
+    write, for the undo's error is no reason to replace it. The fixed line comes
+    first, then the paths, which are worked out only as they are written."""
     message = UNDO_UNFINISHED.format(type(ended).__name__)
     lines = chain(
         (line for line in outcome.values() if line),
-        _to_check(root, plan, (*directories, *temporaries), outcome),
+        _to_check(root, plan, noted, outcome),
     )
-    if isinstance(ended, Exception):
+    if isinstance(ended, Exception) and isinstance(first, Exception):
         raise ScaffoldWriteError(message, details=tuple(lines)) from ended
     _say(message, lines)
-    raise ended
+    raise first if isinstance(ended, Exception) else ended
 
 
 def _to_check(
-    root: Path, plan: Plan, made: tuple[Path, ...], outcome: dict[str, str | None]
+    root: Path,
+    plan: Plan,
+    noted: _Noted,
+    outcome: dict[str, str | None],
 ) -> Iterator[str]:
-    """The lines to check by hand: each path of the plan, and each directory or
-    temporary file in ``made``, that ``outcome`` does not hold."""
-    relative = (path.relative_to(root).as_posix() for path in made)
-    for path in (*plan.created, *relative, *WRITE_ORDER):
+    """The lines to check by hand: each path of the plan the command noted that
+    ``outcome`` does not hold, as a new file or an edited one, each directory it
+    noted, and each temporary file it noted that still exists."""
+    files, directories, replaced, temporaries = noted
+    written = {
+        path.relative_to(root).as_posix()
+        for path in (*files, *(path for path, _, _ in replaced))
+    }
+    relative = (path.relative_to(root).as_posix() for path in directories)
+    still_there = (
+        path.relative_to(root).as_posix()
+        for path in temporaries
+        if os.path.lexists(path)
+    )
+    created = (path for path in plan.created if path in written)
+    edited = (path for path in WRITE_ORDER if path in written)
+    for path in (*created, *relative, *still_there, *edited):
         if path not in outcome:
             yield CHECK_BY_HAND.format(path)
 
@@ -423,7 +453,8 @@ def write_plan(root: Path, plan: Plan) -> None:
     included, for it no longer holds that nothing was written), and for an
     interrupt the same lines on standard error before it propagates. When
     something ends the undo itself, ``_end_unfinished`` says so in the same two
-    ways, with every path not known to be settled, and the cause is the error."""
+    ways, with every path it touched not known to be settled, and the cause is the
+    error; an error of the undo after an interrupt leaves as the interrupt."""
     targets = [(root / relative, text) for relative, text in plan.created.items()]
     if any(os.path.lexists(path) for path, _ in targets):
         raise ScaffoldError(PATH_EXISTS)
@@ -441,7 +472,8 @@ def write_plan(root: Path, plan: Plan) -> None:
             _undo(root, files, directories, replaced, temporaries, outcome)
             left = tuple(line for line in outcome.values() if line)
         except BaseException as ended:
-            _end_unfinished(root, plan, directories, temporaries, outcome, ended)
+            noted = (files, directories, replaced, temporaries)
+            _end_unfinished(root, plan, noted, outcome, ended, exc)
         if not left:
             if isinstance(exc, _StepFailed):
                 raise ScaffoldWriteError(
