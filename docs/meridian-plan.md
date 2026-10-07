@@ -13897,6 +13897,15 @@ contract for the documents. The commits, from `git log` of the step's branch:
   skipped tests are, as the implementers infer, the live-model ones. `ruff`,
   the format check and `lint-imports` (six contracts kept) were clean in each
   report.
+- **After `main` moved under the branch (F4):** another step (S074, pull
+  request 111) split two test files this branch had changed. They are gone
+  here as on `main`, and each of this branch's hunks went to the unit's new
+  home by hand: 42 test functions of the one file and 40 of the other before
+  and after, none lost and none twice (its report's table); the merge of
+  `runner.py` and of the support module was read whole and is right. Its run
+  with a database: `4420 passed, 6 skipped, 1 error`, the error a full
+  temporary directory in a test's setup, and that file alone then `85
+  passed`.
 - **The whole suite on the final tree:** FINAL-SUITE-RESULT
 - **A database re-read of the last three commits** (U5, U5b and F2, up to
   `3ca4a9e`): no critical or high finding; the fixes do what the two reviews
