@@ -128,7 +128,10 @@ GUID-redacted: subscription, tenant, object and role IDs appear as `<guid>`.
 The ID of Terraform's `azurerm_client_config` data source, which is the
 base64 of those same IDs, appears as `<client-config-id>`. The filter is
 `redact` in `common.sh`, tested by `tests/test_terraform_redact.py`; it knows
-these two shapes and no other, so read a plan before pasting it anywhere.
+these two shapes and, since S036, the AWS script's (an ARN, an account number,
+an access key, a cluster or database host, an e-mail address, an IPv4 address,
+and a secret key or session token after its label), which the Azure scripts'
+output meets too, and no other, so read a plan before pasting it anywhere.
 
 ## Prerequisites
 
