@@ -33,6 +33,7 @@ MIGRATION = (
     / "0020_gateway_upkeep.sql"
 )
 AUDIT_MIGRATION = MIGRATION.with_name("0028_audit_expire.sql")
+LEDGER_BATCH_MIGRATION = MIGRATION.with_name("0030_ledger_expire_batches.sql")
 RUNBOOK = REPO_ROOT / "docs" / "operations" / "runbooks" / "budget-exhaustion.md"
 # Planted in each connection string: no output may carry it. (Not named after
 # what it stands for: the repository's secret scan reads the name.)
@@ -326,17 +327,19 @@ def test_the_conversion_is_exact_where_a_float_is_not() -> None:
 
 # ── the database's refusals ─────────────────────────────────────────────────
 def migration_codes() -> set[str]:
-    """The GU codes the headers of 0020 and 0028 list, one per line starting
+    """The GU codes the headers of 0020, 0028 and 0030 list, one per line starting
     `--   GU`."""
-    text = MIGRATION.read_text(encoding="utf-8") + AUDIT_MIGRATION.read_text(
-        encoding="utf-8"
+    text = "".join(
+        path.read_text(encoding="utf-8")
+        for path in (MIGRATION, AUDIT_MIGRATION, LEDGER_BATCH_MIGRATION)
     )
     return set(re.findall(r"^--\s+(GU\d{3})\s", text, re.MULTILINE))
 
 
 def test_the_table_of_refusals_holds_every_code_the_migration_names() -> None:
-    # 0020's fourteen and the two 0028 adds (GU401, GU402).
-    assert len(migration_codes()) == 16
+    # 0020's fourteen, the two 0028 adds (GU401, GU402) and the two of 0030
+    # (GU305, GU306).
+    assert len(migration_codes()) == 18
     assert set(gateway_cli.REFUSALS) == migration_codes()
 
 

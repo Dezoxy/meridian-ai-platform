@@ -1,7 +1,8 @@
 """``meridian gateway``: the upkeep of the Model Gateway's ledger (S066).
 
-A thin command over the functions of migrations 0020 and 0028 (``expire-audit``
-calls the audit expiry and its count), run as the database role
+A thin command over the functions of migrations 0020, 0028 and 0030
+(``expire-audit`` calls the audit expiry and its count, ``expire`` the ledger's
+expiry in batches), run as the database role
 ``gateway_upkeep``. That role can write no table: each function holds its
 rule and writes its audit row in the transaction of its change (T-25, T-47), so
 this module only parses what the operator typed, calls one function and prints
@@ -96,6 +97,11 @@ REFUSALS = {
         "newer than it is removed"
     ),
     "GU402": "the limit is from 1 to 10000 rows a batch: give --limit in that range",
+    "GU305": "the limit is from 1 to 10000 rows a batch: give --limit in that range",
+    "GU306": (
+        "usage rows of those months are held by another session: nothing was "
+        "changed by this call, so run it again when it lets go"
+    ),
 }
 # What the dry run prints for a tenant or deployment that is not an ID: the ledger
 # is text from a database, and an escape sequence in it must not reach a terminal.
@@ -136,7 +142,9 @@ def _detail(code: str, message: str, kind: str | None) -> str:
     """The number the server's own message gives for two refusals."""
     if code == "GU204" and kind and (left := re.search(r"\((\d+)\)$", message)):
         return f" (at most {_amount(kind, int(left[1]))} can be credited now)"
-    if code == "GU303" and (rows := re.search(r"^expire_ledger: (\d+) usage", message)):
+    if code == "GU303" and (
+        rows := re.search(r"^expire_ledger_batch: (\d+) usage", message)
+    ):
         return f" (count: {rows[1]})"
     return ""
 
@@ -404,8 +412,16 @@ def credit(
 
 
 # ── expire ───────────────────────────────────────────────────────────────────
-EXPIRE_LEDGER = "SELECT * FROM gateway.expire_ledger(%s, %s)"
-# What expire_ledger would remove, by the same conditions as its DELETEs, and
+EXPIRE_LEDGER_BATCH = "SELECT * FROM gateway.expire_ledger_batch(%s, %s, %s)"
+# The function's own maximum (0030); the default is a tenth of it.
+MAX_LEDGER_BATCH = 10_000
+DEFAULT_LEDGER_BATCH = 1_000
+LEDGER_COUNT_CANCELLED = (
+    "the count did not finish inside the statement timeout, and nothing was "
+    "changed: the real run removes in batches and needs no count, and a nearer "
+    "--before counts faster"
+)
+# What the expiry would remove, by the same conditions as its DELETEs, and
 # the database's own current UTC month (the function's clock, not this host's).
 WOULD_REMOVE = (
     "SELECT date_trunc('month', now() AT TIME ZONE 'UTC')::date, "
@@ -426,7 +442,17 @@ def _counts(prefix: str, month: date, usage: int, counters: int, credits: int) -
     )
 
 
-def _dry_run(conn: psycopg.Connection, before: date) -> list[str]:
+def _batches_line(usage: int, limit: int, batches: int | None = None) -> str:
+    """What the run takes in calls: the batches of usage rows, then the call that
+    removes the counters and credits. Before a run, the batches it will need."""
+    taken = -(-usage // limit) if batches is None else batches
+    return (
+        f"in {taken} batch(es) of at most {limit} usage rows, "
+        "then the counters and credits of those months"
+    )
+
+
+def _dry_run(conn: psycopg.Connection, before: date, limit: int) -> list[str]:
     current, usage, counters, credits, open_rows = conn.execute(
         WOULD_REMOVE, {"before": before}
     ).fetchone()
@@ -435,11 +461,53 @@ def _dry_run(conn: psycopg.Connection, before: date) -> list[str]:
         _refuse("GU302")
     lines = [
         _counts("would remove", before, usage, counters, credits),
+        _batches_line(usage, limit),
         f"still reserved in those months: {open_rows}",
     ]
     if open_rows:
         lines.append("--confirm is refused until each is closed (see: close)")
     return [*lines, "nothing removed: add --confirm to remove them", DRY_RUN_NOTE]
+
+
+def _ledger_limit(limit: int) -> int:
+    if not 1 <= limit <= MAX_LEDGER_BATCH:
+        raise typer.BadParameter(
+            f"a batch is from 1 to {MAX_LEDGER_BATCH} usage rows",
+            param_hint="'--limit'",
+        )
+    return limit
+
+
+def _expire_ledger_batches(
+    month: date, slug: str, limit: int
+) -> tuple[int, int, int, int]:
+    """Call the function until a call removes no usage row; each call is its own
+    transaction. That last call closed the periods (it returns their counters and
+    credits) or found nothing to close. Returns the usage rows, counters and
+    credits removed and the batches that removed usage rows. A failure after a
+    batch says what stays removed, then exits as any failure."""
+    usage = batches = 0
+    while True:
+        try:
+            removed = _upkeep(
+                lambda conn: conn.execute(
+                    EXPIRE_LEDGER_BATCH, (month, slug, limit)
+                ).fetchone()
+            )
+        except typer.Exit:
+            if batches:
+                typer.echo(
+                    f"removed {usage} usage rows in {batches} batch(es) before the "
+                    "failure: each batch is its own transaction with its own audit "
+                    "row, and what was removed stays removed; run the command "
+                    "again to continue",
+                    err=True,
+                )
+            raise
+        if removed[0] == 0:
+            return usage, removed[1], removed[2], batches
+        usage += removed[0]
+        batches += 1
 
 
 @app.command()
@@ -456,6 +524,14 @@ def expire(
         str,
         typer.Option("--reason", help="Why: a slug, such as retention-2026. Audited."),
     ],
+    limit: Annotated[
+        int,
+        typer.Option(
+            "--limit",
+            help=f"Usage rows a batch removes, 1 to {MAX_LEDGER_BATCH}; each batch "
+            "is its own transaction.",
+        ),
+    ] = DEFAULT_LEDGER_BATCH,
     confirm: Annotated[
         bool,
         typer.Option(
@@ -470,18 +546,32 @@ def expire(
     month is the operator's decision: there is no default, nothing runs this on
     a schedule, and the retention period is the owner's to choose. The current
     month is never removed, and months with a reservation still open are
-    refused. One audit row is written.
+    refused. With --confirm it removes at most --limit usage rows at a time, one
+    audit row for each batch, and then the counters and credits of those months
+    in one more call. A run that stops half way leaves what it removed removed;
+    running it again continues.
     """
     month = _month(before)
     slug = _slug(reason)
+    batch = _ledger_limit(limit)
     if not confirm:
-        for line in _upkeep(lambda conn: _dry_run(conn, month), read_only=True):
+        try:
+            lines = _upkeep(
+                lambda conn: _dry_run(conn, month, batch),
+                read_only=True,
+                on_cancel=True,
+            )
+        except CountCancelled:
+            _fail(LEDGER_COUNT_CANCELLED)
+        for line in lines:
             typer.echo(line)
         return
-    removed = _upkeep(
-        lambda conn: conn.execute(EXPIRE_LEDGER, (month, slug)).fetchone()
-    )
-    typer.echo(_counts("removed", month, *removed))
+    usage, counters, credits, batches = _expire_ledger_batches(month, slug, batch)
+    if usage + counters + credits == 0:
+        # Nothing before that month: the function returns zeros and writes no row.
+        _refuse("GU304")
+    typer.echo(_counts("removed", month, usage, counters, credits))
+    typer.echo(_batches_line(usage, batch, batches))
 
 
 # ── expire-audit ─────────────────────────────────────────────────────────────

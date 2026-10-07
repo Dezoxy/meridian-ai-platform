@@ -5,6 +5,10 @@ counter equals the charges of its period less its credits. An expiry removes the
 ledger of whole months, never the current one, with their counters and credits.
 Each writes one audit row in its own transaction. The constants and helpers are
 in ``upkeepsupport``.
+
+Since 0030 the upkeep role calls the expiry in batches
+(``test_ledger_expiry_batches.py``) and no longer ``expire_ledger``: the tests of
+this one call it as the owner, who still may.
 """
 
 import uuid
@@ -568,7 +572,7 @@ def test_an_expiry_removes_usage_counters_and_credits_of_the_months_before_toget
     plant_ledger_of_a_month(fresh_database, last)
     plant_ledger_of_a_month(fresh_database, before_last, tenant=OTHER_TENANT)
 
-    result = run(fresh_database, ROLE, EXPIRE, (last, REASON))
+    result = run(fresh_database, OWNER, EXPIRE, (last, REASON))
 
     # Everything of the month before the last: two usage rows, three counters
     # (two days and a month) and two credits, for each of the two tenants.
@@ -592,7 +596,7 @@ def test_an_expiry_leaves_the_current_month_and_every_later_row_alone(
         for statement in ROWS_FROM
     ]
 
-    run(fresh_database, ROLE, EXPIRE, (current, REASON))
+    run(fresh_database, OWNER, EXPIRE, (current, REASON))
 
     after = [
         run(fresh_database, OWNER, statement, {"date": current})
@@ -610,7 +614,7 @@ def test_the_day_before_the_first_of_the_month_goes_and_the_first_stays(
     plant_counter(fresh_database, TOKENS_KIND, last_day, 1)
     plant_counter(fresh_database, TOKENS_KIND, current, 1)
 
-    result = run(fresh_database, ROLE, EXPIRE, (current, REASON))
+    result = run(fresh_database, OWNER, EXPIRE, (current, REASON))
 
     assert result == [(0, 1, 0)]
     assert counters(fresh_database) == {(TENANT, TOKENS_KIND, current): 1}
@@ -623,7 +627,7 @@ def test_an_expiry_of_nothing_is_refused_and_writes_no_audit_row(
     plant_ledger_of_a_month(fresh_database, current)  # the current month stays
     before = ledger_snapshot(fresh_database)
 
-    error = refusal(fresh_database, ROLE, EXPIRE, (current, REASON))
+    error = refusal(fresh_database, OWNER, EXPIRE, (current, REASON))
 
     assert error.sqlstate == NOTHING_TO_REMOVE
     assert ledger_snapshot(fresh_database) == before
@@ -636,7 +640,7 @@ def test_an_expiry_repeated_with_nothing_to_remove_leaves_no_audit_row_at_all(
     # One credential in a loop must not be able to fill the audit table.
     current = utc_month(fresh_database)
     for _ in range(5):
-        assert sqlstate(fresh_database, ROLE, EXPIRE, (current, REASON)) == (
+        assert sqlstate(fresh_database, OWNER, EXPIRE, (current, REASON)) == (
             NOTHING_TO_REMOVE
         )
 
@@ -651,11 +655,11 @@ def test_an_expiry_that_removes_one_row_of_one_table_is_not_nothing(
     old = previous_month(current)
     plant_usage(fresh_database, day=old, month=old, state="settled", counted=False)
 
-    assert run(fresh_database, ROLE, EXPIRE, (current, REASON)) == [(1, 0, 0)]
+    assert run(fresh_database, OWNER, EXPIRE, (current, REASON)) == [(1, 0, 0)]
     plant_counter(fresh_database, TOKENS_KIND, old, 1)
-    assert run(fresh_database, ROLE, EXPIRE, (current, REASON)) == [(0, 1, 0)]
+    assert run(fresh_database, OWNER, EXPIRE, (current, REASON)) == [(0, 1, 0)]
     run(fresh_database, OWNER, INSERT_OLD_CREDIT, (TENANT, TOKENS_KIND, old, 1))
-    assert run(fresh_database, ROLE, EXPIRE, (current, REASON)) == [(0, 0, 1)]
+    assert run(fresh_database, OWNER, EXPIRE, (current, REASON)) == [(0, 0, 1)]
     assert [row["reference"] for row in audit_rows(fresh_database)] == [
         f"before={current:%Y-%m} usage=1 counters=0 credits=0",
         f"before={current:%Y-%m} usage=0 counters=1 credits=0",
@@ -668,9 +672,9 @@ def test_the_expiry_that_follows_one_that_removed_everything_is_refused(
 ) -> None:
     current = utc_month(fresh_database)
     plant_ledger_of_a_month(fresh_database, previous_month(current))
-    run(fresh_database, ROLE, EXPIRE, (current, REASON))
+    run(fresh_database, OWNER, EXPIRE, (current, REASON))
 
-    state = sqlstate(fresh_database, ROLE, EXPIRE, (current, REASON))
+    state = sqlstate(fresh_database, OWNER, EXPIRE, (current, REASON))
 
     assert state == NOTHING_TO_REMOVE
     assert len(audit_rows(fresh_database)) == 1
@@ -719,7 +723,7 @@ def test_a_reservation_that_commits_while_an_expiry_waits_is_not_orphaned(
     first, second = second_waits_for_first(
         fresh_database,
         (OWNER, RESERVE_AS_THE_GATEWAY, reserve),
-        (ROLE, EXPIRE, (current, REASON)),
+        (OWNER, EXPIRE, (current, REASON)),
     )
 
     assert first == []
@@ -798,10 +802,12 @@ def test_an_expiry_writes_one_audit_row_with_the_month_and_the_three_counts(
     last = previous_month(current)
     plant_ledger_of_a_month(fresh_database, last)
 
-    run(fresh_database, ROLE, EXPIRE, (current, REASON))
+    run(fresh_database, OWNER, EXPIRE, (current, REASON))
 
     (row,) = audit_rows(fresh_database)
-    assert row["db_role"] == ROLE
+    # The upkeep role may not call this function any more (0030): the owner does,
+    # and the row names the session's user, as every row of an upkeep function.
+    assert row["db_role"] == OWNER
     assert row["service"] == SERVICE
     assert (row["event"], row["outcome"]) == ("ledger.expired", "completed")
     assert row["tenant"] is None
@@ -828,7 +834,7 @@ def test_an_expiry_of_something_that_is_not_a_month_is_refused(
     plant_ledger_of_a_month(fresh_database, previous_month(utc_month(fresh_database)))
     snapshot = ledger_snapshot(fresh_database)
 
-    state = sqlstate(fresh_database, ROLE, EXPIRE, (before, REASON))
+    state = sqlstate(fresh_database, OWNER, EXPIRE, (before, REASON))
 
     assert state == code
     assert ledger_snapshot(fresh_database) == snapshot
@@ -842,7 +848,7 @@ def test_an_expiry_that_would_remove_the_current_month_is_refused(
     plant_ledger_of_a_month(fresh_database, current)
     snapshot = ledger_snapshot(fresh_database)
 
-    state = sqlstate(fresh_database, ROLE, EXPIRE, (next_month, REASON))
+    state = sqlstate(fresh_database, OWNER, EXPIRE, (next_month, REASON))
 
     assert state == CURRENT_MONTH
     assert ledger_snapshot(fresh_database) == snapshot
@@ -856,7 +862,7 @@ def test_an_expiry_with_a_reason_that_is_not_a_slug_is_refused(
     plant_ledger_of_a_month(fresh_database, previous_month(current))
     snapshot = ledger_snapshot(fresh_database)
 
-    state = sqlstate(fresh_database, ROLE, EXPIRE, (current, reason))
+    state = sqlstate(fresh_database, OWNER, EXPIRE, (current, reason))
 
     assert state == BAD_REASON
     assert ledger_snapshot(fresh_database) == snapshot
@@ -872,7 +878,7 @@ def test_an_expiry_is_refused_while_a_row_of_those_months_is_still_reserved(
     plant_usage(fresh_database, day=last, month=last, tenant=OTHER_TENANT)
     snapshot = ledger_snapshot(fresh_database)
 
-    error = refusal(fresh_database, ROLE, EXPIRE, (current, REASON))
+    error = refusal(fresh_database, OWNER, EXPIRE, (current, REASON))
 
     assert error.sqlstate == STILL_RESERVED
     assert error.diag.message_primary is not None
@@ -889,7 +895,7 @@ def test_a_reserved_row_of_a_month_that_stays_does_not_stop_an_expiry(
     plant_usage(fresh_database, day=last, month=last)  # the month p_before names
     plant_usage(fresh_database)  # the current month
 
-    result = run(fresh_database, ROLE, EXPIRE, (last, REASON))
+    result = run(fresh_database, OWNER, EXPIRE, (last, REASON))
 
     assert result == [(2, 3, 2)]
     assert count_ledger(fresh_database)[0] == 2
@@ -901,7 +907,7 @@ def test_an_expiry_goes_through_once_the_reserved_rows_are_closed(
     current = utc_month(fresh_database)
     last = previous_month(current)
     attempt = plant_usage(fresh_database, day=last, month=last)
-    assert sqlstate(fresh_database, ROLE, EXPIRE, (current, REASON)) == STILL_RESERVED
+    assert sqlstate(fresh_database, OWNER, EXPIRE, (current, REASON)) == STILL_RESERVED
 
     run(
         fresh_database,
@@ -913,7 +919,7 @@ def test_an_expiry_goes_through_once_the_reserved_rows_are_closed(
             REASON,
         ),
     )
-    result = run(fresh_database, ROLE, EXPIRE, (current, REASON))
+    result = run(fresh_database, OWNER, EXPIRE, (current, REASON))
 
     assert result == [(1, 2, 0)]
     assert count_ledger(fresh_database) == (0, 0, 0)
@@ -963,7 +969,7 @@ def test_temporary_tables_named_like_types_do_not_change_an_expiry(
     plant_ledger_of_a_month(fresh_database, previous_month(current))
 
     rows = call_after_temp_tables_named_like_types(
-        fresh_database, EXPIRE, (current, REASON)
+        fresh_database, EXPIRE, (current, REASON), role=OWNER
     )
 
     assert rows == [(2, 3, 2)]
@@ -977,6 +983,8 @@ def test_a_clock_planted_in_a_schema_the_caller_controls_is_not_called_by_an_exp
 
     # With the planted now() the current month would be January 2000 and the
     # expiry would be refused as one that removes it.
-    rows = call_with_a_planted_clock(fresh_database, EXPIRE, (current, REASON))
+    rows = call_with_a_planted_clock(
+        fresh_database, EXPIRE, (current, REASON), role=OWNER
+    )
 
     assert rows == [(2, 3, 2)]

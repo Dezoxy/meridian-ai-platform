@@ -64,8 +64,8 @@ checks as 0022 does, for `meridian knowledge verify`. It leaves out the vector,
 takes no lock and sets none, and says in its header the statement that undoes
 it.
 
-The two files of S068 let audit rows expire. Implemented and tested, not run on
-a cluster; no retention period is set and nothing is scheduled.
+The first two files of S068 let audit rows expire. Implemented and tested, not
+run on a cluster; no retention period is set and nothing is scheduled.
 [`0027_audit_recorded_at_idx.sql`](0027_audit_recorded_at_idx.sql) is an index on
 `audit.events (recorded_at, seq)`, the order the expiry's batch asks for, and
 nothing else, with the owner guard and `SET LOCAL lock_timeout` first. It is
@@ -95,6 +95,43 @@ name narrower than its job now (it also expires audit rows), and still holds no
 right on the schema `audit` or on its table: it holds EXECUTE on the functions.
 The count lets its holder learn how many events fell in any interval (volume, no
 content).
+
+The next two files of S068 put the ledger's expiry in batches. Implemented and
+tested, not run on a cluster; no retention period is set and nothing is
+scheduled.
+[`0029_usage_month_idx.sql`](0029_usage_month_idx.sql) is an index on
+`gateway.usage (month, attempt_id)` and nothing else, with the owner guard and
+`SET LOCAL lock_timeout` first: the table had no index on `month`, so a batch
+sorted every row of the months to remove and the question "is any row left"
+read the whole table. It is **not built concurrently**, for the reason above
+(the runner's transaction). The build takes SHARE on `gateway.usage`, so the
+gateway's reserve (an insert) and its close (an update) wait while it runs:
+0.30 s at 1,000,000 rows on one machine with the data in memory, not measured
+on a cloud disk. The index costs a write for every row the gateway reserves,
+and `attempt_id` is a random UUID, so those entries do not land at the end of
+the index.
+[`0030_ledger_expire_batches.sql`](0030_ledger_expire_batches.sql) adds
+`gateway.expire_ledger_batch(p_before, p_reason, p_limit)`, the owner's,
+executable by `gateway_upkeep` alone, and takes that role's EXECUTE on 0020's
+`gateway.expire_ledger` back (the function stays and the owner may call it): one
+way to expire the ledger. One call removes at most `p_limit` usage rows (1 to
+10,000; 10,000 rows took 0.08 to 0.14 s at 1,000,000 rows, on the same machine)
+of the months before `p_before`, oldest month first, and writes one
+`ledger.expired` row; the call that finds none left removes the counters and
+credits of those months and writes one more; a call after that returns zeros and
+writes none. It refuses as 0020's function does, with the same codes (GU001,
+GU002, GU301, GU302, GU303 while a usage row of those months is still reserved)
+and two of its own: GU305 (a limit outside 1 to 10,000) and GU306 (rows of those
+months are held by another session, nothing changed). GU304 is not used: the
+command tells a finished run from a refusal by the zeros. Rows go by location
+(`ctid`) over rows locked in the same statement, which is safe on this table,
+unlike an update-prone one, because the batch takes only rows that are not
+`reserved` and the trigger `usage_close_once` lets nothing change a closed row.
+While a run is half done the counters of the past months stand without all their
+usage rows, so the runbook's reconciliation shows drift for those periods until
+the closing call; nothing the gateway decides reads a past period. The role's
+functions are now five: `close_reservation`, `credit_tenant`,
+`expire_ledger_batch`, `expire_audit_events` and `count_audit_events_before`.
 
 ## An applied file never changes
 

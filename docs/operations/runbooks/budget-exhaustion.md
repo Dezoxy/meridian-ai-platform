@@ -96,7 +96,11 @@ ORDER BY reserved_at;
 The reconciliation: each counter must equal the sum of what its tenant's
 ledger rows charge in that period, less the credits of that period
 (`gateway.credits`, written only by the upkeep functions of migration 0020).
-`ledger` is that difference and `drift` is 0 on a sound ledger:
+`ledger` is that difference and `drift` is 0 on a sound ledger. One time it is
+not: while an expiry of past months is half done (below), their counters stand
+without all their usage rows, and `drift` shows it for those periods until the
+call that closes them. Read the reconciliation of a past period before an
+expiry starts or after it ends, not during:
 
 ```sql
 SELECT c.tenant, c.kind, c.period_start, c.amount,
@@ -203,7 +207,9 @@ command as a Job of its own (below, "On kind, as a Job"): implemented and
 tested with stub commands and the real chart, and seen on kind on 2026-10-06
 (second and third runs of S066, local only). What was seen: the read of the
 open reservations (`reservations: 0`, in both runs), an `expire` that refused
-with `ERROR GU304` as a failed Job and changed nothing, and a credit of one
+with `ERROR GU304` as a failed Job and changed nothing (that was the single
+call that S068 later replaced with batches, which were not run there), and a
+credit of one
 token to `claims-triage`, which printed the counter's new value. The audit row
 of that credit was not read on the cluster (reading `audit.events` there takes
 the database's pod, which asks the owner first). `close`, the euro credit and
@@ -263,22 +269,50 @@ meridian gateway credit TENANT --tokens 50000 --reason retry-loop
 meridian gateway credit TENANT --eur 1.5 --reason retry-loop
 ```
 
-**Expire old ledger rows.** The command removes whole months before
-`--before` (a month, written YYYY-MM): their usage rows, counters and
-credits together. The current month is never removed, and a month with a
-reservation still open is refused until each is closed. An expiry that would
-remove nothing is refused (`GU304`) and writes no audit row. The month is the
-owner's decision: there is no default and nothing runs this on a schedule,
-because retention is still open, and there is no minimum age: one call
-removes every whole month before the one named, up to the current month.
-Without `--confirm` the command prints what it would remove and removes
-nothing; read that first. It is a count at that moment: rows that arrive
-before `--confirm` are removed too, and a reservation that arrives makes the
-expiry refuse.
+**Expire old ledger rows.** Status: implemented (S068) in batches and tested
+against PostgreSQL; not run on a cluster. The command removes whole months
+before `--before` (a month, written YYYY-MM): their usage rows, counters and
+credits. The current month is never removed, and a month with a reservation
+still open is refused until each is closed (`GU303`, on every call, with the
+count). An expiry that would remove nothing is refused (`GU304`) and writes no
+audit row. The month is the owner's decision: there is no default and nothing
+runs this on a schedule, because retention is still open, and there is no
+minimum age: the run removes every whole month before the one named, up to the
+current month. Without `--confirm` the command prints what it would remove, in
+how many batches, and removes nothing; read that first. It is a count at that
+moment: rows that arrive before `--confirm` are removed too, and a reservation
+that arrives makes the expiry refuse. If the count is cancelled by the
+statement timeout the command says so and changes nothing; the real run needs
+no count, so a nearer `--before` counts faster or the run goes ahead.
+
+With `--confirm` the command calls one function until it has finished. Each
+call removes at most `--limit` usage rows (default 1,000, at most 10,000),
+oldest month first, in a transaction of its own with one `ledger.expired` audit
+row (`before=YYYY-MM batch usage=N`); the call that finds no usage row left
+removes the counters and credits of those months and writes one more row
+(`before=YYYY-MM closed counters=N credits=N`). It prints the totals and the
+number of batches. A batch of 10,000 rows took 0.08 to 0.14 s at 1,000,000 rows
+on a development machine with the data in memory (migration 0030's header); a
+cold cloud disk was not measured. Use `--limit 10000` for a backlog of many
+millions of rows.
+
+- **Between the batches the counters of the past months stand without all
+  their usage rows.** The reconciliation shows drift for those periods until
+  the closing call, and nothing the gateway decides reads a past period (a test
+  admits and charges a call in the current period the same). Run it once, to
+  its end, and do not run two at once: a row another session holds is skipped
+  and, when only held rows are left, the call is refused (`GU306`, nothing
+  changed); run the command again.
+- **A half-finished run stays finished as far as it went.** A failure after
+  some batches says how many usage rows were removed and that they stay removed
+  (each batch has its audit row); running the command again continues from the
+  oldest row left. There is no undo.
+- **No period and no schedule.** Nothing here sets a number of days and nothing
+  runs it by itself; the cutoff is the operator's argument.
 
 ```sh
 meridian gateway expire --before YYYY-MM --reason old-months
-meridian gateway expire --before YYYY-MM --reason old-months --confirm
+meridian gateway expire --before YYYY-MM --reason old-months --limit 10000 --confirm
 ```
 
 **Expire old audit rows.** Status: implemented (S068) and tested against
@@ -372,6 +406,7 @@ make gateway-upkeep ARGS="credit TENANT --tokens 50000 --reason retry-loop"
 make gateway-upkeep ARGS="credit TENANT --eur 1.5 --reason retry-loop"
 make gateway-upkeep ARGS="expire --before YYYY-MM --reason old-months"
 make gateway-upkeep ARGS="expire --before YYYY-MM --reason old-months --confirm"
+make gateway-upkeep ARGS="expire --before YYYY-MM --reason old-months --limit 10000 --confirm"
 ```
 
 The first reads and writes no audit row; so does `expire` without `--confirm`,
@@ -443,8 +478,9 @@ written by whoever inserts, so the query below filters on `db_role` (another
 role can write a row that says `gateway-upkeep` in `service`). `reference`
 says what was done: `attempt=ID tokens=N micro_eur=N` for a closed
 reservation (what it had reserved), `credit=ID kind=KIND amount=N
-period=YYYY-MM-DD` for a credit, and `before=YYYY-MM usage=N counters=N
-credits=N` for an expiry, so a row still says how much after an expiry
+period=YYYY-MM-DD` for a credit, and `before=YYYY-MM batch usage=N` for each
+batch of a ledger expiry and `before=YYYY-MM closed counters=N credits=N` for
+the call that closes the periods, so a row still says how much after an expiry
 removed the ledger rows it was about, and `before=TIMESTAMP removed=N` (the
 cutoff in UTC and the rows one batch removed) for `audit.expire`, the expiry of
 audit rows below. Read the rows as the queries above are read:

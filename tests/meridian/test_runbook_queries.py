@@ -17,11 +17,11 @@ from pathlib import Path
 import psycopg
 import pytest
 from dbsupport import OWNER, UPKEEP_ROLE, DatabaseHandle
+from ledgerbatchsupport import BATCH
 from servicesupport import REGISTRY_DIR
 from upkeepsupport import (
     CLOSE,
     CREDIT,
-    EXPIRE,
     plant_ledger_of_a_month,
     plant_usage,
     previous_month,
@@ -334,12 +334,35 @@ def test_the_reconciliation_reports_no_drift_after_upkeep_expires_a_month(
     assert {row["period_start"] for row in before} >= {old, old.replace(day=28)}
     assert [row["drift"] for row in before] == [0] * len(before)
 
-    run(ledger_run.db, UPKEEP_ROLE, EXPIRE, (current, "retention-test"))
+    # The expiry in batches: the batch that removes the two usage rows, then the
+    # call that closes the periods.
+    run(ledger_run.db, UPKEEP_ROLE, BATCH, (current, "retention-test", 100))
+    run(ledger_run.db, UPKEEP_ROLE, BATCH, (current, "retention-test", 100))
 
     rows = drift_rows(ledger_run.db)
     assert {row["period_start"] for row in rows}.isdisjoint({old, old.replace(day=28)})
     assert [row["drift"] for row in rows] == [0] * len(rows)
     assert rows
+
+
+def test_the_reconciliation_shows_drift_between_the_batches_of_an_expiry_not_after(
+    ledger_run: LedgerRun,
+) -> None:
+    current = utc_month(ledger_run.db)
+    old = previous_month(current)
+    plant_ledger_of_a_month(ledger_run.db, old)
+
+    # One of the month's two usage rows goes; its counters stand until the
+    # closing call, so the period no longer reconciles (the runbook says so).
+    run(ledger_run.db, UPKEEP_ROLE, BATCH, (current, "retention-test", 1))
+    between = [
+        row for row in drift_rows(ledger_run.db) if row["period_start"] < current
+    ]
+    run(ledger_run.db, UPKEEP_ROLE, BATCH, (current, "retention-test", 1))
+    run(ledger_run.db, UPKEEP_ROLE, BATCH, (current, "retention-test", 1))
+
+    assert any(row["drift"] != 0 for row in between)
+    assert all(row["drift"] == 0 for row in drift_rows(ledger_run.db))
 
 
 def test_the_reconciliation_reports_a_counter_changed_by_hand(
@@ -380,7 +403,9 @@ def test_the_upkeep_audit_query_lists_each_change_newest_first_under_the_role(
     run(db, UPKEEP_ROLE, CLOSE, (stale, False, "dead-process"))
     run(db, UPKEEP_ROLE, CREDIT, (TENANT, TOKENS_KIND, 10, "goodwill"))
     plant_ledger_of_a_month(db, previous_month(utc_month(db)))
-    run(db, UPKEEP_ROLE, EXPIRE, (utc_month(db), "retention-test"))
+    # The batch that removes the month's two usage rows, then the closing call.
+    run(db, UPKEEP_ROLE, BATCH, (utc_month(db), "retention-test", 100))
+    run(db, UPKEEP_ROLE, BATCH, (utc_month(db), "retention-test", 100))
     sql = runbook_query("runbooks/budget-exhaustion.md", "audit.events")
 
     columns, rows = run_read_only(db, sql)
@@ -388,11 +413,13 @@ def test_the_upkeep_audit_query_lists_each_change_newest_first_under_the_role(
     found = [dict(zip(columns, row, strict=True)) for row in rows]
     assert [row["event"] for row in found] == [
         "ledger.expired",
+        "ledger.expired",
         "budget.credited",
         "ledger.reservation-closed",
     ]
     assert {row["db_role"] for row in found} == {UPKEEP_ROLE}
     assert [row["reason"] for row in found] == [
+        "retention-test",
         "retention-test",
         "goodwill",
         "dead-process",

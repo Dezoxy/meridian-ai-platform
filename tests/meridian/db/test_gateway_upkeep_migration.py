@@ -37,6 +37,10 @@ PUBLIC_FUNCTIONS = (
     "gateway.credit_tenant(text, text, bigint, text)",
     "gateway.expire_ledger(date, text)",
 )
+# 0030 took the upkeep role's EXECUTE on the last of them back (the expiry in
+# batches replaced it): the owner's alone on a migrated database.
+OWNERS_ALONE_SINCE_0030 = "gateway.expire_ledger(date, text)"
+ROLE_FUNCTIONS = tuple(f for f in PUBLIC_FUNCTIONS if f != OWNERS_ALONE_SINCE_0030)
 HELPER_FUNCTIONS = (
     "gateway.upkeep_check_reason(text)",
     "gateway.upkeep_lower_counter(text, text, date, bigint)",
@@ -419,23 +423,24 @@ def test_the_role_has_no_privilege_on_the_audit_schema_or_any_other_schema(
     ]
 
 
-def test_the_role_may_execute_the_three_functions_and_the_audit_expiry_and_no_other(
+def test_the_role_may_execute_five_functions_and_no_other(
     migrated_database: DatabaseHandle,
 ) -> None:
-    # The catalog prints a signature without the spaces after its commas. The
-    # fourth and fifth are 0028's (the audit table's expiry and its count, in the
-    # schema gateway).
-    audit_expiry = [
+    # The catalog prints a signature without the spaces after its commas. 0020's
+    # close and credit; 0028's audit expiry and its count; 0030's expiry in
+    # batches, which took the place of 0020's expire_ledger for this role.
+    since_0028_and_0030 = [
         "gateway.expire_audit_events(timestamp with time zone,text,integer)",
         "gateway.count_audit_events_before(timestamp with time zone)",
+        "gateway.expire_ledger_batch(date,text,integer)",
     ]
     expected = sorted(
-        [name.replace(", ", ",") for name in PUBLIC_FUNCTIONS] + audit_expiry
+        [name.replace(", ", ",") for name in ROLE_FUNCTIONS] + since_0028_and_0030
     )
     assert executable_by(migrated_database, ROLE) == expected
 
 
-@pytest.mark.parametrize("function", PUBLIC_FUNCTIONS)
+@pytest.mark.parametrize("function", ROLE_FUNCTIONS)
 def test_execute_on_each_function_is_the_owners_and_the_roles_alone(
     migrated_database: DatabaseHandle, function: str
 ) -> None:
