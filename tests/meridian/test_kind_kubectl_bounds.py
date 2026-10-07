@@ -75,7 +75,7 @@ KNOWN_VERBS = {
 # is not kubectl's, so the script's ``kill`` would leave kubectl running. A file
 # is counted by its path under infra/kind/: a part of smoke.sh is
 # ``smoke.d/<file>``, so the key moves with the call when a cut moves it.
-RAW_PORT_FORWARDS = {"grafana.sh": 1, "demo.sh": 1, "smoke.sh": 1}
+RAW_PORT_FORWARDS = {"grafana.sh": 1, "demo.sh": 1, "smoke.d/shared.sh": 1}
 SCRIPTS = (
     "up.sh",
     "deploy.sh",
