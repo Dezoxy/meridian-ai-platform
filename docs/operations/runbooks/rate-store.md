@@ -336,8 +336,8 @@ few calls do: `MeridianRateStoreRefusing` needs at least two refused calls in
 cycle, so `MeridianServiceUnavailable` does not hold either. Read first the
 pod's events (`k describe pod -l app.kubernetes.io/name=rate-store`) and the
 list above: who holds connections, the Certificate's dates, the clock. The
-rule is loaded by `make up` and `make deploy`; not seen firing (implemented
-and unit-tested by `make alerts`).
+rule is applied by `make up` and `make deploy`; not yet seen loaded on a
+cluster and not seen firing (implemented and unit-tested by `make alerts`).
 
 ### A script hangs
 
