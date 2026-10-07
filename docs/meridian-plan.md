@@ -18987,10 +18987,12 @@ run):
   checked before any policy is applied) was taken on the advisor's advice, a
   third consultation that the implementer records. **M4b, `6e5d360`:** the
   second review's fixes (below) and check 12's last two lines; 3,407 passed, 1
-  skipped. **M5, no hash yet:** oversized test files and the cluster script's
-  gateway functions split along their sections, no behaviour changed (a
-  one-sentence description for the session to confirm: the contract is written
-  and its report was not in the handoff folder when this was written). The
+  skipped. **M5, `cbcbf08`:** the seven files the file size check named on this
+  branch split along their sections, by moving text: six test files into
+  eighteen with two support modules, and the Prometheus gateway's four
+  functions out of `up.sh` (850 lines, now 750) into `gateways.sh`; no
+  behaviour and no assertion changed (the collected tests are the same 1,297
+  ids, and a line proof holds for the script); 2,951 passed, 1 skipped. The
   merge of `main` (the uploads, plan v0.87) is `406e968`.
 - The implementers ran `make lint` (six contracts kept), `make test` and `make
   docs` on each contract, `shellcheck` on the scripts, and no whole suite and no
