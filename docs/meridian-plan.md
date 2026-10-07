@@ -14300,7 +14300,13 @@ lines (4, 3 and 28, the ones the proofs list), which makes the 3,900.
 - **The whole suite on the final tree** (the main session fills the next line
   when it has run):
 
-FINAL-SUITE-RESULT
+The main session's run on 77fd7fc (the three cuts, the two follow-ups of the
+review and this record, with `main` 064e5ab merged in): `make test` (372
+tests), `make docs` (14 checks) and `make lint` ended 0; the whole suite at
+six workers beside the kind cluster and no other run with a database: 18,153
+passed, 8 skipped (4 min 42 s). And by hand, on the same tree: `shellcheck
+infra/kind/smoke.sh infra/kind/smoke.d/*.sh` ended 0, and `bash -n` on each
+of the eleven files.
 
 - **The split script on kind (run R8, 2026-10-07, 10:42 to 10:48 UTC; the main
   session's, seen).** On the local cluster, with the checkout at `main`
@@ -17272,7 +17278,7 @@ ClusterRole and Envoy's hook leftovers.
   high; its medium finding (smoke's refused request had stopped proving that
   the namespace alone refuses it) and three low ones are fixed in the same
   pull request, which closes one of the five new rows.
-- **PLAN-VERSION, 2026-10-07:** S074, third part (still `doing`): the smoke
+- **v0.76, 2026-10-07:** S074, third part (still `doing`): the smoke
   script is split by moves a script proves. `infra/kind/smoke.sh` stays the
   entry (the statements, the eleven calls, the summary; 1,185 lines) and
   `infra/kind/smoke.d/` holds `shared.sh` and nine checks, each under 800
