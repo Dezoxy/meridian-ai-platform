@@ -12994,11 +12994,21 @@ No other consultation is recorded.
   three-digit citation defined. The script's canonical copy is the development
   base's: the same line is owed there, with the guard's neutral rules.
 - **The whole suite on the final tree, with `main` merged in, run by the main
-  session:** FINAL-SUITE-RESULT
-- **T2e's gates, run by the main session on the tree that carries its
-  items:** T2E-RESULT
+  session:** `16514 passed, 8 skipped, 8 warnings in 195.87s` at six workers
+  beside the cluster and nothing else, on 01d56d6 (`main` with S069 merged
+  in), 2026-10-07 05:44 to 05:47 UTC. A run of the same tree twenty minutes
+  earlier, with another step's loop of stack tests beside it, ended with 15
+  failures on a machine that was swapping (load 190) and is no result: the
+  session's fault.
+- **T2e's gates, run by the main session on the tree that carries its items:**
+  on 01d56d6, `make test` (`Ran 343 tests`, OK), `make docs` (14 checks) and
+  `make lint` ended 0; the AWS script's, the scan's, the redaction's and the
+  documents check's tests printed `772 passed, 47 subtests passed in 10.22s`.
+  `make aws-validate` and `make aws-scan` were run by T2e's implementer and
+  not again by the main session.
 - **The guard's case file on the final tree, run by the main session:**
-  GUARD-CASES-RESULT
+  `tests/test_guard_bash.sh` ended 0 with 2,074 ok and 0 FAIL on 01d56d6; the
+  worst shape under the byte bound took 0.747 s of CPU against the bound of 3.
 - **What the implementers reported (claims, not the main session's runs):**
   the guard's runner ended at 2,074 ok and 0 FAIL on T3d's tree, and the
   three AWS test files with the Renovate test passed 567 tests (T3d);
