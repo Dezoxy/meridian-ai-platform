@@ -83,13 +83,74 @@ EU_MEMBER_STATES = {
 # In Google's "Europe" and not in the EU (ADR 7): London and Zurich.
 NOT_IN_THE_EU = {"europe-west2": "England", "europe-west6": "Switzerland"}
 
+# The zones each of those Regions has, in the order Google's page "Regions and
+# zones" lists them (read 2026-10-07). St. Ghislain has no zone "a": it has b, c
+# and d, which a zone built as "<region>-a" would not find.
+PAGE_ZONES = {
+    "europe-central2": ["a", "b", "c"],
+    "europe-north1": ["a", "b", "c"],
+    "europe-north2": ["a", "b", "c"],
+    "europe-southwest1": ["a", "b", "c"],
+    "europe-west1": ["b", "c", "d"],
+    "europe-west3": ["a", "b", "c"],
+    "europe-west4": ["a", "b", "c"],
+    "europe-west8": ["a", "b", "c"],
+    "europe-west9": ["a", "b", "c"],
+    "europe-west10": ["a", "b", "c"],
+    "europe-west12": ["a", "b", "c"],
+}
+
+# Every resource address the module declares: a resource added without the pin,
+# or one that vanishes, changes this set and fails the test that holds it.
+RESOURCE_ADDRESSES = [
+    "google_artifact_registry_repository.main",
+    "google_artifact_registry_repository_iam_member.nodes_pull",
+    "google_billing_budget.monthly",
+    "google_compute_address.database",
+    "google_compute_forwarding_rule.database",
+    "google_compute_network.main",
+    "google_compute_router.main",
+    "google_compute_router_nat.main",
+    "google_compute_subnetwork.nodes",
+    "google_container_cluster.main",
+    "google_container_node_pool.main",
+    "google_project_iam_member.node",
+    "google_project_service.api",
+    "google_secret_manager_regional_secret.workload",
+    "google_secret_manager_regional_secret_iam_member.workload",
+    "google_service_account.node",
+    "google_sql_database_instance.main",
+    "terraform_data.project_pin",
+]
+
 
 def tf_files() -> list[Path]:
     return sorted(MODULE_DIR.glob("*.tf"))
 
 
 def without_comments(text: str) -> str:
-    return "\n".join(re.sub(r"\s#.*$|^\s*#.*$", "", line) for line in text.splitlines())
+    """The text with each ``#`` comment removed, line by line. A ``#`` inside a
+    double-quoted string (a URL fragment, a message) is part of the string and
+    stays; a backslash keeps the quote after it from ending the string."""
+    return "\n".join(_without_comment(line) for line in text.splitlines())
+
+
+def _without_comment(line: str) -> str:
+    in_string = False
+    escaped = False
+    for index, char in enumerate(line):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        elif char == "#":
+            return line[:index].rstrip()
+    return line
 
 
 def module_text() -> str:
@@ -102,6 +163,17 @@ def module_text() -> str:
 
 def file_text(name: str) -> str:
     return without_comments((MODULE_DIR / name).read_text(encoding="utf-8"))
+
+
+def raw_text(name: str) -> str:
+    """A file as written, comments and all: for what a comment must say."""
+    return (MODULE_DIR / name).read_text(encoding="utf-8")
+
+
+def squeezed(text: str) -> str:
+    """A comment wraps where it likes: the words, joined by single spaces and
+    without the comment markers."""
+    return " ".join(re.sub(r"^\s*#", "", text, flags=re.MULTILINE).split())
 
 
 def top_level_blocks(text: str, kind: str) -> dict[str, str]:
@@ -152,6 +224,40 @@ def quoted_list_in(text: str, anchor: str) -> list[str]:
     return re.findall(r'"([^"]+)"', items)
 
 
+# ── the helper that strips comments ──────────────────────────────────────────
+
+
+def test_a_hash_inside_a_quoted_string_is_not_a_comment_and_is_kept() -> None:
+    text = 'url = "https://example.com/#frag"  # a real comment\nname = "a # b"\n'
+
+    stripped = without_comments(text)
+
+    assert 'url = "https://example.com/#frag"' in stripped
+    assert 'name = "a # b"' in stripped
+    assert "real comment" not in stripped
+
+
+def test_a_whole_line_comment_and_a_trailing_comment_are_removed() -> None:
+    text = "# a whole line\n  # an indented one\nsize = 1 # trailing\nnext = 2\n"
+
+    stripped = without_comments(text)
+
+    assert "whole line" not in stripped
+    assert "indented" not in stripped
+    assert "trailing" not in stripped
+    assert "size = 1" in stripped
+    assert "next = 2" in stripped
+
+
+def test_an_escaped_quote_does_not_end_the_string_the_hash_sits_in() -> None:
+    text = 'a = "say \\"hi\\" # still inside"  # outside\n'
+
+    stripped = without_comments(text)
+
+    assert "still inside" in stripped
+    assert "outside" not in stripped
+
+
 # ── the project pin ──────────────────────────────────────────────────────────
 
 
@@ -181,9 +287,13 @@ def test_the_pins_message_names_neither_the_project_nor_the_number_it_expected()
     assert not re.search(r"\d{6,}", message)
 
 
+def test_the_module_declares_exactly_these_resources() -> None:
+    assert sorted(resources()) == RESOURCE_ADDRESSES
+
+
 def test_every_resource_but_the_pin_names_the_pin_in_its_depends_on() -> None:
     found = resources()
-    assert len(found) >= 15  # the whole module was read, not a part of it
+    assert sorted(found) == RESOURCE_ADDRESSES  # the whole module was read
 
     without = [
         name
@@ -216,6 +326,49 @@ def test_the_expected_number_is_a_sensitive_variable_without_a_default() -> None
 
     assert re.search(r"^\s*sensitive\s*=\s*true$", block, flags=re.MULTILINE)
     assert not re.search(r"^\s*default\s*=", block, flags=re.MULTILINE)
+
+
+def test_no_comment_says_a_plan_prints_no_project_id_or_number() -> None:
+    overstated = re.compile(
+        r"plan (does not print|never prints|prints (no|none|neither|nothing))",
+        re.IGNORECASE,
+    )
+
+    for path in tf_files():
+        assert not overstated.search(squeezed(path.read_text(encoding="utf-8"))), (
+            path.name
+        )
+
+
+def test_the_comments_say_what_a_plan_does_print_and_that_nothing_redacts_it() -> None:
+    main = squeezed(raw_text("main.tf"))
+    variables = squeezed(raw_text("variables.tf"))
+
+    # What is true: no VARIABLE's value is printed; Google's own resource IDs, the
+    # data source's read line and a failed precondition name the project, and
+    # there is no wrapper that redacts them.
+    for comment in (main, variables):
+        assert "no variable value is printed" in comment
+        assert "nothing redacts" in comment
+    assert "Read complete" in main
+    assert "precondition" in main
+
+
+def test_the_comment_on_the_data_source_says_which_apis_to_enable_by_hand_and_why() -> (
+    None
+):
+    comment = squeezed(raw_text("main.tf"))
+
+    assert "(README.md)" not in comment  # the sentence it pointed at did not exist
+    assert "Cloud Resource Manager" in comment
+    assert "Service Usage" in comment
+    assert "by hand" in comment
+    assert "before the first init" in comment
+    # Why the module cannot do it: the enabling resource hangs on the pin, the pin
+    # on the data source, and the data source on that API.
+    assert "hangs on the pin" in comment
+    assert "the pin on the data source" in comment
+    assert "the data source on that API" in comment
 
 
 # ── variables ────────────────────────────────────────────────────────────────
@@ -392,8 +545,39 @@ def test_the_lock_file_holds_the_two_platform_hashes_the_aws_lock_has() -> None:
         encoding="utf-8"
     )
 
-    assert len(re.findall(r'"h1:', lock)) == len(re.findall(r'"h1:', aws_lock)) == 2
+    hashes = re.findall(r'"(h1:[^"]+)"', lock)
+    assert len(hashes) == len(re.findall(r'"h1:', aws_lock)) == 2
+    assert len(set(hashes)) == 2  # two platforms, not one hash written twice
     assert len(re.findall(r'"zh:', lock)) >= 2
+
+
+def test_the_state_comment_says_a_bare_init_writes_the_state_in_this_directory() -> (
+    None
+):
+    header = squeezed(raw_text("versions.tf"))
+
+    # The block has no path, so a call that passes none writes terraform.tfstate
+    # next to the files, in a worktree a session deletes (the failure aws.sh
+    # exists to prevent). A by-hand apply starts with a path outside every
+    # checkout.
+    assert "terraform.tfstate" in header
+    assert "in this directory" in header
+    assert "init -backend-config=path=" in header
+    assert "outside every checkout" in header
+    assert "NOT one in this directory" not in header
+
+
+def test_the_provider_constraint_comment_says_what_it_allows_and_what_runs() -> None:
+    header = squeezed(raw_text("versions.tf"))
+
+    # "~> 8.6" is the form the AWS module uses ("~> 6.67"): it allows any 8.x from
+    # 8.6 and never 9; the lock holds the version a validate runs.
+    assert 'version = "~> 8.6"' in raw_text("versions.tf")
+    assert 'version = "~> 6.67"' in raw_text("../aws/versions.tf")
+    assert "any 8.x from 8.6" in header
+    assert "never 9" in header
+    assert "-lockfile=readonly" in header
+    assert "pinned to the minor" not in header
 
 
 def test_no_variable_file_override_file_or_state_sits_in_the_modules_directory() -> (
@@ -505,7 +689,66 @@ def test_there_is_one_zonal_cluster_one_node_pool_and_one_subnet() -> None:
     assert re.search(r"^\s*location\s*=\s*local\.zone$", cluster, re.MULTILINE)
     assert "node_locations" not in cluster
     (zone,) = re.findall(r"^\s*zone\s*=\s*(.+)$", file_text("main.tf"), re.MULTILINE)
-    assert zone.strip() == '"${var.region}-a"'
+    assert zone.strip() == "local.zones[var.region]"
+
+
+def module_zones() -> dict[str, str]:
+    (body,) = re.findall(
+        r"^\s*zones\s*=\s*\{\n(.*?)^\s*\}$",
+        file_text("main.tf"),
+        re.MULTILINE | re.DOTALL,
+    )
+    return dict(re.findall(r'"([^"]+)"\s*=\s*"([^"]+)"', body))
+
+
+def test_the_zone_map_has_one_entry_for_every_region_of_the_list_and_no_other() -> None:
+    allowed = quoted_list_in(variable_block("region"), "var.region")
+
+    zones = module_zones()
+
+    assert sorted(zones) == sorted(allowed) == sorted(EU_REGIONS)
+    assert len(zones) == 11
+
+
+def test_every_zone_of_the_map_begins_with_its_region_and_names_one_letter() -> None:
+    for region, zone in module_zones().items():
+        assert zone.startswith(f"{region}-"), region
+        assert re.fullmatch(r"[a-z]", zone.removeprefix(f"{region}-")), region
+
+
+def test_each_zone_is_the_first_one_the_page_lists_for_its_region() -> None:
+    assert sorted(PAGE_ZONES) == sorted(EU_REGIONS)
+
+    for region, zone in module_zones().items():
+        assert zone == f"{region}-{PAGE_ZONES[region][0]}", region
+
+
+def test_st_ghislain_is_not_given_a_zone_it_does_not_have() -> None:
+    zones = module_zones()
+
+    assert zones["europe-west1"] == "europe-west1-b"
+    assert "a" not in PAGE_ZONES["europe-west1"]
+
+
+def test_the_zone_is_looked_up_with_no_fallback_for_a_region_without_an_entry() -> None:
+    main = file_text("main.tf")
+
+    # An index, not lookup(): a Region added to the list without a zone is an
+    # error of the plan, not a zone built from a guess. try() and coalesce() are
+    # the other two ways to write a fallback.
+    assert "local.zones[var.region]" in main
+    for fallback in ("lookup(", "try(", "coalesce(", '"${var.region}-'):
+        assert fallback not in main, fallback
+
+
+def test_the_zone_comment_says_what_was_read_and_when() -> None:
+    comment = squeezed(raw_text("main.tf"))
+
+    assert "Regions and zones" in comment
+    assert "2026-10-07" in comment
+    assert "europe-west1" in comment
+    assert "b, c and d" in comment
+    assert 'has a zone "a"' not in comment
 
 
 def test_the_cluster_chooses_dataplane_v2_workload_identity_and_the_gateway_api() -> (
@@ -569,6 +812,71 @@ def test_deletion_protection_is_written_false_on_the_cluster(
     )
 
 
+def test_the_cluster_ships_system_components_logs_only_and_says_why() -> None:
+    cluster = one_resource("google_container_cluster")
+
+    (logging,) = re.findall(r"logging_config \{\n(.*?)\n\s*\}", cluster, re.DOTALL)
+    assert re.search(
+        r'^\s*enable_components\s*=\s*\["SYSTEM_COMPONENTS"\]$', logging, re.MULTILINE
+    )
+    assert "WORKLOADS" not in cluster
+    # What the pages said: the _Default bucket is in the global location and
+    # cannot be moved, and the platform's chart ships workload logs itself.
+    comment = squeezed(raw_text("cluster.tf"))
+    assert "_Default" in comment
+    assert "global" in comment
+    assert "SYSTEM_COMPONENTS" in comment
+    assert "chart ships workload logs" in comment
+
+
+def test_the_default_node_pool_is_removed_and_has_no_node_config_of_its_own() -> None:
+    cluster = one_resource("google_container_cluster")
+
+    assert re.search(r"^\s*remove_default_node_pool\s*=\s*true$", cluster, re.MULTILINE)
+    assert re.search(r"^\s*initial_node_count\s*=\s*1$", cluster, re.MULTILINE)
+    # The provider's page: the cluster's node_config manages the default pool and
+    # "should not be used at the same time as a google_container_node_pool". The
+    # minutes the default pool lives it runs as Compute Engine's default service
+    # account; the comment says so, and what fails if that account has no role.
+    assert "node_config" not in cluster
+    comment = squeezed(raw_text("cluster.tf"))
+    assert "Compute Engine default service account" in comment
+    assert "for a few minutes" in comment
+    assert "fails" in comment
+
+
+@pytest.mark.parametrize(
+    ("resource_type", "setting"),
+    [
+        ("google_container_cluster", r'^\s*channel\s*=\s*"REGULAR"$'),
+        ("google_container_cluster", r"^\s*enable_shielded_nodes\s*=\s*true$"),
+        ("google_container_node_pool", r"^\s*auto_upgrade\s*=\s*true$"),
+        ("google_container_node_pool", r"^\s*auto_repair\s*=\s*true$"),
+        ("google_container_node_pool", r"^\s*enable_secure_boot\s*=\s*true$"),
+        ("google_container_node_pool", r"^\s*enable_integrity_monitoring\s*=\s*true$"),
+        ("google_sql_database_instance", r'^\s*availability_type\s*=\s*"ZONAL"$'),
+        (
+            "google_billing_budget",
+            r'^\s*credit_types_treatment\s*=\s*"EXCLUDE_ALL_CREDITS"$',
+        ),
+    ],
+    ids=[
+        "release channel",
+        "shielded nodes",
+        "automatic upgrade",
+        "automatic repair",
+        "secure boot",
+        "integrity monitoring",
+        "zonal availability",
+        "credits excluded",
+    ],
+)
+def test_the_settings_the_review_found_untested_are_written_out(
+    resource_type: str, setting: str
+) -> None:
+    assert re.search(setting, one_resource(resource_type), re.MULTILINE)
+
+
 # ── registry ─────────────────────────────────────────────────────────────────
 
 
@@ -582,6 +890,37 @@ def test_the_registry_is_one_docker_repository_in_the_region_with_immutable_tags
     assert re.search(r"immutable_tags\s*=\s*true", repository)
     assert "allUsers" not in module_text()
     assert "allAuthenticatedUsers" not in module_text()
+
+
+def test_the_nodes_may_read_the_modules_own_repository_and_nothing_else_in_it() -> None:
+    members = resources_of("google_artifact_registry_repository_iam_member")
+    (body,) = members.values()
+
+    # The node role covers logging and metrics, not Artifact Registry: Google's
+    # page says a user-provided node service account must be granted access on
+    # the repository. ONE member, ON the repository (not the project), the reader
+    # role, in the form that removes nothing granted elsewhere.
+    assert re.search(r'^\s*role\s*=\s*"roles/artifactregistry\.reader"$', body, re.M)
+    assert re.search(
+        r"^\s*member\s*=\s*google_service_account\.node\.member$", body, re.M
+    )
+    assert re.search(
+        r"^\s*repository\s*=\s*google_artifact_registry_repository\.main\.name$",
+        body,
+        re.M,
+    )
+    assert re.search(
+        r"^\s*location\s*=\s*google_artifact_registry_repository\.main\.location$",
+        body,
+        re.M,
+    )
+    assert not re.search(
+        r"artifact_registry_repository_iam_(binding|policy)", module_text()
+    )
+    assert "roles/artifactregistry.writer" not in module_text()
+    assert "roles/artifactregistry.admin" not in module_text()
+    assert "roles/artifactregistry.repoAdmin" not in module_text()
+    assert "artifactregistry" not in one_resource("google_project_iam_member")
 
 
 # ── database ─────────────────────────────────────────────────────────────────
@@ -608,6 +947,47 @@ def test_backups_and_point_in_time_recovery_are_written_out_not_left_to_a_defaul
     assert re.search(
         r"^\s*point_in_time_recovery_enabled\s*=\s*true$", backup, re.MULTILINE
     )
+    assert re.search(r"backup_retention_settings \{", backup)
+    assert re.search(r"^\s*retained_backups\s*=\s*3$", backup, re.MULTILINE)
+
+
+def test_no_final_backup_is_kept_when_the_instance_is_removed() -> None:
+    database = one_resource("google_sql_database_instance")
+
+    assert re.search(r"final_backup_config \{\n\s*enabled\s*=\s*false\n\s*\}", database)
+
+
+def test_the_backups_are_kept_in_the_instances_own_region_and_why() -> None:
+    database = one_resource("google_sql_database_instance")
+
+    # Google's page offers the "eu" multi-region (data centres in the EU, the
+    # default) or a Region, and says a backup in the instance's own Region always
+    # succeeds whatever the organization policy. The Region is the tighter claim.
+    (backup,) = re.findall(
+        r"backup_configuration \{\n(.*?)\n    \}", database, re.DOTALL
+    )
+    assert re.search(r"^\s*location\s*=\s*var\.region$", backup, re.MULTILINE)
+    comment = squeezed(raw_text("database.tf"))
+    assert "multi-region" in comment
+    assert "always succeeds" in comment
+
+
+def test_the_databases_storage_grows_to_a_closed_ceiling_and_no_disk_size_is_set() -> (
+    None
+):
+    database = one_resource("google_sql_database_instance")
+
+    # Autoresize is on by default and its limit 0 means no limit (a shared-core
+    # instance may reach 3054 GB). disk_size stays unset: the provider's page says
+    # a disk_size beside autoresize makes a later apply try to delete the
+    # instance after a resize.
+    assert re.search(r"^\s*disk_autoresize\s*=\s*true$", database, re.MULTILINE)
+    (limit,) = re.findall(r"^\s*disk_autoresize_limit\s*=\s*(\d+)$", database, re.M)
+    assert 0 < int(limit) <= 50
+    assert "disk_size" not in database
+    comment = squeezed(raw_text("database.tf"))
+    assert "disk_size" in comment
+    assert "no limit" in comment
 
 
 def test_the_database_has_no_public_address_and_requires_tls() -> None:
@@ -843,6 +1223,7 @@ def evaluate(tmp_path: Path, name: str, value: str) -> str:
         ("node_count", "5"),
         ("workload_namespace", "meridian"),
         ("workload_service_account", "model-gateway"),
+        ("workload_service_account", "gateway2"),
         ("budget_monthly_limit", "1"),
         ("budget_monthly_limit", "25"),
         ("budget_monthly_limit", "500"),
@@ -897,6 +1278,10 @@ def test_the_values_the_module_allows_are_accepted(
         ("workload_namespace", ""),
         ("workload_service_account", "Model_Gateway"),
         ("workload_service_account", "model-gateway-"),
+        # A dot is a valid Kubernetes name and not a valid Secret Manager ID, and
+        # the secret's ID is built from this name.
+        ("workload_service_account", "model.gateway"),
+        ("workload_service_account", "a.b"),
         ("workload_service_account", ""),
         ("budget_monthly_limit", "0"),
         ("budget_monthly_limit", "-5"),

@@ -32,6 +32,19 @@ resource "google_sql_database_instance" "main" {
     deletion_protection_enabled = false
     user_labels                 = local.labels
 
+    # Storage grows on its own (autoresize is on by default) and the provider's
+    # limit defaults to 0, which Google's page "About instance settings"
+    # (Cloud SQL for PostgreSQL, read 2026-10-07) says means no limit: a shared-core instance could grow
+    # to 3054 GB and bill for it. A ceiling of 20 GB, closed and small, is
+    # enough for a test that lives an hour; an instance that reaches it stops
+    # growing, and one that runs out of space goes offline (the same page).
+    # disk_size is left unset: the provider's page says a disk_size beside
+    # autoresize makes a later apply try to delete the instance to resize it
+    # back. The instance's first size is Cloud SQL's own, which no page read
+    # here states: an apply shows it, and it has to be below the ceiling.
+    disk_autoresize       = true
+    disk_autoresize_limit = 20
+
     # No final backup, so a removal leaves nothing billed behind. A final backup
     # is kept, and billed, for 30 days (ADR 7). Production keeps one.
     final_backup_config {
@@ -40,9 +53,19 @@ resource "google_sql_database_instance" "main" {
 
     # Through Terraform, backups and point-in-time recovery are off unless they
     # are asked for (ADR 7, row 20, trap b).
+    #
+    # The backups' location is written out: the instance's own Region. Google's
+    # page "Manage standard backups" (read 2026-10-07) offers the default
+    # multi-region (here "eu", which its page "Manage instance locations"
+    # describes as data centers in the European Union) or a Region, and says a backup in the instance's own Region always succeeds,
+    # whatever the organization policy allows. The Region is the tighter
+    # residency claim, one country and not a continent of data centers; the cost
+    # is that a backup does not survive the loss of its Region, which a test
+    # environment accepts.
     backup_configuration {
       enabled                        = true
       point_in_time_recovery_enabled = true
+      location                       = var.region
 
       backup_retention_settings {
         retained_backups = 3

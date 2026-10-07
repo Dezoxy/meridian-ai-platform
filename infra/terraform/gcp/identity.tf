@@ -27,7 +27,8 @@ resource "google_secret_manager_regional_secret" "workload" {
 # member to one role on this one secret and removes nothing granted elsewhere;
 # _iam_binding owns the whole role and _iam_policy the whole policy of the
 # secret. The project number comes from the sensitive variable the pin checks
-# against the project itself, so a plan does not print it.
+# against the project itself, so the plan shows the member as sensitive; the
+# resource's ID names the project all the same (main.tf).
 resource "google_secret_manager_regional_secret_iam_member" "workload" {
   location  = google_secret_manager_regional_secret.workload.location
   secret_id = google_secret_manager_regional_secret.workload.secret_id

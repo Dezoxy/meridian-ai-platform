@@ -7,8 +7,12 @@
 # The nodes' own service account. By default GKE uses the Compute Engine default
 # service account, which is broad; Google's best practice is a custom one with
 # at least roles/container.defaultNodeServiceAccount (ADR 7, item 2), and that
-# is the one role granted. The role that pulls from Artifact Registry is not
-# verified (ADR 7, question 16): whether this one covers it, only an apply shows.
+# is the one role granted at the project. Read 2026-10-07 on Google's page
+# "Google Kubernetes Engine roles and permissions": the role holds logging,
+# monitoring and autoscaling permissions and none for Artifact Registry, and the
+# page "Access control with IAM" (Artifact Registry) says a user-provided node
+# service account must be granted access on the repository. That one
+# grant, on the module's one repository, is in registry.tf (ADR 7, question 16).
 resource "google_service_account" "node" {
   account_id   = "${local.name}-node"
   display_name = "Meridian GKE nodes (${local.name})"
@@ -35,7 +39,16 @@ resource "google_container_cluster" "main" {
   subnetwork = google_compute_subnetwork.nodes.id
 
   # The node pool below is the cluster's only one: the default pool GKE makes
-  # with the cluster is removed at once.
+  # with the cluster is removed at once. This is the form the provider's page
+  # recommends ("a separately managed node pool"), and the page says the
+  # cluster's own node_config manages the default pool and generally should not
+  # be used beside a google_container_node_pool, so none is written here. The
+  # price, read on Google's page "About service accounts in GKE" (2026-10-07): for a few minutes the default pool runs as the Compute Engine
+  # default service account, which is broad, and where an organization enforces
+  # iam.automaticIamGrantsForDefaultServiceAccounts (enforced by default in
+  # every organization made on or after 2024-05-03) that account may lack the
+  # role GKE needs, so the cluster's creation fails. Only an apply shows which. The module's own node service
+  # account is on the node pool below, where the page's example puts it.
   remove_default_node_pool = true
   initial_node_count       = 1
 
@@ -61,6 +74,21 @@ resource "google_container_cluster" "main" {
   }
 
   enable_shielded_nodes = true
+
+  # Only the system components' logs are shipped. Unset, the cluster's logs go
+  # to Cloud Logging (the provider's page: logging_service defaults to
+  # logging.googleapis.com/kubernetes) and GKE chooses the components. Read
+  # 2026-10-07 on Google's page "Regionalize your logs": a project's _Default and
+  # _Required buckets are in the global location, which promises no EU location,
+  # and the location of an existing bucket cannot be changed. The platform's
+  # chart ships workload logs itself (to Loki), so SYSTEM_COMPONENTS is all this
+  # cluster sends. That narrows what reaches the global _Default bucket; it does
+  # not regionalize it (a bucket and a sink, or the organization's default
+  # location, outside this module, do), and _Required stays global whatever is
+  # set here.
+  logging_config {
+    enable_components = ["SYSTEM_COMPONENTS"]
+  }
 
   resource_labels = local.labels
 

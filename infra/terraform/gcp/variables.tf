@@ -1,6 +1,8 @@
 # Every variable has a description and a validation. The ones that name the
 # owner's project, billing account or address are sensitive and have no default,
-# so that no value of theirs is ever in the repository and a plan prints none.
+# so that no value of theirs is ever in the repository and no variable value is
+# printed by a plan (Google's own resource IDs, the data source's read line and
+# a failed precondition do name the project, and nothing redacts them: main.tf).
 # This module is never planned, so no value is passed anywhere: the validations
 # are run by tests/meridian/test_gcp_module.py through terraform console, on a
 # copy of this file with no provider.
@@ -26,9 +28,11 @@ variable "region" {
 # The project the module is written for. The provider reads it here, the
 # workload identity pool is named after it (PROJECT_ID.svc.id.goog) and the
 # database allows it as the consumer of Private Service Connect. Sensitive, like
-# AWS's expected_account_id: a plan prints no project ID, and nothing in the
-# repository holds one. A project ID is 6 to 30 characters: lowercase letters,
-# digits and hyphens, starting with a letter and not ending with a hyphen.
+# AWS's expected_account_id: no variable value is printed, so this one is not,
+# though Google's own IDs name the project and nothing redacts them (main.tf);
+# and nothing in the repository holds one. A project ID is 6 to 30 characters:
+# lowercase letters, digits and hyphens, starting with a letter and not ending
+# with a hyphen.
 variable "project_id" {
   description = "The ID of the existing Google Cloud project the module's resources are made in. The module never creates a project. No default."
   type        = string
@@ -43,8 +47,10 @@ variable "project_id" {
 # The one project this module may touch. The provider has no list of allowed
 # projects (AWS's allowed_account_ids), so main.tf compares the number of the
 # project it is configured for with this, and every resource waits for the
-# comparison. Sensitive: a plan prints neither the number nor a rejected value
-# of it. The number is also what the workload principal and the budget name.
+# comparison. Sensitive: this variable's value is not printed, nor is a rejected
+# value of it (the number of the project the provider reached is printed by a
+# failed precondition, and nothing redacts it: main.tf). The number is also what
+# the workload principal and the budget name.
 variable "expected_project_number" {
   description = "The number of the project, which the project's own number must equal or nothing is proposed. Digits only. No default."
   type        = string
@@ -151,14 +157,18 @@ variable "workload_namespace" {
   }
 }
 
+# The name is also part of the secret's ID (identity.tf), which Secret Manager
+# accepts with letters, digits, hyphens and underscores and rejects with a dot.
+# A Kubernetes service account name may hold a dot, so the dot is refused here,
+# where the sentence names the variable, and not at an apply.
 variable "workload_service_account" {
-  description = "Kubernetes service account that may read the secret."
+  description = "Kubernetes service account that may read the secret: lowercase letters, digits and hyphens, because the secret's ID is built from it."
   type        = string
   default     = "model-gateway"
 
   validation {
-    condition     = can(regex("^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$", var.workload_service_account)) && length(var.workload_service_account) <= 253
-    error_message = "workload_service_account must be a valid Kubernetes service account name."
+    condition     = can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", var.workload_service_account)) && length(var.workload_service_account) <= 253
+    error_message = "workload_service_account must be a valid Kubernetes service account name without a dot (lowercase letters, digits and hyphens): the secret's ID is built from it, and a secret's ID cannot hold a dot."
   }
 }
 
