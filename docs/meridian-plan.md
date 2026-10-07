@@ -12578,6 +12578,13 @@ on 2026-10-06 side by side; E3 waited for E2 (both edit the runtime's
   whose IDs do not fit and the canary test; the mode-enum test could not be
   seen to fail (it guards a fourth mode). No recorded reply carries a
   deployment or a provider, so the replay did not move.
+- **The pull request's checks, and one change beside the step:** the first
+  two runs of the `docs consistency` job failed on S075's guard test, not on
+  this step: the hook's worst shape took 1.746 and 1.745 s of CPU on the
+  hosted runner against a bound of 1.5 s (0.777 s on the development machine;
+  1.736 s once on pull request 108). The bound is 3 s in this branch, with
+  its reason beside it; the guard's cases ran 1521 ok, 0 FAIL after the
+  change. S036's branch rewrites the same lines and wins the conflict.
 - **A kind run would show** the withheld completion's four headers on the
   400, the 422 text "a resume delivers no value: send {}", one `suppressed`
   row from each service after a flood and a shed tool call's row with its run
