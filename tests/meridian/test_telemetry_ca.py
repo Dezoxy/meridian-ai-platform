@@ -25,16 +25,18 @@ import pytest
 import yaml
 from certpolicysupport import (
     AUTHORITY_POLICY,
+    COLLECTOR_CLIENT_POLICY,
     COLLECTOR_POLICY,
     DENY_POLICY,
     KIND_DIR,
     POLICY_NAMES,
+    allows,
     hours,
     request_of,
     selects,
     verdict,
 )
-from certscriptsupport import SECONDS
+from certscriptsupport import POLICIES, SECONDS
 from test_certificate_deploy import run_deploy, without_the_record
 from test_certificate_policy_up import (
     line_containing,
@@ -60,6 +62,13 @@ COLLECTOR_NAMES = [
     "otel-collector.observability.svc",
     "otel-collector.observability.svc.cluster.local",
 ]
+COLLECTOR_CLIENT = "otel-collector-client"
+COLLECTOR_CLIENT_TLS_NAME = "otel-collector-client-tls"
+# One name, made to say what it is and to resolve nowhere: no Service, no pod and
+# no cluster domain has it (`.meridian` is not the cluster's `.cluster.local`).
+COLLECTOR_CLIENT_NAMES = ["otel-collector.client.observability.meridian"]
+CLIENT_USAGES = ["client auth", "digital signature"]
+SERVER_USAGES = ["digital signature", "server auth"]
 NINETY_DAYS = "2160h"
 ONE_YEAR = "8760h"
 REQUESTER = {
@@ -153,7 +162,9 @@ def decision(request: dict) -> str:
 # ── the manifest ─────────────────────────────────────────────────────────────
 
 
-def test_the_manifest_holds_two_issuers_and_two_certificates_in_observability() -> None:
+def test_the_manifest_holds_two_issuers_and_three_certificates_in_observability() -> (
+    None
+):
     kinds = [(d["kind"], d["metadata"]["name"]) for d in documents(MANIFEST)]
 
     assert kinds == [
@@ -161,6 +172,7 @@ def test_the_manifest_holds_two_issuers_and_two_certificates_in_observability() 
         ("Certificate", AUTHORITY),
         ("Issuer", AUTHORITY),
         ("Certificate", COLLECTOR),
+        ("Certificate", COLLECTOR_CLIENT),
     ]
     # Namespaced, so that only a request in `observability` can name them.
     assert {d["metadata"]["namespace"] for d in documents(MANIFEST)} == {NAMESPACE}
@@ -177,11 +189,12 @@ def test_the_selfsigned_issuer_signs_the_authority_which_signs_the_collector() -
         "kind": "Issuer",
         "group": "cert-manager.io",
     }
-    assert certificate(COLLECTOR)["spec"]["issuerRef"] == {
-        "name": AUTHORITY,
-        "kind": "Issuer",
-        "group": "cert-manager.io",
-    }
+    for leaf in (COLLECTOR, COLLECTOR_CLIENT):
+        assert certificate(leaf)["spec"]["issuerRef"] == {
+            "name": AUTHORITY,
+            "kind": "Issuer",
+            "group": "cert-manager.io",
+        }
 
 
 def test_the_authority_is_a_ca_with_the_service_cas_key_and_lifetime() -> None:
@@ -204,7 +217,7 @@ def test_the_collectors_certificate_names_two_hosts_and_asks_to_serve_only() -> 
     spec = certificate(COLLECTOR)["spec"]
 
     assert spec["dnsNames"] == COLLECTOR_NAMES
-    assert sorted(spec["usages"]) == ["digital signature", "server auth"]
+    assert sorted(spec["usages"]) == SERVER_USAGES
     assert spec["secretName"] == COLLECTOR_TLS_NAME
     assert spec["duration"] == NINETY_DAYS
     # A new key at every renewal, as the services' certificates have.
@@ -215,6 +228,26 @@ def test_the_collectors_certificate_names_two_hosts_and_asks_to_serve_only() -> 
     }
     for absent in ("uris", "ipAddresses", "emailAddresses", "commonName", "isCA"):
         assert absent not in spec, absent
+
+
+def test_the_collectors_client_certificate_asks_to_present_and_never_to_serve() -> None:
+    spec = certificate(COLLECTOR_CLIENT)["spec"]
+    server = certificate(COLLECTOR)["spec"]
+
+    assert sorted(spec["usages"]) == CLIENT_USAGES
+    assert "server auth" not in spec["usages"]
+    # One name that says what it is and resolves nowhere, not a name of a Service.
+    assert spec["dnsNames"] == COLLECTOR_CLIENT_NAMES
+    assert not set(spec["dnsNames"]) & set(server["dnsNames"])
+    assert spec["secretName"] == COLLECTOR_CLIENT_TLS_NAME != server["secretName"]
+    # As the server certificate has: its lifetime, and a new key at each renewal
+    # of the same algorithm.
+    assert spec["duration"] == server["duration"] == NINETY_DAYS
+    assert spec["privateKey"] == server["privateKey"]
+    assert spec["privateKey"]["rotationPolicy"] == "Always"
+    for absent in ("uris", "ipAddresses", "emailAddresses", "commonName", "isCA"):
+        assert absent not in spec, absent
+    assert "renewBefore" not in spec  # renewal as the server certificate has it
 
 
 def test_the_collectors_names_are_the_host_the_services_are_told_to_send_to() -> None:
@@ -251,13 +284,21 @@ def test_approver_policy_also_approves_for_the_manifests_two_issuers() -> None:
 # ── the policies against the evaluator ───────────────────────────────────────
 
 
-def test_the_policy_file_holds_the_two_policies_of_the_authority() -> None:
-    assert {AUTHORITY_POLICY, COLLECTOR_POLICY} <= set(policies())
+def test_the_policy_file_holds_the_three_policies_of_the_authority() -> None:
+    assert {AUTHORITY_POLICY, COLLECTOR_POLICY, COLLECTOR_CLIENT_POLICY} <= set(
+        policies()
+    )
     assert set(policies()) == POLICY_NAMES
+    assert len(policies()) == 6
 
 
 @pytest.mark.parametrize(
-    ("name", "issuer"), [(AUTHORITY_POLICY, SELF_SIGNED), (COLLECTOR_POLICY, AUTHORITY)]
+    ("name", "issuer"),
+    [
+        (AUTHORITY_POLICY, SELF_SIGNED),
+        (COLLECTOR_POLICY, AUTHORITY),
+        (COLLECTOR_CLIENT_POLICY, AUTHORITY),
+    ],
 )
 def test_each_new_policy_selects_one_namespaced_issuer_by_name_kind_and_namespace(
     name: str, issuer: str
@@ -281,6 +322,114 @@ def test_the_authoritys_own_request_is_approved() -> None:
     assert request["namespace"] == NAMESPACE
     assert request["isCA"] is True
     assert decision(request) == "approved"
+
+
+def test_the_collectors_client_request_is_approved_by_its_own_policy_alone() -> None:
+    request = request_of(certificate(COLLECTOR_CLIENT))
+
+    assert request["namespace"] == NAMESPACE
+    assert decision(request) == "approved"
+    permitting = {n for n, p in policies().items() if allows(p, request)}
+    assert permitting == {COLLECTOR_CLIENT_POLICY}
+
+
+def test_the_collectors_client_policy_allows_one_name_two_usages_and_nothing_else() -> (
+    None
+):
+    spec = policies()[COLLECTOR_CLIENT_POLICY]["spec"]
+
+    assert spec["allowed"] == {
+        "dnsNames": {"values": COLLECTOR_CLIENT_NAMES, "required": True},
+        "usages": ["digital signature", "client auth"],
+    }
+    assert sorted(spec["allowed"]["usages"]) == CLIENT_USAGES
+    # Not wider than the Certificate it is for.
+    assert hours(spec["constraints"]["maxDuration"]) == hours(
+        certificate(COLLECTOR_CLIENT)["spec"]["duration"]
+    )
+    assert set(spec["constraints"]) == {"maxDuration"}
+
+
+def test_the_collectors_server_policy_is_as_s063_made_it() -> None:
+    # Compared with constants, not with the manifest: a client certificate must
+    # not widen the policy that signs the collector's server certificate.
+    spec = policies()[COLLECTOR_POLICY]["spec"]
+
+    assert spec["allowed"] == {
+        "dnsNames": {"values": COLLECTOR_NAMES, "required": True},
+        "usages": SERVER_USAGES,
+    }
+    assert spec["constraints"] == {"maxDuration": NINETY_DAYS}
+    assert spec["selector"] == {
+        "issuerRef": {"name": AUTHORITY, "kind": "Issuer", "group": "cert-manager.io"},
+        "namespace": {"matchNames": [NAMESPACE]},
+    }
+
+
+@pytest.mark.parametrize(
+    ("what", "change"),
+    [
+        ("the server certificate's names", {"dnsNames": COLLECTOR_NAMES}),
+        ("the server certificate's short name", {"dnsNames": COLLECTOR_NAMES[:1]}),
+        ("the server certificate's long name", {"dnsNames": COLLECTOR_NAMES[1:]}),
+        (
+            "a name of a Service",
+            {"dnsNames": ["otel-collector-client.observability.svc"]},
+        ),
+        ("another name", {"dnsNames": ["grafana.client.observability.meridian"]}),
+        ("a wildcard name", {"dnsNames": ["*.client.observability.meridian"]}),
+        (
+            "one name more",
+            {
+                "dnsNames": [
+                    *COLLECTOR_CLIENT_NAMES,
+                    "evil.client.observability.meridian",
+                ]
+            },
+        ),
+        ("no name", {"dnsNames": None}),
+        ("a URI", {"uris": ["spiffe://meridian.kind/ns/meridian/sa/claims-api"]}),
+        (
+            "server auth too",
+            {"usages": ["digital signature", "client auth", "server auth"]},
+        ),
+        ("server auth instead", {"usages": ["digital signature", "server auth"]}),
+        ("cert sign", {"usages": ["digital signature", "client auth", "cert sign"]}),
+        ("a CA", {"isCA": True}),
+        ("a common name", {"commonName": "otel-collector"}),
+        ("an address", {"ipAddresses": ["10.0.0.1"]}),
+        ("a lifetime over 90 days", {"duration": "2161h"}),
+    ],
+)
+def test_a_client_auth_request_under_any_other_name_to_the_authority_is_denied(
+    what: str, change: dict
+) -> None:
+    request = request_of(changed(certificate(COLLECTOR_CLIENT), **change))
+
+    # Both policies select the Issuer, so the request is judged, not left waiting;
+    # neither permits it, so the telemetry authority signs no other client name.
+    assert decision(request) == "denied", what
+    assert not any(allows(p, request) for p in policies().values()), what
+
+
+def test_a_client_auth_request_for_the_server_names_is_denied_by_both_policies() -> (
+    None
+):
+    request = request_of(
+        changed(certificate(COLLECTOR), usages=["digital signature", "client auth"])
+    )
+
+    assert selects(policies()[COLLECTOR_POLICY], request)
+    assert selects(policies()[COLLECTOR_CLIENT_POLICY], request)
+    assert decision(request) == "denied"
+
+
+def test_the_collectors_client_policy_boundaries_are_inclusive() -> None:
+    client = certificate(COLLECTOR_CLIENT)
+
+    assert decision(request_of(changed(client, duration="2160h"))) == "approved"
+    assert decision(request_of(changed(client, duration="2160h1m"))) == "denied"
+    assert decision(request_of(changed(client, duration=None))) == "never decided"
 
 
 @pytest.mark.parametrize(
@@ -369,7 +518,7 @@ def test_a_request_aimed_at_the_other_new_issuer_is_denied() -> None:
     assert decision(request_of(leaf_for_ca_issuer)) == "denied"
 
 
-@pytest.mark.parametrize("subject", [COLLECTOR, AUTHORITY])
+@pytest.mark.parametrize("subject", [COLLECTOR, COLLECTOR_CLIENT, AUTHORITY])
 def test_a_request_in_observability_for_the_meridian_services_issuer_is_denied(
     subject: str,
 ) -> None:
@@ -384,11 +533,12 @@ def test_a_request_in_observability_for_the_meridian_services_issuer_is_denied(
     # any namespace; the two policies of this file select Issuers, not that one.
     assert selects(policies()[DENY_POLICY], request)
     assert not selects(policies()[COLLECTOR_POLICY], request)
+    assert not selects(policies()[COLLECTOR_CLIENT_POLICY], request)
     assert not selects(policies()[AUTHORITY_POLICY], request)
     assert decision(request) == "denied"
 
 
-@pytest.mark.parametrize("subject", [COLLECTOR, AUTHORITY])
+@pytest.mark.parametrize("subject", [COLLECTOR, COLLECTOR_CLIENT, AUTHORITY])
 @pytest.mark.parametrize("issuer", [AUTHORITY, SELF_SIGNED])
 @pytest.mark.parametrize("namespace", ["meridian", "cert-manager", "default"])
 def test_a_request_in_another_namespace_cannot_name_the_namespaced_issuers_at_all(
@@ -415,6 +565,7 @@ def test_a_request_in_another_namespace_cannot_name_the_namespaced_issuers_at_al
     assert (namespace, issuer) not in defined
     assert (NAMESPACE, issuer) in defined
     assert not selects(policies()[COLLECTOR_POLICY], request)
+    assert not selects(policies()[COLLECTOR_CLIENT_POLICY], request)
     assert not selects(policies()[AUTHORITY_POLICY], request)
     assert not selects(policies()[DENY_POLICY], request)
     assert decision(request) == "left waiting"
@@ -437,7 +588,9 @@ def test_the_deny_policys_selector_does_not_reach_the_namespaced_issuers() -> No
 # ── who is bound ─────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("name", [AUTHORITY_POLICY, COLLECTOR_POLICY])
+@pytest.mark.parametrize(
+    "name", [AUTHORITY_POLICY, COLLECTOR_POLICY, COLLECTOR_CLIENT_POLICY]
+)
 def test_each_new_policy_is_bound_in_observability_and_nowhere_else(name: str) -> None:
     assert may_use(name, NAMESPACE)
     for elsewhere in ("meridian", "cert-manager", "default", "kube-system"):
@@ -447,7 +600,7 @@ def test_each_new_policy_is_bound_in_observability_and_nowhere_else(name: str) -
         for d in documents(POLICY_FILE)
         if d["kind"] == "RoleBinding" and d["metadata"]["namespace"] == NAMESPACE
     ]
-    assert len(bindings) == 2
+    assert len(bindings) == 3
     for binding in bindings:
         assert binding["subjects"] == [REQUESTER]
         assert binding["roleRef"]["kind"] == "Role"
@@ -456,7 +609,7 @@ def test_each_new_policy_is_bound_in_observability_and_nowhere_else(name: str) -
 def test_every_use_rule_of_the_file_grants_one_policy_and_nothing_else() -> None:
     roles = [d for d in documents(POLICY_FILE) if d["kind"] in ("Role", "ClusterRole")]
 
-    assert len(roles) == 5
+    assert len(roles) == 6
     for role in roles:
         (rule,) = role["rules"]
         assert rule["apiGroups"] == ["policy.cert-manager.io"]
@@ -466,7 +619,7 @@ def test_every_use_rule_of_the_file_grants_one_policy_and_nothing_else() -> None
         assert name in POLICY_NAMES
 
 
-def test_the_two_new_roles_are_named_after_the_policies_they_grant() -> None:
+def test_the_new_roles_are_named_after_the_policies_they_grant() -> None:
     roles = {
         d["metadata"]["name"]: d["rules"][0]["resourceNames"]
         for d in documents(POLICY_FILE)
@@ -476,6 +629,7 @@ def test_the_two_new_roles_are_named_after_the_policies_they_grant() -> None:
     assert roles == {
         f"{AUTHORITY_POLICY}-use-policy": [AUTHORITY_POLICY],
         f"{COLLECTOR_POLICY}-use-policy": [COLLECTOR_POLICY],
+        f"{COLLECTOR_CLIENT_POLICY}-use-policy": [COLLECTOR_CLIENT_POLICY],
     }
 
 
@@ -484,6 +638,9 @@ def test_the_hours_of_the_policies_caps_are_the_certificates_lifetimes() -> None
         return hours(policies()[name]["spec"]["constraints"]["maxDuration"])
 
     assert cap(COLLECTOR_POLICY) == hours(certificate(COLLECTOR)["spec"]["duration"])
+    assert cap(COLLECTOR_CLIENT_POLICY) == hours(
+        certificate(COLLECTOR_CLIENT)["spec"]["duration"]
+    )
     assert cap(AUTHORITY_POLICY) == hours(certificate(AUTHORITY)["spec"]["duration"])
 
 
@@ -543,8 +700,8 @@ def test_the_collector_closes_4317_in_the_service_and_the_container_too() -> Non
 def test_the_collector_mounts_the_certificate_read_only_where_tls_reads_it() -> None:
     values = collector_values()
     tls = values["config"]["receivers"]["otlp"]["protocols"]["http"]["tls"]
-    (volume,) = values["extraVolumes"]
-    (mount,) = values["extraVolumeMounts"]
+    (volume,) = [v for v in values["extraVolumes"] if v["name"] == "tls"]
+    (mount,) = [m for m in values["extraVolumeMounts"] if m["name"] == "tls"]
 
     assert volume["secret"]["secretName"] == COLLECTOR_TLS_NAME
     assert certificate(COLLECTOR)["spec"]["secretName"] == COLLECTOR_TLS_NAME
@@ -556,13 +713,65 @@ def test_the_collector_mounts_the_certificate_read_only_where_tls_reads_it() -> 
     assert tls["key_file"] == f"{mount['mountPath']}/tls.key"
 
 
+def test_the_collector_mounts_both_secrets_read_only_in_directories_of_their_own() -> (
+    None
+):
+    values = collector_values()
+
+    # The client certificate is present and unused (S072, contract M1): a second
+    # volume and mount beside the server certificate's, and nothing else.
+    assert [v["name"] for v in values["extraVolumes"]] == ["tls", "client-tls"]
+    assert [m["name"] for m in values["extraVolumeMounts"]] == ["tls", "client-tls"]
+    volume = {v["name"]: v for v in values["extraVolumes"]}["client-tls"]
+    mount = {m["name"]: m for m in values["extraVolumeMounts"]}["client-tls"]
+    assert volume["secret"]["secretName"] == COLLECTOR_CLIENT_TLS_NAME
+    assert (
+        certificate(COLLECTOR_CLIENT)["spec"]["secretName"] == COLLECTOR_CLIENT_TLS_NAME
+    )
+    assert mount["readOnly"] is True
+    assert "subPath" not in mount  # a subPath never sees a renewed Secret
+    paths = [m["mountPath"] for m in values["extraVolumeMounts"]]
+    assert len(set(paths)) == 2
+    assert mount["mountPath"] == "/etc/otel-collector/client-tls"
+    assert not any(a.startswith(b + "/") for a in paths for b in paths)
+
+
+def test_nothing_in_the_collectors_configuration_uses_the_client_certificate_yet() -> (
+    None
+):
+    config = collector_values()["config"]
+    text = json.dumps(config)
+
+    # Present and unused: no path of the mount, and no file name of a client
+    # pair, appears in the configuration; the receiver's tls block is the four
+    # keys it had, and only Tempo's exporter has a tls block at all.
+    assert "client-tls" not in text
+    assert "client_ca_file" not in text
+    assert "client_ca_file_reload" not in text
+    assert set(config["receivers"]["otlp"]["protocols"]["http"]["tls"]) == {
+        "cert_file",
+        "key_file",
+        "reload_interval",
+        "min_version",
+    }
+    assert [n for n, e in config["exporters"].items() if e and "tls" in e] == [
+        "otlp_grpc/tempo"
+    ]
+    assert list(config["exporters"]) == [
+        "debug",
+        "otlp_grpc/tempo",
+        "otlp_http/prometheus",
+        "otlp_http/loki",
+    ]
+
+
 def test_the_collectors_key_is_readable_through_the_pods_fs_group_only() -> None:
     values = collector_values()
-    (volume,) = values["extraVolumes"]
 
     # 0440, as the services' Secrets: root's and the pod's group's, so the
     # container's one user (10001) reads it through fsGroup and nobody else does.
-    assert volume["secret"]["defaultMode"] == 0o440
+    for volume in values["extraVolumes"]:
+        assert volume["secret"]["defaultMode"] == 0o440
     assert values["podSecurityContext"] == {"fsGroup": 10001}
 
 
@@ -620,10 +829,56 @@ def test_up_s_wait_for_the_collectors_certificate_has_a_bound_and_a_remedy() -> 
     assert AUTHORITY_POLICY in message
 
 
-def test_the_other_waits_for_the_policies_name_all_five_in_their_remedy_line() -> None:
+def test_the_other_waits_for_the_policies_name_all_six_in_their_remedy_line() -> None:
     line = script_lines()[line_containing("certificaterequestpolicy")]
 
-    assert line.count("certificaterequestpolicy/") == 5
+    assert line.count("certificaterequestpolicy/") == 6
+
+
+def test_up_waits_for_both_certificates_of_the_collector_before_its_release() -> None:
+    lines = script_lines()
+    waited = line_index("kctl -n observability wait --for=condition=Ready certificate/")
+    collector = line_index("install_release otel-collector ")
+
+    # A Secret that does not exist leaves the pod in ContainerCreating and stops
+    # `make up` at the release: the client certificate is waited for as the
+    # server certificate is, in the same bounded wait.
+    assert waited < collector
+    assert f"certificate/{COLLECTOR} " in lines[waited]
+    assert f"certificate/{COLLECTOR_CLIENT} " in lines[waited]
+    assert lines[waited].count("certificate/") == 2
+    assert "--timeout=5m" in lines[waited]
+    _, message = wait_and_die_message(
+        "kctl -n observability wait --for=condition=Ready certificate/"
+    )
+    assert COLLECTOR_CLIENT in message
+    assert COLLECTOR_CLIENT_POLICY in message
+
+
+def test_the_six_policy_names_are_the_same_in_the_four_places_that_list_them() -> None:
+    lines = script_lines()
+    in_manifest = set(policies())
+    in_up = re.findall(
+        r"certificaterequestpolicy/([a-z-]+)",
+        lines[line_containing("certificaterequestpolicy")],
+    )
+    (in_deploy,) = re.findall(
+        r"^readonly CERTIFICATE_POLICIES=\((.*)\)$",
+        (KIND_DIR / "deploy.sh").read_text(encoding="utf-8"),
+        re.M,
+    )
+    (in_smoke,) = re.findall(
+        r"^readonly POLICY_NAMES=\((.*)\)$",
+        (KIND_DIR / "smoke.d" / "10-certificate-policy.sh").read_text(encoding="utf-8"),
+        re.M,
+    )
+
+    assert len(in_manifest) == 6
+    # Each place lists each name once, and the lists are equal to the manifest's.
+    for listed in (in_up, in_deploy.split(), in_smoke.split(), list(POLICIES)):
+        assert len(listed) == 6
+        assert set(listed) == in_manifest == POLICY_NAMES
+    assert COLLECTOR_CLIENT_POLICY in in_manifest
 
 
 def run_publish(

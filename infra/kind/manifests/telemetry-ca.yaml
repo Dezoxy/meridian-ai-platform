@@ -14,6 +14,8 @@
 #   telemetry-ca          the CA certificate (ECDSA P-256, one year), and the
 #                         Issuer of the same name that signs with its key
 #   otel-collector        the collector's server certificate (90 days)
+#   otel-collector-client the collector's client certificate (90 days; S072, the
+#                         last document of this file)
 #
 # Why an authority of its own and not the `meridian-services` issuer: S056 made
 # "that issuer signs only for the `meridian` namespace and its URI prefix" the
@@ -111,6 +113,41 @@ spec:
   dnsNames:
     - otel-collector.observability.svc
     - otel-collector.observability.svc.cluster.local
+  issuerRef:
+    name: telemetry-ca
+    kind: Issuer
+    group: cert-manager.io
+---
+# The collector's CLIENT certificate (S072, contract M1): what the collector will
+# present to the telemetry stores that write-protect their ports. It is issued
+# and mounted (values/otel-collector.yaml) and NOTHING uses it yet: no exporter
+# presents it and no store asks for it, so this changes no behaviour.
+#
+# Its own Certificate and its own policy (otel-collector-client in
+# certificate-policy.yaml), not the usage `client auth` added to the server
+# certificate above: the server policy stays as S063 made it, and a request to
+# this authority for client auth under any other name is denied. The one DNS name
+# says what the certificate is and resolves nowhere (`.meridian` is not the
+# cluster's domain, and no Service or pod has it); a server that verifies a client
+# checks the chain, not the name. Lifetime, renewal and key as the server
+# certificate has them: 90 days, a new ECDSA P-256 key at every renewal.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: otel-collector-client
+  namespace: observability
+spec:
+  secretName: otel-collector-client-tls
+  duration: 2160h # 90 days, named: the policy caps it and cannot read a missing one
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always # a new key at every renewal
+  usages:
+    - digital signature
+    - client auth
+  dnsNames:
+    - otel-collector.client.observability.meridian
   issuerRef:
     name: telemetry-ca
     kind: Issuer

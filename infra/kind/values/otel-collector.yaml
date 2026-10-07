@@ -79,14 +79,28 @@ serviceAccount:
   automountServiceAccountToken: false
 
 # A directory mount, not a subPath: a subPath never sees the renewed Secret.
+#
+# The second Secret, otel-collector-client-tls, is the collector's CLIENT
+# certificate (S072, contract M1; the Certificate is in manifests/telemetry-ca.yaml
+# and up.sh waits for it before this release). It is mounted and NOT USED: no
+# exporter below presents it and no `tls` block names its files, so the collector
+# behaves as it did. The next contracts make the exporters present it, store by
+# store, once the store asks for one.
 extraVolumes:
   - name: tls
     secret:
       secretName: otel-collector-tls
       defaultMode: 288 # 0440
+  - name: client-tls
+    secret:
+      secretName: otel-collector-client-tls
+      defaultMode: 288 # 0440
 extraVolumeMounts:
   - name: tls
     mountPath: /etc/otel-collector/tls
+    readOnly: true
+  - name: client-tls
+    mountPath: /etc/otel-collector/client-tls
     readOnly: true
 
 config:

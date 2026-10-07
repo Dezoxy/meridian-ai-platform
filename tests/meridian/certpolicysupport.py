@@ -20,16 +20,19 @@ KIND_DIR = REPO_ROOT / "infra" / "kind"
 SERVICES_POLICY = "meridian-services"
 CA_POLICY = "meridian-services-ca"
 DENY_POLICY = "meridian-deny-unlisted"
-# The two policies of the collector's own authority in `observability` (S063,
-# manifests/telemetry-ca.yaml): its CA certificate's and the collector's.
+# The three policies of the collector's own authority in `observability` (S063,
+# manifests/telemetry-ca.yaml): its CA certificate's, the collector's server
+# certificate's and, since S072 (contract M1), the collector's client certificate's.
 AUTHORITY_POLICY = "telemetry-ca"
 COLLECTOR_POLICY = "otel-collector"
+COLLECTOR_CLIENT_POLICY = "otel-collector-client"
 POLICY_NAMES = {
     SERVICES_POLICY,
     CA_POLICY,
     DENY_POLICY,
     AUTHORITY_POLICY,
     COLLECTOR_POLICY,
+    COLLECTOR_CLIENT_POLICY,
 }
 
 

@@ -446,7 +446,8 @@ kctl wait --for=condition=Ready certificaterequestpolicy/meridian-services \
   certificaterequestpolicy/meridian-services-ca \
   certificaterequestpolicy/meridian-deny-unlisted \
   certificaterequestpolicy/telemetry-ca \
-  certificaterequestpolicy/otel-collector --timeout=2m >/dev/null ||
+  certificaterequestpolicy/otel-collector \
+  certificaterequestpolicy/otel-collector-client --timeout=2m >/dev/null ||
   die "the certificate policies were not Ready in 2m: read the Ready condition of each (kubectl get certificaterequestpolicy -o yaml) and approver-policy's pod (kubectl -n cert-manager get pods; logs deploy/cert-manager-approver-policy)"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/service-ca.yaml" >/dev/null
 # Helm returns when cert-manager runs (its startupapicheck hook has proved the
@@ -459,12 +460,15 @@ kctl wait --for=condition=Ready clusterissuer/meridian-services \
 # The collector's own authority (S063, T-90): namespaced Issuers in
 # observability, so no policy for the services' issuer changes. The collector's
 # Certificate being Ready means the authority's was issued before it. The
-# release of the collector, further on, mounts the Secret it makes.
+# release of the collector, further on, mounts the Secrets they make: the server
+# certificate's and, since S072 (contract M1), the client certificate's, so both
+# are waited for here (a Secret that does not exist leaves the pod in
+# ContainerCreating and stops `make up` at that release).
 log "telemetry: the CA for the collector's certificate, in observability"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/telemetry-ca.yaml" >/dev/null
 kctl -n observability wait --for=condition=Ready certificate/otel-collector \
-  --timeout=5m >/dev/null ||
-  die "the Certificate otel-collector in observability was not Ready in 5m: read the CertificateRequests of the Certificates telemetry-ca and otel-collector (kubectl -n observability get certificaterequest; describe each) for their Approved or Denied condition, the Ready condition of the policies telemetry-ca and otel-collector (the add-on's pod logs say why one was not applied), and the Certificates' events"
+  certificate/otel-collector-client --timeout=5m >/dev/null ||
+  die "the Certificate otel-collector or otel-collector-client in observability was not Ready in 5m: read the CertificateRequests of the Certificates telemetry-ca, otel-collector and otel-collector-client (kubectl -n observability get certificaterequest; describe each) for their Approved or Denied condition, the Ready condition of the policies telemetry-ca, otel-collector and otel-collector-client (the add-on's pod logs say why one was not applied), and the Certificates' events"
 publish_telemetry_ca
 
 # The operator runs in `meridian`, with the chart's `config.clusterWide=false`
