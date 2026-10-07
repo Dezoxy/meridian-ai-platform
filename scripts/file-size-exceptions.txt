@@ -10,7 +10,7 @@
 # 800 lines is not added here: it is split. Every line starts as the first run
 # of the check found it (2026-10-07).
 
-infra/terraform/aws.sh 812 over the ceiling before the check existed; a row of S074 homes its split
+infra/terraform/aws.sh 878 over the ceiling before the check existed; a row of S074 homes its split
 scripts/check_docs_consistency.py 828 copied unchanged from development-base, whose copy is the one to split
 src/meridian/platform/registry/checks.py 857 over the ceiling before the check existed; a row of S074 homes its split
 tests/meridian/common/test_http.py 860 over the ceiling before the check existed; a row of S074 homes its split
@@ -35,7 +35,8 @@ tests/meridian/runtime/test_tool_client.py 1091 over the ceiling before the chec
 tests/meridian/test_alert_rules.py 900 over the ceiling before the check existed; a row of S074 homes its split
 tests/meridian/test_aws_kubeadm_bootstrap.py 1690 over the ceiling before the check existed; a row of S074 homes its split
 tests/meridian/test_aws_kubeadm_module.py 1461 over the ceiling before the check existed; a row of S074 homes its split
-tests/meridian/test_aws_script.py 1491 cut once from a larger file; a row of S074 homes cutting it again or keeping it
+tests/meridian/test_aws_script.py 1754 cut once from a larger file; a row of S074 homes cutting it again or keeping it
+tests/meridian/test_azure_module.py 1268 written on a branch cut before the check existed; a row of S074 homes its split
 tests/meridian/test_aws_script_plan.py 1512 cut once from a larger file; a row of S074 homes cutting it again or keeping it
 tests/meridian/test_certificate_refused_request.py 852 over the ceiling before the check existed; a row of S074 homes its split
 tests/meridian/test_gcp_kubeadm_bootstrap.py 1461 over the ceiling before the check existed; a row of S074 homes its split

@@ -76,7 +76,8 @@ PYTEST_WORKERS      ?= 10
 # stop that. .github/renovate.json reads it as it reads PYTEST_DB_IMAGE.
 PROMTOOL_IMAGE      := quay.io/prometheus/prometheus:v3.15.0-distroless@sha256:b2a413d5a03ea6a76782a508d1c7947440bba3b973931a25676e278431891b01
 # Trivy's configuration scan for `make aws-scan` (S036), `make gcp-scan` (S078),
-# `make aws-kubeadm-scan` and `make gcp-kubeadm-scan` (S079), one image for all:
+# `make aws-kubeadm-scan` and `make gcp-kubeadm-scan` (S079) and
+# `make azure-platform-scan` (S020), one image for all:
 # 0.75.0, read on
 # 2026-10-06. The digest is the multi-arch index's (`docker buildx imagetools
 # inspect` shows an OCI index; `docker pull` of the tag prints the same digest);
@@ -112,7 +113,7 @@ EVAL_INPUTS         := src config/registry data/synthetic data/evaluation/record
 
 STRUCTURIZR := docker run --rm -v "$(CURDIR)/$(ARCH_DIR):/w:ro"
 
-.PHONY: help validate inspect check docs test secret-scan view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db alerts eval eval-compare eval-baseline eval-record synthetic up deploy images helm-lint demo smoke gateway-upkeep grafana grafana-password cert-renew cluster-holder down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry aws-validate aws-scan aws-plan aws-apply aws-destroy gcp-validate gcp-scan aws-kubeadm-validate aws-kubeadm-scan gcp-kubeadm-validate gcp-kubeadm-scan
+.PHONY: help validate inspect check docs test secret-scan view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db alerts eval eval-compare eval-baseline eval-record synthetic up deploy images helm-lint demo smoke gateway-upkeep grafana grafana-password cert-renew cluster-holder down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry aws-validate aws-scan aws-plan aws-apply aws-destroy gcp-validate gcp-scan aws-kubeadm-validate aws-kubeadm-scan gcp-kubeadm-validate gcp-kubeadm-scan azure-platform-validate azure-platform-scan
 .DEFAULT_GOAL := help
 
 ## help            list the targets
@@ -425,3 +426,18 @@ gcp-kubeadm-validate:
 gcp-kubeadm-scan:
 	@ls "$(CURDIR)"/infra/terraform/gcp-kubeadm/*.tf >/dev/null 2>&1 || { echo "gcp-kubeadm-scan: no .tf file in infra/terraform/gcp-kubeadm, nothing to scan" >&2; exit 1; }
 	docker run --rm --network none --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges -e TRIVY_CACHE_DIR=/tmp/trivy --mount type=bind,source="$(CURDIR)/infra/terraform/gcp-kubeadm",target=/work,readonly -w /work $(TRIVY_IMAGE) config --quiet --skip-check-update --skip-version-check --disable-telemetry --skip-dirs .terraform --skip-files gcp-kubeadm.tfplan,terraform.tfstate,terraform.tfstate.backup --severity HIGH,CRITICAL --exit-code 1 .
+
+# ── Azure platform module (S020: checked, never planned or applied) ──────────
+# infra/terraform/azure/README.md says what this is. These two checks need no
+# Azure sign-in, no subscription and no credential, and deliberately no target
+# here plans, applies or removes the module: those arrive with their wrapper and
+# the guard's rules, in a later change.
+
+## azure-platform-validate terraform fmt -check, init with no backend and validate of the Azure platform module; needs no Azure sign-in and no subscription and changes nothing in Azure
+azure-platform-validate:
+	infra/terraform/aws.sh validate azure
+
+## azure-platform-scan Trivy's configuration scan of the Azure platform module from the same pinned image as aws-scan: offline, changes nothing in Azure, needs no Azure sign-in and no subscription; fails on a HIGH or CRITICAL finding that infra/terraform/azure/.trivyignore does not list (needs Docker)
+azure-platform-scan:
+	@ls "$(CURDIR)"/infra/terraform/azure/*.tf >/dev/null 2>&1 || { echo "azure-platform-scan: no .tf file in infra/terraform/azure, nothing to scan" >&2; exit 1; }
+	docker run --rm --network none --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges -e TRIVY_CACHE_DIR=/tmp/trivy --mount type=bind,source="$(CURDIR)/infra/terraform/azure",target=/work,readonly -w /work $(TRIVY_IMAGE) config --quiet --skip-check-update --skip-version-check --disable-telemetry --skip-dirs .terraform --skip-files azure.tfplan,terraform.tfstate,terraform.tfstate.backup --severity HIGH,CRITICAL --exit-code 1 .

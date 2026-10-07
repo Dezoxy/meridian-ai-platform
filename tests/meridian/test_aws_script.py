@@ -187,6 +187,14 @@ def with_a_gcp_kubeadm_directory(tree: Tree) -> Path:
     return twin
 
 
+def with_an_azure_directory(tree: Tree) -> Path:
+    """The Azure platform module's directory (S020), made by the tests that name it."""
+    azure = tree.root / "infra" / "terraform" / "azure"
+    azure.mkdir()
+    (azure / "main.tf").write_text("# a stand-in module\n")
+    return azure
+
+
 def run_words(tree: Tree, *words: str, **env: str) -> subprocess.CompletedProcess[str]:
     """The script with these words exactly (tree.run takes one sub-command)."""
     return subprocess.run(
@@ -260,6 +268,26 @@ def test_validate_with_the_word_gcp_kubeadm_runs_the_three_commands_on_its_direc
 
 
 @only_the_managed_module
+def test_validate_with_the_word_azure_runs_the_three_commands_on_its_directory(
+    tree: Tree,
+) -> None:
+    azure = with_an_azure_directory(tree)
+
+    done = run_words(tree, "validate", "azure")
+
+    assert done.returncode == 0, everything_printed(done)
+    assert tree.subcommands() == ["fmt", "init", "validate"]
+    for call in tree.calls():
+        assert f"-chdir={azure} " in call
+        assert f"-chdir={tree.module} " not in call
+    fmt, init, _ = tree.calls()
+    assert "-check" in fmt
+    assert "-backend=false" in init
+    assert "-lockfile=readonly" in init
+    assert tree.aws_calls() == []
+
+
+@only_the_managed_module
 def test_validate_with_the_word_aws_checks_the_aws_directory_as_with_no_word(
     tree: Tree,
 ) -> None:
@@ -320,11 +348,48 @@ def test_a_format_difference_in_the_gcp_kubeadm_module_names_its_directory(
 
 
 @only_the_managed_module
+def test_a_format_difference_in_the_azure_module_names_its_directory(
+    tree: Tree,
+) -> None:
+    with_an_azure_directory(tree)
+    tree.write_stub_env({"STUB_FMT_STATUS": "3"})
+
+    done = run_words(tree, "validate", "azure")
+
+    assert done.returncode != 0
+    assert "terraform -chdir=infra/terraform/azure fmt" in done.stderr
+    assert "terraform -chdir=infra/terraform/aws fmt" not in done.stderr
+    assert tree.subcommands() == ["fmt"]
+
+
+@only_the_managed_module
 @pytest.mark.parametrize(
     "words",
     [
-        ["validate", "azure"],
+        # The foundation is a module too, and a persistent one: its commands
+        # are its own script's (foundation.sh), and this door never takes it.
         ["validate", "foundation"],
+        ["validate", "Foundation"],
+        ["validate", "infra/terraform/foundation"],
+        # The Azure platform module's near misses: the literal list holds the one
+        # word, and no pattern, path or other spelling of it.
+        ["validate", "azure/"],
+        ["validate", "azure "],
+        ["validate", "AZURE"],
+        ["validate", "azure*"],
+        ["validate", "az*"],
+        ["validate", "azure-"],
+        ["validate", "azure-platform"],
+        ["validate", "azure_platform"],
+        ["validate", "../azure"],
+        ["validate", "./azure"],
+        ["validate", "infra/terraform/azure"],
+        ["validate", "azure", "azure"],
+        ["validate", "azure", "aws"],
+        ["validate", "aws", "azure"],
+        ["validate", "azure", "gcp"],
+        ["validate", "gcp", "azure"],
+        ["validate", "azure", "foundation"],
         ["validate", "GCP"],
         ["validate", "gcp/"],
         ["validate", "gcp "],
@@ -378,6 +443,7 @@ def test_validate_with_any_other_word_or_with_two_is_refused_before_a_program_ru
     with_a_gcp_directory(tree)
     with_an_aws_kubeadm_directory(tree)
     with_a_gcp_kubeadm_directory(tree)
+    with_an_azure_directory(tree)
 
     done = run_words(tree, *words)
 
@@ -560,7 +626,7 @@ def test_the_usage_line_names_the_modules_each_command_takes_and_keeps_its_old_f
 
     assert done.returncode == 2
     assert "validate|plan|apply|destroy" in done.stderr
-    assert "validate [aws|gcp|aws-kubeadm|gcp-kubeadm]" in done.stderr
+    assert "validate [aws|gcp|aws-kubeadm|gcp-kubeadm|azure]" in done.stderr
     assert "<plan|apply|destroy> [aws-kubeadm]" in done.stderr
     assert tree.calls() == []
 
@@ -571,6 +637,7 @@ def test_the_scripts_header_says_which_commands_take_which_module_name() -> None
     assert "validate gcp" in header
     assert "validate aws-kubeadm" in header
     assert "validate gcp-kubeadm" in header
+    assert "validate azure" in header
     assert "plan aws-kubeadm" in header
     assert "apply aws-kubeadm" in header
     assert "destroy aws-kubeadm" in header
@@ -585,6 +652,7 @@ def test_the_scripts_header_says_which_commands_take_which_module_name() -> None
         ["validate", "gcp"],
         ["validate", "aws-kubeadm"],
         ["validate", "gcp-kubeadm"],
+        ["validate", "azure"],
     ],
 )
 def test_validate_runs_terraform_with_no_credential_name_of_any_cloud(
@@ -593,6 +661,7 @@ def test_validate_runs_terraform_with_no_credential_name_of_any_cloud(
     with_a_gcp_directory(tree)
     with_an_aws_kubeadm_directory(tree)
     with_a_gcp_kubeadm_directory(tree)
+    with_an_azure_directory(tree)
 
     done = run_words(
         tree,
@@ -601,13 +670,207 @@ def test_validate_runs_terraform_with_no_credential_name_of_any_cloud(
         **CREDENTIALS,
         AWS_REGION="eu-central-1",
         AZURE_CLIENT_ID="00000000-0000-0000-0000-000000000000",
+        ARM_SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000",
     )
 
     assert done.returncode == 0, everything_printed(done)
     names = env_names(tree.terraform_env())
     assert {n for n in names if n.startswith(CREDENTIAL_PREFIXES)} == set()
-    assert names - SHELL_ADDS <= BASE_NAMES
+    # TF_DATA_DIR is the one name beyond the base list: validate sets it itself
+    # (the next section), to a directory of its own choosing.
+    assert names - SHELL_ADDS <= BASE_NAMES | {"TF_DATA_DIR"}
     assert "PATH" in names  # the run did reach the stub, and it saw a path
+
+
+# ── validate keeps the provider's directory out of the module (S020) ─────────
+# `terraform init` writes the providers it downloads into .terraform in the
+# module's directory, and two tests of the self-managed modules failed whenever a
+# validate had run there. The script sets Terraform's data directory itself, for
+# validate only, to a private directory under the caller's cache named for the
+# module; the caller's own TF_DATA_DIR never reaches Terraform.
+
+VALIDATE_MODULES = [
+    pytest.param([], "aws", id="aws"),
+    pytest.param(["gcp"], "gcp", id="gcp"),
+    pytest.param(["aws-kubeadm"], "aws-kubeadm", id="aws-kubeadm"),
+    pytest.param(["gcp-kubeadm"], "gcp-kubeadm", id="gcp-kubeadm"),
+    pytest.param(["azure"], "azure", id="azure"),
+]
+
+
+def with_every_directory(tree: Tree) -> None:
+    with_a_gcp_directory(tree)
+    with_an_aws_kubeadm_directory(tree)
+    with_a_gcp_kubeadm_directory(tree)
+    with_an_azure_directory(tree)
+
+
+def data_dir_of(tree: Tree, name: str) -> Path:
+    return tree.root / ".cache" / "meridian-terraform" / name
+
+
+def data_dirs_seen(tree: Tree) -> list[str]:
+    return [
+        line.split("=", 1)[1]
+        for line in tree.terraform_env().splitlines()
+        if line.startswith("TF_DATA_DIR=")
+    ]
+
+
+@only_the_managed_module
+@pytest.mark.parametrize(("words", "name"), VALIDATE_MODULES)
+def test_a_validate_leaves_no_terraform_directory_in_the_module(
+    tree: Tree, words: list[str], name: str
+) -> None:
+    with_every_directory(tree)
+    module = tree.root / "infra" / "terraform" / name
+    tree.write_stub_env({"STUB_INIT_WRITES_DATA_DIR": "1"})
+
+    done = run_words(tree, "validate", *words)
+
+    assert done.returncode == 0, everything_printed(done)
+    assert sorted(path.name for path in module.iterdir()) == ["main.tf"]
+    # The stand-in init did write its providers: where the script sent them.
+    assert (data_dir_of(tree, name) / "providers").is_dir()
+
+
+@only_the_managed_module
+@pytest.mark.parametrize(("words", "name"), VALIDATE_MODULES)
+def test_terraform_is_given_the_modules_own_data_directory_by_init_and_validate(
+    tree: Tree, words: list[str], name: str
+) -> None:
+    with_every_directory(tree)
+
+    done = run_words(tree, "validate", *words)
+
+    assert done.returncode == 0, everything_printed(done)
+    assert tree.subcommands() == ["fmt", "init", "validate"]
+    assert data_dirs_seen(tree)[-2:] == [str(data_dir_of(tree, name))] * 2
+
+
+@only_the_managed_module
+def test_two_modules_never_share_a_data_directory(tree: Tree) -> None:
+    with_every_directory(tree)
+
+    for param in VALIDATE_MODULES:
+        words, _ = param.values
+        assert run_words(tree, "validate", *words).returncode == 0
+
+    expected = {str(data_dir_of(tree, param.values[1])) for param in VALIDATE_MODULES}
+    assert set(data_dirs_seen(tree)) == expected
+    assert len(expected) == len(VALIDATE_MODULES)
+
+
+@only_the_managed_module
+@pytest.mark.parametrize(("words", "name"), VALIDATE_MODULES)
+def test_the_data_directory_is_private_to_the_caller(
+    tree: Tree, words: list[str], name: str
+) -> None:
+    with_every_directory(tree)
+
+    done = run_words(tree, "validate", *words)
+
+    assert done.returncode == 0, everything_printed(done)
+    path = data_dir_of(tree, name)
+    assert path.stat().st_mode & 0o777 == 0o700
+    # Whatever a loose caller's umask is, nothing the script made above it is open.
+    for parent in (path.parent, path.parent.parent):
+        assert parent.stat().st_mode & 0o077 == 0, parent
+
+
+@only_the_managed_module
+def test_a_data_directory_that_is_open_to_others_is_closed_again(tree: Tree) -> None:
+    with_every_directory(tree)
+    path = data_dir_of(tree, "azure")
+    path.mkdir(parents=True)
+    path.chmod(0o755)
+
+    done = run_words(tree, "validate", "azure")
+
+    assert done.returncode == 0, everything_printed(done)
+    assert path.stat().st_mode & 0o777 == 0o700
+
+
+@only_the_managed_module
+@pytest.mark.parametrize(("words", "name"), VALIDATE_MODULES)
+def test_a_callers_own_data_directory_never_reaches_terraform(
+    tree: Tree, words: list[str], name: str
+) -> None:
+    with_every_directory(tree)
+    elsewhere = tree.root / "elsewhere"
+
+    done = run_words(
+        tree,
+        "validate",
+        *words,
+        TF_DATA_DIR=str(elsewhere),
+        XDG_CACHE_HOME=str(elsewhere),
+    )
+
+    assert done.returncode == 0, everything_printed(done)
+    assert str(elsewhere) not in tree.terraform_env()
+    assert not elsewhere.exists()
+    assert set(data_dirs_seen(tree)) == {str(data_dir_of(tree, name))}
+
+
+@only_the_managed_module
+def test_a_data_directory_that_is_a_symbolic_link_is_refused_before_a_program_runs(
+    tree: Tree,
+) -> None:
+    with_every_directory(tree)
+    target = tree.root / "elsewhere"
+    target.mkdir()
+    link = data_dir_of(tree, "azure")
+    link.parent.mkdir(parents=True)
+    link.symlink_to(target)
+
+    done = run_words(tree, "validate", "azure")
+
+    assert done.returncode != 0
+    assert "symbolic link" in done.stderr
+    assert tree.calls() == []
+    assert list(target.iterdir()) == []
+
+
+@only_the_managed_module
+@pytest.mark.parametrize("home", [None, "", "relative/home"])
+def test_a_validate_without_an_absolute_home_is_refused_before_a_program_runs(
+    tree: Tree, home: str | None
+) -> None:
+    with_every_directory(tree)
+    env = {k: v for k, v in tree.base_env.items() if k != "HOME"}
+    if home is not None:
+        env["HOME"] = home
+
+    done = subprocess.run(
+        tree.command("validate", "azure"),
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=tree.root,
+        stdin=subprocess.DEVNULL,
+        timeout=60,
+        check=False,
+    )
+
+    assert done.returncode != 0
+    assert "HOME" in done.stderr
+    assert tree.calls() == []
+    assert not (tree.root / "relative").exists()
+
+
+@only_the_managed_module
+def test_a_plan_sets_no_data_directory_and_keeps_the_one_it_has_always_had(
+    tree: Tree,
+) -> None:
+    # The change is for validate alone: the other commands keep the directory
+    # they have always had, which the default-workspace check reads.
+    with_local_file(tree)
+
+    done = tree.run("plan")
+
+    assert done.returncode == 0, everything_printed(done)
+    assert data_dirs_seen(tree) == []
 
 
 @pytest.mark.parametrize("subcommand", REFUSING)

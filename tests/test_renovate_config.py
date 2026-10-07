@@ -510,9 +510,12 @@ class Readers(unittest.TestCase):
             "`make aws-kubeadm-scan`",
             "`make gcp-kubeadm-validate`",
             "`make gcp-kubeadm-scan`",
+            "`make azure-platform-validate`",
+            "`make azure-platform-scan`",
             "Google Cloud module",
             "self-managed AWS module",
             "Google Cloud twin",
+            "Azure platform module",
         ):
             with self.subTest(words=words):
                 self.assertIn(words, note)
@@ -525,6 +528,8 @@ class Readers(unittest.TestCase):
             "aws-kubeadm-scan",
             "gcp-kubeadm-validate",
             "gcp-kubeadm-scan",
+            "azure-platform-validate",
+            "azure-platform-scan",
         ):
             with self.subTest(target=target):
                 makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
