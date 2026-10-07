@@ -22,9 +22,11 @@ app:
 # (about 30 MiB used); nobody has measured it on a larger cluster, with more
 # CertificateRequests to decide.
 # The chart (v0.28.0) has a readiness probe (app.readinessProbe.port) and no
-# value for a liveness probe, so a hung pod is not restarted; nothing patches
-# the Deployment after install (the plan's backlog). The image is pinned by
-# digest in pins.env and passed by up.sh.
+# value for a liveness probe, and its schema refuses a key it does not know, so
+# none is set here. The liveness probe comes from
+# manifests/approver-policy-liveness.yaml, which up.sh applies server-side after
+# this release is installed (S073). The image is pinned by digest in pins.env
+# and passed by up.sh.
 resources:
   requests:
     cpu: 10m
