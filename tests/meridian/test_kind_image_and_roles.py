@@ -87,7 +87,8 @@ def test_only_the_tool_server_roles_have_a_connection_limit_above_their_pool() -
         r["name"]: r["connectionLimit"]
         for r in PLATFORM_DB["cluster"]["roles"]
         if "connectionLimit" in r
-        and r["name"] not in (SWEEP_ROLE, UPKEEP_ROLE, SEED_ROLE, INGEST_ROLE)
+        and r["name"]
+        not in (SWEEP_ROLE, UPKEEP_ROLE, SEED_ROLE, INGEST_ROLE, "claims_api")
     }
 
     # A tool server runs MAX_CONCURRENT_CALLS calls in worker threads, one
@@ -96,6 +97,17 @@ def test_only_the_tool_server_roles_have_a_connection_limit_above_their_pool() -
     assert set(limits) == {name.replace("-", "_") for name in TOOL_SERVERS}
     for name, limit in limits.items():
         assert limit >= 2 * (MAX_CONCURRENT_CALLS + 1), name
+
+
+def test_the_claims_api_role_may_hold_its_threads_and_a_few_more_and_no_more() -> None:
+    (role,) = [r for r in PLATFORM_DB["cluster"]["roles"] if r["name"] == "claims_api"]
+
+    # One connection a request, in a worker thread: anyio's 40 (S070's review, M-3)
+    # and ten spare for an audit row's own connection and a replacement. The
+    # limit is under the shared hundred and over the threads, so it never refuses
+    # a request the pod can serve.
+    assert role["connectionLimit"] == 50
+    assert 40 < role["connectionLimit"] < 100
 
 
 def test_the_sweep_role_may_hold_a_few_connections_and_no_more() -> None:

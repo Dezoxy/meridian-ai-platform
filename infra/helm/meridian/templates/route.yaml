@@ -3,8 +3,51 @@ The only route on the edge: the Claims API, on a *.localhost name on kind. The
 Agent Runtime and the Model Gateway have none and stay reachable only in the
 cluster. A request with another Host header (127.0.0.1:8088, a rebinding page)
 matches no route and gets 404 (threat model T-01). Plain HTTP until the edge
-gets its certificates. Rendered only when `route.enabled`.
+gets its certificates. Rendered only when `route.enabled`. With
+`route.uploads.enabled` there is a second HTTPRoute for the same service, for
+the upload paths alone (below).
 */ -}}
+{{- /*
+The two file switches are read as booleans only: in a template the string "false"
+is truthy, so `--set-string route.uploads.enabled=false` would otherwise turn the
+route on (and `--set-string ...=true` pass for a string). Everything below reads
+them as booleans, so this comes first.
+*/ -}}
+{{- range $name, $value := dict "route.uploads.enabled" .Values.route.uploads.enabled "route.downloads.enabled" .Values.route.downloads.enabled }}
+{{- if not (kindIs "bool" $value) }}
+{{- fail (printf "%s must be true or false, a boolean, and is %q: a string is not one (the string \"false\" would count as true); set it with --set, not --set-string, or in a values file without quotes" $name (toString $value)) }}
+{{- end }}
+{{- end }}
+{{- if and .Values.route.uploads.enabled (not .Values.route.enabled) }}
+{{- fail "route.uploads.enabled is true, but route.enabled is false: the upload route is a second route on the edge and has nothing to stand beside; turn the route on (route.enabled, route.hostname, route.parentRef) or turn uploads off" }}
+{{- end }}
+{{- if and .Values.route.downloads.enabled (not .Values.route.uploads.enabled) }}
+{{- fail "route.downloads.enabled is true, but route.uploads.enabled is false: the download serves the files the upload route stores and has nothing to serve without it; turn uploads on or turn downloads off" }}
+{{- end }}
+{{- /*
+The guard for both file switches. Until sign-in exists (S021) the upload route
+takes a file from anyone who reaches the host and the download serves every
+stored file to anyone who reaches the host, by walking the claim IDs (threat
+model T-38, T-69). What the guard IS: a check of a string. The chart turns either
+switch on only when `route.hostname` as a whole is a lower-case DNS name that ends
+in `.localhost`. It does not check who can reach the edge: Envoy matches the Host
+header, which any client can set, so the same release answers anyone who can open
+a connection to the Gateway's address. On kind the boundary is the cluster config
+that binds the published port to 127.0.0.1 (infra/kind/cluster.yaml:18), not this
+chart. The guard stops a release that turns the switches on beside a public name
+in one values file. It does not stop a Gateway that is reachable from a network (a
+LoadBalancer, a changed `listenAddress`), a port-forward, other local users or
+containers that reach the loopback port or the node's address, a `parentRef` to
+another Gateway, or the variable set by hand outside the chart. S021 removes it
+when sign-in exists. The name is matched whole (anchored, one label at a time), so
+a value with a newline or a second name neither passes nor renders as two, and it
+is printed quoted wherever it is rendered.
+*/ -}}
+{{- if or .Values.route.uploads.enabled .Values.route.downloads.enabled }}
+{{- if not (and (kindIs "string" .Values.route.hostname) (regexMatch "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\\.localhost$" .Values.route.hostname)) }}
+{{- fail (printf "route.uploads.enabled or route.downloads.enabled is true, but route.hostname %q is not a lower-case host name ending in .localhost: until sign-in exists (S021) the upload and download routes take and serve files for anyone who reaches the host. This check is of the string only: Envoy matches the Host header and any client can set one, and on kind the boundary is the published port bound to 127.0.0.1, not the chart. Use a *.localhost name, or turn the switches off" (toString .Values.route.hostname)) }}
+{{- end }}
+{{- end }}
 {{- if .Values.route.enabled }}
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -18,7 +61,7 @@ spec:
     - name: {{ required "route.parentRef.name is required when route.enabled" .Values.route.parentRef.name }}
       namespace: {{ required "route.parentRef.namespace is required when route.enabled" .Values.route.parentRef.namespace }}
   hostnames:
-    - {{ required "route.hostname is required when route.enabled" .Values.route.hostname }}
+    - {{ required "route.hostname is required when route.enabled" .Values.route.hostname | quote }}
   rules:
     - backendRefs:
         - name: claims-api
@@ -40,4 +83,174 @@ spec:
       name: claims-api
   requestBuffer:
     limit: {{ .Values.route.requestBufferLimit }}
+{{- if .Values.route.uploads.enabled }}
+---
+{{- /*
+The upload route (S070, T-38): the same host, Gateway, Service and port as the
+route above, for POST to the two paths that take a claimant's file, and nothing
+else. Its own BackendTrafficPolicy gives it a larger request buffer and a rate
+limit; the route above keeps its 64 Ki for every other request.
+
+Which route serves an upload path. The route above has no `matches`, which the
+Gateway API reads as PathPrefix "/": every path satisfies it, the upload paths
+too. A request that matches both goes to the more specific match. The Gateway
+API's own precedence is Exact, then the longest PathPrefix, then method, headers
+and query; a RegularExpression path is an implementation-specific match type,
+and Envoy Gateway's own order of path matches (not checked against its
+sources or a running proxy yet) is Exact, then RegularExpression, then
+PathPrefix. So, if that holds, the regular
+expressions below win over the prefix "/" and an upload never meets the 64 Ki
+buffer. Only a cluster shows it (the plan's run on
+kind: a body of 100 Ki to the upload path must get through, the same body to
+/claims/CLM-0001/documents must be 413). A request that matches the regular
+expression but not the method (a GET) falls back to the first route.
+
+Why the match cannot take another path. Envoy matches the whole path (the query
+string apart) against the expression, so `^...$` is the stricter reading and not
+a different one. The expression names the claim ID's shape (CLM-, four digits:
+models.py's pattern) and the literal `/files`; `/` is only in the literal
+places, so no other segment, suffix, `..` or empty segment is inside the match
+(tests/meridian/test_helm_uploads_route.py holds a list of paths that must not
+match). A path that does not match is served by the first route, at 64 Ki. The
+second match is the HTML twin of the first, the claimant's own page (the
+documents route has /claimant/claims/{claim_id}/documents beside
+/claims/{claim_id}/documents), behind the same switch.
+
+The NetworkPolicies do not change. The Claims API's ingress from the edge
+(networkpolicy.yaml, gated on route.enabled alone) names the edge's pods and the
+chart's port, not a route: a second route to the same Service and port is the
+same traffic from the same pods. tests/meridian/test_helm_uploads_route.py
+renders the policies with uploads on and off and holds them equal.
+*/}}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: claims-api-uploads
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "meridian.labels" "claims-api" | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ .Values.route.parentRef.name }}
+      namespace: {{ .Values.route.parentRef.namespace }}
+  hostnames:
+    - {{ .Values.route.hostname | quote }}
+  rules:
+    - matches:
+        - method: POST
+          path:
+            type: RegularExpression
+            value: ^/claims/CLM-[0-9]{4}/files$
+        - method: POST
+          path:
+            type: RegularExpression
+            value: ^/claimant/claims/CLM-[0-9]{4}/files$
+      backendRefs:
+        - name: claims-api
+          port: {{ .Values.port }}
+{{- if .Values.route.downloads.enabled }}
+    {{- /*
+    The download (S070 F4b): a second rule of this route, named so that a
+    policy can target it alone, for GET and HEAD of
+    /adjuster/claims/{claim_id}/files/{file_id}. The claim ID has the shape of the
+    others and the file ID is the app's own (a lower-case, hyphenated UUID:
+    file_download.FILE_ID_PATTERN, which a test holds equal to this). Why a rule of
+    this route and not a third match of the first rule: a BackendTrafficPolicy
+    attaches to a whole HTTPRoute or, by `sectionName`, to one rule of it, and the
+    first rule's policy carries the uploads' 1,126,400 byte buffer and six
+    requests a minute for every match of that rule. A GET of a file would spend
+    the uploads' allowance and be buffered at the uploads' size. The Gateway
+    API's HTTPRouteRule `name` (CRDs of the Gateway API v1.6.1 the pinned
+    Envoy Gateway v1.9.2 chart installs) and the policy's `sectionName` ("HTTPRoute:
+    HTTPRouteRule name", in the policy's CRD) were read there; neither was run
+    on a cluster, nor was which of the route's policy and the rule's policy an
+    Envoy Gateway applies to this rule ("only the most specific configuration
+    takes effect", the policy CRD says of merging). The kind run reads it: 31
+    GETs of a file in a minute must end in a 429 and an upload must still be
+    counted by the uploads' limit alone. Should the rule's policy not attach, the
+    route's own applies and the download is limited by the uploads' bucket,
+    which is stricter, not looser. A route of its own would need no such
+    reading, at the price of a second route to explain.
+    */}}
+    - name: downloads
+      matches:
+        - method: GET
+          path:
+            type: RegularExpression
+            value: ^/adjuster/claims/CLM-[0-9]{4}/files/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+        - method: HEAD
+          path:
+            type: RegularExpression
+            value: ^/adjuster/claims/CLM-[0-9]{4}/files/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+      backendRefs:
+        - name: claims-api
+          port: {{ .Values.port }}
+{{- end }}
+---
+{{- /*
+The upload route's own limits, in a policy of its own so that the first one is
+not touched. The buffer is the app's UPLOAD_BODY_LIMIT_BYTES (values.yaml says
+how the two are held equal): Envoy buffers a body up to it and answers 413 above
+it. The rate limit is Local: Envoy's own token bucket, no extra service. A rule
+with no clientSelectors applies to all traffic of the targeted route, so the
+bucket is meant to be one for every caller of the route, six requests a minute by
+default, and Envoy answers 429 past it. Whether the counter is per route or per
+match (the policy's CRD says only that "each Route has its own rate limit
+counters", so the two POST matches could count apart and allow twelve): not seen
+on a cluster. The app's own rate and byte budget back it up either way. There is
+no caller identity to key on before sign-in (S021): one busy claimant can use the
+whole allowance, and that is the point, since it bounds how fast the store fills.
+With more than one Envoy proxy pod each counts for itself.
+*/}}
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: claims-api-uploads
+  namespace: {{ .Release.Namespace }}
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: claims-api-uploads
+  requestBuffer:
+    limit: {{ .Values.route.uploads.requestBufferLimit | quote }}
+  rateLimit:
+    local:
+      rules:
+        - limit:
+            requests: {{ .Values.route.uploads.rateLimit.requests }}
+            unit: {{ .Values.route.uploads.rateLimit.unit }}
+{{- if .Values.route.downloads.enabled }}
+---
+{{- /*
+The download rule's own limit (S070 F4b), a policy that targets the rule named
+`downloads` of the uploads route and nothing else (`sectionName`; see the rule
+above for what was read and what only a cluster shows). A local rate limit, as the
+uploads': meant as one bucket for every caller of the rule, per proxy pod (per
+route or per match: not seen on a cluster, so GET and HEAD may count apart), 30 a
+minute by default; the app has its own limit of the same size, per process
+(file_download.DOWNLOAD_RATE_PER_MINUTE), which does not depend on this one. The buffer is the first route's own, 64Ki, and no larger: a GET has no
+body, so the uploads' buffer is neither needed nor wanted here.
+*/}}
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: claims-api-downloads
+  namespace: {{ .Release.Namespace }}
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: claims-api-uploads
+      sectionName: downloads
+  requestBuffer:
+    limit: {{ .Values.route.requestBufferLimit }}
+  rateLimit:
+    local:
+      rules:
+        - limit:
+            requests: {{ .Values.route.downloads.rateLimit.requests }}
+            unit: {{ .Values.route.downloads.rateLimit.unit }}
+{{- end }}
+{{- end }}
 {{- end }}

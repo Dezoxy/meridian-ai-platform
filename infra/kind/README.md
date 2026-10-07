@@ -514,8 +514,9 @@ server, whatever its connection string says.
 
 The edge is a Gateway API `Gateway` named `edge` (class `envoy`) with one HTTP
 listener. Only routes from the `meridian` namespace may attach. `make deploy`
-adds one route, for the Claims API only (below); every other host and path
-answers 404.
+adds one route, for the Claims API only (below; a second one for the file
+paths when the uploads switch is on, which it is not on kind); every other
+host and path answers 404.
 
 ## Prerequisites
 
@@ -1443,8 +1444,81 @@ on the host `claims.meridian.localhost`. A request with any other `Host`
 header, such as `127.0.0.1:8088` or a page that rebinds its DNS name to
 loopback (threat model T-01), matches no route and gets 404 from Envoy.
 Envoy buffers each request to the Claims API and answers 413 above 64 KiB, the
-app's own limit, before the app sees it. The edge speaks plain HTTP, on
-loopback only; TLS there has no step yet.
+app's own limit, before the app sees it, except on the two upload paths when
+the uploads switch is on (next). The edge speaks plain HTTP, on loopback only;
+TLS there has no step yet.
+
+### Files for a claim: two switches, both off
+
+S080 (the commits and code comments call it "S070 uploads") built, behind two
+switches that are **off in kind's values and off in the chart's**, a
+claimant's upload of a file to a claim and the adjuster's download of it.
+Status: implemented and tested, and **run once on kind** (RU1, 2026-10-07,
+with both switches added to kind's values for that run and turned off again by
+a second deploy; smoke passed 46 lines afterwards). That run saw the uploads
+route win over the first route, the three policies `Accepted` (the downloads
+policy on the route's named rule, replacing the route's own policy for it), the
+edge's 413 over the buffer and its 429 at the seventh upload and at the 31st
+download in a minute, the two buckets separate, a download's headers through
+the edge, the cross-site refusals and one audit row for each download served.
+**Not seen:** a browser, slow bodies and readers, the app's own 429 and 503
+(the edge answered first), the byte budget, memory under four uploads, a retry
+at the edge, and the database's size and log at the ceiling.
+
+- **Uploads** (`route.uploads.enabled`). A second HTTPRoute for exactly
+  `POST /claims/CLM-nnnn/files` and the claimant form's post to
+  `/claimant/claims/CLM-nnnn/files`, with a request buffer of 1,126,400 bytes
+  (1 MiB of file and 76 KiB of envelope; the other routes keep 64 KiB) and a
+  local rate limit of six requests a minute for the whole route, in a
+  BackendTrafficPolicy of its own, and `MERIDIAN_CLAIMS_UPLOADS=on` on the
+  Claims API. The chart refuses the switch while `route.enabled` is off. Envoy
+  counts the limit for each of its proxy pods, and on kind there is one.
+- **Downloads** (`route.downloads.enabled`), its own switch, which needs the
+  uploads switch (the chart and the app each refuse downloads without uploads):
+  the adjuster's `GET` and `HEAD` of
+  `/adjuster/claims/CLM-nnnn/files/<file id>`, a second named rule of the
+  uploads route with a limit of 30 requests a minute of its own and no larger
+  buffer, and `MERIDIAN_CLAIMS_DOWNLOADS=on`. A file is sent only as an
+  attachment, under a sandbox policy. The app has brakes of its own for it (a
+  cross-site check, 30 a minute and four at once, a HEAD that reads no
+  bytes), and the adjuster's claim page shows the newest 200 events and counts
+  the downloads on one line.
+- **The guard.** Until sign-in exists (S021) the pages have no identity, so
+  whoever reaches the route stores files on any claim and, with downloads on,
+  reads any claim's files by walking the claim IDs. The chart therefore
+  **refuses either switch unless the route's host name as a whole is a
+  lower-case name that ends in `.localhost`** (the name
+  `claims.meridian.localhost` of kind's values is), and unless the switches are
+  booleans, with a sentence that names S021. **The guard checks a string.**
+  Envoy matches the Host header, which any client can set, so the same release
+  answers anyone who can open a connection to the Gateway; on kind the
+  boundary is the cluster config that binds the published port to 127.0.0.1
+  (`cluster.yaml`), not the chart. The guard stops a release that turns the
+  switches on beside a public name in one values file. It does not stop a
+  Gateway that is reachable from a network (a LoadBalancer, a changed
+  `listenAddress`), a port-forward, other local users or containers that reach
+  the loopback port or the node's address, a `parentRef` to another Gateway, or
+  a variable set by hand outside the chart. So do not turn either switch on for
+  a cluster that other people or machines reach, and S021 removes the guard
+  when sign-in exists.
+- **Turning them on for a local run.** Neither switch has a `make` target or
+  a flag: edit [`values/meridian.yaml`](values/meridian.yaml) under `route:`,
+  uncomment the commented `uploads:` lines (and, to try the download too,
+  add `downloads:` with `enabled: true` beside them), and run `make deploy`.
+  Put the file back afterwards, so the change is not committed. Nothing the
+  services read can be set through an `env` item: the chart refuses one that
+  names either variable.
+- **What the app does as well.** The edge's buffer and rate limit are not the
+  app's only brakes, and the app does not depend on which edge route served a
+  path: it takes at most four uploads at once (503), 30 files and 8 MiB a
+  minute for the whole store (429), a body within 20 seconds (408), a ceiling of
+  128 MiB and 2,000 stored files (507), and five files and 3 MiB to a claim. It
+  also refuses a raw path that holds a percent sign, but RU1 showed that Envoy
+  normalises the path first, so behind this edge that refusal does not fire;
+  RU2 showed that the uploads route serves the normalised request and that
+  its limit counts it. Files go to the one database (2 Gi on kind, shared with
+  the audit trail); `claims_api` has a connection limit of 50 there. Nothing
+  scans a file: malware scanning is designed, not built.
 
 A `ClusterIP` Service means unrouted, not protected. Since S019 the
 namespace's network policies are the protection: the Agent Runtime, the
@@ -2730,6 +2804,9 @@ pod's working set from cAdvisor as the services' were read.
 
 - TLS on the gateway: no step yet (the plan's follow-up backlog). The edge
   listens on loopback only.
+- Malware scanning of an uploaded file, and any delete or retention of one
+  (S080): designed, not built. The two switches that store and serve files
+  are off here (see "Files for a claim" above).
 - `enforce` for Pod Security Admission on the `meridian` namespace, which
   has `warn` and `audit` at `restricted` since S019 (as `cert-manager` has
   since S063, and `observability` at `restricted`): a server-side dry run
