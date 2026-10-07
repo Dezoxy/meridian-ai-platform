@@ -36,7 +36,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 from opentelemetry.trace import Tracer
-from pydantic import AwareDatetime, ValidationError
+from pydantic import AwareDatetime
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -55,8 +55,11 @@ from meridian.platform.common.telemetry import (
 from meridian.runtime.sweep import ABANDONED_REASON
 from meridian.workloads.claims_triage.adjuster_queue import (
     QUEUE_LIMIT,
+    UNREADABLE_PROPOSAL_MARK,
     QueueCursor,
     QueueRow,
+    _proposal_of,
+    _queue_mark,
     load_queue,
 )
 from meridian.workloads.claims_triage.claim_dates import (
@@ -77,7 +80,6 @@ from meridian.workloads.claims_triage.models import (
     DecisionResponse,
 )
 from meridian.workloads.claims_triage.proposal import (
-    RESTS_ON_MARKS,
     RESTS_ON_NOTES,
     TriageProposal,
     recommendation_rests_on,
@@ -86,7 +88,6 @@ from meridian.workloads.claims_triage.triaging import (
     NUMBER_WORDS,
     arrived_documents,
     claim_database_failure,
-    invalid_fields,
 )
 
 logger = logging.getLogger(__name__)
@@ -98,10 +99,7 @@ QUEUE_PATH = "/adjuster/claims"
 STYLESHEET_PATH = "/adjuster/static/adjuster.css"
 NO_SUCH_CLAIM_DETAIL = "no such claim"
 CROSS_SITE_DETAIL = "the request came from another site"
-NO_PROPOSAL_TEXT = "no proposal is stored"
 ARRIVED_LABEL = "Documents that arrived later"
-NO_STRUCTURED_PROPOSAL_TEXT = "no structured proposal"
-UNREADABLE_PROPOSAL_TEXT = "the stored proposal could not be read"
 TRAIL_LIMIT = 200
 HTTP_OK = 200
 HTTP_FORBIDDEN = 403
@@ -426,15 +424,22 @@ def render_queue(
             "peril": _text(r.peril),
             "amount": _euros(r.claimed_amount),
             "reason": _text(r.reason),
-            "rests_on": RESTS_ON_MARKS.get(
-                recommendation_rests_on(r.recommendation, r.assessment), ""
-            ),
+            "rests_on": _queue_mark(r),
             # The same test as the claim's page: the sweep referred it.
             "overdue": r.state == "awaiting_adjuster"
             and r.referral_reason == DOCUMENTS_OVERDUE_REASON,
         }
         for r in rows
     ]
+    # One line for the page, the count only: the judgment is silent per row, so
+    # that reloading the queue cannot multiply log lines (the claim's own page
+    # logs the claim).
+    unreadable = sum(s["rests_on"] == UNREADABLE_PROPOSAL_MARK for s in shown)
+    if unreadable:
+        logger.warning(
+            "rows of the queue page whose stored proposal could not be read: %d",
+            unreadable,
+        )
     return TEMPLATES.get_template("queue.html").render(
         rows=shown,
         limit=QUEUE_LIMIT,
@@ -516,29 +521,6 @@ def render_error(
 
 
 # ── what the pages read ─────────────────────────────────────────────────────
-# (the queue's reading is in ``adjuster_queue.py``)
-def _proposal_of(
-    claim_id: str, row: tuple | None
-) -> tuple[TriageProposal | None, str | None]:
-    """The latest proposal and, when there is none to show, why."""
-    if row is None:
-        return None, NO_PROPOSAL_TEXT
-    if row[0] is None:
-        return None, NO_STRUCTURED_PROPOSAL_TEXT
-    try:
-        return TriageProposal.model_validate(row[0]), None
-    except ValidationError as exc:
-        # The claim's ID, the class, the fields and the error types only: the
-        # document is the model's text.
-        logger.warning(
-            "the stored proposal of claim %s is not valid: %s %s",
-            claim_id,
-            type(exc).__name__,
-            invalid_fields(exc),
-        )
-        return None, UNREADABLE_PROPOSAL_TEXT
-
-
 def _referral_of(
     conn: psycopg.Connection, claim_id: str, tenant: str
 ) -> tuple[str | None, bool]:

@@ -595,7 +595,8 @@ def add_documents(
     ended answers its status and runs nothing, and one still paused reads the
     recorded ``request_documents`` and completes with its note. A failure after
     the commit (the triage's, or its 409 when another request took it over, as
-    ``RefusedAfterStoring``) is marked ``stored``; one before or in it is not."""
+    ``RefusedAfterStoring``; or an answer its model refuses, a 500) is marked
+    ``stored``; one before or in it is not."""
     with start_span(tracer, "claims.documents") as span:
         set_span_attributes(
             span, {"meridian.claim_id": claim_id, "meridian.tenant": tenant}
