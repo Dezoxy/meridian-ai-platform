@@ -17921,7 +17921,13 @@ test` (356 tests), `make docs` (14 checks) and `make lint` ended 0; the whole
 suite at six workers beside the kind cluster and no other run with a
 database: 19,767 passed, 8 skipped (4 min 58 s). The Terraform tests ran in
 it (the program is on this machine); on the CI runner they run for the first
-time with this pull request's check.
+time with this pull request's check. That run was before K7 and before three
+more merges of `main`. The final one, on 042bd47 (K6, K7 and `main` 3b1f42a
+merged in: S074's third part, S070's second half so far, S072's cluster
+batch; one commit after it adds a blank line to this plan): `make test` (385
+tests), `make docs` and `make lint` ended 0; the whole suite at six workers:
+20,009 passed, 8 skipped (4 min 4 s). The guard's own cases, run by the main
+session on K7's commit as rebased: 2,376 `ok` lines, no failure.
 
 - **Hosted runner.** The 225 tests that need the Terraform program have never
   run on the runner: not seen on the runner until this pull request's check.
