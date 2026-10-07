@@ -16337,7 +16337,7 @@ what was wrong):
   again from AWS's price files before any ask, and stays a figure of the design
   until the owner's billing console confirms it.
 
-**Advisor:** two consultations.
+**Advisor:** three consultations (the third is in the work log, with K6's review).
 
 - **2026-10-06, 17:21 UTC, before the first contract (the design).** It changed
   five things. The plan's row no longer says "reuses S036's network" (fixed in
@@ -16443,7 +16443,38 @@ No other consultation is recorded.
   state file as a path to steer away from; the settings cover the three
   tools only). The security review this change needs is out:
 
-K6-REVIEW-RESULT
+- **The security review of K6** (`security-reviewer`, on 974d6d1): yes; a
+  tightening only. It ran the old guard and the new over the 1,941 cases as
+  they were before the commit (no decision weaker, none changed), over the
+  181 new cases (111 changed, each from no decision to an ask or a deny, or
+  from an ask to a deny: the implementer's report said 98, a counting slip),
+  and over a corpus of its own, 1,682 shapes for each module: the second
+  module gets the first's decision in every one, the first module's
+  decisions did not change, and 839 of the second's tightened. Each of the
+  eleven patterns is the old one when its new optional group is empty, so
+  it matches a superset; no widened ask stands before a deny (the last deny
+  is above the first of them). The settings' nine entries are in the right
+  lists, and the test's directory scan fails for a third module without
+  entries (run on a replica: nine failures). No window opens for ordinary
+  work on the second module's files (its README, its tests, `git` on its
+  paths, its validate and scan targets); five new false alarms of the kind
+  the first module already has (a search or an `echo` that quotes one of the
+  three target names).
+  - **Medium, older than K6 and true of both modules: K7, out.** The guard
+    names no state file as a path to steer away from, so a write into a
+    state file or a copy out of it gets no decision (`tee`, `mv`, `install`,
+    `ln`, `truncate`, a redirect), and a copy that is then read prints the
+    state. The review tried one more alternative in the pattern on a
+    scratch copy: 5,486 lines, none weaker, 144 writer shapes denied. K7
+    applies that line with cases.
+
+K7-RESULT
+
+- **A third consultation, before this pull request** (11:10 UTC, asked with
+  another step's): K6b, which landed after the wrapper's review and which no
+  reviewer read, is that review's prescription applied, with its tests seen
+  red, and may go on that ground; K6, a change of the guard, waits for its
+  own review whatever a consultation says (the owner's condition).
 
 - **K6b landed** (e335061). The plan's record is held to exactly its four
   lines: a partial fifth line and a NUL, which the old read let through
@@ -16557,7 +16588,13 @@ K6-REVIEW-RESULT
 - **The whole suite on the final tree, with `main` merged in, run by the main
   session:**
 
-FINAL-SUITE-RESULT
+The main session's run on the tree with `main` merged in (S073's first half,
+S074's second half, S070's first half and S072's first part; 0b9aab6): `make
+test` (356 tests), `make docs` (14 checks) and `make lint` ended 0; the whole
+suite at six workers beside the kind cluster and no other run with a
+database: 19,767 passed, 8 skipped (4 min 58 s). The Terraform tests ran in
+it (the program is on this machine); on the CI runner they run for the first
+time with this pull request's check.
 
 - **Hosted runner.** The 225 tests that need the Terraform program have never
   run on the runner: not seen on the runner until this pull request's check.
