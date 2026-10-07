@@ -297,31 +297,52 @@ Codex) now has rules for these targets, for Terraform by hand against this
 directory and for the `aws` CLI, and they are **not the barrier**. They stop
 a session from doing by reflex what only the owner should do:
 
-- **Denied:** `make aws-destroy` and `aws.sh destroy` in every runner form; the
-  wrapper or its targets under a pseudo-terminal tool, traced (`bash -x`,
-  `set -x`) or with `BASH_ENV`, `ENV`, `SHELLOPTS`, `BASH_XTRACEFD` or `PS4`;
-  a `TF_*` or `AWS_ENDPOINT_URL*` assignment in front of `terraform`, `tofu`,
-  `aws`, the wrapper or a target; `terraform apply`, `plan -out`, `import`,
-  `state mv|rm|push`, `force-unlock` and `workspace new|select` against this
-  directory; `aws` calls that delete or that print a new credential
-  (`iam create-access-key`, `kms decrypt`, `rds generate-db-auth-token`,
-  `sso get-role-credentials`); readers of the local file, the state, the plan
-  and its record, the AWS configuration and `.tfvars`; and writes to
-  `~/.terraformrc`, `~/.gitconfig`, `~/.aws`, `.terraform/environment` and
-  `aws.tfplan*`.
+- **Denied:** `make aws-destroy` and `aws.sh destroy` in the usual runner
+  forms (`bash`, a path, `cd … &&`, `bash -c`, `env`, `time`, `gmake`; not a
+  variable or stdin that holds the target); the wrapper or its targets with a
+  pseudo-terminal tool starting a command, traced (`bash -x`, `set -x`) or
+  with `BASH_ENV`, `ENV`, `SHELLOPTS`, `BASH_XTRACEFD` or `PS4`; a `TF_*` or
+  `AWS_ENDPOINT_URL*` assignment in front of `terraform`, `tofu`, `aws`, the
+  wrapper or a target (this reaches the Azure foundation's commands too);
+  `terraform` or `tofu` `apply`, `plan -out`, `import`, `state mv|rm|push`,
+  `force-unlock` and `workspace new|delete|select <another name>` where this
+  directory is named in the same command (`-chdir`, `cd … &&`) or is the
+  working directory the harness reports; `aws` calls that delete or that
+  print a new credential (`iam create-access-key`, `kms decrypt`,
+  `rds generate-db-auth-token`, `sso get-role-credentials`); readers of the
+  local file, the state, the plan and its record, the AWS configuration and
+  `.tfvars`; and writes to `~/.terraformrc`, `~/.gitconfig`, `~/.aws`,
+  `.terraform/environment` and `aws.tfplan*`. A search for a word is not a
+  use of it: the quoted pattern of `grep`, `rg` and the like is not read.
 - **Asked:** `make aws-plan` and `make aws-apply` (the apply's text says it
   costs money and that the owner runs it from where no session holds the
-  credentials); `terraform show`, `output`, `console`, `refresh` and
-  `state list|show|pull` against this directory; any `aws` call that is not a
-  read (`describe-*`, `list-*`, `sts get-caller-identity`, and a few more);
-  `make … TRIVY_IMAGE=` and `PROMTOOL_IMAGE=`.
+  credentials); `terraform` or `tofu` `plan`, `show`, `output`, `console`,
+  `refresh`, `state list|show|pull` and `workspace select default` (the
+  row of the table above, which the owner runs in a terminal) where this
+  directory is named or is the working directory; any `aws` call that is not a
+  read (`describe-*`, `list-*`, `sts get-caller-identity`, and a few more; a
+  `get-*` that is not on the list asks on purpose); `make … TRIVY_IMAGE=` and
+  `PROMTOOL_IMAGE=`.
 - **Passes:** `make aws-validate` and `make aws-scan`, which cost nothing.
 - `.claude/settings.json` adds to this: `Read`, `Edit` and `Write` are denied
   for the local file, the state and plan files, variable and override files,
   `.terraform/`, the state's directory under home, `~/.aws`, `~/.terraformrc`
-  and `~/.terraform.d`; the bare `terraform plan` and the one with `-chdir`
-  into this directory ask. The Codex side runs the same hook and reads no
-  settings file.
+  and `~/.terraform.d`; `make aws-destroy` and the wrapper's `destroy` are
+  denied there too, as a second layer; the bare `terraform plan` and the one
+  with `-chdir` into this directory ask. The settings hold in Claude Code
+  only: Codex runs the same hook and reads no settings file, so there the
+  hook's own asks and denies are all there is.
+- **Not covered, once:** wrappers before `aws` that the ask does not read
+  (`timeout`, `nice`, `watch`, `env -i`, `xargs`, `find -exec`, a brace group, a
+  path prefix); the `hashicorp/terraform` image, `terragrunt` and
+  `state replace-provider`; a reader after a `cd` into a credentials directory
+  or through `find`, a redirect or a glob; `git config --global` with a key that
+  runs a program; the session's own start-up files under the home directory; a
+  `cd` in one call and a bare `terraform apply` in the next (whether the
+  harness's working directory follows a `cd` is not verified); the bare `Grep`
+  and `Glob` tools against the settings' `Read` denies, and the settings' `./`
+  patterns for a file reached by an absolute path from another checkout (neither
+  verified).
 
 None of that is a boundary. A session that holds credentials reaches the same
 calls by a variable, a quote inside a word, a script file, `python3`, `uv` or a
@@ -420,7 +441,7 @@ prints an account number:
 | The identity call fails | Sign in, for example `aws sso login`, to the account you mean |
 | The signed-in account is not the pinned one | Sign in to the right account, or correct the pin if it is wrong |
 | A variable file or an override file in this directory, hidden or in another case included | Remove it; give values through the local file |
-| A Terraform workspace other than the default (`.terraform/environment`), at `plan`, `apply` or `destroy` | `terraform -chdir=infra/terraform/aws workspace select default` |
+| A Terraform workspace other than the default (`.terraform/environment`), at `plan`, `apply` or `destroy` | The owner, in a terminal: `terraform -chdir=infra/terraform/aws workspace select default` (a session's command guard asks) |
 | `apply` with no saved plan | `make aws-plan` first |
 | `apply` with a plan that has no record, whose file is not the one the record names, that is another commit's, from a changed directory, or older than thirty minutes | `make aws-plan` again (the plan and its record are dropped) |
 | `destroy` with no terminal | Run it yourself, in a terminal |

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Regression test for .claude/hooks/guard-bash.sh. Each line of
 # guard-bash-cases.jsonl carries a sample command and the expected decision
-# (deny, ask or none). Run: bash tests/test_guard_bash.sh
+# (deny, ask or none), and may carry the working directory the harness passes
+# in its input ("cwd"; a line without one is as before). Run: bash tests/test_guard_bash.sh
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 hook="$here/../.claude/hooks/guard-bash.sh"
@@ -11,7 +12,7 @@ while IFS= read -r line; do
   [ -z "$line" ] && continue
   n=$((n + 1))
   expect="$(jq -r '.expect' <<<"$line")"
-  got="$(jq -c '{tool_input:{command:.command}}' <<<"$line" | bash "$hook" \
+  got="$(jq -c '{cwd:(.cwd // null),tool_input:{command:.command}}' <<<"$line" | bash "$hook" \
     | jq -r '.hookSpecificOutput.permissionDecision // "none"')"
   [ -z "$got" ] && got=none
   if [ "$got" != "$expect" ]; then
@@ -145,6 +146,17 @@ esac
 # limit is far above that and far below a ten-second timeout.
 big_input="$(mktemp)"
 trap 'rm -f "$big_input"' EXIT
+# One bound for every CPU check below: 3 s of CPU, whatever the shape. The
+# shapes take 0.05 to 0.85 s of CPU on the development machine, and one of the
+# older bounds (1.5 s for the worst shape under the byte bound) took 1.736 s on
+# the hosted CI runner once, where the same shape took 0.74 s here: a machine
+# can be twice as slow, and a fixed small bound then fails for the machine and
+# not for the hook. A hook that has come to cost more than the bytes it reads
+# should (a pattern gone quadratic) lands near 10 s, so 3 s still catches it.
+# The watchdog (5 of the hook's 10 s) carries the protection; these are
+# regression guards. A ratio against a baseline shape was the other form and
+# is not used: its baseline is itself a measurement of the loaded machine.
+cpu_bound=3
 # The command is nine thousand segments, not a heredoc: a heredoc written to a
 # file is stripped before any pattern, and cheap to read even without the bound.
 jq -nc --arg c "$(for _ in $(seq 9000); do printf 'echo a; '; done)" \
@@ -152,10 +164,10 @@ jq -nc --arg c "$(for _ in $(seq 9000); do printf 'echo a; '; done)" \
 TIMEFORMAT='%U %S'
 cpu="$( { time bash "$hook" < "$big_input" > /dev/null; } 2>&1 )"
 cpu_seconds="$(awk '{ print $1 + $2 }' <<<"$cpu")"
-if awk -v s="$cpu_seconds" 'BEGIN { exit !(s < 0.5) }'; then
-  echo "ok   a 70 KB command takes ${cpu_seconds} s of CPU, under 0.5"
+if awk -v s="$cpu_seconds" -v b="$cpu_bound" 'BEGIN { exit !(s < b) }'; then
+  echo "ok   a 70 KB command takes ${cpu_seconds} s of CPU, under ${cpu_bound}"
 else
-  echo "FAIL a 70 KB command takes ${cpu_seconds} s of CPU, not under 0.5"
+  echo "FAIL a 70 KB command takes ${cpu_seconds} s of CPU, not under ${cpu_bound}"
   fail=1
 fi
 # The worst shape under the byte bound: 8192 one-word segments are 16384 bytes
@@ -163,10 +175,10 @@ fi
 jq -nc --arg c "$(segments 8192 a)" '{tool_input:{command:$c}}' > "$big_input"
 cpu="$( { time bash "$hook" < "$big_input" > /dev/null; } 2>&1 )"
 cpu_seconds="$(awk '{ print $1 + $2 }' <<<"$cpu")"
-if awk -v s="$cpu_seconds" 'BEGIN { exit !(s < 0.5) }'; then
-  echo "ok   16384 bytes of one-word segments take ${cpu_seconds} s of CPU, under 0.5"
+if awk -v s="$cpu_seconds" -v b="$cpu_bound" 'BEGIN { exit !(s < b) }'; then
+  echo "ok   16384 bytes of one-word segments take ${cpu_seconds} s of CPU, under ${cpu_bound}"
 else
-  echo "FAIL 16384 bytes of one-word segments take ${cpu_seconds} s of CPU, not under 0.5"
+  echo "FAIL 16384 bytes of one-word segments take ${cpu_seconds} s of CPU, not under ${cpu_bound}"
   fail=1
 fi
 
@@ -218,10 +230,10 @@ amp_command="$(amp_shape "$bound")"
 jq -nc --arg c "$amp_command" '{tool_input:{command:$c}}' > "$big_input"
 cpu="$( { time bash "$hook" < "$big_input" > /dev/null; } 2>&1 )"
 cpu_seconds="$(awk '{ print $1 + $2 }' <<<"$cpu")"
-if awk -v s="$cpu_seconds" 'BEGIN { exit !(s < 1.5) }'; then
-  echo "ok   the worst shape under the byte bound takes ${cpu_seconds} s of CPU, under 1.5"
+if awk -v s="$cpu_seconds" -v b="$cpu_bound" 'BEGIN { exit !(s < b) }'; then
+  echo "ok   the worst shape under the byte bound takes ${cpu_seconds} s of CPU, under ${cpu_bound}"
 else
-  echo "FAIL the worst shape under the byte bound takes ${cpu_seconds} s of CPU, not under 1.5"
+  echo "FAIL the worst shape under the byte bound takes ${cpu_seconds} s of CPU, not under ${cpu_bound}"
   fail=1
 fi
 ask_for "the worst shape followed by a denied segment is denied, not skipped" deny \
@@ -393,10 +405,10 @@ rmdir "$stand_in/bin" "$stand_in"
 jq -nc --arg c "tee <<EOF .$(padding 16000 .)" '{tool_input:{command:$c}}' > "$big_input"
 cpu="$( { time bash "$hook" < "$big_input" > /dev/null; } 2>&1 )"
 cpu_seconds="$(awk '{ print $1 + $2 }' <<<"$cpu")"
-if awk -v s="$cpu_seconds" 'BEGIN { exit !(s < 0.5) }'; then
-  echo "ok   16 KB of dots after a heredoc marker take ${cpu_seconds} s of CPU, under 0.5"
+if awk -v s="$cpu_seconds" -v b="$cpu_bound" 'BEGIN { exit !(s < b) }'; then
+  echo "ok   16 KB of dots after a heredoc marker take ${cpu_seconds} s of CPU, under ${cpu_bound}"
 else
-  echo "FAIL 16 KB of dots after a heredoc marker take ${cpu_seconds} s of CPU, not under 0.5"
+  echo "FAIL 16 KB of dots after a heredoc marker take ${cpu_seconds} s of CPU, not under ${cpu_bound}"
   fail=1
 fi
 
@@ -415,10 +427,10 @@ jq -nc --arg c "$(for _ in $(seq 2000); do printf 'aws '; done)secretsmanager ge
   '{tool_input:{command:$c}}' > "$big_input"
 cpu="$( { time bash "$hook" < "$big_input" > /dev/null; } 2>&1 )"
 cpu_seconds="$(awk '{ print $1 + $2 }' <<<"$cpu")"
-if awk -v s="$cpu_seconds" 'BEGIN { exit !(s < 2) }'; then
-  echo "ok   2000 repetitions of a tool name before its verb take ${cpu_seconds} s of CPU, under 2"
+if awk -v s="$cpu_seconds" -v b="$cpu_bound" 'BEGIN { exit !(s < b) }'; then
+  echo "ok   2000 repetitions of a tool name before its verb take ${cpu_seconds} s of CPU, under ${cpu_bound}"
 else
-  echo "FAIL 2000 repetitions of a tool name before its verb take ${cpu_seconds} s of CPU, not under 2"
+  echo "FAIL 2000 repetitions of a tool name before its verb take ${cpu_seconds} s of CPU, not under ${cpu_bound}"
   fail=1
 fi
 
@@ -431,20 +443,44 @@ aws_shape="$(for _ in $(seq 1950); do printf 'aws '; done)ec2 describe-instances
 jq -nc --arg c "$aws_shape" '{tool_input:{command:$c}}' > "$big_input"
 cpu="$( { time bash "$hook" < "$big_input" > /dev/null; } 2>&1 )"
 cpu_seconds="$(awk '{ print $1 + $2 }' <<<"$cpu")"
-if awk -v s="$cpu_seconds" 'BEGIN { exit !(s < 1.5) }'; then
-  echo "ok   2000 repetitions of aws before a read take ${cpu_seconds} s of CPU, under 1.5"
+if awk -v s="$cpu_seconds" -v b="$cpu_bound" 'BEGIN { exit !(s < b) }'; then
+  echo "ok   2000 repetitions of aws before a read take ${cpu_seconds} s of CPU, under ${cpu_bound}"
 else
-  echo "FAIL 2000 repetitions of aws before a read take ${cpu_seconds} s of CPU, not under 1.5"
+  echo "FAIL 2000 repetitions of aws before a read take ${cpu_seconds} s of CPU, not under ${cpu_bound}"
   fail=1
 fi
 make_shape="$(for _ in $(seq 1550); do printf 'make '; done)aws-plan"
 jq -nc --arg c "$make_shape" '{tool_input:{command:$c}}' > "$big_input"
 cpu="$( { time bash "$hook" < "$big_input" > /dev/null; } 2>&1 )"
 cpu_seconds="$(awk '{ print $1 + $2 }' <<<"$cpu")"
-if awk -v s="$cpu_seconds" 'BEGIN { exit !(s < 1.5) }'; then
-  echo "ok   1600 repetitions of make before aws-plan take ${cpu_seconds} s of CPU, under 1.5"
+if awk -v s="$cpu_seconds" -v b="$cpu_bound" 'BEGIN { exit !(s < b) }'; then
+  echo "ok   1600 repetitions of make before aws-plan take ${cpu_seconds} s of CPU, under ${cpu_bound}"
 else
-  echo "FAIL 1600 repetitions of make before aws-plan take ${cpu_seconds} s of CPU, not under 1.5"
+  echo "FAIL 1600 repetitions of make before aws-plan take ${cpu_seconds} s of CPU, not under ${cpu_bound}"
+  fail=1
+fi
+# The security pass found two shapes slower than these: `make ` 1550 times and
+# then a target that only starts like the one the rules look for (0.5 s), and a
+# run of `>` and then a dot-directory name that only starts like the AWS one
+# (0.5 s). Neither matches, so both are read to the end.
+near_miss_shape="$(for _ in $(seq 1550); do printf 'make '; done)aws-valid"
+jq -nc --arg c "$near_miss_shape" '{tool_input:{command:$c}}' > "$big_input"
+cpu="$( { time bash "$hook" < "$big_input" > /dev/null; } 2>&1 )"
+cpu_seconds="$(awk '{ print $1 + $2 }' <<<"$cpu")"
+if awk -v s="$cpu_seconds" -v b="$cpu_bound" 'BEGIN { exit !(s < b) }'; then
+  echo "ok   1550 repetitions of make before a near-miss target take ${cpu_seconds} s of CPU, under ${cpu_bound}"
+else
+  echo "FAIL 1550 repetitions of make before a near-miss target take ${cpu_seconds} s of CPU, not under ${cpu_bound}"
+  fail=1
+fi
+redirect_shape="echo $(padding 7900 '>').awsX"
+jq -nc --arg c "$redirect_shape" '{tool_input:{command:$c}}' > "$big_input"
+cpu="$( { time bash "$hook" < "$big_input" > /dev/null; } 2>&1 )"
+cpu_seconds="$(awk '{ print $1 + $2 }' <<<"$cpu")"
+if awk -v s="$cpu_seconds" -v b="$cpu_bound" 'BEGIN { exit !(s < b) }'; then
+  echo "ok   a run of > before a near-miss dot-directory takes ${cpu_seconds} s of CPU, under ${cpu_bound}"
+else
+  echo "FAIL a run of > before a near-miss dot-directory takes ${cpu_seconds} s of CPU, not under ${cpu_bound}"
   fail=1
 fi
 ask_for "a command of 1950 aws words before a read asks and is read" ask "$aws_shape"
@@ -534,6 +570,16 @@ for path in '~/.gitconfig' '~/.config/git/**'; do
   done
 done
 # The old denies stay.
+# The removal has a second layer (the hook is the first): a hook that timed out
+# or crashed would let make aws-destroy through, as Bash(make *) is allowed.
+for entry in 'Bash(make aws-destroy*)' 'Bash(infra/terraform/aws.sh destroy*)' 'Bash(./infra/terraform/aws.sh destroy*)'; do
+  if in_list deny "$entry"; then
+    echo "ok   deny holds ${entry}"
+  else
+    echo "FAIL deny lacks ${entry}"
+    fail=1
+  fi
+done
 for entry in 'Read(./**/*.tfvars)' 'Read(./**/.env)' 'Edit(./**/.env)' 'Bash(terraform destroy*)' 'Bash(terraform -chdir=* destroy*)'; do
   if in_list deny "$entry"; then
     echo "ok   deny keeps ${entry}"

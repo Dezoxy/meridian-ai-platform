@@ -99,6 +99,9 @@
     "deny": [
       "Bash(terraform destroy*)",
       "Bash(terraform -chdir=* destroy*)",
+      "Bash(make aws-destroy*)",
+      "Bash(infra/terraform/aws.sh destroy*)",
+      "Bash(./infra/terraform/aws.sh destroy*)",
       "Bash(rm -rf*)",
       "Bash(git push --force*)",
       "Bash(git push -f*)",
