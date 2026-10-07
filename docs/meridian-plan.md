@@ -563,6 +563,50 @@ both readings the same hour ("yes both are right, go on").
 | S075 | Harness, guard and Renovate | `make docs` notices a blank line that splits a table; the command guard's known gaps to a Secret's values and to superuser SQL are closed or listed where a session reads them, and a hook that times out has a known outcome; a rule for an implementer that edits through the shell, and a guard or a rule for `make up` and `make down` from an old checkout (both the owner's); the workflow linter knows the runner label; Renovate's week of waiting is a required check or the plan says why not (the owner's decision), an image is not proposed before the chart that installs it, and the two pgvector versions are one | done (not built: the two pgvector versions are not one, because the newest CloudNativePG image still holds 0.8.6; the owner chose package-manager holds over a required check, and uv's `exclude-newer` cannot go in before 2026-10-10; N4, the guard's own files, is the owner's open question 6; the shell-edit hook is inert until the owner sets `bashEditDiffEnabled`) | — |
 | S076 | CLI, scaffold and loader small ends | No registry entry lets the runtime name an agent that no tenant lists without a check saying so (T-81); `services_edit` refuses an alias or a merge key by itself; the scaffold says which write failed and names the line it refuses in every case; the two entry-point loaders answer a bad entry in the same fixed words; the screen's fingerprint covers what it claims to; the workload's report builders refuse another workload's manifest; `meridian registry schemas` answers an unwritable directory with a message; the scaffold can write an agent with workers, or the plan says why a second graph of subgraphs is not built. Built as: `meridian registry validate` prints one NOTE, exit code unchanged, for each graph agent the runtime may name and no tenant lists, and `load_registry` refuses nothing new, so the owner's S061 decision stands; `services_edit` itself refuses an anchor, an alias or a merge key, naming the line; a refusal about a line of the person's file names the parser's line where the parser gives one; a failed or interrupted write names its kind and the error's class, the undo puts back every file that still holds the command's own bytes and names every path it did not restore (the scaffold's write and undo are in `scaffold_writes.py`); the two loaders word a refusal in one table of fixed sentences that quote no distribution's name and no import error's text, with the registry's agent ID in front for the graphs; the screen's digest is unchanged and the documents say what it covers and does not; both report builders compare the manifest's workload with their own; `meridian registry schemas` answers a directory it cannot update with one line; a second graph of subgraphs is not built, as a decision (the section says why). Implemented and tested, not run on a cluster | done | S037 |
 
+### Toward services: a database each and six images
+
+Made on 2026-10-07 from the owner's answers of the same day (S081's section,
+and [ADR 10](architecture/decisions/0010-split-the-platform-into-services-with-a-database-each-and-their-own-releases.md)):
+a database per service on one PostgreSQL server, five databases, six images
+with independent versions, the tool servers trusting the authenticated caller,
+the audit trail as an outbox per service, a fresh baseline per database, and
+the building after the steps in flight. These steps are the building. They
+are **designed**: nothing in S082 to S088 exists, and S081 is the record that
+decides what they are. S080 is kept for the uploads step, which another branch
+adds.
+
+- **"Depends" on the steps in flight** means their pull requests are merged,
+  not that the steps are `done`: S020 and S069 are not `done` when their pull
+  requests merge, because S020's apply and S069's R12 wait on the owner.
+  S082's row names S020 and the range S069 to S074 as the owner's "the
+  steps in flight" was read. S071 is in that range and its paid run waits on
+  the owner's yes: S082 waits for the pull request of S071's free half (it
+  changes the tests' support code the split moves), not for the paid run,
+  which is a measurement and changes no service. This is the session's
+  reading; the owner may say otherwise.
+- **Two checkpoints for the owner:** after S083 the images half of the choice
+  is delivered (six images, on one database, with no independent release safe
+  before S088's contracts); after S087 the data half is.
+- **Lanes (Part A):** S083 and S087 change what the cluster runs, so each is
+  the cluster lane's. S085 adds migrations and S087 replaces the migration
+  tree: the database lane's. S084 may add or change a tool's contract and then
+  moves an evaluation fingerprint. S083 and S084 may run side by side.
+- **The owner's two answers of the sixth round** are in Part D's 7 (the audit
+  outbox, for S085) and 8 (a fresh baseline per database, for S087). What they
+  leave open is the steps' own design: the gateway's audit row, how the
+  adjuster's page reads the central trail, and where the archive lives.
+
+| ID | Step | Done when | Status | Depends |
+|---|---|---|---|---|
+| S081 | The decision record for the move toward services | [ADR 10](architecture/decisions/0010-split-the-platform-into-services-with-a-database-each-and-their-own-releases.md) is accepted and indexed: it says what the owner decided (five databases on one server, six images with independent versions, the tool servers trusting the authenticated caller with the lost double check accepted as a risk, the audit trail as an outbox per service, a fresh baseline per database, the building after the steps in flight) apart from the session's own design, lists the ten couplings with the step that replaces each, what stays shared, the consequences and the two checkpoints; this table exists and Part D's questions 7 and 8 are answered; `make docs`, `make check` and `make test` pass. Nothing is built. `doing` until the pull request is merged, then `done` | doing | — |
+| S082 | Code in the wrong place moves; import contracts per service | With no change in behaviour and no assertion of an existing test changed: the claims tool server leaves the claims workload's package, the Claims API no longer imports the runtime's models or its sweep's constants (the models both sides use sit in a module of their own), the sweep's runtime SQL sits with the runtime, and the workloads' graphs sit in a package of their own; an import contract keeps each service's package from importing another service's; `make lint`, `make pytest` and `make smoke` pass. Designed | todo | S081, S020, S069 to S074 |
+| S083 | Six packages, six images, a tag per service | A `uv` workspace holds a common library (`common`, `registry` and `guardrails`), the tool-server library and one package per service, each with its own dependencies and version; the runtime's image installs the graphs' package; the jobs ship with the service that owns their data; one build file makes six images; the chart takes a tag per service and `make deploy` builds and loads all six; `make demo` and `make smoke` pass on kind with six images on one database. First checkpoint: the images half of the owner's choice. Designed | todo | S082 |
+| S084 | The tool servers take the binding from the caller; two reads become calls | A tool server takes a call's run, agent, tenant and claim from the Agent Runtime's authenticated call and reads neither `runtime.runs` nor `claims.claims`; a call without a binding is refused; the knowledge server asks the policy server for a policy's wording version and the policy server asks the claims tool server for a policy's other claims, each over mutual TLS under a registry entry, a chart value and a NetworkPolicy; ADR 4's one-caller rule is changed for the two paths and the change recorded; T-22 is rewritten with the accepted risk, stating what the double check caught and what is left. Designed | todo | S082 |
+| S085 | The audit outbox, the relay and the central trail | Each service writes its audit row into an audit table of its own in the transaction of its business write, with the insert-only and stamp triggers; a relay copies the rows into a central audit table that owns retention and serves the adjuster's trail by claim; a relay that lags or stops is seen by an alert, and the services keep writing; the gateway's audit row is settled in the design and said (in the ledger's transaction, or kept apart); built inside the one database, as a table per schema (the owner's decision, Part D's question 7). Designed | todo | S082 |
+| S086 | The sweep in two | The runtime sweeps its own runs and checkpoints under its own role, and the claims side asks the runtime for a run's state and moves its own claims; no statement spans runs and claims; each half is safe to run twice, and a test stops a pass between the halves; whether the claims side has an identity of its own towards the runtime is decided and recorded. Designed | todo | S082 |
+| S087 | Five databases | `claims`, `runtime`, `gateway`, `policy` and `knowledge` each have their own migration tree and ledger from a baseline, with no replay (the owner's decision, Part D's question 8); the 31 files and their 59 test files are archived outside the package's path; each role and the server's rules name one database; kind, the tests' template databases, smoke, the runbooks' queries and the database lists of the Azure and AWS modules follow; the audit database exists; `make up`, `make smoke` and `make demo` pass on a recreated kind cluster. Second checkpoint: the data half of the owner's choice. T-25 is rewritten. Designed | todo | S083, S084, S085, S086 |
+| S088 | Contracts, versions and independent release | A committed, versioned contract for the gateway, the runtime and the Claims API's routes, each side tested against it, and a rule for how long an old version is served; the registry directory has a version of its own; CI builds, tests what changed and publishes the six images to a place the step chooses and records; one service is released alone while the others stay on their versions, and the run is recorded. Designed | todo | S083, S087 |
+
 ### M3 — Reliability and operations
 
 | ID | Step | Done when | Status | Depends |
@@ -1026,6 +1070,8 @@ that day; the rest stand as their step recorded them.
 | The evidence for `reset` against `refused` in smoke's check 9 and in this kind README (an unknown CA's connection ends with no alert) was measured on 2026-10-06 against a test server built on a plain `uvicorn.Config`, not through the start module that the five services now use; a test holds the module's context equal to uvicorn's own and smoke passed 46 of 46 after K2's deploy (the ending that line read is not in the run's record), but the ending was not measured against the module | S069 (infrastructure review of R11) | open; low; the comments now say the evidence came from plain uvicorn | S073 |
 | approver-policy's liveness probe is a second writer of the Deployment (field manager `meridian-kind`), and what happens when a chart takes the field was reasoned and not seen: whether the probe survives an upgrade to a newer chart (R13 applied the same chart twice), the apply's refusal and Helm's own conflict message on a cluster that has the probe, the two-step remedy (apply a copy of the manifest without its probe lines, then delete the manifest and the function and set the chart's value; the alternative is one Helm upgrade with `--force-conflicts`), the probe under real load (the numbers were chosen for an overload R13 did not reproduce), and a cold install with the apply. No run can see most of it before a newer chart exists: Renovate's pull request for one is the occasion, and its note names the remedy | S073 (R13 and its infrastructure review) | open; the remedy is written in the apply's message, the manifest's header and the kind README, tried nowhere | S073 |
 | How `certmanager_certificate_renewal_timestamp_seconds` behaves while a renewal is pending (expected: it stays in the past until issuance sets the next time) and whether Prometheus stores it at all: R13 saw `MeridianCertificateRenewalOverdue` loaded and healthy and quiet, not the series, and neither it nor `MeridianCertificateIssuingRestartLoop` has been seen firing; seeing the first needs a certificate whose renewal is due while nothing decides its request (the one-hour certificates of the certificate runbook's watch, with the approver stopped, about 45 minutes) | S073 (R13 and its infrastructure review) | open; the inner `> 0` of the rule rests on the series reporting 0 for a Certificate with no renewal time, expected and not seen | S073 |
+| Documents that say "the one image" or its size: ADR 6 and ADR 7 ("one image of 0.5 GB", an estimate; no image was measured), the Azure platform document, and T-97 ("the one image"). They stay true until S083 makes six images; each is read again in the step that makes it false | S081 (the map) | open; designed, nothing built | S083 |
+| Runbook queries and smoke lines that name the one database `meridian` or one schema each (the budget-exhaustion, secret-rotation, rate-store, provider-outage and database-failure runbooks, run by `tests/meridian/test_runbook_queries.py`; smoke's `psql -d meridian` lines and the cost-panel and service-identity checks; `infra/kind/deploy.sh`'s chunk count) | S081 (the map) | open; designed, nothing built | S087 |
 | 46 source files over the 800-line ceiling have no row of their own: `scripts/file-size-exceptions.txt` lists 51, each with the line count it may not pass (a ratchet), and five of them are homed elsewhere (`scripts/check_docs_consistency.py`, a copy of development-base's file, whose copy is the one to split; the two AWS script test files and the two upkeep and migration-rule test files, which have the rows above). The other 46 carry the reason "over the ceiling before the check existed; a row of S074 homes its split", and this row is that row. Two are not tests (`infra/terraform/aws.sh`, 812 lines, and `src/meridian/platform/registry/checks.py`, 857) and 44 are, the largest `test_runtime_app.py` (3,160 lines), `test_adjuster_pages.py` (3,097) and `test_claimant_pages.py` (2,743). Each split is work nobody has homed: a cut by S074's method (a script proves the moves) and the removal of the file's line from the list | S074 (the size check, C1, 2026-10-07) | open; each file's split is a contract of its own, none is built | S074 |
 | The ten least covered files of `src/meridian`, from the whole suite of 2026-10-07 (99.11 % of 13,783 statements, 122 missed; the same lines with the tracing core and with the monitoring one): `workloads/claim_brief/evaluation.py` 82.2 %, `platform/evaluation/report.py` 94.2 %, `platform/evaluation/fingerprints.py` 94.8 %, `workloads/claims_triage/mcp_server/tools.py` 95.1 %, `platform/gateway/startup.py` 96.0 %, `workloads/claim_brief/workflow.py` 96.2 %, `platform/policy_mcp/seed.py` 96.3 %, `platform/cli/knowledge.py` 96.4 %, `workloads/claims_triage/evaluation_http.py` 96.7 % and `platform/gateway/providers/azure_openai.py` 96.7 %. The lines still missing are ordinary error paths; no file is reachable only through the paid opt-in tests, and nothing is omitted for them. The floor is 98 for the whole, so one of these files can lose coverage without failing the gate | S074 (the coverage floor, C1, 2026-10-07) | open; a list for a person who works in those files, no fix built | S074 |
 | Coverage's cost on the hosted runner is not measured: the 2.0 % (257.63 s against 252.52 s) is the development machine's, at six workers, and the CI job's limit of 30 minutes was set from it by arithmetic (the slowest of five jobs, 14 min 29 s, scaled by 257.63 / 252.52 to 14 min 47 s, doubled and rounded up). The first pull request whose `python` check runs with `COVERAGE=1` gives the number: the Tests step's time and the whole job's, against the 10 min 1 s to 14 min 29 s read before it; if the step costs much more than 2.0 %, the limit and the workflow's comment are reread | S074 (C1b, 2026-10-07) | open; read from the first pull request that runs it | S074 |
@@ -19363,6 +19409,96 @@ real thing):
   here and kept.
 - For the owner: the decisions above and the four questions at the paid stop.
 
+### S081 — The decision record for the move toward services
+**Status:** doing · **Started:** 2026-10-07 · **Finished:** —
+**Goal:** write down, before anything is built, what the owner decided about
+moving the platform toward services (a database per service on one server, six
+images with independent versions, the tool servers trusting the authenticated
+caller, the audit trail as an outbox, a fresh baseline per database) apart from
+the session's own design, with the ten couplings that stand in the way and the
+eight steps that would cut them. Documents only:
+no code, no chart, no test. Every capability in it is designed.
+
+**Decisions:**
+
+- **Decided by the owner, 2026-10-07 (the answers file, fourth, fifth and sixth
+  rounds):** "A database per service, one server (Recommended)", refined at once
+  to five databases ("Five databases (Recommended)": `claims`, `runtime`,
+  `gateway`, `policy`, `knowledge`; the claims tool server shares the claims
+  database under its own role); "Six images, independent versions"; "Trust the
+  authenticated caller (Recommended)" (the tool servers give up their own read
+  of the run and the claim; the lost double check is an accepted risk, and T-22
+  is rewritten when the code changes); "Map and decision record now, build
+  after (Recommended)". The answers are copied as written, with the question
+  tool's mark of the session's recommendation.
+- **Decided by the owner in the sixth round (about 15:30 UTC; Part D's
+  questions 7 and 8, answered):** "Outbox per service (Recommended)": the audit
+  trail as an outbox, against a shared audit database (the guarantee "no
+  action without its row" is lost) and against the log pipeline; and "Fresh
+  baseline per database (Recommended)": one migration tree and ledger per
+  database from a baseline, with no replay, honest only because no environment
+  holds data, with the 31 files and their 59 test files archived outside the
+  package's path. The record says the fact the map found: the Model Gateway
+  already writes its audit row on a separate connection, so one service of six
+  runs without the guarantee today. The answers do not settle whether the
+  gateway's audit row joins its ledger's transaction, nor where the archive
+  lives: S085's and S087's designs say.
+- **The session's own, not put to the owner (the owner may overturn any):** ADR
+  number 10, taken now and moved if another ADR lands first (Part A: numbers are
+  taken late); status Accepted; no Mermaid diagram, because a table says the
+  before and the after; the new steps in a section of their own in Part B and
+  not among the backlog steps, whose preamble says they add no capability; S087
+  depends on S083 as well as on S084 to S086, because a migration tree per
+  database lives in a package per service; S082's row names S020 and the range
+  S069 to S074 as the owner's "the steps in flight" was read, with the note
+  that of S071 the free half's pull request gates it and the paid run does not;
+  the threat model's rows T-22, T-25 and T-97, the model's files and the root
+  README are not changed (nothing is built); two backlog rows for the documents
+  and the queries that name one image or one database.
+- **Rejected, with the reasons in ADR 10:** schemas kept in one database; a
+  server per service (the designed next step, its price on Azure to be read and
+  not stated); six databases strictly; one image; six images with one version;
+  the double check kept over the network; a shared audit database; audit
+  through the log pipeline; a replay of the 31 files into each database.
+
+**Advisor:** one consultation is recorded in the design, on 2026-10-07 about
+14:35 UTC, at the design, before this record was written. It changed five
+things: the claims tool server's database went to the owner as a choice, not a
+silent reading; the audit outbox stayed the recommendation with the fact about
+the gateway's separate connection added and the relay's cost and failure mode
+(a lagging or dead relay: a stale trail and no retention) named; the signed run
+context was dropped as redundant beside mutual TLS, so the real decision became
+the loss of defence in depth, and the owner's; the baselines were found honest
+and incomplete, so the record says where the 31 files and their tests go and
+that it is a large deletion; and the steps got two named checkpoints, with the
+note that independent release needs a CI that builds and publishes images,
+which does not exist. No second consultation was held for this step: the
+pull request is documents alone.
+**Work log:** 2026-10-07. A read-only map of the code on `main` at d1fd865,
+nothing run: the ownership matrix of tables and roles from the 31 migrations,
+every cross-service read and write with its code, what assumes one database,
+one image or one version, the import contracts and the contracts between
+services; it found ten couplings. A design of eight decisions (V1 to V8) and
+eight steps, with its threat model. Seven questions put to the owner in three
+rounds, three at about 14:15 UTC, two at about 14:45 UTC and two at about 15:30
+UTC, with the answers above (an earlier count said four). This record, ADR 10, written
+through the `architecture-docs` skill; this section, the rows and Part D's two
+questions, answered in the sixth round; the architecture README's index and
+reading paths.
+**Result / verification:** ADR 10 exists and is indexed. The gates are run on
+the branch and their output is in the pull request.
+**Follow-ups:** S082 to S088 (rows above) start when the steps in flight are
+merged; T-22
+(S084), T-25 (S087) and T-97 (S083) are rewritten in the steps that make them
+false; the two backlog rows (documents that say "the one image", S083; queries
+and smoke lines that name one database, S087). Open for those steps and said in
+ADR 10: how the tool servers' trust applies when the caller is another tool
+server and whether the new claims route is a registry tool (an evaluation
+fingerprint), whether the gateway's audit row joins its ledger's transaction,
+what the relay's rows carry so the trail is selected by claim, how the
+adjuster's page reads the central trail, where the archive of the old
+migrations lives, and whether the claims sweep has an identity of its own.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -19373,6 +19509,8 @@ real thing):
 | 4 | Licence: keep all rights reserved, or publish under MIT or Apache-2.0? **Answered 2026-09-29: Apache-2.0**, copyright Dezoxy; `NOTICE` credits the MIT-licensed ECC material | Before anyone asks to reuse the code | ~~All rights reserved~~ |
 | 5 | Should Meridian live in a dedicated work tenant instead of the trial account's default directory? It decides where S021's sign-in, roles and app registrations are created, and moving later means recreating the foundation | S021, and the upgrade to pay-as-you-go by about 2026-10-30, which is already an account change | Stay in the trial account's tenant; decide at the upgrade |
 | 6 | Should a session be stopped from editing the command guard's own files? The permission rules allow Edit and Write on `.claude/hooks/guard-bash.sh` and `.claude/settings.json`, so a session can weaken the guard that reads its commands (N4 of the third security review). Two ways: deny Edit and Write on `.claude/hooks/**` and `.claude/settings*.json`, or ask before each. The session recommends asking: a deny would also stop a session from fixing the guard when a review finds a hole, as S075 did after each of its three reviews, while an ask puts the edit in front of the owner | S075's pull request, if the owner wants it built there; no step needs it | Neither is built: the guard stays a guard for habits, and the gap is listed in the runbook and in the hook's header |
+| 7 | Should the audit trail become an outbox when the services get a database each? An audit table in each service's database, written in the same transaction as the business write (so "no action without its row" holds for every service that has a database), and a relay that copies the rows into a central audit database, which owns retention and serves the adjuster's trail. **Answered 2026-10-07 (the sixth round, about 15:30 UTC): "Outbox per service (Recommended)"**, the session's recommendation, chosen as written ([ADR 10](architecture/decisions/0010-split-the-platform-into-services-with-a-database-each-and-their-own-releases.md), point 5). The alternatives not taken: one shared audit database (the audit row can no longer commit with the business write: the guarantee weakens or every write becomes a two-step exchange) and audit through the log pipeline (the trail the adjuster reads would rest on a log store). Its costs: a relay to run, a trail that lags by the relay's lag and stops growing if the relay dies, and a sixth database on the server. The Model Gateway already writes its audit row on a separate connection, so under the outbox it either keeps that or joins its ledger's transaction, which S085's design says: the one part of the question the answer does not settle | S085's design | ~~The outbox, as ADR 10 recommends, with the gateway's choice settled in S085's design and shown to the owner~~ |
+| 8 | Should each of the five databases start from a baseline with no replay of the 31 migration files, the old files and their 59 test files archived outside the package's path? **Answered 2026-10-07 (the sixth round, about 15:30 UTC): "Fresh baseline per database (Recommended)"**, the session's recommendation, chosen as written (ADR 10, point 6). Honest only while no environment holds data: the kind cluster is disposable and the Azure database has never been created. A split with data would need expand, copy, switch and contract instead, and a replay would mean rewriting 13 files that mix schemas, which an applied file's rule forbids. The cost: a large deletion from the tree and a change in the plan's count of migrations | S087's design | ~~Baselines with no replay, as ADR 10 recommends, asked again at S087 if any environment then holds data~~ |
 
 ## Part E — Changelog
 
@@ -20257,6 +20395,25 @@ real thing):
   runbook, `slo.md` (queries that named two namespaces where the rules name
   three), the kind README and T-91.
   The whole suite on the final tree: 20,080 passed, 8 skipped.
+- **v0.84, 2026-10-07:** S081, the decision record for the move toward
+  services (still `doing` until its pull request merges): ADR 10, accepted,
+  designed and not built. It writes the six decisions the owner took on
+  2026-10-07 (a database per service on one PostgreSQL server, five databases
+  with the claims tool server in the claims database under its own role; six
+  images with independent versions; the tool servers trusting the authenticated
+  caller, with the lost double check accepted as a risk; the map and the record
+  now and the building after the steps in flight; the audit trail as an outbox
+  per service, with a relay into a central audit database; a fresh baseline per
+  database, with no replay of the 31 migration files) apart from the session's
+  own design. It holds the ten couplings with the step that replaces each, what
+  stays shared, the consequences and the two checkpoints. The plan gains S081
+  to S088 in a section of Part B of their own (S080 is kept for the uploads
+  step), S081's section in Part C, Part D's questions 7 and 8, answered in the
+  owner's sixth round (about 15:30 UTC), and two backlog rows (the
+  documents that say "the one image", home S083; the queries and smoke lines
+  that name one database, home S087). The threat model's rows, the model's
+  files and the root README are not changed: T-22, T-25 and T-97 are rewritten
+  in S084, S087 and S083.
 - **v0.85, 2026-10-07:** S074, three gates in CI (still `doing`), the owner's
   answer to "which gates": "Coverage threshold, File size check, Per-test
   timeout". A file size check in `make lint`: a tracked Python or shell

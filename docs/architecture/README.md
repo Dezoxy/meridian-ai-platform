@@ -43,9 +43,11 @@ used everywhere: implemented, simulated, designed.
 
 - Stakeholder: SystemContext, ClaimsTriage, the scope page.
 - Engineer: Containers, ClaimsTriage, ClaimsApproval, the ADRs (ADR 9 for the
-  second agent framework and the runtime's two hosts).
+  second agent framework and the runtime's two hosts; ADR 10 for the designed
+  split into services, a database each and their own releases).
 - Architect: Containers, Governance, DeploymentAws and DeploymentGcp (both
-  designed), the ADRs.
+  designed), the ADRs (ADR 10 for where the platform is meant to go next, and
+  what it would cost).
 - Operator: Governance, DeploymentAws and DeploymentGcp (designed: nothing
   runs on AWS or on Google Cloud). The deployment views of kind and of Azure
   and the observability views arrive with milestone M2.
@@ -103,6 +105,7 @@ drawn.
 - [0007 Map the Azure platform to Google Cloud](decisions/0007-map-the-azure-platform-to-google-cloud.md)
 - [0008 Share the gateway's rate windows in Redis](decisions/0008-share-the-gateways-rate-windows-in-redis.md)
 - [0009 Run a second agent framework behind the same host protocol](decisions/0009-run-a-second-agent-framework-behind-the-same-host-protocol.md)
+- [0010 Split the platform into services with a database each and their own releases](decisions/0010-split-the-platform-into-services-with-a-database-each-and-their-own-releases.md)
 
 
 New ADR: copy [templates/adr.md](templates/adr.md) to
