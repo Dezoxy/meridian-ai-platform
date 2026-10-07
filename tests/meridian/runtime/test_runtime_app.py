@@ -46,7 +46,7 @@ from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.platform.common.throttle import REFUSAL_AUDIT_SECONDS
 from meridian.platform.registry import load_registry
 from meridian.runtime import app as runtime_app
-from meridian.runtime import graphs, runs, tool_client
+from meridian.runtime import graphs, model_client, runs, tool_client
 from meridian.runtime.app import create_app
 from meridian.runtime.checkpoints import open_saver
 from meridian.runtime.failures import GraphFailure
@@ -989,8 +989,7 @@ def started_run(db: DatabaseHandle) -> runs.RunIdentity:
         tenant="claims-triage",
         reference="CLM-0001",
     )
-    runs.start_run(db.dsn("agent_runtime"), identity)
-    return identity
+    return runs.start_run(db.dsn("agent_runtime"), identity)
 
 
 def stored_row(db: DatabaseHandle, run_id: uuid.UUID) -> tuple:
@@ -1617,7 +1616,10 @@ def test_the_final_status_is_recorded_before_the_checkpoints_are_deleted(
 
 
 # ── resuming a paused run (S015) ────────────────────────────────────────────
-APPROVAL = {"approved": True}
+# A resume delivers no value (S069): the decision is read from the record, so the
+# only value a request may carry is the empty one. The name stays: it is what the
+# pause is handed when the approval arrives.
+APPROVAL: dict[str, Any] = {}
 BEFORE = {"stage": "before"}
 
 
@@ -2227,12 +2229,26 @@ def test_a_resumed_gateway_timeout_leaves_the_run_paused_with_504(
 LOOKS_LIKE_AN_INTERRUPT_ID = "a" * 32  # LangGraph reads such keys as a map
 
 
+def test_the_pause_is_handed_the_empty_value_of_a_resume(
+    fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register(monkeypatch, resumable())
+    client = make_client(fresh_database)
+    run_id = paused_run(client)
+
+    response = resume(client, run_id, input={})
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "Completed"
+    assert response.json()["output"] == {"stage": "after", "answer": {}}
+
+
 @pytest.mark.parametrize(
     "value",
-    [{}, {LOOKS_LIKE_AN_INTERRUPT_ID: "not the pause's id"}],
-    ids=["empty", "hex-key"],
+    [{"approved": True}, {LOOKS_LIKE_AN_INTERRUPT_ID: "not the pause's id"}],
+    ids=["a-key", "hex-key"],
 )
-def test_the_pause_reads_the_resume_value_verbatim_whatever_its_keys(
+def test_a_resume_that_carries_a_value_is_refused_and_the_run_stays_paused(
     fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch, value: dict
 ) -> None:
     register(monkeypatch, resumable())
@@ -2241,8 +2257,11 @@ def test_the_pause_reads_the_resume_value_verbatim_whatever_its_keys(
 
     response = resume(client, run_id, input=value)
 
-    assert response.json()["status"] == "Completed"
-    assert response.json()["output"] == {"stage": "after", "answer": value}
+    assert response.status_code == 422
+    assert "no value" in response.text
+    assert "not the pause" not in response.text
+    assert run_rows(fresh_database)[0][5] == "AwaitingApproval"
+    assert "run.resumed" not in event_names(fresh_database, run_id)
 
 
 def test_a_thread_whose_checkpoints_are_gone_fails_the_resume_before_any_node_runs(
@@ -2324,10 +2343,10 @@ def test_a_run_that_pauses_again_keeps_its_checkpoints_and_resumes_again(
     run_id = paused_run(client)
     thread = the_only_thread(fresh_database)
 
-    again = resume(client, run_id, input={"step": 1})
+    again = resume(client, run_id)
     kept = checkpoint_counts(fresh_database, thread)
     status_between = run_rows(fresh_database)[0][5]
-    last = resume(client, run_id, input={"step": 2})
+    last = resume(client, run_id)
 
     assert again.status_code == 200
     assert again.json() == {
@@ -2338,7 +2357,7 @@ def test_a_run_that_pauses_again_keeps_its_checkpoints_and_resumes_again(
     assert status_between == "AwaitingApproval"
     assert all(count > 0 for count in kept.values()), kept
     assert last.json()["status"] == "Completed"
-    assert last.json()["output"] == {"stage": "after", "answer": {"step": 2}}
+    assert last.json()["output"] == {"stage": "after", "answer": {}}
     assert event_names(fresh_database, run_id) == [
         "run.started",
         "run.awaiting_approval",
@@ -2408,17 +2427,37 @@ def test_the_lease_of_a_running_run_is_ten_minutes() -> None:
 
 
 def test_the_longest_a_live_leg_can_last_is_under_the_lease() -> None:
-    # Four model calls of 30 s and sixteen tool calls of 10 s: 120 + 160 = 280 s.
-    # A lease the longest leg could outlast would let a takeover or the sweep
-    # end a run something is still working on. The 30 s of the gateway client is
-    # its timeout for each phase of a call, so this is the sum of the bounds the
-    # code names, not a hard ceiling.
-    model_seconds = runs.MAX_MODEL_CALLS_PER_RUN * runtime_app.GATEWAY_TIMEOUT_SECONDS
+    # Four model calls and sixteen tool calls of 10 s (the whole call is under
+    # one deadline). A model call ends one of two ways. Before the headers: the
+    # pool wait, the connect twice over TLS, the write and one wait for the
+    # headers, 55 s. After them the clock is read: a call inside its deadline
+    # reads on, each wait at most one read timeout, and ends at the deadline plus
+    # one, 60 s; a call whose headers come later ends when they do. The longer
+    # of the two is its figure: 4 x 60 + 160 = 400 s. A lease the longest leg
+    # could outlast would let a takeover or the sweep end a run something is
+    # still working on. NOT a ceiling for one case: response HEADERS that
+    # trickle, each wait under the read timeout (httpx has no timeout for a
+    # whole request, and the clock is read only once the headers are in), so a
+    # leg is not provably under the lease; a leg that outlives it writes
+    # nothing over the run (its end matches its own claim) and its tool calls
+    # bind until it ends (T-10).
+    before_headers = (
+        runtime_app.GATEWAY_POOL_TIMEOUT_SECONDS
+        + 2 * runtime_app.GATEWAY_CONNECT_TIMEOUT_SECONDS
+        + runtime_app.GATEWAY_WRITE_TIMEOUT_SECONDS
+        + runtime_app.GATEWAY_TIMEOUT_SECONDS
+    )
+    reading = (
+        model_client.MODEL_CALL_DEADLINE_SECONDS + runtime_app.GATEWAY_TIMEOUT_SECONDS
+    )
+    model_call = max(before_headers, reading)
+    assert (before_headers, reading) == (55.0, 60.0)
+    model_seconds = runs.MAX_MODEL_CALLS_PER_RUN * model_call
     tool_seconds = runs.MAX_TOOL_CALLS_PER_RUN * tool_client.TOOL_TIMEOUT_SECONDS
 
     longest_leg = model_seconds + tool_seconds
 
-    assert (model_seconds, tool_seconds, longest_leg) == (120.0, 160.0, 280.0)
+    assert (model_seconds, tool_seconds, longest_leg) == (240.0, 160.0, 400.0)
     assert longest_leg < runs.RUNNING_LEASE_SECONDS
 
 
@@ -2651,7 +2690,6 @@ def test_pausing_after_a_failed_resume_says_whether_it_moved_the_run(
 ) -> None:
     identity = started_run(fresh_database)
     dsn = fresh_database.dsn("agent_runtime")
-    make_running(fresh_database, str(identity.run_id), idle_seconds=0)
 
     first = runs.pause_after_failed_resume(dsn, identity, reason="unexpected")
     second = runs.pause_after_failed_resume(dsn, identity, reason="unexpected")
@@ -2663,9 +2701,14 @@ def test_pausing_after_a_failed_resume_says_whether_it_moved_the_run(
     )
 
 
-def test_a_resume_input_of_exactly_32_kib_is_accepted_and_one_byte_more_is_not(
+def test_a_resume_input_with_a_value_is_refused_whatever_its_size_and_not_echoed(
     fresh_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # The size bound that this test used to pin (32 KiB accepted, one byte more
+    # refused) is gone with the value: a resume delivers none (S069), so any
+    # non-empty value is refused, at 32 KiB and one byte over alike. The body's
+    # size is the middleware's bound (``SMALL_BODY_LIMIT_BYTES``, 64 KiB: the
+    # 413 tests in ``tests/meridian/common/test_http.py`` hold it).
     register(monkeypatch, resumable())
     client = make_client(fresh_database)
     run_id = paused_run(client)
@@ -2673,10 +2716,9 @@ def test_a_resume_input_of_exactly_32_kib_is_accepted_and_one_byte_more_is_not(
     over = resume(client, run_id, input=input_of_size(32 * 1024 + 1))
     exact = resume(client, run_id, input=input_of_size(32 * 1024))
 
-    assert over.status_code == 422
-    assert "xxxxxxxx" not in over.text
-    assert exact.status_code == 200
-    assert exact.json()["status"] == "Completed"
+    assert (over.status_code, exact.status_code) == (422, 422)
+    assert "xxxxxxxx" not in over.text + exact.text
+    assert run_rows(fresh_database)[0][5] == "AwaitingApproval"
 
 
 @pytest.mark.parametrize(

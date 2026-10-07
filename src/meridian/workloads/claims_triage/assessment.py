@@ -35,7 +35,7 @@ import json
 import logging
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from typing import Any
 
@@ -116,7 +116,8 @@ class Assessed:
     assessment: Assessment
     rationale: str | None  # set only for none_applies and applies
     # None means no answer: no call was made (a guardrail or too-long) or the
-    # provider's content filter refused it.
+    # provider's content filter refused the prompt. A completion it withheld
+    # has its drafter (S069): the provider ran and billed it.
     drafted_by: DraftedBy | None
     unavailable_because: UnavailableBecause | None  # set only for unavailable
 
@@ -202,6 +203,26 @@ def _without_an_answer(reason: UnavailableBecause) -> Assessed:
     """The assessment of a call that was not made or got no answer."""
     assessment, rationale, because = _unavailable(reason)
     return Assessed(assessment, rationale, None, because)
+
+
+def _filtered(filtered: ModelCallFilteredError) -> Assessed:
+    """The assessment of a call the provider's content filter stopped. A prompt
+    it refused had no drafter: nothing ran. A completion it withheld was drafted
+    and billed, so the deployment the gateway named is on record, as for any
+    answer; with none named (a header lost) there is none to record."""
+    answered = _without_an_answer("filtered")
+    if filtered.drafter is None:
+        return answered
+    drafter = filtered.drafter
+    return replace(
+        answered,
+        drafted_by=DraftedBy(
+            deployment=drafter.deployment,
+            provider=drafter.provider,
+            mode=drafter.mode,
+            prompt=PROMPT_VERSION,
+        ),
+    )
 
 
 def _unfenced(text: str) -> str:
@@ -334,8 +355,8 @@ def assess(
             data_class=PERSONAL_DATA,
             response_schema=ANSWER_SCHEMA,
         )
-    except ModelCallFilteredError:
-        return _without_an_answer("filtered")
+    except ModelCallFilteredError as filtered:
+        return _filtered(filtered)
     assessment, rationale, because = read_answer(
         result.text, result.finish_reason, candidates
     )

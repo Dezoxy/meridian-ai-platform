@@ -54,7 +54,10 @@ pins in `infra/kind/pins.env`, the `Makefile` and the workflows:
 - `gitleaks` (the secret scan before a push) and `shellcheck`;
 - Node.js, for the edit and session hooks under `.claude/hooks/node/` and
   the MCP server in `.mcp.json`;
-- `terraform` and `az` only for the Azure steps (S007, S020).
+- `terraform` and `az` only for the Azure steps (S007, S020), and `terraform`
+  with Docker for `make aws-validate` and `make aws-scan` (S036), which need
+  no account; the `aws` CLI is the owner's, for a plan or an apply, and a
+  session holds no credential for it.
 
 Three things the laptop never showed, and what the virtual machine
 answered on 2026-10-06:
@@ -81,6 +84,7 @@ clone plus the tools above is a working environment. What is not in git:
 |---|---|---|
 | Private notes | `.context/` (ignored) | Copy by hand; never commit, never quote in a tracked file |
 | Azure state settings | `infra/terraform/local.env` (ignored) | What `make azure-state` wrote. Copy by hand, or let that target write it again when S020 opens; never into a tracked file |
+| AWS pin and settings | `infra/terraform/local.env-aws` (ignored, mode 600) | Four `KEY=value` lines the owner writes by hand (the account number, the Region, an address and an e-mail address), read and never run by `infra/terraform/aws.sh`; the module's README lists them. The state is under `~/.local/state/meridian-aws/`, not in the checkout, and moves only if it is copied |
 | Local permission answers | `.claude/settings.local.json` (ignored) | Leave behind; the assistant asks again |
 | The kind cluster | Docker, on the old machine | Do not move. `make up`, then `make deploy`, rebuild it from the charts; `make smoke` and `make demo` prove it. The owner runs `make down` on the old machine |
 | Cluster credentials | `infra/kind/kubeconfig` (ignored) | `make up` writes a new one |
@@ -158,7 +162,12 @@ For the virtual machine both are recorded below.
   the other ways to a Secret's value (the secret-rotation runbook lists
   them, and what the guard does not see: it is a guard for habits, and
   the session can edit the guard's own files, which is the owner's to
-  decide). A known limit, older than this
+  decide). Since S036 it also denies the AWS module's removal and the
+  by-hand changes of its state (`make aws-destroy`, the wrapper's `destroy`,
+  `apply`, `import`, `state` writes), and asks before `make aws-plan`,
+  `make aws-apply`, a `terraform plan` of that module and an `aws` call that
+  is not a read (the same runbook's section on the AWS environment lists what
+  it does not see). A known limit, older than this
   change: the hook has ten seconds, and with the machine loaded (a load
   average near 70) a command that carries a 70 KB heredoc, or one of
   4,000 segments, took it that long (1.3 s when idle), and Claude Code

@@ -49,6 +49,7 @@ from meridian.platform.common.identity import (
 from meridian.platform.common.logformat import configure_logging
 from meridian.platform.common.logredaction import install_log_redaction
 from meridian.platform.common.metrics import make_meter_provider
+from meridian.platform.common.refusal_summary import write_ended_summaries
 from meridian.platform.common.telemetry import (
     mark_error,
     set_span_attributes,
@@ -90,7 +91,19 @@ from meridian.runtime.tool_client import (
 )
 from meridian.runtime.tool_transport import ToolTransport
 
+# The gateway client's bound for each phase (httpx has no bound for a whole
+# request; the call's deadline is ``model_client.MODEL_CALL_DEADLINE_SECONDS``,
+# read once the headers are in). The read is each wait for bytes. The others
+# are for a first-party call inside one cluster, over mutual TLS: the pool wait
+# is for a free one of the client's hundred connections (the request threads
+# are anyio's forty, so it is free unless graphs fan out widely), the connect
+# is taken twice over TLS (the TCP connect, then the handshake), and the write
+# is a request body of some KiB. Each is a wait a healthy call spends in
+# milliseconds; a node under load needs seconds, not tens of them.
 GATEWAY_TIMEOUT_SECONDS = 30.0
+GATEWAY_POOL_TIMEOUT_SECONDS = 5.0
+GATEWAY_CONNECT_TIMEOUT_SECONDS = 5.0
+GATEWAY_WRITE_TIMEOUT_SECONDS = 10.0
 # The audit reason of a call the runtime's own allowlist refuses.
 REFUSAL_REASON: ClientRefusal = "tool-not-allowed"
 # The audit reason of a run request for a job agent, which has no graph.
@@ -195,7 +208,12 @@ def make_gateway_client(
     # trust_env=False: a proxy variable must not reroute claimant data.
     return httpx.Client(
         base_url=settings.gateway_url,
-        timeout=GATEWAY_TIMEOUT_SECONDS,
+        timeout=httpx.Timeout(
+            GATEWAY_TIMEOUT_SECONDS,
+            connect=GATEWAY_CONNECT_TIMEOUT_SECONDS,
+            write=GATEWAY_WRITE_TIMEOUT_SECONDS,
+            pool=GATEWAY_POOL_TIMEOUT_SECONDS,
+        ),
         trust_env=False,
         verify=verify,
     )
@@ -295,7 +313,11 @@ def create_app(
     servers: Mapping[str, ToolTarget] = (
         settings.tool_servers if tool_servers is None else tool_servers
     )
+    # Two throttles, as the rows are of two events: ``run.refused`` for a caller
+    # the registry does not map and a name it may not use, ``tool.call`` for a
+    # tool a graph may not call. Each is summarised under its own event.
     refusal_throttle = RefusalAuditThrottle(clock)
+    tool_throttle = RefusalAuditThrottle(clock)
     for server_id in servers:
         if not registry.has_server(server_id):
             raise SettingsError(f"tool server {server_id!r} is not in the registry")
@@ -326,18 +348,38 @@ def create_app(
     def saver_scope() -> AbstractContextManager[BaseCheckpointSaver]:
         return open_saver(dsn) if checkpointer is None else nullcontext(checkpointer)
 
+    def audit(event: str, outcome: str, **fields: Any) -> None:
+        write_audit(
+            dsn,
+            AuditEvent(service=SERVICE_NAME, event=event, outcome=outcome, **fields),
+        )
+
+    def write_ended(*, everything: bool = False) -> None:
+        """The counts of the floods that ended, which no row carries, by the
+        writer every service shares. It never raises an ``Exception``; the
+        route handlers call it, in the thread of their own request."""
+        write_ended_summaries(
+            refusal_throttle, audit, "run.refused", everything=everything
+        )
+        write_ended_summaries(tool_throttle, audit, "tool.call", everything=everything)
+
     def close() -> None:
+        # The counts of refusal floods are written first; with the database
+        # unreachable they are lost with the process, and the shutdown goes on.
         # The gateway client and the meter provider are closed only when the
         # app made them: an injected one is its owner's.
         try:
-            tool_transport.close()
+            write_ended(everything=True)
         finally:
             try:
-                if http_client is None:
-                    http.close()
+                tool_transport.close()
             finally:
-                if owns_meter_provider:
-                    shut_down(app_meter_provider)  # a failure is a WARNING
+                try:
+                    if http_client is None:
+                        http.close()
+                finally:
+                    if owns_meter_provider:
+                        shut_down(app_meter_provider)  # a failure is a WARNING
 
     service = create_service_app(
         title="Meridian Agent Runtime",
@@ -461,7 +503,7 @@ def create_app(
                 dsn=dsn,
                 tracer=tracer,
                 identity=identity,
-                throttle=refusal_throttle,
+                throttle=tool_throttle,
                 verify=verify,
                 transport=tool_transport,
             )
@@ -481,14 +523,25 @@ def create_app(
             _log_failure(identity.run_id, exc, leg)
             mark_error(span, exc)
             failure, outcome = exc, RunOutcome("Failed", None)
-        settled, answered, unsaved = settle(dsn, identity, leg, failure, outcome)
+        try:
+            settled, answered, unsaved = settle(dsn, identity, leg, failure, outcome)
+        except BaseException:
+            # Whatever ends the settling, the leg is counted once, as the
+            # unexpected end that it is (a status the meters read as failed).
+            meters.leg_ended(identity, RunOutcome("Failed", None), None)
+            raise
         # Counted once, after the write, by what the leg itself did (not what
         # settle answers for the sweep); not-saved when nothing was written.
         meters.leg_ended(identity, outcome, failure, saved=unsaved is None)
-        if settled.status != "AwaitingApproval":
-            # The checkpoint holds the claim; a finished run needs none,
-            # whether or not its status could be recorded. After settle: the
-            # second host's delete skips a run its row does not say has ended.
+        if unsaved is None and settled.status in ("Completed", "Failed"):
+            # The checkpoint holds the claim; a finished run needs none. After
+            # settle: the second host's delete skips a run its row does not say
+            # has ended. Not for a run another leg holds (``Running``, after a
+            # takeover) or one paused: their checkpoints are in use. Not when
+            # the end could not be recorded (``unsaved``: the write failed, or
+            # it matched nothing and the stored status could not be read): the
+            # leg cannot tell its end from a takeover's, and the sweep removes
+            # the checkpoints of a run it ends.
             _forget(host, identity)
         set_span_attributes(span, {"meridian.run_status": settled.status})
         if unsaved is not None:
@@ -513,6 +566,7 @@ def create_app(
     def create_run(
         body: RunRequest, response: Response, request: Request
     ) -> RunResponse | JSONResponse:
+        write_ended()
         calling = caller_service(request)
         if not caller_may_name(policy, calling, body.tenant, body.agent):
             raise refuse(body.tenant, body.agent, body.reference, NAME_REFUSAL_REASON)
@@ -537,7 +591,8 @@ def create_app(
             # Both passed tenant_may_run: a refused start counts under them.
             with meters.start_counted(identity.tenant, identity.agent):
                 host = opened.enter_context(scope())
-                runs.start_run(dsn, identity)
+                # The first leg's identity carries the claim its insert wrote.
+                identity = runs.start_run(dsn, identity)
             return run_leg(host, span, identity, response, body.input)
 
     @app.post(
@@ -558,13 +613,19 @@ def create_app(
     def resume_run(
         run_id: uuid.UUID, body: ResumeRequest, response: Response, request: Request
     ) -> RunResponse | JSONResponse:
+        write_ended()
         # A resume names a tenant and a reference; the agent is the run's own.
         # The tenant is checked before the run is read, so a caller that may
         # not name it learns nothing of a run under it (T-10).
         calling = caller_service(request)
         if not caller_may_name(policy, calling, body.tenant):
             raise refuse(body.tenant, None, body.reference, NAME_REFUSAL_REASON)
-        found = runs.fetch_run(dsn, run_id)
+        # A database that cannot be read here is a resume that did not start.
+        # The run is unread, so its agent is not known, and the tenant is
+        # caller-chosen: it labels the count only when the registry holds it.
+        known = body.tenant if registry.tenant(body.tenant) is not None else None
+        with meters.start_counted(known, None):
+            found = runs.fetch_run(dsn, run_id)
         # The same answer for a run that is not there and one under another
         # tenant or reference: no answer says that a run ID exists (T-10).
         if found is None or (found.tenant, found.reference) != (
@@ -636,6 +697,7 @@ def create_app(
         reference: Reference,
         request: Request,
     ) -> RunStatus:
+        write_ended()
         # As for a resume: the tenant is checked before the run is read, so a
         # caller that may not name it learns nothing of a run under it (T-10).
         calling = caller_service(request)

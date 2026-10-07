@@ -194,6 +194,71 @@ def test_the_command_prints_no_message_of_the_import_error(
     assert "/opt/somewhere" not in result.output
 
 
+def a_planted_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str) -> str:
+    package = tmp_path / "planted_exit_plugin"
+    package.mkdir()
+    (package / "__init__.py").write_text(body, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+    return "planted_exit_plugin.module:VALUE"
+
+
+def test_a_module_that_exits_at_import_is_a_refusal_and_the_process_goes_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    value = a_planted_module(tmp_path, monkeypatch, "import sys\nsys.exit(3)\n")
+    planted = SimpleNamespace(
+        name="claims-triage",
+        value=value,
+        dist=SimpleNamespace(name="meridian"),
+        load=lambda: importlib.import_module("planted_exit_plugin"),
+    )
+
+    refused = refusal_of(planted, value_prefix="planted_exit_plugin.")
+
+    assert refused.reason is Refusal.UNLOCATABLE
+    assert str(refused.__cause__) == "SystemExit"
+
+
+def test_an_entry_point_that_exits_while_loading_is_refused_without_its_argument() -> (
+    None
+):
+    refused = refusal_of(entry(raise_from(SystemExit)))
+
+    logged = "".join(traceback.format_exception(refused))
+    assert refused.reason is Refusal.FAILED_TO_IMPORT
+    assert str(refused.__cause__) == "SystemExit"
+    assert CANARY not in logged
+    assert refused.__context__ is None
+    assert refused.__suppress_context__
+
+
+@pytest.mark.parametrize("passing", [KeyboardInterrupt, GeneratorExit])
+def test_an_interrupt_is_not_swallowed_while_an_entry_point_loads(
+    passing: type[BaseException],
+) -> None:
+    with pytest.raises(passing):
+        load_trusted_entry_point(
+            GROUP,
+            "claims-triage",
+            entry_points=lambda *, group: [entry(raise_from(passing))],
+        )
+
+
+@pytest.mark.parametrize("passing", [KeyboardInterrupt, GeneratorExit])
+def test_an_interrupt_is_not_swallowed_while_a_parent_package_is_found(
+    passing: type[BaseException], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(importlib.util, "find_spec", raise_from(passing))
+
+    with pytest.raises(passing):
+        load_trusted_entry_point(
+            GROUP,
+            "claims-triage",
+            entry_points=lambda *, group: [entry()],
+        )
+
+
 def raise_from(cls: type[BaseException]) -> Callable[..., object]:
     def loads(*_args: object) -> object:
         raise cls("canary-in-the-message")

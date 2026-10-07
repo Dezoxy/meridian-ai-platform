@@ -44,6 +44,12 @@
 #     >.git/hooks/pre-commit): only rm, mv, chmod and truncate of one deny
 #   - a secret-shaped variable whose name matches no word of printenv's list
 #     (REDIS_PW, PW, GITHUB_PAT): the rule reads the name, not the value
+#   - the AWS rules' own gaps (S036): git config --global (a write of
+#     ~/.gitconfig through git), a pseudo-terminal made by a script file, a
+#     file that names the wrapper's removal in a variable, the aws CLI through
+#     python3 or a container that is not amazon/aws-cli, and every spelling above
+#     of a path or verb. With credentials on the machine nothing here is the
+#     barrier: where they are is (infra/terraform/aws/README.md)
 #   - the heredoc openers above: quote kinds mixed in a head, and an
 #     interpreter that is not on the EXECUTES list
 set -euo pipefail
@@ -71,7 +77,12 @@ set -euo pipefail
 # `kubectl exec x -- `, which reach the Azure script rules and the pod rule):
 #   16384 bytes: 0.97 s     8192 bytes: 0.24 s     4096 bytes: 0.06 s
 # Later passes measured 0.23 to 0.42 s at 8192 bytes (the range of three
-# measurements, on a machine at load 3 to 18); the margin below holds it.
+# measurements, on a machine at load 3 to 18); the margin below holds it. The
+# AWS rules (S036) were measured the same way on 40 shapes of 8 KB (the name of
+# a tool, a flag or an assignment repeated, before a verb or a path): the worst
+# were 0.49 s (`make ` 1550 times before a near-miss target) and 0.44 s (a run
+# of `>` before .awsX), at a load of 8. tests/test_guard_bash.sh holds those and
+# the `aws ` run under one bound of 3 s of CPU for every CPU check (see there).
 # The cost goes with the square of the length. The review of the first bounds
 # saw this machine run 3.5 to 6.2 times slower than idle (3 s of CPU took 10.8
 # and 19.3 s of wall with every core oversubscribed three times): 16384 bytes
@@ -127,6 +138,10 @@ guard_helper=$!
 input="$(cat)"
 cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null || true)"
 [ -z "$cmd" ] && exit 0
+# The working directory the harness passes with the command (the AWS rules read
+# it as a cd into the module when it is the module's directory or under it).
+# Whether it follows a cd made by an earlier Bash call is not verified.
+hook_cwd="$(printf '%s' "$input" | jq -r '.cwd? | strings' 2>/dev/null || true)"
 # The command as typed. The heredoc pass below drops lines the shell may still
 # run, so the kubectl rule that lets a call through reads this copy.
 raw_cmd="$cmd"
@@ -313,11 +328,13 @@ hook_cmd="$cmd"
 # shellcheck disable=SC2016  # the Python source below is meant to stay literal
 if [[ "$cmd" == *git* || "$cmd" == *secret* || "$cmd" == *psql* || "$cmd" == *pg_* \
       || "$cmd" == *kubectl* || "$cmd" == *helm* || "$cmd" == *aws* || "$cmd" == *cnpg* \
-      || "$cmd" == *kind* || "$cmd" == *upkeep* ]] \
+      || "$cmd" == *kind* || "$cmd" == *upkeep* || "$cmd" == *terraform* || "$cmd" == *tofu* ]] \
    && command -v python3 >/dev/null 2>&1; then
   hook_cmd="$(printf '%s' "$cmd" | python3 -I -c '
 import re, sys
-PROSE = r"((?<![\w-])-[A-Za-z]*m|--message|--body|--title|--notes)(\s+|=)?"
+# A bundle that holds c is not a message option: in bash -cm and sh -ecm the c
+# takes the quoted body as a command, which is read, not blanked.
+PROSE = r"((?<![\w-])-(?![A-Za-z]*c)[A-Za-z]*m|--message|--body|--title|--notes)(\s+|=)?"
 SINGLE = r"\x27[^\x27]*\x27"
 DOUBLE = r"\"(?:[^\"\\]|\\.)*\""
 QUOTED = "(?:" + SINGLE + "|" + DOUBLE + ")"
@@ -354,7 +371,7 @@ shopt -s nocasematch
 # ---- hard denies ----
 [[ "$cmd" =~ rm[[:space:]]+-[a-z]*r[a-z]*f?[[:space:]]+(/|~|\$HOME|\.\.($|/)) ]] && \
   decide deny "Recursive force-delete of a sensitive path. Run it yourself if truly intended."
-[[ "$cmd" =~ terraform[[:space:]].*destroy ]] && \
+[[ "$cmd" =~ (terraform|tofu)[[:space:]].*destroy ]] && \
   decide deny "terraform destroy is destructive; run it yourself after confirming the workspace."
 # Destructive pushes and secret printing are judged per command segment (split
 # on newlines, ;, &&, || and |), so a flag or path in one segment does not
@@ -777,8 +794,135 @@ unhelped "$cmd" "az[[:space:]]+keyvault[[:space:]]+secret[[:space:]]+(show|set|d
 [[ "$cmd" =~ kubectl[[:space:]].*delete[[:space:]].*(namespace|[[:space:]]ns[[:space:]]|pvc|persistentvolumeclaim|--all) ]] && \
   decide deny "Deleting namespaces, volumes or --all is destructive; run it yourself."
 
+# ---- the AWS environment (S036) ----
+# What a session should not do by reflex on AWS: remove the environment, run
+# the wrapper (infra/terraform/aws.sh) or its make targets in a way that hides
+# what it prints or changes what it runs, drive Terraform by hand against the
+# module's directory, read what the wrapper keeps closed (the local file, the
+# state, the plan, the AWS configuration), or call the aws CLI for a credential
+# or a delete. The asks for the same family are in the next section, after the
+# anchors it shares with the Azure rules. This is a guard for habits and not a
+# barrier: with credentials on the machine a session reaches the same calls by
+# a variable, a quote in the middle of a word, a script file, python3, uv or a
+# container (the runbook's "What the command guard does not see" lists them),
+# so the barrier for the second half of S036 is WHERE the credentials are
+# (infra/terraform/aws/README.md, "What stops a session, and what does not").
+# These rules read hook_cmd, so a commit message or a pull request body that
+# names a command passes. A quoted word anywhere else is read as a use of what
+# it names (a search, an echo): search with the Grep tool. Emptying the quoted
+# pattern of grep and rg was tried (S036 T3b) and taken out: it hid a command
+# substitution inside the pattern, a fake grep inside a literal and a file
+# operand after -e or -f, and a text guard that a quoted grep can talk past is
+# worse than one that fails closed on a quoted word. Order matters: the denies
+# of Terraform against the module's directory come before the generic asks for
+# apply and state surgery below, which they would otherwise answer first.
+# aws_end is what may follow a target or a verb: a blank, the end, a separator,
+# a bracket, a quote or a backtick (`make aws-destroy` is read).
+aws_end="([[:space:]]|\$|[;&|)\"${sq}\`])"
+aws_make_pre="(^|[^[:alnum:]_.-])(g|gnu)?make[[:space:]]+([^;&|${eol}]*[[:space:]])?[\"${sq}]?"
+aws_script_pre="aws\.sh[[:space:]]+([^;&|${eol}]*[[:space:]])?[\"${sq}]?"
+aws_destroy_re="${aws_make_pre}aws-destroy${aws_end}|${aws_script_pre}destroy${aws_end}"
+# A pseudo-terminal tool or the shell's tracing in a command that names the
+# wrapper or a target of it. The terminal check in aws.sh is `[[ -t 0 ]]` and a
+# pseudo-terminal satisfies it; a trace prints what the script keeps out of its
+# output; BASH_ENV, ENV and the rest run code before the script's first line.
+aws_pty_named_re="aws\.sh|aws-(plan|apply|destroy)"
+# The tool's word is read anywhere in a command that names the wrapper: a
+# search for it in the wrapper (grep -n script infra/terraform/aws.sh) is denied
+# too, a false alarm by design (re-anchoring it to where a command starts was
+# tried in S036 T3b and missed a wrapper with an option, timeout 9 script).
+aws_pty_re="(^|[^[:alnum:]_.-])(script|unbuffer|expect|socat|setsid|pty)([^[:alnum:]_-]|\$)"
+aws_named_re="aws\.sh|aws-(validate|scan|plan|apply|destroy)"
+aws_sh_word="(^|[^[:alnum:]_.-])((ba|da|k|z|a)?sh|set)"
+aws_trace_flag="(-[a-zA-Z]*[xv][a-zA-Z]*|--(xtrace|verbose))"
+aws_trace_re="${aws_sh_word}[[:space:]]+(-[^[:space:]]*[[:space:]]+)*${aws_trace_flag}${aws_end}"
+aws_trace_re+="|${aws_sh_word}[[:space:]]+([^;&|${eol}]*[[:space:]])?[-+]o[[:space:]]+(xtrace|verbose)${aws_end}"
+aws_trace_re+="|(^|[^[:alnum:]_])(SHELLOPTS|BASH_XTRACEFD|BASH_ENV|ENV|PS4)="
+# Terraform's and the AWS SDK's own settings, assigned in front of a command
+# that reads them: a log level, extra arguments, a workspace, a data directory,
+# a configuration file, a variable, an endpoint. aws.sh drops them for its own
+# children; a direct call does not.
+aws_tf_assign_re="(^|[^[:alnum:]_])(TF_[A-Za-z0-9_]+|AWS_ENDPOINT_URL[A-Za-z0-9_]*)="
+aws_tf_target_re="(^|[^[:alnum:]_./-])(terraform|tofu|aws)[[:space:]]|aws\.sh|(g|gnu)?make[[:space:]]+([^;&|${eol}]*[[:space:]])?[\"${sq}]?aws-"
+# Terraform by hand where the module is: a -chdir or a cd into the directory,
+# or the state's directory, or the plan or state file's name. The verbs that
+# change the account, the state or the workspace are denied (apply and destroy
+# are the wrapper's, which pins the account and the plan); the verbs that print
+# the state or run unattended ask in the next section.
+aws_dir_re="terraform/aws([/[:space:]\"${sq};&|)]|\$)"
+aws_dir_re+="|-chdir[=[:space:]]+[\"${sq}]?([^[:space:]\"${sq}]*/)?aws([/\"${sq}[:space:]]|\$)"
+aws_dir_re+="|(^|[^[:alnum:]_.-])cd[[:space:]]+[\"${sq}]?([^[:space:];&|\"${sq}]*/)?aws([/\"${sq};&|[:space:]]|\$)"
+aws_dir_re+="|meridian-aws|aws\.tf(plan|state)"
+aws_tf_cmd="(^|[^[:alnum:]_.-])(terraform|tofu)[[:space:]]+([^;&|${eol}]*[[:space:]])?"
+aws_tf_deny_re="${aws_tf_cmd}(apply|destroy|import|force-unlock|state[[:space:]]+(mv|rm|push)|workspace[[:space:]]+(new|delete|select)|plan[[:space:]]+([^;&|${eol}]*[[:space:]])?-out)([[:space:]=]|\$|[;&|)\"${sq}])"
+# The one workspace command a session may be asked about: the README's way back
+# to the default workspace (`workspace select default`, which asks). It is taken
+# out of the text the deny reads, where `default` is followed by what aws_end
+# allows (so default2, defaults, default-prod and default_x are denied as any
+# other name; two blanks and a quoted "default" are cut out like the plain
+# form), so a `workspace select` of another name, a `new` or a `delete` beside
+# it is still denied. The end character is kept in the replacement.
+aws_ws_default_re="workspace[[:space:]]+select[[:space:]]+[\"${sq}]?default[\"${sq}]?([[:space:]]|[;&|)\"${sq}\`])"
+# The working directory the harness passed counts as a cd into the module when
+# it is the module's directory or under it.
+aws_cwd_re='(^|/)terraform/aws(/|$)'
+aws_in_module=""
+[[ "$hook_cwd" =~ $aws_cwd_re ]] && aws_in_module=1
+# The aws CLI: a call that prints a new credential, and a delete. The same
+# cloud_cli and aws_head read `aws`, the image of the CLI (amazon/aws-cli) and
+# `uvx --from awscli aws` (the last is read by the word aws that ends it).
+# S075's rules above already deny a secret store's
+# value and ask for a session, a role, a registry or cluster token; these are
+# the credential printers they leave and the deletes.
+aws_head="(${cloud_cli}aws|(amazon|aws-cli)/aws-cli([:@][^[:space:];&|)\"${sq}]*)?)[[:space:]]+([^;&|${eol}]*[[:space:]])?"
+aws_deny_re="${aws_head}(iam[[:space:]]+(create-access-key|create-service-specific-credential|reset-service-specific-credential)|rds[[:space:]]+generate-db-auth-token|kms[[:space:]]+decrypt|sso[[:space:]]+get-role-credentials"
+aws_deny_re+="|(batch-|force-)?(delete|terminate|purge)-[a-z0-9-]+|s3[[:space:]]+(rm|rb)|--(skip-final-snapshot|force-delete-without-recovery))${aws_end}"
+# What the wrapper keeps closed, read by a reader, and what steers Terraform,
+# git or the aws CLI from the caller's home, written. The reader list is wide
+# (it is not the list of the .env rule above, which would deny `jq '.env'`) and
+# the paths are narrow. A path that only names a template (.tfvars.example)
+# passes.
+aws_closed_path="(local\.env|\.tfstate|\.tfplan|meridian-aws|\.aws(/|[[:space:]\"${sq}]|\$)|\.terraformrc|\.terraform\.d|\.tfvars(\.json)?(\$|[^.a-zA-Z]))"
+aws_reader_re="${reader_pre}(cat|tac|nl|less|more|bat|head|tail|grep|egrep|fgrep|rg|ag|sed|awk|gawk|cut|od|hexdump|xxd|strings|base64|diff|cmp|jq|yq|sort|uniq|cp|tar|zip|python3?|perl|ruby|node|source|echo|printf|xargs|dd|rsync|scp|curl)[[:space:]].*${aws_closed_path}"
+aws_steer_path="(\.terraformrc|\.gitconfig|\.config/git/|\.aws(/|[[:space:]\"${sq}]|\$)|\.terraform/environment|aws\.tfplan)"
+aws_writer_re=">>?[[:space:]]*[\"${sq}]?[^[:space:]\"${sq};&|]*${aws_steer_path}"
+aws_writer_re+="|${reader_pre}(tee|cp|mv|install|ln|dd|rsync|truncate)[[:space:]].*${aws_steer_path}"
+aws_writer_re+="|${reader_pre}sed[[:space:]]+([^;&|${eol}]*[[:space:]])?-[a-zA-Z]*i[^;&|${eol}]*${aws_steer_path}"
+if [[ "$hook_cmd" == *aws* || -n "$aws_in_module" ]]; then
+  [[ "$hook_cmd" =~ $aws_destroy_re ]] && \
+    decide deny "make aws-destroy and aws.sh destroy remove the AWS environment and are the owner's to run (hard rule 8): in a terminal, from a machine or user where no session holds the credentials (infra/terraform/aws/README.md, \"Removal\")."
+  [[ "$hook_cmd" =~ $aws_pty_named_re && "$hook_cmd" =~ $aws_pty_re ]] && \
+    decide deny "aws.sh and make aws-plan, aws-apply and aws-destroy are not run under a pseudo-terminal tool (script, unbuffer, expect, socat, setsid, pty): the wrapper's terminal check is there to stop an accident, and this is how it is passed."
+  [[ "$hook_cmd" =~ $aws_named_re && "$hook_cmd" =~ $aws_trace_re ]] && \
+    decide deny "aws.sh and make aws-* are not run traced (bash -x, set -x, SHELLOPTS, BASH_XTRACEFD, PS4) or with a start-up file (BASH_ENV, ENV): a trace prints the account, the address and the e-mail the script keeps out of its output, and a start-up file runs code before its first line."
+  aws_tf_text="${hook_cmd}"$'\n'
+  aws_ws_cuts=0
+  while [[ "$aws_tf_text" =~ $aws_ws_default_re ]] && [ $(( ++aws_ws_cuts )) -le 8 ]; do
+    aws_tf_text="${aws_tf_text/"${BASH_REMATCH[0]}"/workspace-keep-default${BASH_REMATCH[1]}}"
+  done
+  [[ ( "$hook_cmd" =~ $aws_dir_re || -n "$aws_in_module" ) && "$aws_tf_text" =~ $aws_tf_deny_re ]] && \
+    decide deny "Terraform by hand against infra/terraform/aws (apply, destroy, plan -out, import, state mv|rm|push, force-unlock, workspace new|delete|select of another name) skips the wrapper's account pin, plan record and state path. Use make aws-plan and make aws-apply (the owner runs them); validate, fmt and init -backend=false pass."
+  unhelped "$hook_cmd" "$aws_deny_re" && \
+    decide deny "That deletes AWS resources, or prints a new credential, a database login token, a decrypted value or a role's credentials to the transcript. Run it yourself; the owner's removal is make aws-destroy."
+fi
+if [[ "$hook_cmd" == *TF_* || "$hook_cmd" == *AWS_ENDPOINT_URL* ]]; then
+  [[ "$hook_cmd" =~ $aws_tf_assign_re && "$hook_cmd" =~ $aws_tf_target_re ]] && \
+    decide deny "A TF_* or AWS_ENDPOINT_URL* assignment in front of terraform, tofu, aws, aws.sh or make aws-* changes what they run (a log level, extra arguments, a variable, a workspace, a configuration file, an endpoint). Set the value in the module or the local file instead."
+fi
+if [[ "$hook_cmd" == *local.env* || "$hook_cmd" == *tfstate* || "$hook_cmd" == *tfplan* \
+      || "$hook_cmd" == *meridian-aws* || "$hook_cmd" == *.aws* || "$hook_cmd" == *terraformrc* \
+      || "$hook_cmd" == *terraform.d* || "$hook_cmd" == *tfvars* || "$hook_cmd" == *.gitconfig* \
+      || "$hook_cmd" == *config/git/* || "$hook_cmd" == *.terraform/environment* ]]; then
+  while IFS= read -r seg; do
+    [[ "$seg" =~ $aws_reader_re ]] && \
+      decide deny "That would print what the AWS wrapper keeps closed (the local file with the account and address, the state, the plan and its record, a variable file, the AWS configuration and sign-in cache, Terraform's own configuration) to the transcript. Run it yourself."
+    [[ "$seg" =~ $aws_writer_re ]] && \
+      decide deny "That writes a file that steers Terraform, git or the aws CLI from the caller's home (~/.terraformrc, ~/.gitconfig, ~/.config/git, ~/.aws), the workspace file or the saved plan. Run it yourself if intended."
+  done < <(printf '%s\n' "$hook_cmd" | sed -E 's/(&&|\|\||;|\|)/\n/g')
+fi
+
 # ---- confirmations ----
-[[ "$cmd" =~ terraform[[:space:]].*apply ]] && \
+[[ "$cmd" =~ (terraform|tofu)[[:space:]].*apply ]] && \
   decide ask "terraform apply mutates cloud infrastructure; confirm the plan and workspace first."
 # Deleting the local kind cluster does not ask: `make down` and
 # infra/kind/down.sh pass, and so does a `kind delete cluster` that names the
@@ -856,6 +1000,132 @@ state_re="${runner}${script_path}state\.sh${script_end}"
 foundation_apply_re="${runner}${script_path}foundation\.sh[[:space:]]+[\"${sq}]?apply${script_end}"
 [[ "$cmd" =~ $foundation_apply_re ]] && \
   decide ask "foundation.sh apply creates or changes Azure resources; confirm the plan and subscription first."
+# The asks for the AWS environment (S036); the denies are above, with the
+# reasoning. `make aws-validate` and `make aws-scan` change nothing in AWS and
+# pass, as `make azure-plan` does. They read hook_cmd (a commit message that
+# names a target passes).
+#   - make aws-apply and aws.sh apply cost money; make aws-plan and aws.sh plan
+#     sign in with the owner's credentials, which no session should hold.
+#   - make TRIVY_IMAGE= and PROMTOOL_IMAGE= replace a pinned image (the
+#     Makefile's := is overridden by a command-line assignment, not by the
+#     environment).
+#   - Terraform against the module's directory with a verb that prints the
+#     state or an output, or evaluates (show, output, console, refresh, state
+#     list|show|pull), and -auto-approve anywhere. Foundation's `terraform
+#     output` and `state list` pass, as before.
+#   - any aws call whose operation is not on the read list: describe-*, list-*,
+#     sts get-caller-identity, help, --version, sso login, configure list. The
+#     call is read where a command starts (aws is a word of a command, not a
+#     path component: terraform -chdir=infra/terraform/aws state list is not
+#     one), in the image of the CLI, and after uvx --from awscli; --help passes.
+#   - python3 or uv run that imports boto3, botocore or awscli.
+aws_apply_re="${aws_make_pre}aws-apply${aws_end}|${aws_script_pre}apply${aws_end}"
+aws_plan_re="${aws_make_pre}aws-plan${aws_end}|${aws_script_pre}plan${aws_end}"
+aws_image_re="(^|[^[:alnum:]_.-])(g|gnu)?make[[:space:]]+([^;&|${eol}]*[[:space:]])?[\"${sq}]?(TRIVY|PROMTOOL)_IMAGE="
+aws_tf_ask_re="${aws_tf_cmd}(plan|show|output|console|refresh|state[[:space:]]+(list|show|pull)|workspace[[:space:]]+select[[:space:]]+[\"${sq}]?default[\"${sq}]?)${aws_end}"
+aws_auto_re="(^|[^[:alnum:]_.-])(terraform|tofu|terragrunt)[[:space:]]+([^;&|${eol}]*[[:space:]])?-auto-approve([[:space:]=]|\$)"
+aws_call_end="([[:space:]]|\$|[;&|])"
+aws_call_re="(${runner}((sudo|nice|xargs|exec|command|time|nohup)[[:space:]]+)*((do|then|else|elif|if|while|until|!)[[:space:]]+)*(/[^[:space:];&|\"${sq}]*/)?aws${aws_call_end})"
+aws_call_re+="|((amazon|aws-cli)/aws-cli([:@][^[:space:];&|)\"${sq}]*)?${aws_call_end})"
+aws_call_re+="|(--(from|with)[[:space:]=]+awscli[^[:space:];&|]*[[:space:]]+aws${aws_call_end})"
+aws_boto_re="(^|[^[:alnum:]_.-])(python[0-9.]*|uv[[:space:]]+run)[[:space:]]+([^;&|${eol}]*[^[:alnum:]_.-])?(boto3|botocore|awscli)([^[:alnum:]_.-]|\$)"
+aws_call_listed() { # $1=the text after `aws`; succeeds when the call is on the read list
+  local rest="${1%%[;&|)\`$'\n']*}" tok skip="" service="" op="" arg3="" decrypt="" n=0
+  local -a words=()
+  read -ra words <<<"$rest" || true
+  for tok in "${words[@]}"; do
+    [ $(( ++n )) -le 400 ] || return 1 # a longer call is not read: it asks
+    if [ -n "$skip" ]; then
+      skip=""
+      continue
+    fi
+    case "$tok" in
+      --help | -h) return 0 ;;
+      --version) [ -n "$service" ] || return 0 ;;
+      --region | --profile | --output | --query | --endpoint-url | --ca-bundle | --color \
+        | --cli-read-timeout | --cli-connect-timeout | --cli-binary-format) skip=1 ;;
+      --with-decryption | --with-decryption=*) decrypt=1 ;;
+      -*) ;;
+      *)
+        # A quote is no part of the name: aws "ec2" run-instances and bash -c
+        # "aws sts get-caller-identity" read as ec2 and get-caller-identity. A
+        # token that is nothing but quotes names nothing, and asks (it would
+        # leave the slot empty for a later value to fill).
+        tok="${tok#[\"\']}"
+        tok="${tok%%[\"\']*}"
+        [ -n "$tok" ] || return 1
+        case "$tok" in
+          --with-decryption | --with-decryption=*)
+            decrypt=1
+            continue
+            ;;
+        esac
+        if [ -z "$service" ]; then
+          service="$tok"
+        elif [ -z "$op" ]; then
+          op="$tok"
+        elif [ -z "$arg3" ]; then
+          arg3="$tok"
+        fi
+        ;;
+    esac
+  done
+  [ -n "$service" ] || return 1
+  [ "$service" != help ] || return 0
+  # The review's read list, and the reads S075's cases already pass: s3 ls,
+  # configure get and the ssm get-parameter family. S075's rules read them
+  # with the quotes as typed, which this parser strips, so the two things they
+  # catch are read here as well: --with-decryption on ssm get-parameter*, and a
+  # configure get of a key that names a secret or a token; both ask.
+  case "${service}/${op}" in
+    ssm/get-parameter | ssm/get-parameters | ssm/get-parameters-by-path | ssm/get-parameter-history)
+      [ -z "$decrypt" ] || return 1
+      return 0
+      ;;
+    configure/get)
+      arg3="${arg3,,}"
+      case "$arg3" in
+        *secret* | *token*) return 1 ;;
+      esac
+      return 0
+      ;;
+    */describe-* | */list-* | */help | sts/get-caller-identity | sso/login | sso/logout | s3/ls \
+      | configure/list) return 0 ;;
+  esac
+  return 1
+}
+if [[ "$hook_cmd" == *aws* || "$hook_cmd" == *terraform* || "$hook_cmd" == *tofu* || "$hook_cmd" == *_IMAGE=* ]]; then
+  [[ "$hook_cmd" =~ $aws_apply_re ]] && \
+    decide ask "make aws-apply and aws.sh apply create the AWS environment (EKS, RDS, ECR, the network, a budget) and COST MONEY: it bills by the hour until make aws-destroy. The owner runs it, after reading the plan, from a machine or user where no session holds the credentials (infra/terraform/aws/README.md); confirm only if that is where this runs."
+  [[ "$hook_cmd" =~ $aws_plan_re ]] && \
+    decide ask "make aws-plan and aws.sh plan sign in to AWS with the owner's credentials and read the account; they need those credentials, and no session should hold them (infra/terraform/aws/README.md). Confirm that this is the owner's own session."
+  [[ "$hook_cmd" =~ $aws_image_re ]] && \
+    decide ask "TRIVY_IMAGE= and PROMTOOL_IMAGE= replace an image the Makefile pins by digest; confirm the image and why the pin is not used."
+  [[ "$hook_cmd" =~ $aws_auto_re ]] && \
+    decide ask "-auto-approve runs Terraform without its own question; confirm the workspace and the plan."
+  [[ ( "$hook_cmd" =~ $aws_dir_re || -n "$aws_in_module" ) && "$hook_cmd" =~ $aws_tf_ask_re ]] && \
+    decide ask "terraform plan (it signs in with the owner's credentials), show, output, console, refresh, state list|show|pull (they print the state or its outputs: the database's secret ARN, the cluster's endpoint) and workspace select default, against infra/terraform/aws; confirm that this is the owner's own session and that the transcript may hold them, or run it in a terminal of your own."
+fi
+if [[ "$hook_cmd" == *aws* || "$hook_cmd" == *boto* ]]; then
+  aws_text="$hook_cmd"
+  aws_calls=0
+  # The CLI is spelled in lower case: AWS at the start of a table cell or a
+  # sentence is no call, so the pattern is read with case on.
+  shopt -u nocasematch
+  while [[ "$aws_text" =~ $aws_call_re ]]; do
+    aws_seen="${BASH_REMATCH[0]}"
+    [ "${#aws_seen}" -le 256 ] || \
+      decide ask "An aws call after more than 256 bytes of what stands before it: the guard did NOT read its operation; confirm that it is a read (describe-*, list-*), or split the command."
+    [ $(( ++aws_calls )) -le 8 ] || \
+      decide ask "This command holds more than eight aws calls: the guard did NOT read the rest of them, and one may create, change or delete; confirm that none does, or split the command."
+    aws_text="${aws_text#*"$aws_seen"}"
+    aws_call_listed "$aws_text" || \
+      decide ask "An aws call whose operation is not on the read list (describe-*, list-*, sts get-caller-identity, help, --version, sso login and logout, configure list and get, s3 ls, ssm get-parameter*): it can create, change or delete in the account. Confirm the account and the call, or run it in a terminal of your own. --help passes."
+  done
+  shopt -s nocasematch
+  [[ "$hook_cmd" =~ $aws_boto_re ]] && \
+    decide ask "python or uv run with boto3, botocore or awscli reaches AWS without the aws CLI's rules; confirm the account and the call."
+fi
 # Deletes and purges, state surgery, and a bearer token in the transcript.
 # (Deletes of resource groups, vaults, databases, clusters, registries and
 # Cognitive Services accounts are denied above; this asks for the rest, such as

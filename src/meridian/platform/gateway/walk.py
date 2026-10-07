@@ -180,10 +180,15 @@ def closing_for(failure: Exception) -> Literal["release", "keep"]:
 
 @dataclass(frozen=True, slots=True)
 class Unanswered:
-    """No candidate answered: how many were called and the last one's kind."""
+    """No candidate answered: how many were called and the last one's kind.
+
+    ``withheld_by`` is the deployment whose completion the content filter
+    withheld, when that was the last attempt: the provider ran and the ledger
+    kept the reservation. A prompt the filter refused names none (S069)."""
 
     attempts: int
     last_attempt_kind: str | None
+    withheld_by: Deployment | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,6 +238,7 @@ class _Progress:
     skipped: int = 0
     last_called: Deployment | None = None  # the last candidate that was called
     last_attempt_kind: str | None = None  # the kind that picks the status
+    withheld_by: Deployment | None = None  # set when the last attempt was withheld
     last_skip_reason: str | None = None  # why the last skipped one was skipped
     answered: bool = False
     budget_refused: bool = False  # refused before any call: no error to name
@@ -292,7 +298,9 @@ class CandidateWalker:
                     return self._budget_refused(call, progress, deployment, outcome)
                 if outcome is not None and outcome not in DEPLOYMENT_FAILURES:
                     break  # the request itself was refused: no other will do
-            return Unanswered(progress.attempts, progress.last_attempt_kind)
+            return Unanswered(
+                progress.attempts, progress.last_attempt_kind, progress.withheld_by
+            )
         finally:
             self._finish_span(span, progress, decision.data_class)
 
@@ -328,7 +336,9 @@ class CandidateWalker:
             progress.budget_refused = True
             return BudgetRefused(refusal.reason, deployment)
         self._skip(call, progress, deployment, refusal.reason)
-        return Unanswered(progress.attempts, progress.last_attempt_kind)
+        return Unanswered(
+            progress.attempts, progress.last_attempt_kind, progress.withheld_by
+        )
 
     def _attempt[ReplyT: Reply](
         self,
@@ -449,6 +459,10 @@ class CandidateWalker:
         exception re-raised."""
         reason = failure.kind if isinstance(failure, ProviderError) else INTERNAL_REASON
         progress.last_attempt_kind = reason
+        # The ledger's own rule decides: the reservation kept for a filtered
+        # attempt means the provider ran and the completion was withheld.
+        withheld = reason == "filtered" and closing_for(failure) == "keep"
+        progress.withheld_by = deployment if withheld else None
         set_span_attributes(span, {"error.type": reason})
         status = None
         if isinstance(failure, ProviderError):

@@ -15,6 +15,7 @@ from collections.abc import Callable, Iterator
 import pytest
 from servicesupport import FakeClock
 
+from meridian.platform.common.refusal_summary import write_ended_summaries
 from meridian.platform.common.throttle import (
     REFUSAL_AUDIT_SECONDS,
     REFUSAL_SUMMARY_SECONDS,
@@ -436,6 +437,92 @@ def test_racing_refusals_inside_a_window_are_all_counted(clock: FakeClock) -> No
 
         assert answers == [None] * RACERS
         assert throttle.due(TENANT, REASON) == RACERS
+
+
+def counted_flood(clock: FakeClock, count: int) -> RefusalAuditThrottle:
+    """A throttle with ``count`` refusals counted and no row to carry them, and
+    quiet for two windows, so ``take_ended`` hands the count out."""
+    throttle = RefusalAuditThrottle(clock=clock)
+    assert throttle.due(TENANT, REASON) == 0
+    for _ in range(count):
+        assert throttle.due(TENANT, REASON) is None
+    clock.advance(REFUSAL_SUMMARY_SECONDS)
+    return throttle
+
+
+@pytest.mark.usefixtures("fast_switching")
+def test_racing_takes_of_one_count_hand_it_out_once(clock: FakeClock) -> None:
+    for _ in range(ROUNDS):
+        throttle = counted_flood(clock, 5)
+        handed: list[list[tuple[str | None, str, int]]] = []
+
+        def call() -> None:
+            handed.append(throttle.take_ended())  # noqa: B023
+
+        run_threads(call)
+
+        assert len(handed) == RACERS
+        assert [taken for taken in handed if taken] == [[(TENANT, REASON, 5)]]
+
+
+@pytest.mark.usefixtures("fast_switching")
+def test_racing_restores_of_one_count_each_add_up_and_back_the_key_off(
+    clock: FakeClock,
+) -> None:
+    for _ in range(ROUNDS):
+        throttle = RefusalAuditThrottle(clock=clock)
+
+        def call() -> None:
+            throttle.restore(TENANT, REASON, 1)  # noqa: B023
+
+        run_threads(call)
+
+        assert throttle.take_ended() == []  # backed off, as one restore does
+        clock.advance(REFUSAL_SUMMARY_SECONDS)
+        assert throttle.take_ended() == [(TENANT, REASON, RACERS)]
+
+
+@pytest.mark.usefixtures("fast_switching")
+def test_racing_summary_writers_over_one_count_write_one_row_with_the_whole_count(
+    clock: FakeClock,
+) -> None:
+    for _ in range(ROUNDS):
+        throttle = counted_flood(clock, 5)
+        rows: list[dict[str, object]] = []
+
+        def audit(event: str, outcome: str, **fields: object) -> None:
+            rows.append(fields)  # noqa: B023
+
+        def call() -> None:
+            write_ended_summaries(throttle, audit, "tool.call")  # noqa: B023
+
+        run_threads(call)
+
+        assert len(rows) == 1
+        assert rows[0]["suppressed"] == 5
+        assert (rows[0]["tenant"], rows[0]["reason"]) == (TENANT, REASON)
+
+
+@pytest.mark.usefixtures("fast_switching")
+def test_racing_summary_writers_while_the_write_fails_lose_no_part_of_the_count(
+    clock: FakeClock,
+) -> None:
+    for _ in range(ROUNDS):
+        throttle = counted_flood(clock, 5)
+
+        def audit(event: str, outcome: str, **fields: object) -> None:
+            raise OSError("the database is down")
+
+        def call() -> None:
+            write_ended_summaries(throttle, audit, "tool.call")  # noqa: B023
+
+        run_threads(call)
+
+        # Every writer that took the count put it back; whichever order they
+        # ran in, the sum is the count and it is backed off for two windows.
+        assert throttle.take_ended() == []
+        clock.advance(REFUSAL_SUMMARY_SECONDS)
+        assert throttle.take_ended() == [(TENANT, REASON, 5)]
 
 
 @pytest.mark.parametrize("second", ["due", "release"])

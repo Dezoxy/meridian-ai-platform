@@ -468,7 +468,7 @@ def test_an_access_record_of_another_shape_is_written_as_its_template_only(
         ("/p/%2B36301234567", "/p/[phone]"),
         (
             "http%3A//user%3Apass%40host.example/path?x=1",
-            "http://user:[email]/path",
+            "http://host.example/path",
         ),
     ],
 )

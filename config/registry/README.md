@@ -308,7 +308,13 @@ An Azure deployment states its own `rate_limits` (`requests_per_10_seconds`
 and `tokens_per_minute`) as Azure reports them for the deployment; replay
 deployments have none. The first two tenant limits are the same windows, so
 the validation above refuses a registry whose tenants could together ask for
-more than the smallest candidate of any route allows.
+more than the smallest candidate of any route allows. That check applies to
+candidates that state `rate_limits`; on a route of replay deployments alone
+only the schema's ceiling of a billion applies, which keeps the rate
+script's arithmetic exact and binds nothing real. The store's memory is
+bounded by the request limit (about six entries per allowed request and
+tenant); S069 judged the tenants' sums, held to a deployment's own figures,
+far below what that memory holds, and added no ceiling of its own.
 
 The two windows are kept in the gateway's process, or, when the gateway is
 given the address of the shared store (`MERIDIAN_GATEWAY_RATE_STORE_URL`, a

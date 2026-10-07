@@ -35,6 +35,21 @@ infra/terraform/local.env*
 *.tfstate.*
 crash.log
 *.tfplan
+# The record aws.sh keeps beside a saved plan (the commit and the time).
+*.tfplan.meta
+# Files that change what Terraform does or hold values that must not be
+# committed: override files, JSON variable files, a CLI configuration (it can
+# point Terraform at a provider binary the lock file never checked) and a log
+# (TF_LOG_PATH). aws.sh refuses to run with an override or a variable file in
+# the module's directory; ignoring them keeps one from being committed by hand.
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+*.tfvars.json
+.terraformrc
+terraform.rc
+tf.log
 
 # Claude Code local state
 .claude/settings.local.json

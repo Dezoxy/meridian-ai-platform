@@ -55,6 +55,7 @@ SPAN_ATTRIBUTE_KEYS: frozenset[str] = frozenset(
         "meridian.agent",
         "meridian.worker",
         "meridian.node",
+        "meridian.step",
         "meridian.deployment",
         "meridian.provider",
         "meridian.mode",

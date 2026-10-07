@@ -232,6 +232,29 @@ def test_a_gateway_address_httpx_cannot_take_exits_1_without_a_traceback(
     assert isinstance(result.exception, SystemExit)  # not an httpx.InvalidURL
 
 
+def test_the_net_behind_the_check_exits_1_for_an_address_the_client_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The shared check refuses an emoji host itself now, so it is replaced for
+    # this test: the address reaches the real client factory, whose refusal is
+    # the second line if the check and the client ever drift apart.
+    value = f"http://{SECRET}\U0001f600.invalid:8080"
+    monkeypatch.setattr(knowledge_cli, "gateway_url_problem", lambda _value: None)
+    monkeypatch.setenv(INGEST_DATABASE_URL_ENV, "postgresql://unused")
+    monkeypatch.setenv(knowledge_cli.GATEWAY_URL_ENV, value)
+    monkeypatch.setenv(REGISTRY_DIR_ENV, str(REGISTRY_DIR))
+
+    result = runner.invoke(app, ingest_args())
+
+    assert result.exit_code == 1
+    assert result.output.startswith("ERROR ")
+    assert f"{knowledge_cli.GATEWAY_URL_ENV} is not a URL this command can use" in (
+        result.output
+    )
+    assert SECRET not in result.output
+    assert isinstance(result.exception, SystemExit)  # not an httpx.InvalidURL
+
+
 def test_a_registry_that_does_not_load_exits_1(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
