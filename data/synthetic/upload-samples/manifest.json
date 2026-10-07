@@ -1,0 +1,40 @@
+{
+  "synthetic": true,
+  "workload": "claims-triage",
+  "generator_version": "1",
+  "seed": 20260929,
+  "files": [
+    {
+      "name": "not-a-pdf.pdf",
+      "media_type": "text/plain",
+      "size_bytes": 227,
+      "sha256": "289374950547844b6e73eacd77584f6058ccbdc5600b433b22e279f5ff870df5",
+      "upload_route": "refuses",
+      "upload_status": 415
+    },
+    {
+      "name": "synthetic-document.pdf",
+      "media_type": "application/pdf",
+      "size_bytes": 1014,
+      "sha256": "a6500525188d8ed0a5358c7f69b6dd5c6f76a58a93d63a80b57aee9bdf65b3ef",
+      "upload_route": "accepts",
+      "upload_status": 201
+    },
+    {
+      "name": "synthetic-photo.jpg",
+      "media_type": "image/jpeg",
+      "size_bytes": 701,
+      "sha256": "5507a5fe7254b6bd0491cc1ddde879e0d8c8adadc9dc2a60fe403af81bd35bd4",
+      "upload_route": "accepts",
+      "upload_status": 201
+    },
+    {
+      "name": "synthetic-photo.png",
+      "media_type": "image/png",
+      "size_bytes": 8188,
+      "sha256": "5efb33cf4a7b15880496fa4656ed7bbc69708eded272cf45405e2a18138e0972",
+      "upload_route": "accepts",
+      "upload_status": 201
+    }
+  ]
+}

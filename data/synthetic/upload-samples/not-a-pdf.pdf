@@ -1,0 +1,4 @@
+SYNTHETIC sample of the Meridian Insurance upload demo.
+This is plain text that carries the name of a PDF. The upload route
+knows a file by its first bytes alone, so it refuses this one.
+Fictional insurer, not a real document.
