@@ -7,6 +7,7 @@ file is the last only until another one lands after it.
 
 import hashlib
 import re
+import time
 import uuid
 from datetime import UTC, datetime
 from typing import get_args
@@ -20,6 +21,7 @@ from dbsupport import (
     UPKEEP_ROLE,
     DatabaseHandle,
 )
+from psycopg.conninfo import make_conninfo
 from sweepmigrationsupport import (
     CLAIM_ID,
     INSERT_CLAIM,
@@ -226,7 +228,11 @@ def test_claims_api_stores_and_reads_back_a_file_byte_for_byte(
     ]
 
 
-def test_the_time_a_file_was_received_is_the_databases(claim: DatabaseHandle) -> None:
+def test_the_time_a_file_was_received_defaults_to_the_databases_clock(
+    claim: DatabaseHandle,
+) -> None:
+    # A default, not a guarantee: claims_api holds INSERT on every column and
+    # could name another time (the header says so).
     file_id = add_file(claim)
 
     ((same_transaction_clock,),) = run(
@@ -240,18 +246,59 @@ def test_the_time_a_file_was_received_is_the_databases(claim: DatabaseHandle) ->
     assert same_transaction_clock is True
 
 
-def test_a_claim_holds_several_files_and_one_identifier_names_one(
+def test_a_claim_holds_several_different_files_and_one_identifier_names_one(
     claim: DatabaseHandle,
 ) -> None:
-    first = add_file(claim)
-    add_file(claim)
-    add_file(claim, content=b"the same bytes twice", kind="other")
-    add_file(claim, content=b"the same bytes twice", kind="other")
+    first = add_file(claim, content=b"first")
+    for content in (b"second", b"third", b"fourth"):
+        add_file(claim, content=content, kind="other")
 
     assert run(claim, OWNER, "SELECT count(*) FROM claims.claim_files") == [(4,)]
-    assert refused(claim, API, INSERT_FILE, file_row(file_id=first)) == (
-        UNIQUE_VIOLATION
+    assert refused(
+        claim, API, INSERT_FILE, file_row(content=b"fifth", file_id=first)
+    ) == (UNIQUE_VIOLATION)
+
+
+def test_the_same_file_twice_on_one_claim_is_refused_whatever_its_kind(
+    claim: DatabaseHandle,
+) -> None:
+    add_file(claim, content=b"the same bytes", kind="photos")
+
+    with pytest.raises(psycopg.errors.UniqueViolation) as caught:
+        run(
+            claim,
+            API,
+            INSERT_FILE,
+            file_row(content=b"the same bytes", kind="other", media_type="image/png"),
+        )
+
+    assert caught.value.diag.constraint_name == "claim_files_one_per_claim_and_hash"
+    assert run(claim, OWNER, "SELECT count(*) FROM claims.claim_files") == [(1,)]
+
+
+def test_the_same_file_on_another_claim_is_allowed(claim: DatabaseHandle) -> None:
+    run(claim, API, INSERT_CLAIM, ("CLM-0014", TENANT))
+    add_file(claim, content=b"the same bytes")
+
+    add_file(claim, claim_id="CLM-0014", content=b"the same bytes")
+
+    assert run(claim, OWNER, "SELECT count(*) FROM claims.claim_files") == [(2,)]
+
+
+def test_content_is_stored_out_of_line_and_uncompressed(
+    migrated_database: DatabaseHandle,
+) -> None:
+    # 'e' is STORAGE EXTERNAL; the default for bytea, 'x' (EXTENDED), would try
+    # to compress files that are already compressed.
+    rows = run(
+        migrated_database,
+        OWNER,
+        "SELECT attname, attstorage FROM pg_attribute "
+        "WHERE attrelid = 'claims.claim_files'::regclass AND attname IN "
+        "('content', 'sha256') ORDER BY attname",
     )
+
+    assert rows == [("content", "e"), ("sha256", "x")]
 
 
 def test_the_app_supplies_the_identifier(claim: DatabaseHandle) -> None:
@@ -279,15 +326,27 @@ def test_each_kind_the_rules_know_and_other_is_accepted(
     assert run(claim, OWNER, "SELECT kind FROM claims.claim_files") == [(kind,)]
 
 
-def test_the_kinds_are_the_four_document_codes_of_the_rules_and_other() -> None:
-    # The CHECK lists the codes as text; the rules' type is the source. This
-    # fails the day one gains a code the other has not.
-    listed = re.search(r"kind IN \((.*?)\)", migration_text(), re.DOTALL)
-    assert listed is not None
-    check = re.findall(r"'([a-z_]+)'", listed.group(1))
+def test_the_kinds_are_the_four_document_codes_of_the_rules_and_other(
+    migrated_database: DatabaseHandle,
+) -> None:
+    # The rules' type is the source; the table's live CHECK is read from the
+    # database, not from this file's text (an applied file never changes, so a
+    # later file that widens the CHECK would leave the text stale for ever). This
+    # fails the day the rules gain a code the table has not, and keeps passing
+    # when a later file makes the table match.
+    ((definition,),) = run(
+        migrated_database,
+        OWNER,
+        "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+        "WHERE conrelid = 'claims.claim_files'::regclass "
+        "AND conname = 'claim_files_kind_is_known'",
+    )
+    # A text column's literals come back as 'code'::text, in an ARRAY or an IN.
+    check = re.findall(r"'([a-z_]+)'", definition)
 
     assert len(get_args(Document)) == 4
-    assert sorted(check) == sorted(KINDS)
+    assert check, definition
+    assert sorted(set(check)) == sorted(KINDS)
 
 
 @pytest.mark.parametrize(
@@ -373,20 +432,42 @@ def test_a_hash_that_is_not_32_bytes_is_refused(
 ) -> None:
     constraint = constraint_of(claim, file_row(sha256=b"\xab" * length))
 
-    assert constraint == "claim_files_sha256_is_32_bytes"
+    assert constraint == "claim_files_sha256_is_the_contents"
 
 
-def test_a_hash_of_32_bytes_is_accepted_even_if_it_is_not_the_content_s(
+@pytest.mark.parametrize(
+    "wrong",
+    [
+        b"\x00" * 32,  # the right length and nothing else
+        hashlib.sha256(b"another file").digest(),  # a real hash of other bytes
+        hashlib.sha256(b"%PDF-synthetic").digest()[::-1],  # the right hash reversed
+        hashlib.sha256(b"%PDF-synthetic").hexdigest().encode()[:32],  # hex, cut
+    ],
+)
+def test_a_hash_of_32_bytes_that_is_not_the_contents_is_refused(
+    claim: DatabaseHandle, wrong: bytes
+) -> None:
+    # The database checks the hash with its own sha256(bytea), so a row cannot
+    # carry one the app got wrong, and claims_api cannot correct it afterwards.
+    assert len(wrong) == 32
+    constraint = constraint_of(claim, file_row(sha256=wrong))
+
+    assert constraint == "claim_files_sha256_is_the_contents"
+    assert run(claim, OWNER, "SELECT count(*) FROM claims.claim_files") == [(0,)]
+
+
+def test_the_hash_stored_is_the_one_the_database_computes(
     claim: DatabaseHandle,
 ) -> None:
-    # The table holds the length of a hash, not the hash of the content: the
-    # app computes it, and the database cannot (no extension is installed to do
-    # it here). The test says so, so nobody takes the column for a guarantee.
-    add_file(claim, sha256=b"\x00" * 32)
+    content = bytes(range(256)) * 8
+    file_id = add_file(claim, content=content)
 
-    assert run(claim, OWNER, "SELECT octet_length(sha256) FROM claims.claim_files") == [
-        (32,)
-    ]
+    assert run(
+        claim,
+        OWNER,
+        "SELECT sha256 = sha256(content) FROM claims.claim_files WHERE file_id = %s",
+        (file_id,),
+    ) == [(True,)]
 
 
 @pytest.mark.parametrize(
@@ -450,7 +531,8 @@ def test_the_files_of_one_claim_are_read_through_an_index_on_the_claim(
         OWNER,
         "SELECT indexdef FROM pg_indexes "
         "WHERE schemaname = 'claims' AND tablename = 'claim_files' "
-        "AND indexname <> 'claim_files_pkey'",
+        "AND indexname NOT IN ('claim_files_pkey', "
+        "'claim_files_one_per_claim_and_hash')",
     )
     with connect(claim.dsn(OWNER), "test") as conn:
         # An empty table is read in full whatever indexes it has, so the
@@ -535,6 +617,33 @@ def test_no_other_role_holds_anything_on_the_table(
     assert sqlstate == INSUFFICIENT_PRIVILEGE
 
 
+@pytest.mark.parametrize("role", [API, *OTHER_ROLES])
+def test_no_role_may_maintain_the_table(
+    migrated_database: DatabaseHandle, role: str
+) -> None:
+    # MAINTAIN (VACUUM, ANALYZE, REINDEX, CLUSTER, LOCK) is PostgreSQL 17's. The
+    # shared privilege snapshot does not list it, so it is asked for here.
+    rows = run(
+        migrated_database,
+        OWNER,
+        "SELECT has_table_privilege(%s, 'claims.claim_files', 'MAINTAIN')",
+        (role,),
+    )
+
+    assert rows == [(False,)]
+
+
+def test_a_claim_that_has_a_file_cannot_be_deleted(claim: DatabaseHandle) -> None:
+    # NO ACTION stays the rule: a cascade would destroy the only copy of a file
+    # silently, and nothing may delete a claim that holds evidence.
+    add_file(claim)
+
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        run(claim, OWNER, "DELETE FROM claims.claims WHERE claim_id = %s", (CLAIM_ID,))
+
+    assert run(claim, OWNER, "SELECT count(*) FROM claims.claim_files") == [(1,)]
+
+
 def test_nothing_on_the_table_is_granted_to_public(
     migrated_database: DatabaseHandle,
 ) -> None:
@@ -602,12 +711,20 @@ def test_no_other_file_makes_the_table() -> None:
     assert creating == [migration_name()]
 
 
+@pytest.mark.parametrize("role", ["model_gateway", "superuser"])
 def test_a_migration_run_by_a_role_that_does_not_own_the_schema_is_refused(
-    empty_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
+    empty_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch, role: str
 ) -> None:
     apply_everything_before(empty_database, monkeypatch)
+    # A superuser is the case the guard is for: it would create the table and
+    # own it, and the owner could then neither alter it nor grant on it.
+    dsn = (
+        make_conninfo(empty_database.admin_dsn, dbname=empty_database.name)
+        if role == "superuser"
+        else empty_database.dsn(role)
+    )
 
-    with connect(empty_database.dsn("model_gateway"), "test") as conn:
+    with connect(dsn, "test") as conn:
         with pytest.raises(
             psycopg.Error, match="must be run by the owner of the schema claims"
         ):
@@ -654,6 +771,7 @@ def test_the_file_starts_with_a_lock_timeout_and_says_which_lock_it_takes() -> N
     )
     assert body.startswith("SET LOCAL lock_timeout = '3s';")
     assert "SHARE ROW EXCLUSIVE" in text
+    assert "VACUUM" in text  # what the lock blocks besides writers
     assert "retention" in text
 
 
@@ -676,7 +794,7 @@ def test_the_file_takes_share_row_exclusive_on_the_claims_and_no_other_lock(
     ]
 
 
-def test_a_writer_of_the_claims_holds_the_file_up_for_three_seconds_and_no_longer(
+def test_a_writer_of_the_claims_makes_the_file_give_up_with_a_lock_timeout(
     empty_database: DatabaseHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     apply_everything_before(empty_database, monkeypatch)
@@ -687,10 +805,18 @@ def test_a_writer_of_the_claims_holds_the_file_up_for_three_seconds_and_no_longe
         # conflicts with.
         writer.execute(INSERT_CLAIM, (CLAIM_ID, TENANT))
         with connect(empty_database.dsn(OWNER), "test") as applier:
-            with pytest.raises(psycopg.errors.LockNotAvailable):
+            started = time.monotonic()
+            with pytest.raises(psycopg.errors.LockNotAvailable) as caught:
                 applier.execute(text)
+            waited = time.monotonic() - started
             applier.rollback()
         writer.rollback()
+
+    # The file's 3 s, not the connection's 10 s statement timeout (which would
+    # be a QueryCanceled): a lower bound shows it waited, an upper one that it
+    # stopped well before the statement timeout.
+    assert "lock timeout" in str(caught.value)
+    assert 2.5 <= waited < 8
 
     ((exists,),) = run(
         empty_database, OWNER, "SELECT to_regclass('claims.claim_files') IS NOT NULL"
