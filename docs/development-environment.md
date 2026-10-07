@@ -177,8 +177,11 @@ For the virtual machine both are recorded below.
   variable files, name the self-managed module too
   (`infra/terraform/aws-kubeadm`, `aws-kubeadm.tfplan`, and
   `make aws-kubeadm-plan|apply|destroy`, which the guard reads before the
-  Makefile has them). It knows no Google Cloud command beyond two `gcloud`
-  verbs and no `gcp-*` target: no credential for Google Cloud exists on the
+  Makefile has them). Since S079 (K7) it denies a write into a state file or
+  a state directory of either module, and a copy out of one (a writer verb in
+  a line that holds `.tfstate` or `meridian-aws`). It knows no Google Cloud
+  command beyond two `gcloud` verbs and no `gcp-*` target: no credential for
+  Google Cloud exists on the
   machine, which is what stands in the way (T-100). A known limit, older than
   this change: the hook has ten seconds, and with the machine loaded (a load
   average near 70) a command that carries a 70 KB heredoc, or one of

@@ -324,7 +324,13 @@ a session from doing by reflex what only the owner should do:
   `rds generate-db-auth-token`, `sso get-role-credentials`); readers of the
   local file, the state, the plan and its record, the AWS configuration and
   `.tfvars`; and writes to `~/.terraformrc`, `~/.gitconfig`, `~/.aws`,
-  `.terraform/environment` and `aws.tfplan*`. The guard reads a quoted word as
+  `.terraform/environment` and `aws.tfplan*`. Since S079 (K7) it also denies
+  a write into a state file or a state directory of either module, and a copy
+  out of one (`tee`, `mv`, `install`, `ln`, `truncate`, a redirect: any such
+  verb in a line that holds `.tfstate` or `meridian-aws`). That is a false
+  alarm for a file of such a name that is no state (`mv a.md
+  meridian-aws-notes.md` is denied); no script, target or document of this
+  repository tells anyone to write one. The guard reads a quoted word as
   a use of what it names (a search, an `echo`): search with the Grep tool, and
   write a commit message or a pull request body to a file; a message given
   with `-m` or `--body` is the one thing it blanks.
@@ -362,7 +368,12 @@ a session from doing by reflex what only the owner should do:
   patterns for a file reached by an absolute path from another checkout (neither
   verified); the second tool's bare `state rm`, `import` and `force-unlock`;
   `gh … -b`, `-t` and `--subject` (not blanked as `--body` is); a working
-  directory that reaches this one only through `..` or a link; and the two
+  directory that reaches this one only through `..` or a link; the writers the
+  guard's list leaves (`rm` and `unlink` of a state or a plan, `touch`,
+  `chmod`, `wget -O`, `openssl -out`); readers outside its list (`rev`,
+  `paste`, `fold`, `column`, `tr <`, a `read` loop), which print a copy that
+  was made out of the state; `init -backend-config=path=`; the working
+  directory at the parent of the modules (`infra/terraform`); and the two
   generic rules for `terraform destroy` and `tofu destroy`, which read the whole
   command, so a message that names either is denied (write it to a file).
 

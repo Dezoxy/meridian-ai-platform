@@ -517,6 +517,56 @@ case "$reason" in
     fail=1
     ;;
 esac
+# The second module's lines (S079, K7, the review's L3): the reason names the
+# module's own directory or target, and keeps what the first module's says.
+reason="$(reason_of 'make aws-kubeadm-apply')"
+case "$reason" in
+  *"aws-kubeadm-apply"*"COST MONEY"*"owner"*"no session holds the credentials"*) echo "ok   the ask for make aws-kubeadm-apply names its target, says it costs money and who runs it" ;;
+  *)
+    echo "FAIL the ask for make aws-kubeadm-apply does not name its target, or does not say it costs money and who runs it: $reason"
+    fail=1
+    ;;
+esac
+reason="$(reason_of 'make aws-kubeadm-destroy')"
+case "$reason" in
+  *"aws-kubeadm-destroy"*"owner's"*"terminal"*"no session holds the credentials"*) echo "ok   the deny for make aws-kubeadm-destroy names its target and says it is the owner's, in a terminal" ;;
+  *)
+    echo "FAIL the deny for make aws-kubeadm-destroy does not name its target, or does not say it is the owner's, in a terminal: $reason"
+    fail=1
+    ;;
+esac
+reason="$(reason_of 'make aws-kubeadm-plan')"
+case "$reason" in
+  *"aws-kubeadm-plan"*"owner"*) echo "ok   the ask for make aws-kubeadm-plan names its target" ;;
+  *)
+    echo "FAIL the ask for make aws-kubeadm-plan does not name its target: $reason"
+    fail=1
+    ;;
+esac
+reason="$(reason_of 'terraform -chdir=infra/terraform/aws-kubeadm workspace new x')"
+case "$reason" in
+  *"infra/terraform/aws-kubeadm"*"wrapper"*) echo "ok   the deny for Terraform by hand in the second module's directory names that directory" ;;
+  *)
+    echo "FAIL the deny for Terraform by hand in the second module's directory does not name that directory: $reason"
+    fail=1
+    ;;
+esac
+reason="$(reason_of 'terraform -chdir=infra/terraform/aws-kubeadm show')"
+case "$reason" in
+  *"infra/terraform/aws-kubeadm"*"owner's own session"*) echo "ok   the ask for terraform show in the second module's directory names that directory" ;;
+  *)
+    echo "FAIL the ask for terraform show in the second module's directory does not name that directory: $reason"
+    fail=1
+    ;;
+esac
+reason="$(reason_of 'tee ~/.local/state/meridian-aws-kubeadm/aws-kubeadm.tfstate')"
+case "$reason" in
+  *"saved plan"*"state file"*"meridian-aws-kubeadm"*) echo "ok   the deny for a write into the state names the saved plan, a state file and both modules' directories" ;;
+  *)
+    echo "FAIL the deny for a write into the state does not name the saved plan, a state file and the second module's directory: $reason"
+    fail=1
+    ;;
+esac
 
 # The settings (S036): a hook decision comes first, and the settings are what a
 # session meets when it uses a tool the hook does not read. The lists are held
@@ -665,6 +715,17 @@ for dir in "$here"/../infra/terraform/aws*/; do
       fail=1
     fi
   done
+  # The guard as well as the settings (S079, K7, the review's L2): one by-hand
+  # show in the directory asks, one new workspace and one write into the saved
+  # plan are denied, and the removal target is denied, so a module whose name
+  # the patterns do not read fails here with the settings' entries.
+  ask_for "the guard asks for a show in infra/terraform/${module}" ask \
+    "terraform -chdir=infra/terraform/${module} show"
+  ask_for "the guard denies a new workspace in infra/terraform/${module}" deny \
+    "terraform -chdir=infra/terraform/${module} workspace new x"
+  ask_for "the guard denies a write into ${module}.tfplan" deny \
+    "tee infra/terraform/${module}/${module}.tfplan"
+  ask_for "the guard denies make ${module}-destroy" deny "make ${module}-destroy"
 done
 if [ "$module_count" -ge 2 ]; then
   echo "ok   the directory scan found ${module_count} modules of the AWS family"

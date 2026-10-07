@@ -325,6 +325,21 @@ this directory, and the targets `make aws-kubeadm-plan`, `aws-kubeadm-apply`
 and `aws-kubeadm-destroy`, which do not exist yet, are asked, asked and denied
 as `make aws-plan`, `aws-apply` and `aws-destroy` are.
 
+Since S079 (K7) the guard also denies a write into a state file or a state
+directory, and a copy out of one, for both modules: `tee`, `mv`, `install`,
+`ln`, `truncate` or a redirect in a line that holds `.tfstate` or `meridian-aws`
+(which holds `meridian-aws-kubeadm`). Before it, none of these got an answer
+for either module: a session could empty the state, which makes the removal
+refuse while the instances keep billing, or copy it to another path and read the
+copy, which prints the owner's address, the budget's e-mail address, the account
+number inside the ARNs, the Elastic IP and the boot scripts. Measured by the
+guard's own cases, as above. It is a false alarm for a file of such a name that
+is no state (`mv a.md meridian-aws-notes.md` is denied). It still does not stop
+`rm` or `unlink` of a state or a plan, `touch`, `chmod`, `wget -O`,
+`openssl -out`, a reader outside the guard's list (`rev`, `paste`, `fold`,
+`column`, `tr <`, a `read` loop) on a copy, `init -backend-config=path=`, or the
+working directory at the parent of the modules.
+
 ## Removal
 
 `aws.sh destroy aws-kubeadm` removes everything the module created. Terraform
