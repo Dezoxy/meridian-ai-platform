@@ -101,44 +101,145 @@ resource "azurerm_postgresql_flexible_server" "main" {
     tenant_id                     = data.azurerm_client_config.current.tenant_id
   }
 
-  # The administrator: a fixed name that is none of postgres, admin or
-  # azure_superuser. FACTS: the schema holds no validation text for the login, so
-  # the names the service reserves were not read from it or from a page; the
-  # three above are the ones the contract names. A reserved name would fail at
-  # the first apply, which no check here can see.
-  administrator_login = "meridian_bootstrap"
+  # The administrator: a fixed name that is none of the names the service
+  # reserves. FACTS (the facts sheet, round 2, section 3, read 2026-10-07): the
+  # provider refuses azure_superuser, azure_pg_admin, admin, administrator, root,
+  # guest and public, and any name that starts with pg_, and Microsoft's pages
+  # list the same names. Microsoft's quickstart describes the field as numbers
+  # and letters only, and no page shows whether the service refuses an
+  # underscore, so the name is letters alone: it satisfies every wording read.
+  # Once set, a change of the name replaces the server.
+  administrator_login = "meridianbootstrap"
 
   # The password reaches the service through the write-only argument and is not
   # kept. Raising the version to 2 makes Terraform send the argument again with
   # whatever the ephemeral resource then holds: a NEW password, written to the
   # server and, because the secret's version is tied to this one below, to the
-  # vault in the same apply. Nothing else ever changes the password.
+  # vault in the same apply.
+  #
+  # The version is the only thing that moves the two together, and a write-only
+  # value is not read back, so Terraform cannot see a mismatch. Two cases make
+  # one without a word of warning. A server that is replaced (its administrator's
+  # login, for one, cannot be changed in place) is created with a fresh password
+  # while the version stays 1, so the secret keeps the old one. And a first apply
+  # that creates the server and then fails at the secret, run again, makes the
+  # secret from that run's new password while the server keeps the first. Either
+  # way the Job's login fails at first use. The rule: raise the version in the
+  # same change as any replacement of the server, and before any retry of a
+  # first apply that stopped after the server was made.
   administrator_password_wo         = ephemeral.random_password.database_administrator.result
   administrator_password_wo_version = 1
 
   depends_on = [azurerm_private_dns_zone_virtual_network_link.postgres]
+
+  # No zone is named, so Azure picks one and the provider reads it into the state.
+  # The argument is neither computed nor a replacement trigger in azurerm 5.8.0,
+  # and the provider's update refuses a change of the zone that is not a swap with
+  # a standby zone (there is none), so the next plan would propose to drop the
+  # zone and an apply of it would stop with that error. Its own documentation
+  # offers ignore_changes for the zone.
+  lifecycle {
+    ignore_changes = [zone]
+  }
 }
 
-# The allow-list of extensions. FACTS: Microsoft's page for the parameter writes
-# the extension's name in lower case (vector) and the provider's own example
-# writes the values in upper case; the schema and the provider carry no
-# validation of the value, so which spelling the service takes was not
-# established. The provider's example is followed: upper case. Allowing the name
+# Where the server's own log goes: this module's workspace, the same one that
+# holds the cluster's audit log, so that a connection or a checkpoint outlives
+# the server's own copy of it. The category is the provider's category group
+# that takes every log category the server offers, because no page read names
+# the server's categories and the provider's schema carries no list of them: NOT
+# ESTABLISHED, and that Azure takes the group for a flexible server is not read
+# from a page either. A value Azure refuses stops the apply at this resource and
+# changes nothing else. Taking every category can send more than the connection
+# log into the workspace's daily cap (variables.tf), which also holds the
+# cluster's audit log: once the server's categories are read, name the one that
+# holds the connection log and no other.
+#
+# The two parameters below wait for this setting: without a destination, what
+# they make the server log goes nowhere that outlives the server.
+resource "azurerm_monitor_diagnostic_setting" "database" {
+  name                       = "server-log-to-log-analytics"
+  target_resource_id         = azurerm_postgresql_flexible_server.main.id
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
+
+  enabled_log {
+    category_group = "allLogs"
+  }
+}
+
+# The allow-list of extensions. FACTS (the facts sheet, round 2, section 7, read
+# 2026-10-07): every page of Microsoft's that was read writes the extension's
+# name in lower case (vector) and calls it the name to allowlist, and none says
+# whether the value is case-sensitive; the provider neither checks nor changes
+# the value. The page's spelling is written: lower case. (The provider's own
+# example uses upper case, which no Microsoft page supports.) Allowing the name
 # is all this does; CREATE EXTENSION is the second half's.
 resource "azurerm_postgresql_flexible_server_configuration" "extensions" {
   name      = "azure.extensions"
   server_id = azurerm_postgresql_flexible_server.main.id
-  value     = "VECTOR"
+  value     = "vector"
+}
+
+# The two server parameters that say what the server writes to its log, set to on
+# under the names Microsoft's page for them gives (log_connections and
+# log_checkpoints). For PostgreSQL 17 the page's default for each is on already,
+# so this changes nothing the server does: it writes the setting down, where a
+# scan and a reader can see it, and it waits for the diagnostic setting above, so
+# that the log it asks for has a destination. The provider takes one lock per
+# server for a configuration or a database, so these never run at the same time
+# as each other or as the database below inside one apply; the database also
+# waits for every one of them, in its depends_on, for the same reason in the
+# text. Whether the service answers "busy" to two changes made together from
+# outside the lock is not on any page read.
+resource "azurerm_postgresql_flexible_server_configuration" "log_connections" {
+  name      = "log_connections"
+  server_id = azurerm_postgresql_flexible_server.main.id
+  value     = "on"
+
+  depends_on = [azurerm_monitor_diagnostic_setting.database]
+}
+
+resource "azurerm_postgresql_flexible_server_configuration" "log_checkpoints" {
+  name      = "log_checkpoints"
+  server_id = azurerm_postgresql_flexible_server.main.id
+  value     = "on"
+
+  depends_on = [azurerm_monitor_diagnostic_setting.database]
+}
+
+# Connection throttling: unlike the two above, this one is OFF by default (the
+# page's default is off, its values on and off, and the parameter is dynamic), so
+# this DOES change what the server does: after repeated failed logins from one
+# address it throttles that address for a while. The name is the flexible
+# server's (connection_throttle.enable), not the older connection_throttling that
+# the scan's title shows; the scan accepts this name. Derived, not read: if the
+# pods reach the server from their node's address, a pod that fails to log in
+# over and over could slow the logins of the others on that node. NOT read: how
+# long the throttle lasts or what it counts.
+resource "azurerm_postgresql_flexible_server_configuration" "connection_throttle" {
+  name      = "connection_throttle.enable"
+  server_id = azurerm_postgresql_flexible_server.main.id
+  value     = "on"
 }
 
 # The database the chart's services use, as it is called on kind. Kind's chart
 # values name no collation for it, so the provider's default is left, and this
 # resource sets only the encoding. On kind the owner is meridian_owner; here the
 # administrator creates it, and the second half hands it over with the roles.
+# It waits for the server's three configurations: Microsoft's own template makes
+# one configuration wait for another without saying why, and a change of
+# parameters and the creation of a database are two writes to one server.
 resource "azurerm_postgresql_flexible_server_database" "meridian" {
   name      = "meridian"
   server_id = azurerm_postgresql_flexible_server.main.id
   charset   = "UTF8"
+
+  depends_on = [
+    azurerm_postgresql_flexible_server_configuration.extensions,
+    azurerm_postgresql_flexible_server_configuration.log_connections,
+    azurerm_postgresql_flexible_server_configuration.log_checkpoints,
+    azurerm_postgresql_flexible_server_configuration.connection_throttle,
+  ]
 }
 
 # The administrator's password, in the FOUNDATION's vault (the vault is read in

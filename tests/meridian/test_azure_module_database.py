@@ -35,8 +35,12 @@ from azuremodulesupport import (
 
 DATABASE_RESOURCES = [
     "azurerm_key_vault_secret.database_administrator",
+    "azurerm_monitor_diagnostic_setting.database",
     "azurerm_postgresql_flexible_server.main",
+    "azurerm_postgresql_flexible_server_configuration.connection_throttle",
     "azurerm_postgresql_flexible_server_configuration.extensions",
+    "azurerm_postgresql_flexible_server_configuration.log_checkpoints",
+    "azurerm_postgresql_flexible_server_configuration.log_connections",
     "azurerm_postgresql_flexible_server_database.meridian",
     "azurerm_private_dns_zone.postgres",
     "azurerm_private_dns_zone_virtual_network_link.postgres",
@@ -249,12 +253,44 @@ def test_the_module_has_no_entra_administrator_resource() -> None:
     assert "A Microsoft Entra administrator" in squeezed(raw_text("database.tf"))
 
 
-def test_the_administrator_login_is_fixed_and_none_of_the_reserved_names() -> None:
+RESERVED_LOGINS = {
+    "azure_superuser",
+    "azure_pg_admin",
+    "admin",
+    "administrator",
+    "root",
+    "guest",
+    "public",
+}
+
+
+def test_the_administrator_login_is_letters_only_and_none_of_the_reserved_names() -> (
+    None
+):
+    # Z6: the name holds letters alone. Microsoft's quickstart says "only numbers
+    # and letters" and no page shows whether an underscore is refused, so letters
+    # alone satisfy both readings. The provider refuses the seven names below and
+    # any name that starts with pg_.
     login = attribute(server(), "administrator_login")
 
-    assert login is not None and re.fullmatch(r'"[a-z][a-z_]*"', login)
-    assert login.strip('"') not in {"postgres", "admin", "azure_superuser"}
-    assert "FACTS:" in comments_of("database.tf")
+    assert login == '"meridianbootstrap"'
+    name = login.strip('"')
+    assert re.fullmatch(r"[a-z]{1,63}", name)
+    assert name not in RESERVED_LOGINS
+    assert not name.startswith("pg_")
+    comments = comments_of("database.tf")
+    assert "FACTS (the facts sheet, round 2, section 3" in comments
+    assert "so the name is letters alone" in comments
+    assert "no page shows whether the service refuses an underscore" in comments
+    assert "The schema holds no validation text" not in comments
+
+
+def test_no_file_of_the_module_names_the_old_login_with_an_underscore() -> None:
+    assert not [
+        path.name
+        for path in tf_files()
+        if "meridian_bootstrap" in path.read_text("utf-8")
+    ]
 
 
 def test_the_server_waits_for_the_dns_zones_link() -> None:
@@ -303,17 +339,22 @@ def test_the_link_joins_the_zone_to_the_modules_own_network() -> None:
 # ── the extension, the database and the secret ───────────────────────────────
 
 
-def test_the_allow_list_holds_exactly_vector_in_the_case_the_provider_shows() -> None:
+def test_the_allow_list_holds_exactly_vector_in_the_case_the_page_shows() -> None:
+    # Z6: every Microsoft page read writes the name in lower case, and none says
+    # that the value is case-sensitive or folded; the provider's upper-case
+    # example is no page of Microsoft's.
     body = resources_in("database.tf")[
         "azurerm_postgresql_flexible_server_configuration.extensions"
     ]
 
     assert attribute(body, "name") == '"azure.extensions"'
     assert attribute(body, "server_id") == f"{SERVER}.id"
-    assert attribute(body, "value") == '"VECTOR"'
+    assert attribute(body, "value") == '"vector"'
     comments = comments_of("database.tf")
-    assert "FACTS:" in comments
-    assert "lower case (vector)" in comments and "upper case" in comments
+    assert "FACTS (the facts sheet, round 2, section 7" in comments
+    assert "lower case (vector)" in comments
+    assert "which no Microsoft page supports" in comments
+    assert "The provider's example is followed: upper case" not in comments
 
 
 def test_the_database_is_meridian_in_utf8_with_the_providers_default_collation() -> (

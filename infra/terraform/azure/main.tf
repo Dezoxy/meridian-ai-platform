@@ -27,6 +27,10 @@ locals {
     managed-by  = "terraform"
   }
 
+  # The group's tags are the three above and, only when var.expires_on is set,
+  # expires-on with that date. No other resource carries it.
+  group_tags = merge(local.tags, var.expires_on == null ? {} : { "expires-on" = var.expires_on })
+
   # The address plan. The three subnets sit inside the virtual network. The pod
   # and the service ranges of the cluster's overlay network are not subnets: they
   # are kept apart from every other range, and the cluster (a later change) takes
@@ -89,7 +93,7 @@ resource "terraform_data" "subscription_pin" {
 resource "azurerm_resource_group" "platform" {
   name     = "rg-${local.name_prefix}-platform"
   location = var.location
-  tags     = local.tags
+  tags     = local.group_tags
 
   depends_on = [terraform_data.subscription_pin]
 }

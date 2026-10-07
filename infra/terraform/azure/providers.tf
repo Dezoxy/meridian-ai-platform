@@ -17,6 +17,17 @@ provider "azurerm" {
       recover_soft_deleted_secrets          = true
     }
 
+    log_analytics_workspace {
+      # The workspace is removed with the group after a demo day. By default the
+      # provider only soft-deletes it: Azure keeps it, its data and its name for
+      # 14 days, and a workspace created under the same name, group and region
+      # inside that time is the OLD one given back, the previous day's audit log
+      # in it. True purges it on removal, so every demo day starts empty and the
+      # name is free at once. The price is that the previous day's control-plane
+      # audit log is gone when the environment is.
+      permanently_delete_on_destroy = true
+    }
+
     resource_group {
       # Unlike the foundation's group, this module's group IS deleted, with
       # everything in it, when the environment is removed after a demo day. True

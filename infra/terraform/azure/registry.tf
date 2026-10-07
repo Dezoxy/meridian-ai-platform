@@ -8,10 +8,21 @@
 #
 # Basic is the smallest SKU, and the admin user is off: a pull is made with a
 # Microsoft Entra identity, the cluster's kubelet identity below. Basic has no
-# anonymous pull (Standard and above have it), so there is no setting to turn
-# off. Basic has no private endpoint either (Premium only, at ten times the
-# price), so the registry's endpoint is public and every request to it needs
-# Entra authentication: the demo day's choice, and the README says so.
+# anonymous pull (Standard and above have it), and the argument is written
+# false all the same, so that a move to Standard keeps it off. Whether the
+# service takes an explicit false on a Basic registry is not on any page read: if
+# the first apply refuses it, the line is deleted. Basic has no private endpoint
+# either (Premium only, at ten times the price), so the registry's endpoint is
+# public and every request to it needs Entra authentication: the demo day's
+# choice, and the README says so.
+#
+# The role assignment mode is written, though it is the provider's default: the
+# provider always sends it, and the pull below is an AcrPull assignment, which
+# Microsoft says is honoured only in the mode written here (the one Microsoft
+# calls RBAC-only) and is not honoured at all in the ABAC mode, which Microsoft
+# says will become the service's default in the future. The ABAC mode would need
+# the two repository roles in place of AcrPull. Moving an existing registry from
+# one mode to the other invalidates the credentials issued under the old one.
 resource "azurerm_container_registry" "main" {
   name                = "crmeridian${local.suffix}"
   location            = azurerm_resource_group.platform.location
@@ -19,6 +30,9 @@ resource "azurerm_container_registry" "main" {
   sku                 = "Basic"
   admin_enabled       = false
   tags                = local.tags
+
+  anonymous_pull_enabled = false
+  role_assignment_mode   = "LegacyRegistryPermissions"
 }
 
 # The nodes pull with the kubelet identity, and it may pull and do nothing else:

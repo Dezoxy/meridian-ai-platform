@@ -44,7 +44,7 @@ CLUSTER_RESOURCES = [
     "azurerm_role_assignment.operator_cluster_admin",
 ]
 REGISTRY_RESOURCES = [REGISTRY, "azurerm_role_assignment.kubelet_acr_pull"]
-LOGS_RESOURCES = [DIAGNOSTIC, WORKSPACE]
+LOGS_RESOURCES = [DIAGNOSTIC, WORKSPACE, "azurerm_monitor_diagnostic_setting.vault"]
 
 # The only three role assignments the three files may hold: the role's name, the
 # scope as written and the principal as written.
@@ -505,11 +505,16 @@ def test_the_registry_is_basic_with_the_admin_user_off() -> None:
     assert attribute(body, "admin_enabled") == "false"
 
 
-def test_the_registry_sets_no_anonymous_pull_and_says_basic_has_none() -> None:
+def test_the_registry_sets_anonymous_pull_off_and_says_basic_has_none() -> None:
+    # Z6: written false although Basic has none, so that a move to Standard keeps
+    # it off; the comment says the service's answer to it on Basic is not read.
     body = resources_in("registry.tf")[REGISTRY]
+    comment = squeezed(comments_of("registry.tf"))
 
-    assert not has_attribute(body, "anonymous_pull_enabled")
-    assert "Basic has no anonymous pull" in squeezed(comments_of("registry.tf"))
+    assert attribute(body, "anonymous_pull_enabled") == "false"
+    assert "Basic has no anonymous pull" in comment
+    assert "a move to Standard keeps it off" in comment
+    assert "if the first apply refuses it, the line is deleted" in comment
 
 
 def test_the_registry_says_basic_has_no_private_endpoint_so_it_is_public() -> None:

@@ -15,6 +15,16 @@
 # of the apply has the right to approve connections on that resource, and the
 # owner of the subscription does. NOT proved here: nothing was planned.
 
+# The two links below carry the resolution policy NxDomainRedirect, which exists
+# only for Private Link zones (Microsoft's page on Private DNS fallback). Linked
+# without it, a zone like these makes the name of ANOTHER vault or account, one
+# whose private endpoint is somewhere else, resolve to nothing from this network:
+# the resolver answers from the private zone and the name is not in it. With the
+# policy, a name the zone does not hold is looked up on the public internet. The
+# module's own two resources are not affected either way. The database's zone
+# (database.tf) is not a Private Link zone, and its link has no such argument.
+# NOT read: which policy the service gives a link that names none.
+
 # The vault's zone and its link. The name is Microsoft's for the sub-resource
 # vault (the facts sheet, section F, read 2026-10-07).
 resource "azurerm_private_dns_zone" "key_vault" {
@@ -28,6 +38,7 @@ resource "azurerm_private_dns_zone_virtual_network_link" "key_vault" {
   private_dns_zone_id  = azurerm_private_dns_zone.key_vault.id
   virtual_network_id   = azurerm_virtual_network.main.id
   registration_enabled = false
+  resolution_policy    = "NxDomainRedirect"
   tags                 = local.tags
 }
 
@@ -72,6 +83,7 @@ resource "azurerm_private_dns_zone_virtual_network_link" "openai" {
   private_dns_zone_id  = azurerm_private_dns_zone.openai.id
   virtual_network_id   = azurerm_virtual_network.main.id
   registration_enabled = false
+  resolution_policy    = "NxDomainRedirect"
   tags                 = local.tags
 }
 

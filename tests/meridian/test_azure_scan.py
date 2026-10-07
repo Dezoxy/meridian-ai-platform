@@ -295,7 +295,8 @@ def test_a_flag_in_one_recipe_only_makes_the_recipes_differ() -> None:
 
 def test_the_ignore_file_is_a_header_and_accepts_no_finding() -> None:
     """The module's own HIGH and CRITICAL findings on the pinned image were none
-    (its eight MEDIUM and LOW findings are not what the scan gates on), so nothing
+    (its five MEDIUM and LOW findings, eight before Z6 fixed three of them, are
+    not what the scan gates on), so nothing
     is accepted. A first entry needs a change of this list, with its reason on
     the line above, in the same diff as the entry: a new ID with a reason of five
     words would otherwise pass the shape and the reason tests."""

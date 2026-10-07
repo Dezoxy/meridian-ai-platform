@@ -50,6 +50,7 @@ VARIABLE_NAMES = [
     "budget_amount_eur",
     "database_sku_name",
     "database_storage_mb",
+    "expires_on",
     "gateway_service_account",
     "kubernetes_version",
     "location",
@@ -66,10 +67,20 @@ MAIN_DATA_SOURCES = [
     "azurerm_key_vault.foundation",
     "azurerm_resource_group.foundation",
 ]
+# The three subnets and the network (Z1), and the two security groups with their
+# rules and associations, on the database's and the endpoints' subnets (Z6).
 NETWORK_RESOURCES = [
+    "azurerm_network_security_group.endpoints",
+    "azurerm_network_security_group.postgres",
+    "azurerm_network_security_rule.endpoints_allow_nodes",
+    "azurerm_network_security_rule.endpoints_deny_other_inbound",
+    "azurerm_network_security_rule.postgres_allow_nodes",
+    "azurerm_network_security_rule.postgres_deny_other_inbound",
     "azurerm_subnet.endpoints",
     "azurerm_subnet.nodes",
     "azurerm_subnet.postgres",
+    "azurerm_subnet_network_security_group_association.endpoints",
+    "azurerm_subnet_network_security_group_association.postgres",
     "azurerm_virtual_network.main",
 ]
 
@@ -203,12 +214,30 @@ def test_the_platform_group_waits_for_the_pin() -> None:
     assert attribute(group, "location") == "var.location"
 
 
+def real_references_in(body: str) -> str:
+    """The part of a resource's body that can make Terraform wait for another
+    resource: the ``lifecycle`` block is taken out (``ignore_changes`` names an
+    argument, and a word in it is no dependency) and so is the literal text of
+    every quoted string, which keeps only what sits inside ``${...}``. A resource's
+    name written in a string, or in ``ignore_changes``, is a mention and not a
+    reference."""
+    without_lifecycle = re.sub(
+        r"^  lifecycle \{\n.*?^  \}$", "", body, flags=re.MULTILINE | re.DOTALL
+    )
+
+    def inside_the_string(string: re.Match[str]) -> str:
+        return " ".join(re.findall(r"\$\{(.*?)\}", string.group(0)))
+
+    return re.sub(r'"(?:[^"\\]|\\.)*"', inside_the_string, without_lifecycle)
+
+
 def hangs_on_the_pin(name: str, found: dict[str, str], seen: frozenset[str]) -> bool:
-    """A resource hangs on the pin when its body names the platform group or the
-    pin, or names a resource that does (Terraform's graph is transitive: the DNS
-    link, the server's configuration and the database name the server or the
-    network, which name the group, and have no group argument of their own)."""
-    body = found[name]
+    """A resource hangs on the pin when it REFERENCES the platform group or the
+    pin, or references a resource that does (Terraform's graph is transitive: the
+    DNS link, the server's configuration and the database name the server or the
+    network, which name the group, and have no group argument of their own). A
+    bare mention in a string or in ``ignore_changes`` does not count."""
+    body = real_references_in(found[name])
     if re.search(rf"\b{re.escape(PLATFORM_GROUP)}\b|\b{re.escape(PIN)}\b", body):
         return True
     return any(
@@ -233,6 +262,42 @@ def test_every_resource_hangs_on_the_pin_directly_or_through_the_platform_group(
     ]
 
     assert loose == []
+
+
+def test_the_pin_check_wants_a_reference_and_a_mention_does_not_pass() -> None:
+    # The check used to accept the group's name anywhere in a body, a string or
+    # ignore_changes included. A check that passes everything proves nothing:
+    # each way to hang on the pin once, and each bare mention refused.
+    group = PLATFORM_GROUP
+    found = {
+        group: "",
+        "azurerm_x.argument": f"  resource_group_name = {group}.name\n",
+        "azurerm_x.waits": f"  depends_on = [{group}]\n",
+        "azurerm_x.interpolated": f'  name = "x-${{{group}.name}}"\n',
+        "azurerm_x.in_a_string": f'  note = "{group}"\n',
+        "azurerm_x.in_ignore_changes": (
+            "  tags = local.tags\n  lifecycle {\n"
+            f"    ignore_changes = [{group}]\n  }}\n"
+        ),
+        "azurerm_x.by_chain": "  scope = azurerm_x.argument.id\n",
+        "azurerm_x.by_a_loose_one": "  scope = azurerm_x.in_a_string.id\n",
+    }
+
+    hangs = {
+        name: hangs_on_the_pin(name, found, frozenset())
+        for name in found
+        if name != group
+    }
+
+    assert hangs == {
+        "azurerm_x.argument": True,
+        "azurerm_x.waits": True,
+        "azurerm_x.interpolated": True,
+        "azurerm_x.in_a_string": False,
+        "azurerm_x.in_ignore_changes": False,
+        "azurerm_x.by_chain": True,
+        "azurerm_x.by_a_loose_one": False,
+    }
 
 
 def test_main_says_in_a_comment_how_every_resource_depends_on_the_pin() -> None:
@@ -340,11 +405,33 @@ def test_the_postgres_subnet_alone_is_delegated_and_says_where_the_name_came_fro
     assert "FACTS:" not in comments
 
 
-def test_network_says_why_no_security_group_exists_yet() -> None:
+def test_network_says_the_nodes_subnet_has_no_group_and_why() -> None:
+    # Z6 replaced the sentence "No network security group exists yet", which the
+    # module's own database and endpoints groups made false: the two other subnets
+    # have one each, and the nodes' subnet has none, on purpose.
     comments = comments_of("network.tf")
+    groups = resources_in("network.tf")
+    associated = [
+        attribute(body, "subnet_id")
+        for name, body in groups.items()
+        if name.startswith("azurerm_subnet_network_security_group_association.")
+    ]
 
-    assert "No network security group" in comments
-    assert "azurerm_network_security_group" not in module_text()
+    assert "No network security group exists yet" not in comments
+    assert "in the changes that add those services" not in comments
+    assert "The nodes' subnet has none, on purpose" in comments
+    assert "AKS applies no group to its subnet" in comments
+    assert "blocking traffic inside the subnet is not supported" in comments
+    assert sorted(a or "" for a in associated) == [
+        "azurerm_subnet.endpoints.id",
+        "azurerm_subnet.postgres.id",
+    ]
+    assert not [
+        n
+        for n in groups
+        if n.startswith("azurerm_network_security_group.") and n.endswith(".nodes")
+    ]
+    assert "azurerm_subnet.nodes.id" not in "".join(a or "" for a in associated)
 
 
 def local_cidrs() -> dict[str, str]:
@@ -713,34 +800,31 @@ def test_no_variable_file_override_file_state_or_provider_directory_sits_here() 
         assert name != "tfplan"
 
 
-def test_the_directory_holds_only_files_this_contract_names() -> None:
-    # The list is exact and names every file of the finished module: the first
-    # eight exist now (Z1's seven and Z3's database.tf); each of the others may
-    # exist or not yet, as the contract that writes it lands.
+def test_the_directory_holds_exactly_these_files() -> None:
+    # The list is exact: every file of the finished module, and no other. A file
+    # added or removed changes this list in the same diff (Z6 replaced a version
+    # of this test that allowed any of its files to be absent, which by then
+    # matched every file the module has).
     names = {path.name for path in MODULE_DIR.iterdir()}
-    written = {
+
+    assert names == {
         ".terraform.lock.hcl",
-        "README.md",
-        "database.tf",
-        "main.tf",
-        "network.tf",
-        "providers.tf",
-        "variables.tf",
-        "versions.tf",
-    }
-    to_come = {
         ".trivyignore",
+        "README.md",
         "budget.tf",
         "cluster.tf",
+        "database.tf",
         "endpoints.tf",
         "identity.tf",
         "logs.tf",
+        "main.tf",
+        "network.tf",
         "outputs.tf",
+        "providers.tf",
         "registry.tf",
+        "variables.tf",
+        "versions.tf",
     }
-
-    assert written <= names
-    assert names <= written | to_come
 
 
 GUID = re.compile(
@@ -896,6 +980,8 @@ def test_each_variable_accepts_its_default(tmp_path: Path, name: str) -> None:
         ("budget_amount_eur", "99.5"),
         ("log_daily_quota_gb", "0.5"),
         ("log_daily_quota_gb", "5"),
+        ("expires_on", '"2026-10-08"'),
+        ("expires_on", '"2028-02-29"'),
     ],
 )
 def test_the_values_the_module_allows_are_accepted(
@@ -942,6 +1028,15 @@ def test_the_values_the_module_allows_are_accepted(
         ("log_daily_quota_gb", "0"),
         ("log_daily_quota_gb", "0.4"),
         ("log_daily_quota_gb", "5.1"),
+        # A date that is not a real calendar day, or not a plain date, is refused.
+        ("expires_on", '"2026-02-30"'),
+        ("expires_on", '"2027-02-29"'),
+        ("expires_on", '"2026-13-01"'),
+        ("expires_on", '"2026-10-8"'),
+        ("expires_on", '"08-10-2026"'),
+        ("expires_on", '"2026-10-08T10:00:00Z"'),
+        ("expires_on", '"tomorrow"'),
+        ("expires_on", '""'),
     ],
 )
 def test_a_value_outside_the_closed_list_or_the_bounds_is_refused(

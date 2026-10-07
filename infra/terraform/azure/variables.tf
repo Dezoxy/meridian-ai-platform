@@ -196,3 +196,20 @@ variable "log_daily_quota_gb" {
     error_message = "log_daily_quota_gb must be from 0.5 to 5. Ingestion bills by the gigabyte."
   }
 }
+
+# The day the environment is meant to be gone, as a plain date the owner sets
+# (YYYY-MM-DD). It becomes the tag expires-on on the resource group and nothing
+# else, so that someone looking at the subscription can tell a forgotten
+# environment from a live one. It is a label: nothing deletes anything on that
+# date. Absent (the default) means no tag, and a plan then changes nothing it
+# changed before. A date that is not a real calendar day is refused.
+variable "expires_on" {
+  description = "Optional date the environment is meant to be removed by, written YYYY-MM-DD: the tag expires-on on the resource group. A label only, nothing is removed on that date. Absent means no tag."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.expires_on == null || (can(regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}$", var.expires_on)) && can(formatdate("YYYY-MM-DD", "${var.expires_on}T00:00:00Z")))
+    error_message = "expires_on must be a real calendar date written YYYY-MM-DD, for example 2026-12-31, or left out."
+  }
+}

@@ -159,8 +159,11 @@ def test_endpoints_declares_exactly_these_resources_and_no_data_source() -> None
     assert data_sources_in("endpoints.tf") == {}
 
 
-def test_budget_declares_exactly_one_resource_and_one_data_source() -> None:
-    assert sorted(resources_in("budget.tf")) == [BUDGET]
+def test_budget_declares_exactly_two_resources_and_one_data_source() -> None:
+    # Z6 added the second, on the cluster's node resource group.
+    assert sorted(resources_in("budget.tf")) == sorted(
+        [BUDGET, "azurerm_consumption_budget_resource_group.nodes"]
+    )
     assert sorted(data_sources_in("budget.tf")) == [
         "azurerm_monitor_action_group.budget"
     ]
@@ -675,7 +678,7 @@ def test_every_resource_of_the_four_files_hangs_on_the_pin() -> None:
     found = resources()
     names = [name for file_name in THE_FOUR_FILES for name in resources_in(file_name)]
 
-    assert len(names) == 13
+    assert len(names) == 14
     assert [n for n in names if not hangs_on_the_pin(n, found, frozenset())] == []
 
 
