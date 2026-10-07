@@ -1666,7 +1666,6 @@ def test_a_plan_file_that_is_the_one_the_record_names_is_applied(tree: Tree) -> 
         "01791305195",  # the same, with a leading zero
         "0",
         "015261222753",  # the octal spelling of the clock: bash read it as fresh
-        f"0{oct(int(time.time()))[2:]}",  # and of this very second
         "+1791305195",
         " 1791305195",
         "1791305195 ",
@@ -1679,6 +1678,22 @@ def test_a_time_that_is_not_a_plain_decimal_is_not_read_in_any_other_base(
 ) -> None:
     with_local_file(tree)
     with_saved_plan(tree, time_text=time_text)
+
+    done = tree.run("apply")
+
+    assert_plan_refused_and_dropped(tree, done, "record")
+    assert "value too great" not in done.stderr
+
+
+def test_the_octal_spelling_of_this_very_second_is_not_read_as_fresh(
+    tree: Tree,
+) -> None:
+    # Built here, in the body: a parameter built from the clock at import would
+    # give two xdist workers that import the file in different seconds different
+    # test IDs, and the run stops at collection.
+    octal_now = f"0{oct(int(time.time()))[2:]}"
+    with_local_file(tree)
+    with_saved_plan(tree, time_text=octal_now)
 
     done = tree.run("apply")
 
