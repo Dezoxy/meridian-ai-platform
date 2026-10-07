@@ -12,7 +12,8 @@ grew:
   it and the comment block directly above it included.
 - Inside each new file the units that came from the old file keep the order
   they had there.
-- Every banner line (``# ──``) of the old file is in one new file, once.
+- Every banner line (``# ──`` or ``# -- title ---``) of the old file is in one
+  new file, once.
 - What the new files and support modules hold that neither the old file nor the
   support module's own revision had is listed (imports and module docstrings
   aside; a docstring is listed as a count of lines). A support module's units
@@ -38,6 +39,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 BANNER = "# ──"
+RULED = "# -- "
+
+
+def is_banner(line: str) -> bool:
+    """A section banner: ``# ── title`` or ``# -- title ----`` (ruled to the end)."""
+    return line.startswith(BANNER) or (
+        line.startswith(RULED) and line.rstrip().endswith("---")
+    )
 
 
 @dataclass(frozen=True)
@@ -104,13 +113,13 @@ def units_of(source: str) -> tuple[list[Unit], int, list[str]]:
         while (
             cursor >= 0
             and lines[cursor].startswith("#")
-            and not lines[cursor].startswith(BANNER)
+            and not is_banner(lines[cursor])
         ):
             above.insert(0, lines[cursor])
             cursor -= 1
         text = "\n".join([*above, *lines[start - 1 : end]])
         units.append(Unit(key_of(node), text, len(units)))
-    banners = [line for line in lines if line.startswith(BANNER)]
+    banners = [line for line in lines if is_banner(line)]
     return units, docstring_lines, banners
 
 
