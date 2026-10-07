@@ -1,7 +1,9 @@
 """The issuer's key set: what is fetched, kept and refused (S021, T-05). The key
 URL is a mock transport that counts its requests; the clock is moved by hand."""
 
+import base64
 import json
+import logging
 from typing import Any
 
 import httpx
@@ -14,6 +16,7 @@ from meridian.platform.common.signinkeys import (
     KEY_STALE_LIMIT_SECONDS,
     MAX_CACHED_KEYS,
     MAX_KEY_SET_BYTES,
+    MAX_RSA_BITS,
     REFETCH_INTERVAL_SECONDS,
     KeySet,
     KeySetUnavailable,
@@ -288,6 +291,87 @@ def test_at_most_the_first_sixteen_keys_are_kept() -> None:
     assert len(keys) == MAX_CACHED_KEYS == 16
     assert "kid-15" in keys
     assert "kid-16" not in keys
+
+
+@pytest.mark.parametrize(
+    ("operations", "kept"),
+    [
+        (["verify"], True),
+        (["verify", "sign"], True),
+        (["encrypt"], False),
+        (["sign"], False),
+        ([], False),
+        ("verify", False),  # not a list: malformed, and a substring match
+        (None, False),
+        ({"verify": True}, False),
+    ],
+    ids=["verify", "verify-sign", "encrypt", "sign", "empty", "string", "null", "map"],
+)
+def test_a_key_whose_key_ops_lack_verify_is_dropped(
+    operations: Any, kept: bool, signin_rsa_pool: list
+) -> None:
+    document = {"keys": [jwk_of("k", signin_rsa_pool[0], key_ops=operations)]}
+
+    assert ("k" in parse_key_set(json.dumps(document).encode())) is kept
+
+
+def modulus_jwk(kid: str, bits: int) -> dict[str, Any]:
+    """A JWK whose modulus has exactly ``bits`` bits and is not a product of
+    primes: the library takes the numbers as they are, and making a real 8192 bit
+    key would take half a minute."""
+    modulus = (1 << (bits - 1)) | 0xDEADBEEF | 1
+    raw = modulus.to_bytes(bits // 8, "big")
+    n = base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+    return {"kty": "RSA", "kid": kid, "use": "sig", "alg": "RS256", "n": n, "e": "AQAB"}
+
+
+@pytest.mark.parametrize(
+    ("bits", "kept"),
+    [
+        (1024, False),
+        (2040, False),
+        (2048, True),
+        (4096, True),
+        (8192, True),
+        (8200, False),
+        (16384, False),
+    ],
+)
+def test_an_rsa_key_outside_the_size_bounds_is_dropped(bits: int, kept: bool) -> None:
+    document = {"keys": [modulus_jwk("k", bits)]}
+
+    keys = parse_key_set(json.dumps(document).encode())
+
+    assert ("k" in keys) is kept
+    if kept:
+        assert keys["k"].key_size == bits
+    assert MAX_RSA_BITS == 8192
+
+
+def test_keys_over_the_cap_are_logged_once_with_a_count_and_nothing_else(
+    signin_rsa_pool: list, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    names = [f"canary-kid-{number:02d}" for number in range(20)]
+    document = {"keys": [jwk_of(name, signin_rsa_pool[0]) for name in names]}
+
+    keys = parse_key_set(json.dumps(document).encode())
+
+    assert len(keys) == MAX_CACHED_KEYS
+    (record,) = [r for r in caplog.records if r.name.endswith("signinkeys")]
+    assert record.levelno == logging.WARNING
+    assert record.args == (4,)
+    assert "canary" not in record.getMessage()
+
+
+def test_keys_up_to_the_cap_are_not_logged(
+    signin_rsa_pool: list, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    document = {"keys": [jwk_of(f"k{n}", signin_rsa_pool[0]) for n in range(16)]}
+
+    assert len(parse_key_set(json.dumps(document).encode())) == 16
+    assert [r for r in caplog.records if r.name.endswith("signinkeys")] == []
 
 
 def test_the_first_of_two_keys_with_one_id_wins(signin_rsa_pool: list) -> None:
