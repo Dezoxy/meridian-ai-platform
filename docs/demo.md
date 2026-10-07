@@ -195,7 +195,12 @@ Reload the adjuster's queue: the claim is there, with the reason
 - **The proposal**: route `adjuster`, recommendation `approve`, payable
   EUR 4,500 (the claim less the policy's deductible), two citations of the
   policy wording by clause, and "Drafted by: no model call". The rules
-  needed no model here; an automatic approval stops at EUR 2,500.
+  needed no model here, and the row "Recommendation rests on" says so ("The
+  rules decided this recommendation; no model was asked"); where a model
+  was asked, that row says the recommendation rests on its reading. An
+  automatic approval stops at EUR 2,500. The claim's dates carry labels
+  ("as stated in the claim, not checked") and two gaps in days (S070:
+  tested in the page's own tests, not yet looked at on the cluster).
 - **The audit trail**: every row names the database role that wrote it.
   Each service has a role of its own, and the audit table takes inserts
   only.

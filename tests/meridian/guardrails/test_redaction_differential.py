@@ -14,8 +14,42 @@ shapes named in ``RESIDUAL_SHAPES``, each with one example. A shape outside the
 set fails the test. The set is the guard's price and is listed as residuals in
 ``redact``'s docstring.
 
+Every run of characters that the old matcher replaced and today's leaves a digit
+of is classified on its own, not only the first digit lost in a text: a text
+passes only when every one of its lost runs is a named shape, so a new leak in a
+later number cannot hide behind a named shape in an earlier one. The hits per
+shape are pinned (``PINNED_HITS``), so that a change of the matcher that moves a
+count without making a new shape fails too.
+
+One form of text is written apart, with a second seed (``_shared_prefix_text``):
+a national number whose last group is the "06" or "00" that begins the number
+after it, with an international number in front or not. The national pass reads
+the first through that group and the third loses its prefix (a leak of the pass
+itself, on ``main`` with no international number); the cut of an international
+span at a space (S070) fed it text the matcher before the cut did not, and the
+sweep over this form fails, with some 900 lost runs that fit no shape, when the
+cut is made there. It adds no lost run and moves no hit count today, because the
+reference leaves the same digits: only the two shared-leak counts move.
+
+The old first-digit rule hid, on ``main``, a leak that the strengthened sweep
+found (``test_a_known_leak_...``); nothing on this branch changed what the
+matcher does. The runs that fit no shape are an exact list
+(``KNOWN_UNNAMED_RUNS``), each with what it is.
+
+What this test cannot see: the reference is the matcher before the date guard,
+so a leak that BOTH matchers have is invisible to a differential (the plan's
+row counted 12,147 of 12,281 texts that leave a digit of an inserted number in
+the clear that leave it in the reference too, before the generator wrote the
+forms it lacked).
+Those are counted against the inserted digits that the generator knows, and the
+two counts are pinned (``PINNED_IN_THE_CLEAR`` and
+``PINNED_IN_THE_REFERENCE_TOO``) so that they cannot grow unseen. They are no
+failure; a leak of that kind is found by a test of the rule itself, not by this
+one.
+
 Every number is made up and passes the numbering plan by construction."""
 
+import functools
 import random
 import re
 from collections.abc import Callable
@@ -30,13 +64,14 @@ from meridian.platform.guardrails import hungarian, redact
 from meridian.platform.guardrails.redaction import PLACEHOLDERS
 
 TEXT_COUNT = 24_000
+SHARED_PREFIX_COUNT = 2_000
 SEED = 20261006
 
 # --- The generator ------------------------------------------------------------
 
 NO_BREAK_SPACE = chr(0xA0)
 SEPARATORS = ("", " ", "-", "/", ".", NO_BREAK_SPACE)
-PREFIXES = ("06", "0036", "00 36", "+36")
+PREFIXES = ("06", "0036", "00 36", "+36", "00.36", "00/36")
 BEFORE = (
     "",
     "x",
@@ -67,6 +102,13 @@ BEFORE = (
     "30 ",
     "6-",
     "12.",
+    # A date of three groups, then its separator: the guard reads one or two
+    # groups before a number, and never three.
+    "30.06.30.",
+    "30/06/30/",
+    "2026.06.30.",
+    "2026/06/30/",
+    "06.12.2026.",
 )
 JOINERS = ("", " ", "/", ".", "-", ", ", " / ", "; ", " vagy ", "x", " és ", "\n")
 GROUPS = (
@@ -177,9 +219,37 @@ def _text(generator: random.Random) -> Segments:
     return segments
 
 
+def _shared_prefix_text(generator: random.Random) -> Segments:
+    """A national number whose last group is "06" or "00" and is also the prefix
+    of the number after it ("06 20 765 43" and "06 20 123 4567" written
+    "06 20 765 43 06 20 123 4567"), with an international number in front or
+    not. The national pass reads the first number through that group, as a
+    number of the plan, and the third is left without its prefix."""
+    separator = generator.choice([" ", NO_BREAK_SPACE])
+    shared = generator.choice(["06", "00"])
+    code, tail = _valid_digits(generator)
+    second = [
+        generator.choice(["06", "0036", "00 36"]),
+        *_grouped(generator, code, tail[:-2]),
+    ]
+    code, tail = _valid_digits(generator)
+    prefix = ["06"] if shared == "06" else ["00", "36"]
+    third = [*prefix, *_grouped(generator, code, tail)]
+    segments: Segments = [("", False)]
+    if generator.random() < 0.5:  # an international number in front
+        code, tail = _valid_digits(generator)
+        first = separator.join(["+36", *_grouped(generator, code, tail)])
+        segments += [(first, True), (generator.choice([" ", NO_BREAK_SPACE]), False)]
+    segments += [(separator.join(second), True), (separator, False)]
+    return [*segments, (separator.join(third), True), ("", False)]
+
+
 def generated_texts() -> list[Segments]:
     generator = random.Random(SEED)  # noqa: S311 - a fixed seed, not a secret
-    return [_text(generator) for _ in range(TEXT_COUNT)]
+    texts = [_text(generator) for _ in range(TEXT_COUNT)]
+    # A second seed, so that the texts above are the ones they always were.
+    generator = random.Random(SEED + 1)  # noqa: S311 - a fixed seed, not a secret
+    return texts + [_shared_prefix_text(generator) for _ in range(SHARED_PREFIX_COUNT)]
 
 
 # --- What today's matcher left in the clear -----------------------------------
@@ -240,10 +310,19 @@ class Loss:
     old_survivors: frozenset[int]  # the offsets that the old matcher leaves
 
 
-def losses_of(segments: Segments) -> list[Loss]:
-    """One ``Loss`` for each way of reading the two outputs against the text,
-    or none when any reading shows no loss: where the layout is ambiguous a
-    loss is reported only if every reading has it."""
+@dataclass(frozen=True, slots=True)
+class Layout:
+    """A text read against the two outputs: the offsets of the digits of the
+    inserted numbers, and each way of laying today's survivors and the
+    reference's on the text (a pair of sets of offsets)."""
+
+    text: str
+    redacted: str
+    inserted: frozenset[int]
+    pairs: list[tuple[frozenset[int], frozenset[int]]]
+
+
+def layout_of(segments: Segments) -> Layout:
     text = "".join(piece for piece, _ in segments)
     redacted = redact(text).text
     today = surviving_options(text, redacted)
@@ -254,12 +333,33 @@ def losses_of(segments: Segments) -> list[Loss]:
         if is_number:
             inserted |= {at + i for i, char in enumerate(piece) if char.isdecimal()}
         at += len(piece)
+    pairs = [(t, o) for t in today for o in old]
+    return Layout(text, redacted, frozenset(inserted), pairs)
+
+
+def losses_in(layout: Layout) -> list[Loss]:
+    """One ``Loss`` for each way of reading the two outputs against the text,
+    or none when any reading shows no loss: where the layout is ambiguous a
+    loss is reported only if every reading has it."""
     readings = [
-        Loss(text, redacted, frozenset(inserted & (t - o)), t, o)
-        for t in today
-        for o in old
+        Loss(layout.text, layout.redacted, layout.inserted & (t - o), t, o)
+        for t, o in layout.pairs
     ]
     return readings if all(reading.digits for reading in readings) else []
+
+
+def losses_of(segments: Segments) -> list[Loss]:
+    return losses_in(layout_of(segments))
+
+
+def digits_in_the_clear(layout: Layout) -> tuple[bool, bool]:
+    """Whether today's ``redact`` leaves a digit of an inserted number in the
+    clear (in every reading of the layout), and whether the reference leaves a
+    digit in the clear that today's leaves too: a leak that no differential
+    can see."""
+    today = all(layout.inserted & t for t, _ in layout.pairs)
+    both = all(layout.inserted & t & o for t, o in layout.pairs)
+    return today, both
 
 
 def losses_of_text(text: str) -> list[Loss]:
@@ -276,6 +376,7 @@ def losses_of_text(text: str) -> list[Loss]:
 # matcher replaced, and today's leaves in part, begins.
 
 TAIL_GROUP = r"(?:(?:19|20)[0-9]{2}|[0-9]{1,2})"
+TAIL_WINDOW = 16  # three groups of a year and a separator are 15 characters
 LEAD_SEPARATORS = "".join(sorted(set(" ./-\t" + NO_BREAK_SPACE + chr(0x202F))))
 BUDAPEST_AS_DATE = re.compile(
     rf"\(?06([{re.escape(LEAD_SEPARATORS)}])(?:0[1-9]|1[0-2])\1(?:19|20)[0-9]{{2}}"
@@ -296,22 +397,23 @@ def _run_around(kept: frozenset[int], size: int, at: int) -> tuple[int, int]:
 
 def _after_date_tail(groups: int) -> Callable[[Loss, int], bool]:
     """A number that begins with 06, a dot or a slash, written with that one
-    separator, right after one group (``groups`` is 1) or two (2) of one or two
-    digits or a year, each with the same separator: it reads as the rest of a
-    date."""
+    separator, right after exactly one group (``groups`` is 1) or exactly two
+    (2) of one or two digits or a year, each with the same separator: it reads
+    as the rest of a date. After three groups it is a number: the guard reads
+    two, and a guard that read three would leave a loss that is no shape."""
 
     def shape(loss: Loss, start: int) -> bool:
         text = loss.text
         separator = text[start + 2 : start + 3]
         if text[start : start + 2] != "06" or separator not in (".", "/"):
             return False
-        window = text[max(0, start - 12) : start]
+        window = text[max(0, start - TAIL_WINDOW) : start]
 
         def after(count: int) -> bool:
             tail = (TAIL_GROUP + re.escape(separator)) * count
             return re.search(rf"(?<![0-9]){tail}\Z", window) is not None
 
-        return after(1) and not after(2) if groups == 1 else after(2)
+        return after(groups) and not after(groups + 1)
 
     return shape
 
@@ -344,10 +446,16 @@ def _number_from_the_month_of_a_date(loss: Loss, start: int) -> bool:
 def _international_run_on(loss: Loss, start: int) -> bool:
     """A national number that follows an international one with no slash and no
     dot between them (a space, a hyphen or nothing): the international span
-    (which takes ``.`` and ``/`` among its separators since F1r, and is cut
-    only at a slash or a dot) began before this number and ended inside it.
-    After a slash or a dot the span is cut at the second number, so a loss there
-    is a leak of its own and is no part of this shape."""
+    (which takes ``.`` and ``/`` among its separators since F1r) began before
+    this number and ended inside it. The span is cut at a slash or a dot before
+    "06" or "00", and (S070, row 886) at a space before "06" or "00" when the
+    number before it is a complete Hungarian one and the number after it is
+    taken: so what remains of this shape is a run-on that is not cut, in the
+    corpus always a first number that is no complete number of the numbering
+    plan (a foreign one, a wrong code or length: the generator ends some with a
+    group that reads as a year). After a slash or a dot the span is cut at the
+    second number, so a loss there is a leak of its own and is no part of this
+    shape."""
     text = loss.text
     if start < 2 or start in loss.survivors:
         return False
@@ -380,24 +488,72 @@ RESIDUAL_SHAPES = (
     ),
     Shape(
         "a number run on into by an international one",
-        "+36/83/701/902 00 36/73/48/9525",
+        "+36.53.861.9481999 00 36 20 159 1904",
         _international_run_on,
     ),
 )
 
 
-def _start_of(loss: Loss) -> int:
-    return _run_around(loss.old_survivors, len(loss.text), min(loss.digits))[0]
+def lost_runs(loss: Loss) -> list[tuple[int, int]]:
+    """Each run of characters that the old matcher replaced and in which
+    today's leaves a digit, as its offsets: a text may hold more than one, and
+    each is classified on its own."""
+    size = len(loss.text)
+    return sorted({_run_around(loss.old_survivors, size, at) for at in loss.digits})
 
 
-def shapes_of(readings: list[Loss]) -> list[str]:
-    """The names of the shapes that some reading of a loss belongs to, none for
-    a new one."""
-    return [
-        shape.name
-        for shape in RESIDUAL_SHAPES
-        if any(shape.holds(reading, _start_of(reading)) for reading in readings)
+def shapes_of(loss: Loss, start: int) -> list[str]:
+    """The names of the shapes that the lost run beginning at ``start`` fits,
+    none for a new one."""
+    return [shape.name for shape in RESIDUAL_SHAPES if shape.holds(loss, start)]
+
+
+def classify(readings: list[Loss]) -> tuple[Loss, dict[tuple[int, int], list[str]]]:
+    """The reading of a loss with the fewest runs that fit no shape, and each of
+    its runs with the shapes it fits. A text passes only if every run of some
+    reading is named: a leak in a later number of a text cannot hide behind a
+    named shape in an earlier one. Where the layout is ambiguous (a lone space
+    between two numbers) a reading that is no more than a way of laying the
+    output on the text gets the benefit of the doubt, as in ``losses_of``."""
+    classified = [
+        (reading, {run: shapes_of(reading, run[0]) for run in lost_runs(reading)})
+        for reading in readings
     ]
+    unnamed = [sum(not names for names in runs.values()) for _, runs in classified]
+    return classified[unnamed.index(min(unnamed))]
+
+
+# --- The sweep over the generated texts ----------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class Sweep:
+    hits: dict[str, int]  # lost runs that fit each named shape (a run may fit two)
+    new: list[tuple[str, str, str]]  # text, today's output, run that fits no shape
+    in_the_clear: int  # texts that leave a digit of an inserted number
+    in_the_reference_too: int  # of them, texts in which the reference leaves one too
+
+
+@functools.cache
+def sweep() -> Sweep:
+    hits = {shape.name: 0 for shape in RESIDUAL_SHAPES}
+    new: list[tuple[str, str, str]] = []
+    in_the_clear = in_the_reference_too = 0
+    for segments in generated_texts():
+        layout = layout_of(segments)
+        today, both = digits_in_the_clear(layout)
+        in_the_clear += today
+        in_the_reference_too += both
+        readings = losses_in(layout)
+        if not readings:
+            continue
+        loss, runs = classify(readings)
+        for (start, end), names in runs.items():
+            for name in names:
+                hits[name] += 1
+            if not names:
+                new.append((loss.text, loss.redacted, loss.text[start:end]))
+    return Sweep(hits, new, in_the_clear, in_the_reference_too)
 
 
 # --- The tests ------------------------------------------------------------------
@@ -411,6 +567,24 @@ def test_the_generator_makes_twenty_thousand_texts_of_two_or_three_numbers() -> 
     assert len(texts) >= 20_000
     assert set(counts) == {2, 3}
     assert generated_texts() == texts  # the same seed, the same texts
+
+
+def test_the_generator_writes_a_number_that_ends_in_the_prefix_of_the_next() -> None:
+    # The last texts (a second seed, so the others are what they were): a
+    # national number whose last group is the "06" or "00" that begins the
+    # number after it, with an international number in front in about half.
+    texts = generated_texts()[TEXT_COUNT:]
+
+    numbers = [[piece for piece, is_number in text if is_number] for text in texts]
+    completed = [
+        re.sub(r"\D", "", pieces[-2]) + re.sub(r"\D", "", pieces[-1])[:2]
+        for pieces in numbers
+    ]
+
+    assert len(texts) == SHARED_PREFIX_COUNT
+    assert all(hungarian.national_phone_holds(digits) for digits in completed)
+    assert {len(pieces) for pieces in numbers} == {2, 3}
+    assert {pieces[-1][:2] for pieces in numbers} == {"06", "00"}
 
 
 def test_the_reference_is_the_matcher_before_the_date_guard() -> None:
@@ -445,22 +619,170 @@ def test_a_lone_separator_between_two_replaced_spans_has_more_than_one_reading()
     assert frozenset({14}) in options  # the reading that is true
 
 
+def test_the_generator_writes_the_prefixes_and_the_dates_it_once_lacked() -> None:
+    texts = generated_texts()
+
+    numbers = [
+        piece for segments in texts for piece, is_number in segments if is_number
+    ]
+    befores = {segments[0][0] for segments in texts}
+
+    assert any(piece.lstrip("(").startswith("00.36") for piece in numbers)
+    assert any(piece.lstrip("(").startswith("00/36") for piece in numbers)
+    assert {"30.06.30.", "30/06/30/", "2026.06.30.", "2026/06/30/"} <= befores
+
+
+def test_a_text_with_two_lost_runs_is_classified_run_by_run() -> None:
+    # The old matcher replaced both numbers and left the space between them;
+    # today's leaves the first (it follows the "30." of a date) and the end of
+    # the second. The first run is a named shape, the second is none, and a
+    # text passes only when no run is left that fits none.
+    text = "30.06.30.8336.687 +36 30 123 4567"
+    survivors = frozenset(range(18)) | frozenset(range(29, 33))
+    old_survivors = frozenset({0, 1, 2, 17})  # the date's "30." and the space
+    lost = frozenset(at for at in survivors - old_survivors if text[at].isdecimal())
+    loss = Loss(text, "", lost, survivors, old_survivors)
+
+    _, runs = classify([loss])
+
+    assert list(runs.values()) == [["a number after one date group"], []]
+
+
+def test_a_number_after_a_date_hides_no_leak_in_the_numbers_after_it() -> None:
+    # The review's text: the first number is left as the rest of a date, the
+    # second and the third are replaced. A mutation of the matcher that brings
+    # back the parenthesised second number leaves the third's digits in the
+    # clear, in a run of its own.
+    segments: Segments = [
+        ("30.", False),
+        ("06.30.8336.687", True),
+        (" ", False),
+        ("+36 30 123 4567", True),
+        ("/", False),
+        ("(06) 20 765 4321", True),
+        ("", False),
+    ]
+
+    readings = losses_of(segments)
+    loss, runs = classify(readings)
+
+    assert redact(loss.text).text == "30.06.30.8336.687 [phone]/[phone]"
+    assert list(runs.values()) == [["a number after one date group"]]
+
+
+# The lost runs that fit no named shape and are known, each as the text, today's
+# output and the run: the strengthened sweep found them, and nothing on this
+# branch changed what the matcher does (the same matcher is on ``main``, where
+# the first-digit rule hid them). The list is EXACT: the sweep passes only if its
+# unnamed runs are these and no others, not a subset and not a superset, and the
+# count is pinned beside it. A fourth entry is a new leak and is no entry to add
+# without a decision; a fix of one removes its entry in the same change.
+KNOWN_UNNAMED_RUNS = [
+    # A LEAK, open. A date-tail guard refuses the first number (it follows
+    # "2."), the rescan's candidate inside it ends by taking the next number's
+    # prefix ("00 36"), and the rest of the second number stays visible. Not
+    # fixed in this step; a backlog row and T-73 carry it. The same mechanism as
+    # ``test_a_known_leak_...`` below, whose text the reseeded corpus no longer
+    # makes.
+    (
+        "2.06.85.068.489/00 36.2050.641.88/06",
+        "2.06.85.[phone].2050.641.88/06",
+        "00 36.2050.641.88",
+    ),
+    # A LEAK, open: the text that row 886 was written about. The international
+    # span runs on at a space into the second number, and what is left of it,
+    # with the "(00 36)" of the third, forms a number after a slash. The cut of
+    # an international span at a space turned it; the narrowing of that cut gives
+    # it back, because a token inside the second number ("0619 45/(00 36)")
+    # reads as a Budapest number that reaches beyond the second number's end, and
+    # the condition cannot tell that overlapping reading from a real third
+    # number. Fixing it needs the overlapping reading told apart, which is not
+    # built. The same text is a row of ``GREEDY_NATIONAL_READING`` in
+    # ``test_redaction_international_cut.py``.
+    (
+        "Tel: +36.62.7320.12 00 36 69 0619 45/(00 36).92.803.020.",
+        "Tel: [phone] [phone].92.803.020.",
+        "(00 36).92.803.020",
+    ),
+    # Not a regression: digits glued to an "x", which the old matcher hid only
+    # by an accidental span across two numbers. Both matchers leave
+    # "06/83/7819 64x" alone. An exception, not a leak to fix.
+    (
+        "06.12.2026 00.36.42.06.5633.06/83/7819\xa064x00 36/95/9620/86-1",
+        "06.12.2026 [phone].06/83/7819\xa064x00 36/95/9620/86-1",
+        "06.5633.06/83",
+    ),
+]
+PINNED_UNNAMED_RUNS = 3
+
+
 def test_every_digit_the_old_matcher_hid_stays_hidden_but_in_the_named_shapes() -> None:
-    hits = {shape.name: 0 for shape in RESIDUAL_SHAPES}
-    new = []
+    # Every lost run of every text, not only the first digit lost: a text that
+    # holds a named shape and a new leak fails, and the message lists them all.
+    new = sweep().new
 
-    for segments in generated_texts():
-        readings = losses_of(segments)
-        if not readings:
-            continue
-        names = shapes_of(readings)
-        for name in names:
-            hits[name] += 1
-        if not names:
-            new.append((readings[0].text, readings[0].redacted))
+    assert sorted(new) == sorted(KNOWN_UNNAMED_RUNS), (
+        f"{len(new)} lost runs fit no shape:\n"
+        + "\n".join(
+            f"{text!r} -> {redacted!r}, the run {run!r}" for text, redacted, run in new
+        )
+    )
+    assert len(new) == PINNED_UNNAMED_RUNS
 
-    assert new == []
-    assert [name for name, count in hits.items() if not count] == []
+
+def test_a_known_leak_a_refused_date_tail_lets_the_next_number_be_cut_short() -> None:
+    # A LEAK, open, pinned so that nobody reads it as wanted behaviour: the same
+    # mechanism as the first entry of ``KNOWN_UNNAMED_RUNS``. The date-tail guard
+    # refuses "06/80/..." after "2026/", the rescan's candidate begins inside it
+    # ("0624/98") and takes "(0036)" with it, and "69/062/772" of the second
+    # number stays. The old first-digit rule hid it on ``main`` behind the
+    # named shape of the first number. Not fixed in this step.
+    text = "2026/06/80/0624/98.(0036)/69/062/772/12"
+    without_the_date = "06/80/0624/98.(0036)/69/062/772/12"
+    without_the_lead = "06.85.068.489/00 36.2050.641.88"
+
+    assert redact(text).text == "2026/06/80/[phone]/69/062/772/12"
+    # The controls: with no date before the first number both are hidden.
+    assert redact(without_the_date).text == "[phone].[phone]/12"
+    assert redact(without_the_lead).text == "[phone]/[phone]"
+    # And the entry's text, with the lead that makes the guard refuse.
+    assert redact("2." + without_the_lead + "/06").text == (
+        "2.06.85.[phone].2050.641.88/06"
+    )
+
+
+# A change of one of these numbers is a change of the matcher, and is made on
+# purpose, with the matcher, in the pull request that changes it: a mutation of
+# the date guard, or of how a number is cut, moves a count without making a new
+# shape, and only the count shows it. Each count is the lost runs of the
+# corpus that fit the shape (``Sweep.hits``).
+PINNED_HITS = {
+    "a number after one date group": 176,
+    "a number after two date groups": 40,
+    "a Budapest number written as a date": 152,
+    "a mobile number that starts at the month of a date": 7,
+    "a number run on into by an international one": 11,
+}
+# The texts that leave a digit of an inserted number in the clear, and of them
+# the texts in which the reference leaves one too: the leaks no differential
+# finds, since both matchers have them. They are pinned so that they cannot
+# grow unseen; they are no failure (the generator makes numbers glued to
+# letters and digits that are no number, and the matcher is not asked to hide
+# them), and the row of the plan that counted them had 12,281 and 12,147 of
+# 24,000 texts before the generator wrote the forms it lacks.
+PINNED_IN_THE_CLEAR = 13_965
+PINNED_IN_THE_REFERENCE_TOO = 13_829
+
+
+def test_the_hits_of_each_named_shape_are_pinned() -> None:
+    assert sweep().hits == PINNED_HITS
+
+
+def test_the_leaks_that_the_reference_has_too_are_pinned() -> None:
+    result = sweep()
+
+    assert result.in_the_clear == PINNED_IN_THE_CLEAR
+    assert result.in_the_reference_too == PINNED_IN_THE_REFERENCE_TOO
 
 
 @pytest.mark.parametrize("shape", RESIDUAL_SHAPES, ids=lambda shape: shape.name)
@@ -470,4 +792,10 @@ def test_each_named_shape_has_an_example_that_the_old_matcher_hid_and_today_leav
     readings = losses_of_text(shape.example)
 
     assert readings, shape.example
-    assert shape.name in shapes_of(readings)
+    names = {
+        name
+        for reading in readings
+        for start, _ in lost_runs(reading)
+        for name in shapes_of(reading, start)
+    }
+    assert shape.name in names

@@ -46,6 +46,34 @@ UnavailableBecause = Literal[
 INJECTION_SUSPECTED: Final = "injection-suspected"
 # The model said something about the exclusions, in its own words.
 ASSESSED = ("none_applies", "applies")
+RestsOn = Literal["model", "rules", "neither"]
+# What the adjuster's pages say of a recommendation, in one place (S070): the
+# sentence beside it on the claim's page and the marker in the queue's column.
+# Fixed words, no stored value; neither names the claimant or the prompt.
+RESTS_ON_NOTES: Final = {
+    "model": (
+        "This recommendation rests on a model's reading of the policy's "
+        "exclusion clauses and is not the rules' alone; check it against the "
+        "policy's wording."
+    ),
+    "rules": "The rules decided this recommendation; no model was asked.",
+}
+RESTS_ON_MARKS: Final = {"model": "model reading", "rules": "rules only"}
+
+
+def recommendation_rests_on(
+    recommendation: str | None, assessment: str | None
+) -> RestsOn:
+    """What a stored recommendation rests on, from the two fields that say so:
+    ``model`` when the model answered about the exclusions, ``rules`` when no
+    assessment was needed, ``neither`` when there is no recommendation to mark
+    or the assessment was unavailable. Any other value, such as a field a row
+    stored before this change lacks, is ``neither``: it never raises."""
+    if recommendation not in ("approve", "reject"):
+        return "neither"
+    if assessment in ASSESSED:
+        return "model"
+    return "rules" if assessment == "not_needed" else "neither"
 
 
 class Citation(WireModel):
