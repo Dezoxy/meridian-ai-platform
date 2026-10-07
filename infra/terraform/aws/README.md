@@ -300,7 +300,7 @@ a session from doing by reflex what only the owner should do:
 - **Denied:** `make aws-destroy` and `aws.sh destroy` in the usual runner
   forms (`bash`, a path, `cd … &&`, `bash -c`, `env`, `time`, `gmake`; not a
   variable or stdin that holds the target); the wrapper or its targets with a
-  pseudo-terminal tool starting a command, traced (`bash -x`, `set -x`) or
+  pseudo-terminal tool named beside it, traced (`bash -x`, `set -x`) or
   with `BASH_ENV`, `ENV`, `SHELLOPTS`, `BASH_XTRACEFD` or `PS4`; a `TF_*` or
   `AWS_ENDPOINT_URL*` assignment in front of `terraform`, `tofu`, `aws`, the
   wrapper or a target (this reaches the Azure foundation's commands too);
@@ -312,8 +312,10 @@ a session from doing by reflex what only the owner should do:
   `rds generate-db-auth-token`, `sso get-role-credentials`); readers of the
   local file, the state, the plan and its record, the AWS configuration and
   `.tfvars`; and writes to `~/.terraformrc`, `~/.gitconfig`, `~/.aws`,
-  `.terraform/environment` and `aws.tfplan*`. A search for a word is not a
-  use of it: the quoted pattern of `grep`, `rg` and the like is not read.
+  `.terraform/environment` and `aws.tfplan*`. The guard reads a quoted word as
+  a use of what it names (a search, an `echo`): search with the Grep tool, and
+  write a commit message or a pull request body to a file; a message given
+  with `-m` or `--body` is the one thing it blanks.
 - **Asked:** `make aws-plan` and `make aws-apply` (the apply's text says it
   costs money and that the owner runs it from where no session holds the
   credentials); `terraform` or `tofu` `plan`, `show`, `output`, `console`,
@@ -342,7 +344,11 @@ a session from doing by reflex what only the owner should do:
   harness's working directory follows a `cd` is not verified); the bare `Grep`
   and `Glob` tools against the settings' `Read` denies, and the settings' `./`
   patterns for a file reached by an absolute path from another checkout (neither
-  verified).
+  verified); the second tool's bare `state rm`, `import` and `force-unlock`;
+  `gh … -b`, `-t` and `--subject` (not blanked as `--body` is); a working
+  directory that reaches this one only through `..` or a link; and the two
+  generic rules for `terraform destroy` and `tofu destroy`, which read the whole
+  command, so a message that names either is denied (write it to a file).
 
 None of that is a boundary. A session that holds credentials reaches the same
 calls by a variable, a quote inside a word, a script file, `python3`, `uv` or a

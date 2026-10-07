@@ -2,7 +2,18 @@
 # Regression test for .claude/hooks/guard-bash.sh. Each line of
 # guard-bash-cases.jsonl carries a sample command and the expected decision
 # (deny, ask or none), and may carry the working directory the harness passes
-# in its input ("cwd"; a line without one is as before). Run: bash tests/test_guard_bash.sh
+# in its input ("cwd"; a line without one is as before) and a "note" that the
+# runner does not read. Run: bash tests/test_guard_bash.sh
+#
+# The rows whose note says "false alarm by design" are searches (grep, rg and
+# the like with a quoted word) and a pseudo-terminal word near the wrapper's
+# name that the guard denies or asks about though they do not use what they
+# name: the guard reads a quoted word as a use of it (a search, an echo, a
+# commit message is the exception that is blanked). Search with the Grep tool.
+# A try at emptying a search's quoted pattern (S036 T3b) was taken out because
+# it hid a command substitution, a fake grep inside a literal and a file operand
+# after -e or -f; the rows marked "finding N" hold those and the other cases the
+# second security pass found.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 hook="$here/../.claude/hooks/guard-bash.sh"

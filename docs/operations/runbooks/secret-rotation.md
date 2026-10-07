@@ -388,26 +388,28 @@ script file, `python3`, `uv` or a container. The barrier is where the
 credentials are, a machine or an operating-system user where no session runs
 and no credential file is readable by one
 (`infra/terraform/aws/README.md`, "What stops a session, and what does
-not"). The rules read the command with prose blanked, so a commit message or
-a pull request body that names one passes. A search for a word is not a use
-of it: the quoted pattern of `grep`, `egrep`, `fgrep`, `rg`, `ag` and `git
-grep` (the first word after its options, when it is quoted) is not read as a
-path or as a command, and the files after it still are (`grep "x"
-~/.aws/credentials` is denied). An `echo` that names a command is denied.
+not"). The rules read the command with prose blanked, so a commit message
+(`-m`, `--message`) or a pull request body (`--body`) that names one passes.
+Nothing else is blanked: the guard reads a quoted word as a use of what it
+names (a search, an `echo`, a commit message given with `-b`, `-t` or
+`--subject`), so search with the Grep tool and write a message to a file.
+The searches and pseudo-terminal rows marked "false alarm by design" in
+`tests/guard-bash-cases.jsonl` hold this.
 
 Denied:
 
 - `make aws-destroy` and `infra/terraform/aws.sh destroy`, in the runner
   forms the Azure rules read (`bash`, `./`, a path, after `cd … &&`, in
-  `bash -c`, behind `env`, `time`, `xargs` before the script, `gmake`). Not
-  read: a variable or stdin that holds the target (`for t in aws-destroy; do
-  make $t; done`, `echo aws-destroy | xargs make`);
-- `aws.sh` or `make aws-plan|apply|destroy` in a command where a
+  `bash -c`, behind `env`, `time`, `xargs` before the script, `gmake`; a
+  backtick after the target ends it). Not read: a variable or stdin that holds
+  the target (`for t in aws-destroy; do make $t; done`,
+  `echo aws-destroy | xargs make`);
+- `aws.sh` or `make aws-plan|apply|destroy` in a command that also names a
   pseudo-terminal tool (`script`, `unbuffer`, `expect`, `socat`, `setsid`,
-  `pty`) starts a command (after `VAR=value`, `sudo`, `env`, a separator, a
-  bracket or a quote; `python3 -c` that names `pty` too), because the
-  wrapper's terminal check is `[[ -t 0 ]]` and a pseudo-terminal passes it.
-  The word elsewhere (`grep -n script infra/terraform/aws.sh`) passes;
+  `pty`) anywhere, because the wrapper's terminal check is `[[ -t 0 ]]` and a
+  pseudo-terminal passes it. A search for the word in the wrapper
+  (`grep -n script infra/terraform/aws.sh`) is denied too, a false alarm by
+  design;
 - `aws.sh` or `make aws-*` run traced (`bash -x`, `-v`, `-xv`, `-o xtrace`,
   `sh -x`, `set -x`, `set -o xtrace`) or with `SHELLOPTS=`, `BASH_XTRACEFD=`,
   `BASH_ENV=`, `ENV=` or `PS4=` set, which print what the script keeps out of
@@ -423,8 +425,10 @@ Denied:
   under it. Whether that `cwd` follows a `cd` made by an earlier Bash call is
   not verified, so a `cd` in one call and `terraform apply` in the next may
   pass. The verbs are `apply`, `destroy`, `plan -out`, `import`,
-  `state mv|rm|push`, `force-unlock` and `workspace new|delete|select` of any
-  name but `default`; `validate`, `fmt` and `init -backend=false` pass. A bare
+  `state mv|rm|push`, `force-unlock` and `workspace new|delete|select` of
+  another name than `default` (`default2`, `defaults`, `default-prod` and
+  `default_x` are other names); `validate`, `fmt` and `init -backend=false`
+  pass. A bare
   `tofu destroy` is denied as `terraform destroy` is, and a bare `tofu apply`
   asks as `terraform apply` does;
 - the `aws` CLI (also the `amazon/aws-cli` image and `uvx --from awscli aws`)
@@ -457,8 +461,9 @@ Asked:
 - `terraform` or `tofu` where the module is (as above, the same command or
   the `cwd`) with `plan` (it signs in with the owner's credentials), `show`,
   `output`, `console`, `refresh`, `state list|show|pull` and
-  `workspace select default` (the README's way back to the default workspace;
-  `workspace show` asks too, as a `show`), and `-auto-approve` anywhere. The
+  `workspace select default` (the README's way back to the default workspace,
+  also with two blanks or a quoted `"default"`; `workspace show` asks too, as a
+  `show`), and `-auto-approve` anywhere. The
   Azure foundation's `terraform output`, `state list` and `plan` pass, as
   before. The settings add an ask for the bare `terraform plan` and for `-chdir`
   into the module, which holds in Claude Code only (Codex reads no settings;
@@ -466,8 +471,12 @@ Asked:
 - any `aws` call whose operation is not on the read list: `describe-*`,
   `list-*`, `sts get-caller-identity`, `help`, `--version`, `sso login` and
   `logout`, `configure list` and `get`, `s3 ls` and the `ssm get-parameter`
-  family (S075's cases pass those; `--with-decryption` is denied). The `get-*`
-  operations other than those ask, on purpose (fail closed). `aws` is read
+  family (S075's cases pass those). S075 denies `--with-decryption` and asks
+  for `configure get` of a secret key or a token when they are typed plain;
+  the quotes are stripped here, so `aws "ssm" get-parameter --with-decryption`
+  and `aws "configure" "get" aws_secret_access_key` are not listed reads and
+  ask. The `get-*` operations other than those ask, on purpose (fail
+  closed). `aws` is read
   where a command starts, after `VAR=value`, `env`, `time`, `nohup`, `exec`,
   `command`, `sudo`, `nice` or `xargs` (each with no option of its own), `if`,
   `do`, a bracket or a quote, in the `amazon/aws-cli` image and after `uvx
@@ -524,9 +533,20 @@ guard for habits, and the barrier is where the credentials are):
   session's directory, and whether they match a file reached by an absolute
   path from another checkout is not verified; Codex reads no settings and runs
   this hook through `.codex/hooks`, a link to `.claude/hooks`.
-- `echo "make aws-destroy"` is denied as a mention (an `echo` is not a search
-  tool), and so is a search whose pattern is not quoted when it holds the
-  command's words (`grep -n make aws-destroy Makefile`).
+- The two generic rules for the removal verb (`terraform` and `tofu` followed
+  by `destroy`, and by `apply` for the ask) read the whole command, not the
+  command with prose blanked: a commit message or a pull request body that
+  names `terraform destroy` or `tofu destroy` is denied for both tools (write
+  the message to a file and pass the file).
+- The second tool's bare state-surgery verbs (`tofu state rm`, `import`,
+  `force-unlock`) answer none where `terraform`'s ask, unless the module is
+  named or is the working directory.
+- `gh … -b`, `-t` and `gh pr merge --subject` are not blanked as `--body` and
+  `--title` are, so a body given with `-b` that names `make aws-destroy` is
+  denied.
+- A working directory that reaches the module only through `..` or a link
+  (`…/foundation/../aws`) is not seen; one that ends in `/..` counts as the
+  module, and fails closed.
 
 Timeouts. A hook that runs past its timeout does not block the call, so
 the guard cannot be allowed to run long. The bounds below do not prevent

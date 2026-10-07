@@ -547,24 +547,24 @@
 {"expect":"none","command":"aws \"ec2\" describe-instances"}
 {"expect":"none","command":"aws ec2 'describe-instances'"}
 {"expect":"none","command":"aws \"sts\" \"get-caller-identity\""}
-{"expect":"none","command":"grep -rn \"local.env\" docs"}
-{"expect":"none","command":"grep -rn \"aws.tfplan\" Makefile infra"}
-{"expect":"none","command":"grep -rn \"meridian-aws\" docs infra"}
-{"expect":"none","command":"grep -rn \".aws\" docs"}
-{"expect":"none","command":"grep -n '\\.tfstate' .gitignore"}
-{"expect":"none","command":"grep -rn \"aws iam\" docs"}
+{"expect":"deny","note":"false alarm by design: a search for a word is read as a use of it; search with the Grep tool","command":"grep -rn \"local.env\" docs"}
+{"expect":"deny","note":"false alarm by design: a search for a word is read as a use of it; search with the Grep tool","command":"grep -rn \"aws.tfplan\" Makefile infra"}
+{"expect":"deny","note":"false alarm by design: a search for a word is read as a use of it; search with the Grep tool","command":"grep -rn \"meridian-aws\" docs infra"}
+{"expect":"deny","note":"false alarm by design: a search for a word is read as a use of it; search with the Grep tool","command":"grep -rn \".aws\" docs"}
+{"expect":"deny","note":"false alarm by design: a search for a word is read as a use of it; search with the Grep tool","command":"grep -n '\\.tfstate' .gitignore"}
+{"expect":"ask","note":"false alarm by design: a search for a word is read as a use of it; search with the Grep tool","command":"grep -rn \"aws iam\" docs"}
 {"expect":"none","command":"grep -rn --include='*.md' \"tfstate\" docs"}
-{"expect":"none","command":"grep -rn -i \"local.env\" docs"}
-{"expect":"none","command":"rg \"aws \" docs"}
-{"expect":"none","command":"git grep -n \"aws ec2\""}
-{"expect":"none","command":"egrep -rn 'aws (ec2|s3)' docs"}
-{"expect":"none","command":"fgrep -n \"make aws-apply\" Makefile"}
+{"expect":"deny","note":"false alarm by design: a search for a word is read as a use of it; search with the Grep tool","command":"grep -rn -i \"local.env\" docs"}
+{"expect":"ask","note":"false alarm by design: a search for a word is read as a use of it; search with the Grep tool","command":"rg \"aws \" docs"}
+{"expect":"ask","note":"false alarm by design: a search for a word is read as a use of it; search with the Grep tool","command":"git grep -n \"aws ec2\""}
+{"expect":"ask","note":"false alarm by design: a search for a word is read as a use of it; search with the Grep tool","command":"egrep -rn 'aws (ec2|s3)' docs"}
+{"expect":"ask","note":"false alarm by design: a search for a word is read as a use of it; search with the Grep tool","command":"fgrep -n \"make aws-apply\" Makefile"}
 {"expect":"none","command":"ag \"kms decrypt\" docs"}
 {"expect":"none","command":"cd docs && grep -rn \"aws-destroy\" ."}
-{"expect":"none","command":"grep -n script infra/terraform/aws.sh"}
-{"expect":"none","command":"grep -n expect infra/terraform/aws.sh"}
-{"expect":"none","command":"grep -n \"script\" infra/terraform/aws.sh"}
-{"expect":"none","command":"echo script infra/terraform/aws.sh"}
+{"expect":"deny","note":"false alarm by design: the pseudo-terminal words are read anywhere in a command that names the wrapper","command":"grep -n script infra/terraform/aws.sh"}
+{"expect":"deny","note":"false alarm by design: the pseudo-terminal words are read anywhere in a command that names the wrapper","command":"grep -n expect infra/terraform/aws.sh"}
+{"expect":"deny","note":"false alarm by design: the pseudo-terminal words are read anywhere in a command that names the wrapper","command":"grep -n \"script\" infra/terraform/aws.sh"}
+{"expect":"deny","note":"false alarm by design: the pseudo-terminal words are read anywhere in a command that names the wrapper","command":"echo script infra/terraform/aws.sh"}
 {"expect":"none","command":"grep -rn aws docs"}
 {"expect":"deny","command":"grep x ~/.aws/credentials"}
 {"expect":"deny","command":"grep \"x\" ~/.aws/credentials"}
@@ -580,6 +580,55 @@
 {"expect":"deny","command":"X=1 expect -c 'spawn make aws-plan'"}
 {"expect":"deny","command":"bash -c \"unbuffer make aws-plan\""}
 {"expect":"deny","command":"python3 -c \"import pty; x = pty.spawn(['make', 'aws-apply'])\""}
+{"expect":"deny","note":"finding 1: a command substitution in a search pattern runs","command":"grep \"$(make aws-destroy)\" f"}
+{"expect":"deny","note":"finding 1","command":"grep \"x$(make aws-destroy)y\" f"}
+{"expect":"deny","note":"finding 1","command":"grep \"$(cat ~/.aws/credentials)\" f"}
+{"expect":"deny","note":"finding 1","command":"rg \"$(make aws-destroy)\" f"}
+{"expect":"deny","note":"finding 1","command":"git grep \"$(make aws-destroy)\""}
+{"expect":"deny","note":"finding 2: a fake grep inside a literal hides the next real command","command":"echo ';grep \"'; make aws-destroy; echo '\"'"}
+{"expect":"deny","note":"finding 2","command":"echo ';grep \"'; aws iam delete-user --user-name stand-in; echo '\"'"}
+{"expect":"deny","note":"finding 2","command":"echo ';grep \"'; cat ~/.aws/credentials; echo '\"'"}
+{"expect":"deny","note":"finding 2","command":"echo ';grep \"'; infra/terraform/aws.sh destroy; echo '\"'"}
+{"expect":"ask","note":"finding 2","command":"echo '|rg \"'; make aws-apply; echo '\"'"}
+{"expect":"deny","note":"finding 3: a file operand after -e or -f","command":"grep --regexp=aws \"$HOME/.aws/credentials\""}
+{"expect":"deny","note":"finding 3","command":"grep -eaws \"$HOME/.aws/credentials\""}
+{"expect":"deny","note":"finding 3","command":"rg -eaws \"$HOME/.aws/credentials\""}
+{"expect":"deny","note":"finding 3","command":"grep -f \"$HOME/.aws/credentials\" x"}
+{"expect":"deny","note":"finding 3","command":"grep --regexp=x \"infra/terraform/local.env-aws\""}
+{"expect":"deny","note":"finding 5: a wrapper with an option before a pseudo-terminal tool","command":"timeout 9 script -qc \"make aws-apply\" /dev/null"}
+{"expect":"deny","note":"finding 5","command":"nice script -qc \"make aws-apply\" /dev/null"}
+{"expect":"deny","note":"finding 5","command":"sudo -u stand-in script -qc \"make aws-apply\" /dev/null"}
+{"expect":"deny","note":"finding 5","command":"stdbuf -o0 script -qc \"make aws-apply\" /dev/null"}
+{"expect":"deny","note":"finding 5","command":"timeout 5 unbuffer make aws-plan"}
+{"expect":"ask","note":"finding 4: a quoted ssm get-parameter with --with-decryption is not a listed read","command":"aws \"ssm\" \"get-parameter\" --name x --with-decryption"}
+{"expect":"ask","note":"finding 4","command":"aws \"ssm\" get-parameter --name x --with-decryption"}
+{"expect":"ask","note":"finding 4","command":"aws ssm \"get-parameter\" --name x --with-decryption"}
+{"expect":"ask","note":"finding 4","command":"aws ssm get-parameter --name x \"--with-decryption\""}
+{"expect":"ask","note":"finding 4: a quoted configure get of a secret or a token","command":"aws \"configure\" \"get\" aws_secret_access_key"}
+{"expect":"ask","note":"finding 4","command":"aws configure get \"aws_session_token\""}
+{"expect":"ask","note":"finding 4","command":"aws --profile stand-in configure get aws_secret_access_key"}
+{"expect":"deny","note":"finding 4, the unquoted twin (S075)","command":"aws ssm get-parameter --name x --with-decryption"}
+{"expect":"ask","note":"finding 4, the unquoted twin (S075)","command":"aws configure get aws_secret_access_key"}
+{"expect":"none","note":"finding 4, both ways","command":"aws \"ssm\" get-parameter --name x"}
+{"expect":"none","note":"finding 4, both ways","command":"aws \"configure\" \"get\" region"}
+{"expect":"none","note":"finding 4, both ways","command":"aws ssm get-parameter --name x --no-with-decryption"}
+{"expect":"deny","note":"finding 6: default followed by more is another name","command":"terraform -chdir=infra/terraform/aws workspace select default2"}
+{"expect":"deny","note":"finding 6","command":"terraform -chdir=infra/terraform/aws workspace select defaults"}
+{"expect":"deny","note":"finding 6","command":"terraform -chdir=infra/terraform/aws workspace select default-prod"}
+{"expect":"deny","note":"finding 6","command":"terraform -chdir=infra/terraform/aws workspace select default_x"}
+{"expect":"deny","note":"finding 6","command":"terraform -chdir=infra/terraform/aws workspace select defaultx"}
+{"expect":"deny","note":"finding 6","command":"tofu -chdir=infra/terraform/aws workspace select default2"}
+{"expect":"deny","note":"finding 6","command":"terraform -chdir=infra/terraform/aws workspace select default; terraform -chdir=infra/terraform/aws workspace select default2"}
+{"expect":"deny","note":"finding 6","command":"terraform -chdir=infra/terraform/aws workspace select default2; terraform -chdir=infra/terraform/aws workspace select default"}
+{"expect":"ask","note":"finding 6 and 12: two blanks and a quoted default ask as the plain form does","command":"terraform -chdir=infra/terraform/aws workspace select  default"}
+{"expect":"ask","note":"finding 12","command":"terraform -chdir=infra/terraform/aws workspace select \"default\""}
+{"expect":"ask","note":"finding 12","command":"terraform -chdir=infra/terraform/aws workspace select 'default'"}
+{"expect":"ask","note":"finding 6, both ways","command":"terraform -chdir=infra/terraform/aws workspace select default && echo done"}
+{"expect":"deny","note":"finding 7: a backtick ends a target","command":"`make aws-destroy`"}
+{"expect":"deny","note":"finding 7","command":"x=`infra/terraform/aws.sh destroy`"}
+{"expect":"ask","note":"finding 7","command":"`make aws-apply`"}
+{"expect":"ask","note":"finding 7","command":"echo `make aws-plan`"}
+{"expect":"ask","note":"finding 7","command":"x=`infra/terraform/aws.sh apply`"}
 {"expect":"deny","command":"grep -n x infra/terraform/aws/.terraform/terraform.tfstate"}
 {"expect":"deny","command":"echo \"make aws-destroy\""}
 {"expect":"deny","command":"git commit -m x && make aws-destroy"}
