@@ -5,7 +5,8 @@
 and never applied here. Each test reads the ``.tf`` files, as the managed
 module's tests (``test_aws_script.py``) do, and the validations of ``variables.tf``
 are run through ``terraform console`` on a scratch copy, which needs no provider
-and no account (skipped where Terraform is not installed).
+and no account (skipped where Terraform is not installed, failed under
+``GITHUB_ACTIONS=true``: the python workflow installs it).
 """
 
 import os
@@ -16,6 +17,7 @@ from pathlib import Path
 
 import pytest
 from servicesupport import REPO_ROOT
+from terraformsupport import needs_terraform
 
 MODULE_DIR = REPO_ROOT / "infra" / "terraform" / "aws-kubeadm"
 MANAGED_DIR = REPO_ROOT / "infra" / "terraform" / "aws"
@@ -252,9 +254,6 @@ def test_the_region_list_is_the_managed_modules_and_so_is_the_cidr_validation() 
 
 # What `terraform console` says of each value: the validations run when it
 # starts, with no provider and no account.
-needs_terraform = pytest.mark.skipif(
-    shutil.which("terraform") is None, reason="terraform is not installed"
-)
 VALID = {
     "budget_email": EMAIL,
     "api_access_cidr": ENDPOINT,

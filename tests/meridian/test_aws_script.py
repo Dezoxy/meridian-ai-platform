@@ -31,6 +31,7 @@ from pathlib import Path
 
 import pytest
 from servicesupport import REPO_ROOT
+from terraformsupport import needs_terraform
 
 TERRAFORM_DIR = REPO_ROOT / "infra" / "terraform"
 PINNED = "111111111111"
@@ -2822,10 +2823,8 @@ def test_the_module_keeps_its_state_out_of_its_own_directory() -> None:
 
 # What `terraform console` says of each value: the validations run when it
 # starts, with no provider and no account. Skipped where Terraform is not
-# installed (the pipeline has none yet, S022).
-needs_terraform = pytest.mark.skipif(
-    shutil.which("terraform") is None, reason="terraform is not installed"
-)
+# installed, and failed under GITHUB_ACTIONS=true (``terraformsupport``): the
+# python workflow installs it.
 VALID = {
     "budget_email": BUDGET_EMAIL,
     "api_access_cidr": ENDPOINT_CIDR,

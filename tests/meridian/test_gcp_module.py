@@ -9,10 +9,11 @@ the only proof there is, and each test is named for the sentence it holds.
 held on the text alone: its data source, its comparison, its message and the
 ``depends_on`` line of every resource. The variables' validations do run, in
 ``terraform console`` on a scratch copy of ``variables.tf`` with no provider and
-no project, skipped where Terraform is not installed (the pipeline has none
-yet). Every project number, billing account and address here is made up: twelve
-identical digits, the documentation's own shape with zeros, ``example-project``
-and a documentation address.
+no project, skipped where Terraform is not installed and failed under
+``GITHUB_ACTIONS=true`` (the python workflow installs it). Every project
+number, billing account and address here is made up: twelve identical digits,
+the documentation's own shape with zeros, ``example-project`` and a
+documentation address.
 """
 
 import os
@@ -23,6 +24,7 @@ from pathlib import Path
 
 import pytest
 from servicesupport import REPO_ROOT
+from terraformsupport import needs_terraform
 
 MODULE_DIR = REPO_ROOT / "infra" / "terraform" / "gcp"
 VARIABLES = MODULE_DIR / "variables.tf"
@@ -1246,9 +1248,6 @@ def test_the_directory_has_a_readme_that_says_what_it_is() -> None:
 
 # ── the validations, run by terraform console ────────────────────────────────
 
-needs_terraform = pytest.mark.skipif(
-    shutil.which("terraform") is None, reason="terraform is not installed"
-)
 VALID = {
     "project_id": PROJECT_ID,
     "expected_project_number": PROJECT_NUMBER,

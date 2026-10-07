@@ -20,6 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG = ROOT / ".github" / "renovate.json"
 WORKFLOW = ".github/workflows/docs.yml"
+PYTHON_WORKFLOW = ".github/workflows/python.yml"
 PINS = "infra/kind/pins.env"
 
 # Per glob, the lines that pin a version.
@@ -481,11 +482,14 @@ class Readers(unittest.TestCase):
     def test_the_terraform_note_names_the_checks_of_the_modules(self) -> None:
         rules = self.config["packageRules"]
 
-        (group,) = [r for r in rules if r.get("groupName") == "terraform"]
+        (group,) = [
+            r for r in rules if r.get("groupName") == "terraform" and "prBodyNotes" in r
+        ]
         note = " ".join(group["prBodyNotes"])
 
         for words in (
-            "CI does not run Terraform",
+            "CI installs Terraform only to run the modules' variable validations",
+            "it never runs init, validate, plan or apply",
             "`make azure-plan`",
             "`make aws-validate`",
             "`make aws-scan`",
@@ -509,6 +513,38 @@ class Readers(unittest.TestCase):
             with self.subTest(target=target):
                 makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
                 self.assertIn(f"\n{target}:", makefile)
+
+    def test_the_terraform_program_ci_installs_is_read_from_its_releases(self) -> None:
+        text = (ROOT / ".github" / "workflows" / "python.yml").read_text(
+            encoding="utf-8"
+        )
+
+        found = [
+            match.group("datasource", "depName", "extractVersion", "currentValue")
+            for match in self.comment_reader(PYTHON_WORKFLOW).finditer(text)
+            if match.group("depName") == "hashicorp/terraform"
+        ]
+
+        self.assertEqual(
+            found,
+            [
+                (
+                    "github-releases",
+                    "hashicorp/terraform",
+                    "^v(?<version>.+)$",
+                    re.search(r'TERRAFORM_VERSION: "(.+)"', text).group(1),
+                )
+            ],
+        )
+
+    def test_the_terraform_program_arrives_with_the_providers(self) -> None:
+        (rule,) = [
+            r
+            for r in self.config["packageRules"]
+            if "hashicorp/terraform" in r.get("matchPackageNames", [])
+        ]
+
+        self.assertEqual(rule["groupName"], "terraform")
 
     def test_the_terraform_lock_refresh_is_off_and_the_others_are_not(self) -> None:
         terraform = self.config["terraform"]

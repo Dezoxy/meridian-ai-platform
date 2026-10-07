@@ -57,12 +57,9 @@ from awskubeadmsupport import (
     template_text,
     user_data_sizes,
 )
+from terraformsupport import needs_terraform
 
 # ── terraform's rendering and the renderer here are one ─────────────────────
-
-needs_terraform = pytest.mark.skipif(
-    shutil.which("terraform") is None, reason="terraform is not installed"
-)
 
 
 def terraform_rendering(tmp_path: Path, role: str) -> str:

@@ -41,6 +41,13 @@ jobs:
       # The gateway's shared rate windows (S066) run against the Redis service
       # container below; MERIDIAN_REQUIRE_DB makes a missing Redis a failure too.
       MERIDIAN_TEST_REDIS_URL: redis://127.0.0.1:6379/0
+      # The version of Terraform the step below installs (S079). The tests of
+      # three modules' variable validations run `terraform console`; this is the
+      # version the modules require (`~> 1.16` in each versions.tf) and the one
+      # the development machine runs, and tests/meridian/test_ci_config.py checks
+      # the first. Renovate's reader takes the comment's line.
+      # renovate: datasource=github-releases depName=hashicorp/terraform extractVersion=^v(?<version>.+)$
+      TERRAFORM_VERSION: "1.16.5"
     services:
       postgres:
         # Throwaway and unreachable from outside the job, so trust auth keeps
@@ -96,6 +103,16 @@ jobs:
       # runs their unit tests (S024); the runner has Docker.
       - name: Check the alert rules
         run: make alerts
+      # The variable validations of the three Terraform modules run `terraform
+      # console` on scratch copies of their files: no provider is downloaded, no
+      # credential or cloud login exists, and no `init` runs. The marker of those
+      # tests fails under CI when the program is missing, so this step cannot
+      # drop out unseen (tests/meridian/terraformsupport.py). The wrapper is off:
+      # the tests read the program's own output.
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
       - name: Tests
         run: make pytest
         env:
