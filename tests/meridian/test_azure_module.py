@@ -131,10 +131,12 @@ def test_no_block_is_written_where_the_block_reader_cannot_see_it() -> None:
 def test_the_module_declares_no_other_block_kind_than_these() -> None:
     # Outputs, a provider block and the locals are the only top-level kinds a
     # later contract may add besides these; `module` is refused in the next test.
+    # `ephemeral` is the database's password (Z3): a value that is never stored.
     kinds = set(re.findall(r"^(\w+)\s", module_text(), flags=re.MULTILINE))
 
     assert kinds <= {
         "data",
+        "ephemeral",
         "locals",
         "output",
         "provider",
@@ -148,11 +150,14 @@ def test_the_module_calls_no_module_and_uses_no_other_provider() -> None:
     text = module_text()
 
     assert not re.search(r'^\s*module\s+("[^"]+"|\w+)', text, re.MULTILINE)
+    # Z3 adds `random`, for the database administrator's ephemeral password: the
+    # providers are exactly these two, and only `azurerm` has a provider block.
     assert re.findall(r'source\s*=\s*"([^"]+)"', file_text("versions.tf")) == [
-        "hashicorp/azurerm"
+        "hashicorp/azurerm",
+        "hashicorp/random",
     ]
     assert re.findall(r'^provider\s+"([^"]+)"', text, flags=re.MULTILINE) == ["azurerm"]
-    for other in ("kubernetes", "helm", "kubectl", "random", "azuread", "azapi"):
+    for other in ("kubernetes", "helm", "kubectl", "azuread", "azapi"):
         assert f"hashicorp/{other}" not in text
 
 
@@ -202,6 +207,23 @@ def test_the_platform_group_waits_for_the_pin() -> None:
     assert attribute(group, "location") == "var.location"
 
 
+def hangs_on_the_pin(name: str, found: dict[str, str], seen: frozenset[str]) -> bool:
+    """A resource hangs on the pin when its body names the platform group or the
+    pin, or names a resource that does (Terraform's graph is transitive: the DNS
+    link, the server's configuration and the database name the server or the
+    network, which name the group, and have no group argument of their own)."""
+    body = found[name]
+    if re.search(rf"\b{re.escape(PLATFORM_GROUP)}\b|\b{re.escape(PIN)}\b", body):
+        return True
+    return any(
+        other != name
+        and other not in seen
+        and re.search(rf"\b{re.escape(other)}\b", body)
+        and hangs_on_the_pin(other, found, seen | {name})
+        for other in found
+    )
+
+
 def test_every_resource_hangs_on_the_pin_directly_or_through_the_platform_group() -> (
     None
 ):
@@ -210,11 +232,8 @@ def test_every_resource_hangs_on_the_pin_directly_or_through_the_platform_group(
 
     loose = [
         name
-        for name, body in found.items()
-        if name != PIN
-        and not re.search(
-            rf"\b{re.escape(PLATFORM_GROUP)}\b|\b{re.escape(PIN)}\b", body
-        )
+        for name in found
+        if name != PIN and not hangs_on_the_pin(name, found, frozenset())
     ]
 
     assert loose == []
@@ -317,9 +336,12 @@ def test_the_postgres_subnet_alone_is_delegated_and_says_where_the_name_came_fro
     )
     assert re.search(r"^\s*delegation \{$", postgres, flags=re.MULTILINE)
     assert re.search(r"^\s*service_delegation \{$", postgres, flags=re.MULTILINE)
+    # Z3 replaced the question with what the facts sheet established.
     comments = comments_of("network.tf")
-    assert "FACTS:" in comments
-    assert "strings in the provider's binary" in comments
+    assert "established the name from Microsoft's page" in comments
+    assert "Microsoft.DBforPostgreSQL/flexibleServers" in comments
+    assert "string in the provider's binary" in comments
+    assert "FACTS:" not in comments
 
 
 def test_network_says_why_no_security_group_exists_yet() -> None:
@@ -489,10 +511,11 @@ def test_a_closed_list_holds_two_values_and_its_default_is_one_of_them(
     assert default in values
 
 
-@pytest.mark.parametrize("name", ["node_vm_size", "database_sku_name"])
+@pytest.mark.parametrize("name", ["node_vm_size"])
 def test_the_names_of_sizes_are_marked_as_not_confirmed_yet(name: str) -> None:
     # The placeholders are the main session's to confirm before Z2 and Z3: the
-    # comment sits in the lines right above the variable it marks.
+    # comment sits in the lines right above the variable it marks. The database's
+    # size and storage comments are Z3's, held in test_azure_module_database.py.
     above = raw_text("variables.tf").split(f'variable "{name}"')[0].splitlines()
     comment_block = []
     for line in reversed(above):
@@ -559,12 +582,19 @@ def test_the_versions_are_the_foundations() -> None:
     ours = file_text("versions.tf")
     theirs = file_text("versions.tf", FOUNDATION_DIR)
 
-    for pattern in (
-        r'required_version\s*=\s*"([^"]+)"',
-        r'version\s*=\s*"([^"]+)"',
-        r'source\s*=\s*"([^"]+)"',
-    ):
-        assert re.findall(pattern, ours) == re.findall(pattern, theirs), pattern
+    pattern = r'required_version\s*=\s*"([^"]+)"'
+    assert re.findall(pattern, ours) == re.findall(pattern, theirs)
+    # azurerm is the foundation's; random (Z3) is the second, `~>` to the minor
+    # whose schema has the ephemeral resource (3.7.0 was never published: 3.7.1
+    # is the lowest release that has it).
+    assert re.findall(r'version\s*=\s*"([^"]+)"', ours) == [
+        *re.findall(r'version\s*=\s*"([^"]+)"', theirs),
+        "~> 3.7",
+    ]
+    assert re.findall(r'source\s*=\s*"([^"]+)"', ours) == [
+        *re.findall(r'source\s*=\s*"([^"]+)"', theirs),
+        "hashicorp/random",
+    ]
 
 
 def backend_lines(directory: Path) -> dict[str, str]:
@@ -621,25 +651,40 @@ def lock_text(directory: Path) -> str:
     return (directory / ".terraform.lock.hcl").read_text(encoding="utf-8")
 
 
-def test_the_lock_names_the_foundations_azurerm_version_and_constraint() -> None:
-    ours = lock_text(MODULE_DIR)
-    theirs = lock_text(FOUNDATION_DIR)
+def lock_providers(directory: Path) -> dict[str, str]:
+    """The lock's provider blocks, keyed by the provider's short name."""
+    return dict(
+        re.findall(
+            r'^provider "registry\.terraform\.io/hashicorp/([a-z]+)" \{\n(.*?)^\}$',
+            lock_text(directory),
+            flags=re.MULTILINE | re.DOTALL,
+        )
+    )
 
+
+def test_the_lock_names_the_foundations_azurerm_version_and_constraint() -> None:
+    # The lock holds azurerm, as the foundation's does, and random (Z3).
+    ours = lock_providers(MODULE_DIR)
+    theirs = lock_providers(FOUNDATION_DIR)
+
+    assert sorted(ours) == ["azurerm", "random"]
+    assert sorted(theirs) == ["azurerm"]
     for pattern in (
-        r'provider "(registry\.terraform\.io/hashicorp/[a-z]+)"',
         r'^\s*version\s*=\s*"([^"]+)"',
         r'^\s*constraints\s*=\s*"([^"]+)"',
     ):
-        found = re.findall(pattern, ours, flags=re.MULTILINE)
-        assert found == re.findall(pattern, theirs, flags=re.MULTILINE), pattern
+        found = re.findall(pattern, ours["azurerm"], flags=re.MULTILINE)
+        assert found == re.findall(pattern, theirs["azurerm"], flags=re.MULTILINE)
         assert len(found) == 1
-    constraint = re.search(
-        r'source\s*=\s*"hashicorp/azurerm"\s*version\s*=\s*"(~> [^"]+)"',
-        file_text("versions.tf"),
-    )
-    assert constraint is not None
-    assert f'constraints = "{constraint.group(1)}"' in ours
-    assert "hashicorp/google" not in ours and "hashicorp/aws" not in ours
+    for name in ("azurerm", "random"):
+        constraint = re.search(
+            rf'source\s*=\s*"hashicorp/{name}"\s*version\s*=\s*"(~> [^"]+)"',
+            file_text("versions.tf"),
+        )
+        assert constraint is not None
+        assert f'constraints = "{constraint.group(1)}"' in ours[name]
+    assert "hashicorp/google" not in lock_text(MODULE_DIR)
+    assert "hashicorp/aws" not in lock_text(MODULE_DIR)
 
 
 def test_the_lock_holds_the_two_platform_hashes_the_google_lock_has() -> None:
@@ -648,20 +693,24 @@ def test_the_lock_holds_the_two_platform_hashes_the_google_lock_has() -> None:
     # the platform is not in the hash, so the count is what can be held: two,
     # not the same string twice, as many as the Google module's lock holds. A
     # hash's value is not pinned: Renovate rewrites the lock.
-    ours = lock_text(MODULE_DIR)
+    # Each provider of this lock (azurerm and random) holds two, as the Google
+    # lock's one provider does.
     gcp = lock_text(GCP_DIR)
 
-    hashes = re.findall(r'"(h1:[^"]+)"', ours)
+    assert len(re.findall(r'"h1:', gcp)) == 2
+    for name, body in lock_providers(MODULE_DIR).items():
+        hashes = re.findall(r'"(h1:[^"]+)"', body)
 
-    assert len(hashes) == len(re.findall(r'"h1:', gcp)) == 2
-    assert len(set(hashes)) == 2
-    assert len(re.findall(r'"zh:', ours)) >= 2
+        assert len(hashes) == 2, name
+        assert len(set(hashes)) == 2, name
+        assert len(re.findall(r'"zh:', body)) >= 2, name
 
 
 def test_the_two_h1_hashes_are_among_the_foundations() -> None:
     # The foundation's lock holds eleven: the two for the platforms this lock
     # names are in them, so they are the provider's own and not made up.
-    ours = set(re.findall(r'"(h1:[^"]+)"', lock_text(MODULE_DIR)))
+    # Only azurerm's: the foundation's lock holds no random provider.
+    ours = set(re.findall(r'"(h1:[^"]+)"', lock_providers(MODULE_DIR)["azurerm"]))
     theirs = set(re.findall(r'"(h1:[^"]+)"', lock_text(FOUNDATION_DIR)))
 
     assert ours <= theirs
@@ -684,21 +733,33 @@ def test_no_variable_file_override_file_state_or_provider_directory_sits_here() 
 
 
 def test_the_directory_holds_only_files_this_contract_names() -> None:
+    # The list is exact and names every file of the finished module: the first
+    # eight exist now (Z1's seven and Z3's database.tf); each of the others may
+    # exist or not yet, as the contract that writes it lands.
     names = {path.name for path in MODULE_DIR.iterdir()}
-
-    assert {
+    written = {
         ".terraform.lock.hcl",
         "README.md",
+        "database.tf",
         "main.tf",
         "network.tf",
         "providers.tf",
         "variables.tf",
         "versions.tf",
-    } <= names
-    assert all(
-        name.endswith((".tf", ".md", ".hcl")) or name == ".trivyignore"
-        for name in names
-    )
+    }
+    to_come = {
+        ".trivyignore",
+        "budget.tf",
+        "cluster.tf",
+        "endpoints.tf",
+        "identity.tf",
+        "logs.tf",
+        "outputs.tf",
+        "registry.tf",
+    }
+
+    assert written <= names
+    assert names <= written | to_come
 
 
 GUID = re.compile(

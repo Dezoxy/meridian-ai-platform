@@ -31,12 +31,14 @@ resource "azurerm_subnet" "nodes" {
 # Delegated to the PostgreSQL flexible server service, for the database's private
 # access (D9 of the design: no public endpoint).
 #
-# FACTS: the service's name and the action it needs are NOT in the provider's
-# schema, which carries no descriptions. They were read from strings in the
-# provider's binary (azurerm 5.8.0: both appear in it), which is evidence and not
-# documentation. The question: do Microsoft's pages for a flexible server with
-# private access name this delegation and this action? The facts sheet answers it
-# before the database is written.
+# The service's name and the action it needs are not in the provider's schema,
+# which carries no descriptions. The facts sheet (section E, read 2026-10-07)
+# established the name from Microsoft's page on private access for a flexible
+# server: the delegation is Microsoft.DBforPostgreSQL/flexibleServers, and no
+# other kind of resource may live in this subnet. The action is the one the
+# provider's documentation adds; Microsoft's page does not print it, and it also
+# appears as a string in the provider's binary (azurerm 5.8.0). The sheet found
+# no network security group required here; the smallest subnet it names is a /28.
 resource "azurerm_subnet" "postgres" {
   name                 = "snet-postgres"
   resource_group_name  = azurerm_resource_group.platform.name

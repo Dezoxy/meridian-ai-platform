@@ -240,3 +240,37 @@ def own_text(body: str) -> str:
         body + "\n",
         flags=re.MULTILINE | re.DOTALL,
     )
+
+
+# ── what the database's contract (Z3) reads ──────────────────────────────────
+
+
+def ephemerals_in(file_name: str) -> dict[str, str]:
+    """The ``ephemeral`` blocks one file declares, keyed ``type.name``: values
+    Terraform never stores, which only a write-only argument may take."""
+    return top_level_blocks(file_text(file_name), "ephemeral")
+
+
+def locals_text() -> str:
+    """The bodies of every ``locals`` block of the module, comments removed."""
+    return "\n".join(
+        re.findall(
+            r"^locals \{\n(.*?)^\}$", module_text(), flags=re.MULTILINE | re.DOTALL
+        )
+    )
+
+
+def outputs() -> dict[str, str]:
+    """The module's output blocks (none until a later contract writes them)."""
+    return top_level_blocks(module_text(), "output")
+
+
+def lines_naming(text: str, needle: str) -> list[str]:
+    """The stripped lines of ``text`` that contain ``needle``."""
+    return [line.strip() for line in text.splitlines() if needle in line]
+
+
+def argument_name(line: str) -> str | None:
+    """The name left of the equals sign of an ``name = value`` line, or ``None``."""
+    found = re.match(r"\s*([A-Za-z_][\w-]*)\s*=", line)
+    return found.group(1) if found else None

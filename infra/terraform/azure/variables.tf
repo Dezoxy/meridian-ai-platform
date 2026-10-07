@@ -98,8 +98,14 @@ variable "node_count" {
 }
 
 # Burstable sizes only, the default and one step up: a cost ceiling.
-# FACTS: size names and their offer in the region are confirmed by the facts
-# sheet (s020/facts.md)
+# FACTS (the facts sheet, section E, read 2026-10-07). Established: B_Standard_B1ms
+# is printed in the provider's documentation (the tier, an underscore, then the
+# size), and the service's price list has a burstable meter for each size in
+# both regions. Not established: B_Standard_B2s follows that pattern and was not
+# printed in what was read; the vCPU and memory in the description below were not
+# read from a Microsoft page; no page says that this subscription is offered a
+# size in the region, or that a burstable size takes private access. Only an
+# apply shows those.
 variable "database_sku_name" {
   description = "SKU of the PostgreSQL flexible server: a burstable size, 1 vCPU and 2 GiB (the default) or 2 vCPU and 4 GiB."
   type        = string
@@ -111,9 +117,12 @@ variable "database_sku_name" {
   }
 }
 
-# FACTS: the two storage sizes are 32 GiB and 64 GiB, written as the megabytes
-# the provider's storage_mb takes; the offer in the region is confirmed by the
-# facts sheet (s020/facts.md), and the contract named only the default.
+# FACTS (the facts sheet, section E, read 2026-10-07). Established: the service's
+# storage starts at 32 GiB, and the provider's storage_mb values start at 32768,
+# the default here. Not established: that 65536 is among the values the provider
+# accepts (the sheet read where the list starts, not the whole list), and the
+# service's own default size. Both sizes are written as the megabytes storage_mb
+# takes; the closed list is a cost ceiling.
 variable "database_storage_mb" {
   description = "Storage of the PostgreSQL flexible server, in megabytes: 32768 (the default) or 65536."
   type        = number
