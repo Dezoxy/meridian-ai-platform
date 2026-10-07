@@ -244,11 +244,16 @@ def test_the_workload_panels_ask_for_the_meridian_namespace() -> None:
         "time() - kube_cronjob_status_last_successful_time"
         '{namespace="meridian", cronjob="meridian-sweep"}'
     )
+    # The database operator's Deployment and pod are in `meridian` since S072
+    # (contract C) and are not Meridian services: the two panels leave them out,
+    # as the alert MeridianServiceUnavailable does.
     assert expr_of("Available replicas by service") == (
-        'kube_deployment_status_replicas_available{namespace="meridian"}'
+        "kube_deployment_status_replicas_available"
+        '{namespace="meridian", deployment!="cnpg-cloudnative-pg"}'
     )
     assert expr_of("Container restarts") == (
-        'sum by (pod) (kube_pod_container_status_restarts_total{namespace="meridian"})'
+        "sum by (pod) (kube_pod_container_status_restarts_total"
+        '{namespace="meridian", pod!~"cnpg-cloudnative-pg-.+"})'
     )
 
 

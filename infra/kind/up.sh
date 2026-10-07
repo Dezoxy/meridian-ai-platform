@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
-# Create the local platform on kind: `make up`. Safe to run again; it converges.
+# Create the local platform on kind: `make up`. Safe to run again on a cluster
+# this script made; it converges. A cluster made before the CloudNativePG operator
+# moved into `meridian` (S072, contract C) holds a namespace this script no longer
+# makes: it refuses it before it changes anything, and says to run `make down`
+# and then `make up` (that destroys the kind cluster and its database).
 #   1. kind cluster "meridian" (only if absent), credentials in infra/kind/kubeconfig
 #   2. namespaces (with Pod Security labels), the NetworkPolicies, Envoy Gateway and
-#      the edge Gateway: the database's and cert-manager's (each applied with
-#      the API server's address, read from the `kubernetes` EndpointSlice in
-#      `default` on every run, so a cluster whose node got another address is
-#      repaired by running this again), the one of observability,
+#      the edge Gateway: the database's, the CloudNativePG operator's,
+#      cert-manager's, observability's and Envoy Gateway's (S072, contract N:
+#      denied by default, the listener's port the one rule without a peer;
+#      each applied with the API server's address, read from the `kubernetes`
+#      EndpointSlice in `default` on every run, so a cluster whose node got
+#      another address is repaired by running this again),
 #      the one for smoke's telemetrygen Jobs, the one that gives smoke's probe
 #      pod its egress to the rate store (S066) and the one of the log agent's
 #      namespace `logging`, all before the releases they guard,
@@ -14,7 +20,9 @@
 #      services' certificates, and the CA of its own in `observability` that
 #      signs the collector's certificate (its public certificate goes into the
 #      ConfigMap telemetry-ca in `meridian` and in `logging`, on every run)
-#   3. CloudNativePG operator and the platform-db cluster (PostgreSQL 17, pgvector),
+#   3. CloudNativePG operator (in `meridian`, with a Role there and no ClusterRole
+#      over every namespace: S072, contract C; the comment above its install says
+#      how to take that out) and the platform-db cluster (PostgreSQL 17, pgvector),
 #      the database "meridian" and its eleven roles (the owner, six services, the
 #      scheduled sweep's, the gateway's ledger upkeep's, the policy seed's and
 #      the knowledge ingestion's); their password Secrets are created first,
@@ -77,9 +85,20 @@ readonly RATE_STORE_PROBE_COMMANDS='+ping'
 # server's addresses (S063). The placeholder is not a CIDR, so the API server
 # refuses the file as it stands; a test keeps this string equal to the file's.
 readonly DATABASE_POLICY_FILE="${KIND_DIR}/manifests/platform-db-networkpolicy.yaml"
+# The CloudNativePG operator's own policy: it runs in `meridian` (S072, contract
+# C), where the chart's default-deny selects its pod. The one egress rule for TCP
+# 6443 takes the same placeholder; its webhook port has no ingress rule.
+readonly CNPG_OPERATOR_POLICY_FILE="${KIND_DIR}/manifests/cnpg-operator-networkpolicy.yaml"
 # cert-manager's policies take the same placeholder, on the one egress rule for
-# TCP 6443 (S063, contract FB); its three 10250 ingress rules name no address.
+# TCP 6443 (S063, contract FB); the webhooks' port 10250 has no ingress rule.
 readonly CERT_MANAGER_POLICY_FILE="${KIND_DIR}/manifests/cert-manager-networkpolicy.yaml"
+# observability's takes it on the one egress rule for the node's 6443 and 10250,
+# the API server and the kubelet, which are one address on kind (S072, contract E).
+readonly OBSERVABILITY_POLICY_FILE="${KIND_DIR}/manifests/observability-networkpolicy.yaml"
+# Envoy Gateway's namespace (S072, contract N): denied by default, and the one
+# egress rule for TCP 6443 (the controller and its pre-install hook Job) takes the
+# same placeholder; it is applied before the release, which the Job runs under.
+readonly ENVOY_GATEWAY_POLICY_FILE="${KIND_DIR}/manifests/envoy-gateway-networkpolicy.yaml"
 readonly API_SERVER_PEERS_PLACEHOLDER='to: [{ipBlock: {cidr: API-SERVER-ADDRESS/32}}]'
 
 # install_release NAME NAMESPACE CHART VERSION REPO VALUES_FILE [helm args...]
@@ -111,6 +130,27 @@ check_prerequisites() {
     log "warning: kind is ${kind_version}; the node image in pins.env is for ${KIND_VERSION}"
 }
 
+# The namespace of the operator's old layout, which is history (S072, contract C):
+# the CloudNativePG operator was released into a namespace of its own, and a
+# cluster made then still holds it. Nothing here makes it; this script only asks
+# whether it is there, to refuse such a cluster before it changes anything.
+readonly OLD_OPERATOR_NAMESPACE=cnpg-system
+
+# refuse_the_old_operator_layout: stop, with nothing changed, on a cluster made
+# before the operator moved into `meridian`. The operator's release there owns the
+# CRDs, ClusterRoles and webhook configurations that a release in `meridian`
+# cannot take over (Helm's ownership check), and by then this script would have
+# applied the new policies, so the old operator would already have lost the
+# database's status port. A read that fails is not "the namespace is not there":
+# it stops the run too.
+refuse_the_old_operator_layout() {
+  local found
+  found="$(kctl get namespace "${OLD_OPERATOR_NAMESPACE}" -o name --ignore-not-found)" ||
+    die "could not read whether the namespace ${OLD_OPERATOR_NAMESPACE} exists (kubectl's error is above); that is not 'it does not exist', so the run stops here and nothing was changed: run make up again once the API server answers"
+  [[ -z "${found}" ]] ||
+    die "the namespace ${OLD_OPERATOR_NAMESPACE} exists: this cluster was made before the CloudNativePG operator moved into meridian (S072), and make up cannot bring it to the new layout: the operator's release owns cluster-scoped objects (CRDs, ClusterRoles, webhook configurations) that a release in meridian cannot take over, and Helm would refuse it only after this run had applied the new policies and cut the old operator off from the database; nothing was changed. On a disposable cluster, run 'make down' and then 'make up': that destroys the kind cluster and its database, which holds the only copy of the audit log on kind, so never do it to clear a fault nobody has looked at"
+}
+
 create_cluster() {
   if cluster_exists; then
     log "kind cluster ${CLUSTER_NAME} exists"
@@ -118,6 +158,8 @@ create_cluster() {
     kind export kubeconfig --name "${CLUSTER_NAME}" --kubeconfig "${KUBECONFIG_FILE}"
     # Who holds it (S075): before anything below changes the cluster.
     check_cluster_holder "make up"
+    # A cluster made before the operator moved: before the first write below.
+    refuse_the_old_operator_layout
     # From here on a failed run leaves the record saying `changing`.
     record_cluster_holder changing
     return
@@ -147,16 +189,18 @@ api_server_policy_manifest() {
   printf '%s%s%s\n' "${before}" "to: [${peers}]" "${after}"
 }
 
-# apply_api_server_policy FILE WHOSE: apply the NetworkPolicy file FILE with the
-# API server's address (S063), on every run: a cluster whose node was given
-# another address by a Docker restart is repaired by running `make up` again.
-# WHOSE ("the database's", "cert-manager's") is what the messages call the
-# policy. The address is read and checked first (read_api_server_addresses,
-# common.sh), so a bad answer stops here with the policy as it was, and the
-# manifest is rendered whole before kubectl sees it. The database's file and
-# cert-manager's are applied through this one function.
+# apply_api_server_policy FILE WHOSE [PORTS]: apply the NetworkPolicy file FILE
+# with the API server's address (S063), on every run: a cluster whose node was
+# given another address by a Docker restart is repaired by running `make up`
+# again. WHOSE ("the database's", "cert-manager's") is what the messages call the
+# policy; PORTS is what its one rule admits at that address, for the log line
+# ("TCP 6443" unless the call says otherwise). The address is read and checked
+# first (read_api_server_addresses, common.sh), so a bad answer stops here with
+# the policy as it was, and the manifest is rendered whole before kubectl sees
+# it. The database's file, cert-manager's and observability's are applied
+# through this one function.
 apply_api_server_policy() {
-  local file=$1 whose=$2 address peers="" manifest
+  local file=$1 whose=$2 ports="${3:-TCP 6443}" address peers="" manifest
   read_api_server_addresses ||
     die "${api_server_problem}; ${whose} NetworkPolicy was not changed"
   while IFS= read -r address; do
@@ -164,7 +208,7 @@ apply_api_server_policy() {
   done <<<"${api_server_addresses}"
   manifest="$(api_server_policy_manifest "${file}" "${peers}")" || exit 1
   kctl apply --server-side --force-conflicts -f - <<<"${manifest}" >/dev/null
-  log "network: ${whose} pods may reach TCP 6443 at $(paste -sd ',' - <<<"${api_server_addresses}") alone"
+  log "network: ${whose} pods may reach ${ports} at $(paste -sd ',' - <<<"${api_server_addresses}") alone"
 }
 
 # Apply the policies for approver-policy, trying again until the API server
@@ -347,11 +391,17 @@ kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/namespaces.
 log "network: the database's NetworkPolicy, with the API server's address (before the database exists)"
 apply_api_server_policy "${DATABASE_POLICY_FILE}" "the database's"
 
+log "network: the CloudNativePG operator's NetworkPolicy, with the API server's address (before the operator exists)"
+apply_api_server_policy "${CNPG_OPERATOR_POLICY_FILE}" "the CloudNativePG operator's"
+
 log "network: cert-manager's NetworkPolicies, with the API server's address (before cert-manager is installed)"
 apply_api_server_policy "${CERT_MANAGER_POLICY_FILE}" "cert-manager's"
 
-log "network: observability's NetworkPolicies (before Prometheus, Tempo, Loki and the collector)"
-kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/observability-networkpolicy.yaml" >/dev/null
+log "network: observability's NetworkPolicies, with the node's address (before Prometheus, Tempo, Loki and the collector)"
+apply_api_server_policy "${OBSERVABILITY_POLICY_FILE}" "observability's" "TCP 6443 and 10250"
+
+log "network: Envoy Gateway's NetworkPolicies, with the node's address (before the controller, its hook Job and the proxy pods)"
+apply_api_server_policy "${ENVOY_GATEWAY_POLICY_FILE}" "Envoy Gateway's controller and hook Job" "TCP 6443"
 
 log "network: the NetworkPolicy of smoke's telemetrygen Jobs in meridian"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/smoke-networkpolicy.yaml" >/dev/null
@@ -417,9 +467,40 @@ kctl -n observability wait --for=condition=Ready certificate/otel-collector \
   die "the Certificate otel-collector in observability was not Ready in 5m: read the CertificateRequests of the Certificates telemetry-ca and otel-collector (kubectl -n observability get certificaterequest; describe each) for their Approved or Denied condition, the Ready condition of the policies telemetry-ca and otel-collector (the add-on's pod logs say why one was not applied), and the Certificates' events"
 publish_telemetry_ca
 
-log "database: CloudNativePG operator"
-install_release cnpg cnpg-system "${CNPG_OPERATOR_CHART}" "${CNPG_OPERATOR_VERSION}" \
+# The operator runs in `meridian`, with the chart's `config.clusterWide=false`
+# (S072, contract C): its rules over Secrets, ConfigMaps, pods (and pods/exec) and
+# roles are one Role in `meridian`, where the Cluster is, and no longer a
+# ClusterRole over every namespace; the ClusterRole is left with nodes (read), the
+# webhook configurations (get, patch) and image catalogs (read). One of the four
+# cluster-wide writers of Secrets is gone, and no namespace of its own is made
+# for it. Its pod is selected by its own policy (CNPG_OPERATOR_POLICY_FILE,
+# applied above) and by the chart's default-deny, which `make deploy` adds.
+#
+# Fall-back, written before the first cold run: this change is implemented in
+# files and tested without a cluster; it has not run on kind. If one cold `make
+# up` does not bring the database up under the confined operator, take the change
+# out again (the release back in a namespace of its own, without
+# `config.clusterWide=false`, the policy file and its call removed, the database
+# policy's rule for the operator back to a namespace and a pod selector) and
+# record the operator's reach as accepted with "tried, and what failed". What
+# "does not bring the database up" looks like: the install of platform-db ends
+# with "helm release platform-db failed" and a webhook call refused or timed out
+# (the operator's webhooks fail closed: its pod unreachable from the API server);
+# or the wait for cluster/platform-db below ends after 10m with the Cluster not
+# Ready; or the wait for the roles ends with cannotReconcile. The operator's log
+# (the pod of the Deployment cnpg-cloudnative-pg in `meridian`) would say, for a
+# policy that is too narrow, a timeout dialling the API server's address on 6443
+# or "Instance Status Extraction Error: HTTP communication issue" (its call to
+# the instance manager on 8000); for a Role that is too narrow, "forbidden" and
+# the verb and resource it lacked.
+# A cluster from before this change keeps the release in the namespace of its
+# own, and Helm does not move a release: run `make down` (it deletes the kind
+# cluster: only a disposable one, and never to clear a fault nobody has looked at)
+# and then `make up`.
+log "database: CloudNativePG operator (in meridian, with a Role there instead of rules over every namespace)"
+install_release cnpg meridian "${CNPG_OPERATOR_CHART}" "${CNPG_OPERATOR_VERSION}" \
   "${CNPG_REPO}" cnpg.yaml \
+  --set "config.clusterWide=false" \
   --set "image.tag=${CNPG_OPERATOR_IMAGE_TAG}@${CNPG_OPERATOR_IMAGE_DIGEST}"
 ensure_database_secrets
 ensure_rate_store_secret

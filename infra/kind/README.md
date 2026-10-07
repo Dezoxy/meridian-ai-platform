@@ -24,13 +24,37 @@ adjuster; the rules decide every other claim.
 | Envoy Gateway (Gateway API edge) | `oci://docker.io/envoyproxy/gateway-helm` | v1.9.2 | `envoy-gateway-system` |
 | cert-manager (with the CA for the services) | `cert-manager` (`https://charts.jetstack.io`) | v1.21.2 | `cert-manager` |
 | approver-policy (decides which certificate requests are approved) | `cert-manager-approver-policy` (`https://charts.jetstack.io`) | v0.28.0 | `cert-manager` |
-| CloudNativePG operator | `cloudnative-pg` | 0.29.1 (operator 1.30.1) | `cnpg-system` |
+| CloudNativePG operator | `cloudnative-pg` | 0.29.1 (operator 1.30.1) | `meridian` |
 | PostgreSQL 17 with pgvector (`platform-db`) | `cluster` | 0.8.1 | `meridian` |
 | Prometheus, Grafana, kube-state-metrics (node-exporter is off, see below) | `kube-prometheus-stack` | 91.8.2 (Grafana chart 13.2.7) | `observability` |
 | Tempo (traces) | `tempo` | 3.1.0 | `observability` |
 | Loki (logs) | `loki` | 18.13.7 | `observability` |
 | OpenTelemetry Collector | `opentelemetry-collector` | 0.174.0 (collector 0.162.0) | `observability` |
 | Log agent: a second release of the collector's chart, the contrib build, as a DaemonSet that ships the services' output to Loki (S064) | `opentelemetry-collector` | 0.174.0 (collector 0.162.0, contrib) | `logging` |
+
+The CloudNativePG operator runs in `meridian`, beside the database it manages,
+and has no namespace of its own (S072, contract C). The release is made with
+`config.clusterWide=false`, so its rules over Secrets, ConfigMaps, pods
+(`pods/exec` too) and roles are a Role in `meridian` and no longer a
+ClusterRole over every namespace; the ClusterRole is left with nodes (read),
+the webhook configurations (get, patch) and image catalogs (read). The chart
+also renders two ClusterRoles, `cnpg-cloudnative-pg-view` and
+`cnpg-cloudnative-pg-edit` (read and write on the operator's own objects), that
+nothing binds or aggregates; they stay. Its pod has a NetworkPolicy of its own,
+[`manifests/cnpg-operator-networkpolicy.yaml`](manifests/cnpg-operator-networkpolicy.yaml),
+which `make up` applies before the release: the chart's `default-deny`, added
+by `make deploy`, selects every pod of `meridian`. **Implemented in files and
+tested without a cluster; not seen on kind.** If one cold `make up` does not
+bring the database up under it, the change is taken out again and the
+operator's reach is recorded as accepted with "tried, and what failed" (the
+comment above the install in [`up.sh`](up.sh) says how, and what that looks
+like). A cluster made before this change needs `make down` and then `make up`;
+`make up` refuses such a cluster, before it changes anything, when the old
+namespace exists, and says so (F2 of S072; not seen on kind)
+(`make down` deletes the kind cluster, `down.sh` says so; that is allowed on a
+disposable cluster and never to clear a fault nobody has looked at, as the
+cluster's database holds the only copy of the audit log): Helm does not move a
+release, and the old one owns the CRDs and the webhook configurations.
 
 Besides the releases, `make up` makes the Secrets the platform needs and
 never overwrites one: the eleven database roles', Grafana's admin password
@@ -100,10 +124,10 @@ each month. CI does not start this platform: such a pull request needs
 `make up` and `make smoke` before it merges, and the table above follows
 by hand. The values that override chart defaults are in
 [`values/`](values/); the Gateway, the namespaces, Grafana's Role and the
-NetworkPolicies of the database, `cert-manager`, `observability`, the log agent's
-namespace and smoke's Jobs are in [`manifests/`](manifests/). The Meridian
-services have a chart of their own, [`../helm/meridian/`](../helm/meridian/),
-which `make deploy` installs (below).
+NetworkPolicies of the database, `cert-manager`, `observability`,
+`envoy-gateway-system`, the log agent's namespace and smoke's Jobs are in
+[`manifests/`](manifests/). The Meridian services have a chart of their own,
+[`../helm/meridian/`](../helm/meridian/), which `make deploy` installs (below).
 
 ### The images the charts run (S063)
 
@@ -292,7 +316,13 @@ certificates to prove to one another which service they are, by mutual TLS
 (the chart's part is under "Who a service is" below). The CA's private key is
 a Secret in the `cert-manager` namespace, outside `meridian`: no Meridian pod
 can read it, and the operators that hold a cluster-wide read of Secrets can
-(cert-manager's controller and cainjector, the CloudNativePG operator). The
+(cert-manager's controller and cainjector; the render of 2026-10-07 shows
+Envoy Gateway's controller and the Prometheus operator with a cluster-wide
+rule over Secrets too). The CloudNativePG operator reads
+Secrets in `meridian` only since S072 (contract C; implemented in files, not
+seen on kind): there it still reads and writes every Secret and ConfigMap, the
+services' keys among them, as before, but no longer those of `cert-manager` or
+`observability`. The
 CA keeps its key at its renewal by an explicit `rotationPolicy: Never`, because
 cert-manager's default has been `Always` since v1.18.0 and a new key would
 leave a restarted pod distrusting the pods that had not.
@@ -1134,6 +1164,29 @@ when the script ends. The tool check leaves at most one refused `tool.call` row
 per server in the audit log per throttle window, and the identity check one
 refusal row per reason and minute.
 
+Where a check lives, and how to add one (S074; the split is tested and was
+seen on kind once, 2026-10-07: `make smoke` printed the same 46 PASS lines as
+the unsplit script). `smoke.sh` is the entry: the preconditions, the traps, the
+eleven calls and the summary, and a pair of lines for each part it sources. A
+check is a file in `smoke.d/`, `NN-name.sh` (`shared.sh` holds what several
+checks and the trap use), and it holds definitions only: its paragraph from the
+header, its constants and its functions, so that sourcing it runs nothing.
+Checks 8 and 10 are still in the entry, and move when the cluster batch that
+edits them has landed. To add a check:
+
+- write `smoke.d/NN-name.sh` with no execute bit: the first line `# shellcheck
+  shell=bash`, the paragraph (its first line `#   N. name:`, as the others),
+  a blank line, then the constants and the functions;
+- add the pair `# shellcheck source=smoke.d/NN-name.sh` and
+  `. "${KIND_DIR}/smoke.d/NN-name.sh"` to the entry after the last part's pair,
+  and call the check's function in the sequence of calls near the end of the
+  entry (no source line goes among the calls).
+
+`test_smoke_parts.py` fails on a part that is executable, is not sourced once in
+that form, holds a statement or a name another part defines, or holds the text
+`need_tools `; `test_smoke_line_count.py` fails until the check is counted in
+the number of lines a healthy run prints.
+
 ## The services: `make deploy` and `make demo`
 
 One image, built from the [`Dockerfile`](../../Dockerfile) at the repository
@@ -1174,9 +1227,14 @@ gets 421. A test keeps the two values equal.
 In order, `make deploy`:
 
 1. Refuses with "run 'make up' first" if the `meridian` Database is not
-   applied, a role is not reconciled, a role Secret is missing or the
+   applied, a role is not reconciled, a role Secret is missing, the
    database's NetworkPolicy `platform-db` is absent (the chart's
-   `default-deny` would otherwise cut the database off from its operator).
+   `default-deny` would otherwise cut the database off from its operator) or
+   the operator's NetworkPolicy `cnpg-operator` is absent (the same
+   `default-deny` selects the operator's pod, in `meridian` since S072, and
+   would cut it off from the API server and the database's pods; a cluster
+   made before that change lacks it). The second guard is tested with a stub
+   `kubectl`; it is not seen on kind.
    It refuses the same way, before it builds anything or runs a Job, when the
    ClusterIssuer `meridian-services` (the issuer in
    [`values/meridian.yaml`](values/meridian.yaml)) is missing or not Ready,
@@ -1484,7 +1542,10 @@ The database pod shares the namespace, and its policy is the platform's:
 [`manifests/platform-db-networkpolicy.yaml`](manifests/platform-db-networkpolicy.yaml),
 applied by `make up`. It admits the Meridian pods on 5432 and the
 CloudNativePG operator on 8000 (without that rule the operator reported
-`Instance Status Extraction Error` within 40 seconds, measured in S019). The
+`Instance Status Extraction Error` within 40 seconds, measured in S019); the
+operator's pod is in this namespace since S072 and is admitted by its two
+labels, with no namespace named. The operator has a policy of its own, below.
+The
 database pod itself may reach DNS, the pods of its own Cluster and TCP port
 6443 at the API server's address alone (S063; below): its instance manager
 calls the API server, whose address is the node's own and changes with every
@@ -1509,8 +1570,9 @@ What the policies do not do:
   [`manifests/namespaces.yaml`](manifests/namespaces.yaml)); they do not
   refuse one yet (below), and on kind `audit` records nothing (no API server
   audit policy is configured) and `warn` reaches only the client that creates
-  a workload, never a controller's pod. `cnpg-system` and
-  `envoy-gateway-system` carry Pod Security labels and no NetworkPolicy.
+  a workload, never a controller's pod. No namespace of the add-ons is left
+  without a NetworkPolicy since S072 (contract N): `envoy-gateway-system` has
+  its own (below).
 - The Model Gateway has no rule towards a provider: on kind it calls none.
   The rule for Azure OpenAI is S020's.
 
@@ -1603,8 +1665,10 @@ first `make up` and `make smoke` after it have run on one.
 
 | File | Namespace | What it says |
 |---|---|---|
-| [`manifests/cert-manager-networkpolicy.yaml`](manifests/cert-manager-networkpolicy.yaml) | `cert-manager` | Ingress denied, except 10250 to the two webhooks (the API server calls them, `failurePolicy: Fail`; no peer, see below) and 9402 to the controller's metrics from Prometheus. Egress: DNS and TCP 6443 to the API server's address alone (`make up` reads it from the `kubernetes` EndpointSlice and fills it in, as it does the database's; `make deploy` and `make smoke` do not compare this policy with the endpoint) |
-| [`manifests/observability-networkpolicy.yaml`](manifests/observability-networkpolicy.yaml) | `observability` | Ingress denied, except one rule per peer: the collector from the namespace `meridian` and from the log agent's pods in `logging` (namespace and pod label) on 4318; Tempo from the collector (4317) and Grafana (3200); Loki from the collector and Grafana (3100) and from its own pods (7946, its memberlist); Grafana from Prometheus (3000); Prometheus from Grafana and the collector (9090); kube-state-metrics from Prometheus (8080); and 10250 to the Prometheus operator (no peer). Egress is open |
+| [`manifests/cert-manager-networkpolicy.yaml`](manifests/cert-manager-networkpolicy.yaml) | `cert-manager` | Ingress denied, except 9402 to the controller's metrics from Prometheus; the two webhooks' port (10250, `failurePolicy: Fail`) is admitted from no pod, and the API server, which calls from the node, needs no rule (see below). Egress: DNS and TCP 6443 to the API server's address alone (`make up` reads it from the `kubernetes` EndpointSlice and fills it in, as it does the database's; `make deploy` and `make smoke` do not compare this policy with the endpoint) |
+| [`manifests/observability-networkpolicy.yaml`](manifests/observability-networkpolicy.yaml) | `observability` | Ingress denied, except one rule per peer: the collector from the namespace `meridian` and from the log agent's pods in `logging` (namespace and pod label) on 4318; Tempo from the collector (4317) and Grafana (3200); Loki from the collector and Grafana (3100) and from its own pods (7946, its memberlist); Grafana from Prometheus (3000); Prometheus from Grafana and the collector (9090); kube-state-metrics from Prometheus (8080); and 10250 to the Prometheus operator from Prometheus alone (its webhook and its metrics share the port). Egress denied for every pod and admitted by one policy per pod: DNS for all; the node (the API server and the kubelet: one address on kind, 6443 and 10250, filled in by `make up` as in cert-manager's) for Prometheus, the operator and its hook Jobs, kube-state-metrics and Grafana; Prometheus to its targets (Grafana, kube-state-metrics, the operator, cert-manager's controller 9402, the DNS pods 9153); Grafana to its three datasources; the collector to its three exporters; Loki to its own pods (7946); Tempo to nothing |
+| [`manifests/cnpg-operator-networkpolicy.yaml`](manifests/cnpg-operator-networkpolicy.yaml) | `meridian` | The CloudNativePG operator's pod (S072, contract C): ingress denied, so no pod reaches its webhook port (9443) or its metrics port (8080), and the API server, which calls from the node, needs no rule (as for the other webhooks, below). Egress: DNS, TCP 6443 to the API server's address alone (filled in by `make up` as in the others), and TCP 8000 to the pods of the Cluster `platform-db`, the one port the database's policy admits the operator on; not 5432, and nothing towards the collector. Implemented in files and tested without a cluster; not seen on kind |
+| [`manifests/envoy-gateway-networkpolicy.yaml`](manifests/envoy-gateway-networkpolicy.yaml) | `envoy-gateway-system` | Ingress and egress denied for every pod; five policies, applied together before the release (S072, contract N). The controller receives xDS (18000) from the proxy pods alone; the proxy pods receive the listener's port 10080 from any address, which is the public entry and the one rule of the file without a peer, and may send to the controller (18000) and to the Claims API's pods (8000); every pod may reach DNS; the controller and its hook Job reach TCP 6443 at the node's address (filled in by `make up`, as in the others). The webhook's port 9443, the metrics and the probes have no rule: the API server and the kubelet call from the node. The proxy Service sets no `externalTrafficPolicy`, so the controller's default, `Local`, keeps the request's source; which address a request from the laptop has when the proxy sees it only a run shows, and the rule is right whichever it is. Implemented in files and tested without a cluster; not seen on kind |
 | [`manifests/smoke-networkpolicy.yaml`](manifests/smoke-networkpolicy.yaml) | `meridian` | The pods of smoke's telemetrygen Jobs may reach DNS and the collector's 4318, and nothing reaches them |
 | [`manifests/smoke-rate-store-networkpolicy.yaml`](manifests/smoke-rate-store-networkpolicy.yaml) | `meridian` | The probe pod of smoke's rate store line (the pods with the label `meridian-smoke=network-probe`) may send to the rate store on 6379, so that only the store's ingress rule can stop it |
 | [`manifests/logging-networkpolicy.yaml`](manifests/logging-networkpolicy.yaml) | `logging` | Ingress and egress denied for every pod; the log agent may reach DNS and the collector's 4318 and nothing else (S064) |
@@ -1615,31 +1679,69 @@ no namespace: the collector's rule selects the namespace `meridian` and no pod
 label, and the chart's own policies are what narrow that to the six services
 (its `default-deny` leaves every pod of `meridian` without egress, and only a
 pod given the collector's address has a rule for it; a test reads both halves
-and fails when one drifts from the other). Smoke's Jobs moved into `meridian`
-for that reason, so the sentence has no footnote. The gRPC receiver on 4317 is
+and fails when one drifts from the other). The CloudNativePG operator's pod is
+in `meridian` too since S072, and the operator's own policy, which has no rule
+towards the collector, is what keeps it out. Smoke's Jobs moved into
+`meridian` for that reason, so the sentence has no footnote. The gRPC receiver on 4317 is
 closed in the collector's values (read from them; no probe of 4317 has run on
 a cluster), and the push moved to TLS (below); the policy's refusal of 4317
 stays as a second wall.
 
 What stays open, in one list:
 
-- Egress from `observability` is open: Prometheus scrapes the kubelet and the
-  API server, which are the node, at an address no selector names, and a
-  half-right egress policy that broke a cold `make up` would be worse. A
-  compromised pod there can still reach whatever the other namespaces admit.
+- The edge's listener is open to any address, by design: port 10080 of the
+  proxy pods (the Gateway's port 80 plus 10000) has no peer, because it is
+  the public entry and a request from outside keeps its source address
+  (`Local`, above). The rule admits every source, the pods of the cluster
+  included; a narrower one would need an address range, which the file's own
+  test forbids. The rest of
+  `envoy-gateway-system` is closed (S072, contract N). Not seen on kind: a cold
+  `make up` must show the certgen hook Job completed (it runs under the default
+  deny before the controller exists), the proxy configured, and `make smoke`'s
+  first line and its lines through the edge passing. If the edge stops
+  answering, the way back is in the file's header. The topology-injector
+  webhook (9443) is `failurePolicy: Ignore`, so a call that does not get
+  through raises no error. `make deploy` refuses, with "run 'make up' first",
+  when the operator's policy `cnpg-operator` is missing, as it does for the
+  database's, because the chart's `default-deny` would cut the operator off.
+- Egress from `observability` is denied by default and admitted pod by pod
+  (S072), from a list of what each pod calls that the manifest's header holds,
+  read from the render of the pinned charts. Implemented in files and tested
+  without a cluster; not seen on kind. A cold `make up` must show every pod
+  Ready, every target up on Prometheus's Targets page and smoke's lines
+  passing. What stays: the one rule for the node gives the kubelet's port
+  10250 to every pod it selects, though only Prometheus scrapes it (the file
+  holds the placeholder once, as the function that fills it requires); a
+  cluster with more nodes has a kubelet per node, which that rule does not
+  name; and the pods may still reach the DNS pods, which answer any name. A
+  target found down is added once; a second round of surprises takes the
+  egress policy out again and states the gap.
 - The three webhooks (cert-manager's, approver-policy's, the Prometheus
-  operator's) are open on one port each to any pod of the cluster, because
-  the API server calls them from the node's address, which changes with every
-  cluster. They are TLS endpoints that answer admission reviews, and they
-  answer anyone: any pod can post a forged review and read the verdict, and
-  nothing is applied by one, so nothing is changed. A flood against the two
-  that fail closed (cert-manager's and approver-policy's) can stall the
-  issuance and renewal of certificates; the operator's is
-  `failurePolicy: Ignore`. Nobody has measured whether the address the API
-  server's calls arrive from is the endpoint's, so none is narrowed.
+  operator's) listen on 10250, and no pod may reach that port except
+  Prometheus on the operator's, which serves its metrics there. No rule
+  admits the API server, the one caller: it calls from the node, and on
+  kind a call that starts on the node passes every NetworkPolicy. Seen on
+  kind on 2026-10-07, for the API server's call to a pod by way of the pod
+  proxy: it arrived from the node's own address on the pod network
+  (10.244.0.1) and reached a pod of `meridian`, whose ingress is denied by
+  default; not seen separately, for a webhook call through the Service's
+  address. A cluster with more than one node, or a plugin that polices the
+  node, would need one `ipBlock` peer on each, filled in the way the
+  egress address is; if a cold `make up` shows a webhook unreachable (no
+  certificate issued, smoke fails), each rule comes back with the node's
+  pod-network address as its one peer, and with the node's published address
+  too when that is not the source (after the Service's translation a call
+  through a Service could carry either; not seen). A cold run shows a wrong
+  premise in this order: cert-manager's release, approver-policy's apply, the
+  database's install and, silently, the Prometheus operator's target. The
+  change is in the files and
+  tested without a cluster; a cold `make up` has not run it. The two that
+  fail closed (cert-manager's and approver-policy's) are the ones a flood
+  could have stalled; the operator's is `failurePolicy: Ignore`.
 - The collector's rule admits every pod of `meridian` that the chart's policies
   let out, and on a cluster where the chart is not installed (`make up` alone)
-  every pod of `meridian` can push to it: `default-deny` is the chart's.
+  every pod of `meridian` can push to it: `default-deny` is the chart's. The
+  operator's pod is the exception, as above.
 - Grafana's port-forward needs no ingress rule if the container runtime opens
   it inside the pod's own network namespace, which was assumed and is the
   first thing to look at; Loki's memberlist rule assumes the plugin sees the
@@ -1650,10 +1752,9 @@ Pod Security labels (`warn` and `audit`, never `enforce`, as on `meridian`):
 
 | Namespace | Level | What stops the next one |
 |---|---|---|
-| `meridian` | `restricted` | nothing |
+| `meridian` | `restricted` | nothing; the operator's pod, since S072, is read in the render of 2026-10-07 and meets it, not confirmed by the API server |
 | `cert-manager` | `restricted` | nothing: its five pods meet it as rendered |
 | `observability` | `restricted` | nothing as rendered: `tempo` and `otel-collector` set no `allowPrivilegeEscalation: false`, no `capabilities.drop: [ALL]` and no `seccompProfile`, the collector no `runAsNonRoot` either, until their values files set them (S063, tested without a cluster; the server-side dry run is repeated after `make up`); node-exporter would have stopped `restricted` too, and is off |
-| `cnpg-system` | `restricted` | nothing as rendered (2026-10-07, not confirmed by the API server) |
 | `envoy-gateway-system` | `restricted` | nothing as rendered for the controller and its Job; the proxy pods are made at run time and were read in the source, not seen |
 | `logging` | `privileged` | `baseline` is stopped by the hostPath volume (`/var/log/pods`); `restricted` by that volume alone (it allows no hostPath): the pod runs as user 10001 with `runAsNonRoot` (S064, read as `helm template` renders it, 2026-10-06, and seen on kind the same day: a server-side dry run of `enforce=restricted` warned of "restricted volume types" alone; the label warns of nothing) |
 
@@ -2102,10 +2203,11 @@ request from another namespace, or for a name not listed, is denied, but
 whoever can create a `Certificate` in `meridian`, or change a policy or its
 binding, can still mint any listed service's identity); the CA's private key
 is readable by the operators that hold a cluster-wide read of Secrets
-(cert-manager, cainjector, CloudNativePG), though by no Meridian pod; and the
-telemetry from the services to the collector is TLS only by the second
-authority above (S063, tested without a cluster), while the collector's own
-hops to Tempo, Prometheus and Loki are still plain.
+(cert-manager, cainjector; the CloudNativePG operator no longer does, since
+S072), though by no Meridian pod; and the telemetry from the services to the
+collector is TLS only by the second authority above (S063, tested without a
+cluster), while the collector's own hops to Tempo, Prometheus and Loki are
+still plain.
 
 A cluster whose services were first applied as raw manifests (before S019)
 keeps them: Helm adopted the objects in place (`--take-ownership`) and no
@@ -2491,7 +2593,7 @@ that names the bound.
 | An ordinary call (`get`, `apply`, `create`, `patch`, `label`, `logs`, a `delete` with no `--wait`) | `--request-timeout=15s`, a request | `KCTL_REQUEST_TIMEOUT`, for instance `20s` |
 | `exec`, and a `delete` with `--wait` (also `--timeout=60s`) | the system's `timeout`, 90 s, which then prints the line `kctl: kubectl exec ended with status 124 ...` | `KCTL_OUTER_TIMEOUT`, in seconds |
 | `wait` and `rollout status` | their own `--timeout` at every call site, and the system's `timeout` for that value plus 30 s, which then stops the script with a line that says the API server did not answer; a call with no `--timeout` is refused; no request flag, which may end the watch early | the call site; `KCTL_WAIT_MARGIN`, in seconds |
-| `port-forward`, `attach`, `logs -f`, `get -w` | none, they are streams; `port-forward` is started raw (`kubectl ... &`) by `smoke.sh` and `demo.sh`, which kill it and look for its port with a counted loop, and by `grafana.sh` in the foreground, which ends with ^C; no script uses the other three | |
+| `port-forward`, `attach`, `logs -f`, `get -w` | none, they are streams; `port-forward` is started raw (`kubectl ... &`) by `smoke.sh` (in `open_grafana`, which is in `smoke.d/shared.sh`) and `demo.sh`, which kill it and look for its port with a counted loop, and by `grafana.sh` in the foreground, which ends with ^C; no script uses the other three | |
 | `helm get` (`upkeep.sh`), which has no timeout flag | the system's `timeout`, 30 s | `HELM_READ_TIMEOUT`, in seconds |
 | `helm upgrade --install` | `--wait --timeout 10m` for each of `make up`'s ten releases; `--timeout 300s` for the chart in `make deploy`; and the system's `timeout`: for `make up`'s releases (their charts are taken to carry hooks; not rendered to check) three times that value plus 60 s, for the chart in `make deploy` (no hook, no `--wait`) that value plus 60 s; it stops the script with a line that names `helm status` and `helm history`; a call with no `--timeout` is refused | `up.sh`, `deploy.sh`; `HELM_UPGRADE_MARGIN`, in seconds |
 

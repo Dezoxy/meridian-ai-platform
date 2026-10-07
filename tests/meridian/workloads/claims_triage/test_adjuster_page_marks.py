@@ -402,12 +402,16 @@ def test_the_queue_prints_the_fixed_marks_only(
     assert Table(response.text).row(CLAIM)[MARK_HEADER] == MODEL_MARK
 
 
-def test_the_queue_reads_the_two_fields_in_the_query_it_already_made() -> None:
+def test_the_queue_reads_the_proposal_in_the_query_it_already_made() -> None:
+    # S070 (G2): the queue reads the whole stored proposal, so that the page
+    # validates it as the claim's page does; the two ``->>`` fields it read
+    # before are no longer in the query (``test_adjuster_queue_validation.py``).
     from meridian.workloads.claims_triage import adjuster_queue
 
     sql = adjuster_queue.QUEUE_SQL
 
-    assert sql.count("proposal ->> 'assessment'") == 1
-    assert sql.count("proposal ->> 'recommendation'") == 1
+    assert sql.count("p.proposal") == 1
+    assert sql.count("(SELECT reason, proposal FROM claims.triage_proposals") == 1
+    assert "proposal ->>" not in sql
     # One lookup of the latest proposal per row, as before.
     assert sql.count("FROM claims.triage_proposals") == 1

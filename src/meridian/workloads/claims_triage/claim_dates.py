@@ -49,7 +49,10 @@ def day_gaps(claim: object, received_at: datetime | None) -> dict[str, str]:
     second can be negative: the JSON route keeps a report date the caller chose.
     ``received_at`` must be aware (the column is ``timestamptz``, so the
     database driver returns an aware value): ``astimezone`` would read a naive
-    one as the server's local time. Not checked at run time."""
+    one as the server's local time, so a naive one raises ``ValueError``, a
+    programming error, for any claim, before a day is counted."""
+    if received_at is not None and received_at.utcoffset() is None:
+        raise ValueError("received_at must be aware: it has no time zone")
     if not isinstance(claim, Mapping):
         return {}
     lost, reported = _day(claim.get("loss_date")), _day(claim.get("reported_on"))

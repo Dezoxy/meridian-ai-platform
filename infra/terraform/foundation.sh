@@ -109,8 +109,8 @@ capture() {
 
 # api_post URL BODY: POST JSON with the Entra token. The token reaches curl as a
 # config line on stdin, so it never appears in a process listing (same idea as
-# gcurl in infra/kind/smoke.sh). Sets api_status and api_body; returns 0 only on
-# HTTP 200.
+# gcurl in infra/kind/smoke.d/shared.sh). Sets api_status and api_body; returns
+# 0 only on HTTP 200.
 api_post() {
   local out
   if ! out="$(printf 'header = "Authorization: Bearer %s"\n' "${token}" |

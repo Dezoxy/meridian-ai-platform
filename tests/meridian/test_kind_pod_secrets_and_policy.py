@@ -128,13 +128,15 @@ def test_the_database_policy_admits_the_meridian_pods_and_the_operator_only() ->
             "ports": [{"port": 5432, "protocol": "TCP"}],
         },
         {
+            # The operator's pod is in this namespace (S072, contract C): its two
+            # labels, and no namespace (test_kind_cnpg_operator_confined.py).
             "from": [
                 {
-                    "namespaceSelector": {
-                        "matchLabels": {"kubernetes.io/metadata.name": "cnpg-system"}
-                    },
                     "podSelector": {
-                        "matchLabels": {"app.kubernetes.io/name": "cloudnative-pg"}
+                        "matchLabels": {
+                            "app.kubernetes.io/name": "cloudnative-pg",
+                            "app.kubernetes.io/instance": "cnpg",
+                        }
                     },
                 }
             ],
@@ -189,7 +191,6 @@ def test_every_namespace_warns_and_audits_at_its_level_and_none_enforces() -> No
 
     assert set(namespaces) == {
         "envoy-gateway-system",
-        "cnpg-system",
         "cert-manager",
         "observability",
         "meridian",
@@ -200,11 +201,11 @@ def test_every_namespace_warns_and_audits_at_its_level_and_none_enforces() -> No
     # that `restricted` asks for (test_kind_observability_security_context.py).
     # The log agent's pod (S064) mounts a host directory, which `restricted`
     # forbids, so `logging` is privileged (test_log_agent_network.py says why).
-    # The two operators' namespaces (S072) rest on a render of both charts'
-    # pods, not on the API server: the header of the file says so.
+    # Envoy Gateway's namespace (S072) rests on a render of the chart's pods, not
+    # on the API server: the header of the file says so, and says the same of the
+    # CloudNativePG operator's pod, which is in `meridian` since contract C.
     levels = {
         "envoy-gateway-system": "restricted",
-        "cnpg-system": "restricted",
         "meridian": "restricted",
         "cert-manager": "restricted",
         "observability": "restricted",
