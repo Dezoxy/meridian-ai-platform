@@ -340,38 +340,43 @@ def run_in_a_terminal(
     )
 
 
-@pytest.fixture
-def tree(tmp_path: Path) -> Tree:
-    terraform_dir = tmp_path / "infra" / "terraform"
+def make_tree(root: Path) -> Tree:
+    """The stand-in tree under ``root`` (which must exist and be empty)."""
+    terraform_dir = root / "infra" / "terraform"
     (terraform_dir / "aws").mkdir(parents=True)
     for name in ("aws.sh", "common.sh"):
         shutil.copy2(TERRAFORM_DIR / name, terraform_dir / name)
     # The real ignore file, so that what the script's checks see as "committed"
     # is what the repository's own patterns say.
-    shutil.copy2(REPO_ROOT / ".gitignore", tmp_path / ".gitignore")
+    shutil.copy2(REPO_ROOT / ".gitignore", root / ".gitignore")
     (terraform_dir / "aws" / "main.tf").write_text("# a stand-in module\n")
-    git(tmp_path, "init", "-q")
-    git(tmp_path, "add", "-A")
-    git(tmp_path, "commit", "-q", "-m", "a stand-in tree")
-    stubs = tmp_path / "stubs"
+    git(root, "init", "-q")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "a stand-in tree")
+    stubs = root / "stubs"
     stubs.mkdir()
     for name, text in (("terraform", STUB_TERRAFORM), ("aws", STUB_AWS)):
         (stubs / name).write_text(text)
         (stubs / name).chmod(0o755)
     env = {
         "PATH": f"{stubs}:{os.environ['PATH']}",
-        "HOME": str(tmp_path),
+        "HOME": str(root),
     }
     stub_env = {
-        "STUB_LOG": str(tmp_path / "stub.log"),
-        "STUB_AWS_LOG": str(tmp_path / "stub-aws.log"),
-        "STUB_ENV_LOG": str(tmp_path / "stub-env.log"),
-        "STUB_AWS_ENV_LOG": str(tmp_path / "stub-aws-env.log"),
+        "STUB_LOG": str(root / "stub.log"),
+        "STUB_AWS_LOG": str(root / "stub-aws.log"),
+        "STUB_ENV_LOG": str(root / "stub-env.log"),
+        "STUB_AWS_ENV_LOG": str(root / "stub-aws-env.log"),
         "STUB_ACCOUNT": PINNED,
     }
-    made = Tree(tmp_path, env, stub_env)
+    made = Tree(root, env, stub_env)
     made.write_stub_env({})
     return made
+
+
+@pytest.fixture
+def tree(tmp_path: Path) -> Tree:
+    return make_tree(tmp_path)
 
 
 def with_local_file(tree: Tree, text: str = LOCAL_FILE, mode: int = 0o600) -> Tree:
@@ -1132,6 +1137,122 @@ def test_the_scripts_git_still_sees_a_changed_file_with_those_settings_off(
     assert_plan_refused_and_dropped(tree, done, "uncommitted")
 
 
+# ── the git it needs: 2.32, the first that reads GIT_CONFIG_GLOBAL ───────────
+
+# A stand-in `git` that answers `--version` with the line the test gives and
+# passes every other call to the real one, so that an accepted version goes on
+# to the script's own git calls. The real git's place is written into the stub's
+# settings file by the test, from the path the test process itself has.
+STUB_GIT = r"""#!/usr/bin/env bash
+. "$(dirname "${BASH_SOURCE[0]}")/stub.env"
+if [[ "$1" == --version ]]; then
+  printf '%s\n' "${STUB_GIT_VERSION_LINE}"
+  exit 0
+fi
+exec "${STUB_REAL_GIT}" "$@"
+"""
+
+
+def with_git_version(tree: Tree, line: str) -> dict[str, str]:
+    stub = tree.root / "stubs" / "git"
+    stub.write_text(STUB_GIT)
+    stub.chmod(0o755)
+    real = shutil.which("git")
+    assert real is not None
+    return {"STUB_GIT_VERSION_LINE": line, "STUB_REAL_GIT": real}
+
+
+@pytest.mark.parametrize("subcommand", ["plan", "apply"])
+@pytest.mark.parametrize(
+    ("line", "found"),
+    [
+        # The sentence names major and minor: a four-part version would be
+        # taken for an address by `redact`, which every refusal passes through.
+        ("git version 2.31.9", "git 2.31 "),
+        ("git version 2.9.5", "git 2.9 "),  # 9 is below 32: not a string comparison
+        ("git version 1.8.3.1", "git 1.8 "),
+        ("git version 2.08.1", "git 2.08 "),  # base ten: not an octal error
+        ("git version 2.31.9 (Apple Git-130)", "git 2.31 "),
+    ],
+)
+def test_a_git_older_than_2_32_is_refused_with_the_version_it_found(
+    tree: Tree, subcommand: str, line: str, found: str
+) -> None:
+    with_local_file(tree)
+    with_saved_plan(tree)
+    settings = with_git_version(tree, line)
+
+    done = tree.run(subcommand, **settings)
+
+    printed = everything_printed(done)
+    assert done.returncode == 1, printed
+    assert found in done.stderr
+    assert "2.32" in done.stderr
+    assert "GIT_CONFIG_GLOBAL" in done.stderr
+    assert tree.calls() == []
+    assert tree.aws_calls() == []
+
+
+@pytest.mark.parametrize("subcommand", ["plan", "apply"])
+@pytest.mark.parametrize(
+    "line",
+    [
+        "git version 2.32.0",
+        "git version 2.32",
+        "git version 3.0.0",
+        "git version 2.100.0",
+        "git version 2.032.0",  # a leading zero is a decimal 32
+        "git version 2.43.0.windows.1",
+        "git version 2.39.5 (Apple Git-154)",
+    ],
+)
+def test_a_git_of_2_32_or_newer_is_accepted(
+    tree: Tree, subcommand: str, line: str
+) -> None:
+    with_local_file(tree)
+    with_saved_plan(tree)
+    settings = with_git_version(tree, line)
+
+    done = tree.run(subcommand, **settings)
+
+    assert done.returncode == 0, everything_printed(done)
+    assert tree.terraform_calls(subcommand) != []
+
+
+@pytest.mark.parametrize("subcommand", ["plan", "apply"])
+@pytest.mark.parametrize(
+    "line",
+    ["git version unknown", "git version", "", "2.40.0", "git version .5", "git 2.40"],
+)
+def test_a_git_version_the_script_cannot_read_is_refused(
+    tree: Tree, subcommand: str, line: str
+) -> None:
+    with_local_file(tree)
+    with_saved_plan(tree)
+    settings = with_git_version(tree, line)
+
+    done = tree.run(subcommand, **settings)
+
+    assert done.returncode == 1, everything_printed(done)
+    assert "version" in done.stderr
+    assert "2.32" in done.stderr
+    assert tree.calls() == []
+    assert tree.aws_calls() == []
+
+
+@pytest.mark.parametrize("subcommand", ["validate", "destroy"])
+def test_validate_and_removal_do_not_need_a_git_at_all(
+    tree: Tree, subcommand: str
+) -> None:
+    """They make no git call, so an old git is no reason to refuse them."""
+    with_local_file(tree)
+    settings = with_git_version(tree, "git version 2.0.0")
+
+    done = tree.run(subcommand, terminal=subcommand == "destroy", **settings)
+
+    assert done.returncode == 0, everything_printed(done)
+
+
 # ── nothing in the module's directory may change the plan unseen ─────────────
 
 VARIABLE_FILES = [
@@ -1470,7 +1591,19 @@ def with_workspace(tree: Tree, name: str | None) -> Tree:
 
 
 @pytest.mark.parametrize("subcommand", ["plan", "destroy"])
-@pytest.mark.parametrize("name", ["w1", "staging", "default-2", " default", ""])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "w1",
+        "staging",
+        "default-2",
+        "default\nother",  # the whole content is the name, as Terraform reads it
+        "default\nother\n",
+        "other\ndefault\n",
+        "default default",
+        "default\n\nother\n",
+    ],
+)
 def test_another_workspace_is_refused_after_init_and_before_anything_else(
     tree: Tree, subcommand: str, name: str
 ) -> None:
@@ -1506,7 +1639,22 @@ def test_apply_refuses_a_workspace_other_than_the_default_and_keeps_the_plan(
     assert (tree.module / PLAN_FILE).exists()  # the plan is still good
 
 
-@pytest.mark.parametrize("name", [None, "default", "default\n"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        None,
+        "default",
+        "default\n",
+        # Terraform trims the whole content (leading and trailing space, tabs,
+        # carriage returns, newlines), and an empty or blank file is the default
+        # workspace: observed on Terraform v1.16.5 with `workspace show`.
+        " default",
+        "  default \r\n\t\n",
+        "\n\ndefault\n\n",
+        "",
+        "  \n",
+    ],
+)
 @pytest.mark.parametrize("subcommand", ["plan", "apply", "destroy"])
 def test_no_workspace_file_or_one_that_says_default_is_not_refused(
     tree: Tree, subcommand: str, name: str | None
@@ -1518,6 +1666,43 @@ def test_no_workspace_file_or_one_that_says_default_is_not_refused(
     done = tree.run(subcommand, terminal=subcommand == "destroy")
 
     assert done.returncode == 0, everything_printed(done)
+
+
+@pytest.mark.parametrize("subcommand", ["plan", "apply", "destroy"])
+def test_a_directory_where_the_workspace_file_should_be_is_the_scripts_sentence_only(
+    tree: Tree, subcommand: str
+) -> None:
+    with_local_file(tree)
+    with_saved_plan(tree)
+    (tree.module / ".terraform" / "environment").mkdir(parents=True)
+
+    done = tree.run(subcommand, terminal=subcommand == "destroy")
+
+    printed = everything_printed(done)
+    assert done.returncode == 1, printed
+    assert "workspace select default" in printed
+    assert "Is a directory" not in printed
+    assert "cat:" not in printed  # nor the failed read's own line
+    assert tree.terraform_calls(subcommand) == []
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads any file")
+@pytest.mark.parametrize("subcommand", ["plan", "apply", "destroy"])
+def test_a_workspace_file_that_cannot_be_read_is_the_scripts_sentence_only(
+    tree: Tree, subcommand: str
+) -> None:
+    with_local_file(tree)
+    with_saved_plan(tree)
+    with_workspace(tree, "default")
+    (tree.module / ".terraform" / "environment").chmod(0)
+
+    done = tree.run(subcommand, terminal=subcommand == "destroy")
+
+    printed = everything_printed(done)
+    assert done.returncode == 1, printed
+    assert "workspace select default" in printed
+    assert "Permission denied" not in printed
+    assert tree.terraform_calls(subcommand) == []
 
 
 # ── apply ────────────────────────────────────────────────────────────────────
@@ -1583,7 +1768,9 @@ def assert_plan_refused_and_dropped(tree: Tree, done, sentence: str) -> None:
     assert sentence in done.stderr
     assert "make aws-plan" in done.stderr
     assert tree.terraform_calls("apply") == []
-    assert tree.aws_calls() == []
+    # The plan is judged last, so the identity call came first and was made
+    # once: that is what pins the order (see the test of the order below).
+    assert len(tree.aws_calls()) == 1
     assert not (tree.module / PLAN_FILE).exists()
     assert not (tree.module / META_FILE).exists()
 
@@ -1806,7 +1993,7 @@ def test_a_plan_made_from_a_changed_module_is_not_applied_even_after_a_hand_reve
     assert "record" in done.stderr
     assert "make aws-plan" in done.stderr
     assert tree.terraform_calls("apply") == []
-    assert len(tree.aws_calls()) == 1  # the plan's own, none for the apply
+    assert len(tree.aws_calls()) == 2  # the plan's own, and the apply's, first
     assert not (tree.module / PLAN_FILE).exists()
 
 
@@ -1829,6 +2016,219 @@ def test_a_module_that_changes_while_the_plan_runs_gets_no_record(tree: Tree) ->
 
     assert done.returncode == 0, everything_printed(done)
     assert not (tree.module / META_FILE).exists()
+
+
+# ── the plan is judged last, and read from standard input ────────────────────
+
+
+@pytest.mark.parametrize("fault", ["too old", "not the record's file"])
+def test_the_saved_plan_is_judged_after_the_sign_in_call_not_before_it(
+    tree: Tree, fault: str
+) -> None:
+    """The order is observable: when the sign-in call fails, a saved plan that
+    would have been refused is still there (nothing read it: neither its hash
+    nor its age was taken before a call that can hang), and the sentence is the
+    sign-in's."""
+    with_local_file(tree)
+    if fault == "too old":
+        with_saved_plan(tree, age_seconds=PLAN_MAX_AGE_SECONDS + 60)
+    else:
+        with_saved_plan(tree)
+        (tree.module / PLAN_FILE).write_bytes(b"a plan made by hand")
+
+    done = tree.run("apply", STUB_AWS_STATUS="1")
+
+    assert done.returncode == 1, everything_printed(done)
+    assert "sign in" in done.stderr
+    assert "too old" not in done.stderr
+    assert "SHA-256" not in done.stderr
+    assert len(tree.aws_calls()) == 1
+    assert (tree.module / PLAN_FILE).exists()
+    assert (tree.module / META_FILE).exists()
+
+
+def test_a_plan_that_would_be_refused_is_still_refused_once_signed_in(
+    tree: Tree,
+) -> None:
+    with_local_file(tree)
+    with_saved_plan(tree, age_seconds=PLAN_MAX_AGE_SECONDS + 60)
+
+    done = tree.run("apply")
+
+    assert_plan_refused_and_dropped(tree, done, "old")
+
+
+def test_a_module_path_with_a_backslash_does_not_spoil_the_plans_hash(
+    tmp_path: Path,
+) -> None:
+    """`sha256sum PATH` puts a backslash before the digest when the path holds
+    one, and the record then failed its own shape at apply. The path is built
+    here, in the body, and the hash is read from standard input."""
+    tree = make_tree(tmp_path / "with\\a\\backslash")
+    with_local_file(tree)
+
+    plan = tree.run("plan")
+    assert plan.returncode == 0, everything_printed(plan)
+    record = (tree.module / META_FILE).read_text()
+    assert re.fullmatch(r"commit=\w{40}\ntime=\d{10}\nsha256=[0-9a-f]{64}\n", record)
+    done = tree.run("apply")
+
+    assert done.returncode == 0, everything_printed(done)
+    assert tree.terraform_calls("apply") != []
+
+
+# ── an ignore rule cannot hide a Terraform file from the clean-tree check ───
+
+HIDING_PLACES = [
+    "the caller's default ignore file",
+    "the repository's info/exclude",
+    "a .gitignore in the module directory",
+]
+# What apply says about a file git's own status does not show (the last two) and
+# about one it does, once the script's git has the caller's ignore file off.
+APPLY_SENTENCE = {
+    "the caller's default ignore file": "uncommitted",
+    "the repository's info/exclude": "untracked Terraform",
+    "a .gitignore in the module directory": "untracked Terraform",
+}
+
+
+def hide_zz_files(tree: Tree, where: str) -> None:
+    """An ignore rule that hides every file whose name begins with zz, in one of
+    three places the script's git read before. The module's own .gitignore is
+    committed first, so that it is not itself the change that is seen."""
+    if where == HIDING_PLACES[0]:
+        (tree.root / ".config" / "git").mkdir(parents=True)
+        (tree.root / ".config" / "git" / "ignore").write_text("zz*\n")
+    elif where == HIDING_PLACES[1]:
+        (tree.root / ".git" / "info" / "exclude").write_text("zz*\n")
+    else:
+        (tree.module / ".gitignore").write_text("zz*\n")
+        git(tree.root, "add", "-A")
+        git(tree.root, "commit", "-q", "-m", "an ignore file in the module")
+
+
+def plain_status_as_the_caller(tree: Tree) -> str:
+    """`git status` of the module with no override of the script's, run with the
+    stand-in home as the home, so that its default ignore file is read."""
+    env = {k: v for k, v in GIT_ENV.items() if k != "XDG_CONFIG_HOME"}
+    env["HOME"] = str(tree.root)
+    done = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all", "--", "."],
+        cwd=tree.module,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return done.stdout.strip()
+
+
+@pytest.mark.parametrize("name", ["zz_extra.tf", "zz_extra.tf.json"])
+@pytest.mark.parametrize("where", HIDING_PLACES)
+def test_a_terraform_file_that_an_ignore_rule_hides_gets_the_plan_no_record(
+    tree: Tree, where: str, name: str
+) -> None:
+    with_local_file(tree)
+    hide_zz_files(tree, where)
+    (tree.module / name).write_text("# a resource that changes the plan\n")
+    # The premise: a plain `git status` as this home's owner runs it says nothing.
+    assert plain_status_as_the_caller(tree) == ""
+
+    done = tree.run("plan")
+
+    assert done.returncode == 0, everything_printed(done)
+    assert "stub terraform plan" in done.stdout  # reading the plan is free
+    assert not (tree.module / META_FILE).exists()
+    assert "zz_extra" not in everything_printed(done)
+
+
+@pytest.mark.parametrize("where", HIDING_PLACES[1:])
+def test_the_plan_names_the_kind_and_the_count_of_the_files_an_ignore_rule_hides(
+    tree: Tree, where: str
+) -> None:
+    with_local_file(tree)
+    hide_zz_files(tree, where)
+    (tree.module / "zz_one.tf").write_text("# one\n")
+    (tree.module / "zz_two.tf.json").write_text("{}\n")
+
+    done = tree.run("plan")
+
+    assert done.returncode == 0, everything_printed(done)
+    assert "2 untracked Terraform files" in done.stdout
+    assert "zz_one" not in everything_printed(done)
+    assert "zz_two" not in everything_printed(done)
+    assert not (tree.module / META_FILE).exists()
+
+
+@pytest.mark.parametrize("name", ["zz_extra.tf", "zz_extra.tf.json"])
+@pytest.mark.parametrize("where", HIDING_PLACES)
+def test_a_plan_made_before_a_hidden_terraform_file_appeared_is_not_applied(
+    tree: Tree, where: str, name: str
+) -> None:
+    with_local_file(tree)
+    hide_zz_files(tree, where)
+    with_saved_plan(tree)
+    (tree.module / name).write_text("# a resource the plan was not made from\n")
+
+    done = tree.run("apply")
+
+    assert_plan_refused_and_dropped(tree, done, APPLY_SENTENCE[where])
+    assert "zz_extra" not in everything_printed(done)
+
+
+def test_the_sentence_for_a_hidden_terraform_file_says_how_to_get_rid_of_it(
+    tree: Tree,
+) -> None:
+    """`commit it` is no advice for a file git will not take."""
+    with_local_file(tree)
+    hide_zz_files(tree, HIDING_PLACES[1])
+    with_saved_plan(tree)
+    (tree.module / "zz_extra.tf").write_text("# not committed\n")
+
+    done = tree.run("apply")
+
+    assert "1 untracked Terraform file" in done.stderr
+    assert "ignore" in done.stderr
+    assert "remove it" in done.stderr
+
+
+def test_the_modules_own_ignored_files_that_are_not_terraform_do_not_trip_it(
+    tree: Tree,
+) -> None:
+    """The plan, its record, what init downloads (a provider, and a module's own
+    .tf files under .terraform/) are ignored and untracked: none is a file the
+    plan reads from this directory."""
+    with_local_file(tree)
+    with_saved_plan(tree)
+    providers = tree.module / ".terraform" / "providers" / "registry" / "hashicorp"
+    providers.mkdir(parents=True)
+    (providers / "terraform-provider-aws").write_text("x\n")
+    downloaded = tree.module / ".terraform" / "modules" / "network"
+    downloaded.mkdir(parents=True)
+    (downloaded / "main.tf").write_text("# downloaded by init\n")
+    (tree.module / "terraform.tfstate").write_text("{}\n")
+
+    done = tree.run("apply")
+
+    assert done.returncode == 0, everything_printed(done)
+    plan = tree.run("plan")
+    assert plan.returncode == 0, everything_printed(plan)
+    assert (tree.module / META_FILE).exists()
+
+
+def test_a_terraform_file_in_a_subdirectory_is_not_one_the_plan_reads(
+    tree: Tree,
+) -> None:
+    with_local_file(tree)
+    hide_zz_files(tree, HIDING_PLACES[1])
+    (tree.module / "zzdir").mkdir()
+    (tree.module / "zzdir" / "main.tf").write_text("# not loaded\n")
+
+    done = tree.run("plan")
+
+    assert done.returncode == 0, everything_printed(done)
+    assert (tree.module / META_FILE).exists()
 
 
 # ── removal ──────────────────────────────────────────────────────────────────

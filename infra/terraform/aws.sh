@@ -152,22 +152,52 @@ tf_state_list() { run_clean plain terraform -chdir="${AWS_MODULE_DIR}" state lis
 
 # git with the environment of this script's choosing: a GIT_DIR or a
 # GIT_WORK_TREE of the caller must not point it at another repository. And with
-# no configuration that can run a program: the caller's global and the system
-# configuration are switched off (GIT_CONFIG_GLOBAL, GIT_CONFIG_NOSYSTEM; the
-# first needs git 2.32, from 2021), and the two settings that make `git status`
-# run a program are set by hand, which outranks the repository's own file too:
-# core.fsmonitor (a program asked what changed; a line in ~/.gitconfig made it
-# run in review) and core.hooksPath (hooks). The two commands used here,
-# `status --porcelain` and `rev-parse`, reach nothing else that runs a program:
-# neither talks to a remote, so no credential helper is asked, and neither pages
-# when its output is not a terminal, so no core.pager or GIT_PAGER runs. A clean
-# filter would run on `status` only for a path with a filter attribute and a
-# command in a configuration file: the global and system ones are off, and the
-# repository's own file is the checkout's (whoever can write it can already run
-# code as this user, through a hook).
+# less of the caller's configuration: the caller's global and the system
+# configuration files are switched off (GIT_CONFIG_GLOBAL, GIT_CONFIG_NOSYSTEM;
+# the first needs git 2.32, from 2021, which the next function checks), the two
+# settings that make `git status` run a program are set by hand, which outranks
+# the repository's own file too (core.fsmonitor, a program asked what changed,
+# and core.hooksPath, the hooks), and the caller's default ignore file is
+# switched off (core.excludesFile, which would otherwise be ~/.config/git/ignore:
+# a line there hid an untracked .tf from `status`).
+# The two commands used here that matter, `status --porcelain` and `rev-parse`,
+# talk to no remote, so no credential helper is asked, and page nothing when
+# their output is not a terminal, so no core.pager or GIT_PAGER runs.
+#
+# What this does NOT stop: a `filter.<name>.clean` program configured in the
+# repository's OWN .git/config, together with an attributes line that names it
+# (a committed .gitattributes, or .git/info/attributes), DOES run during
+# `status` for a tracked file whose modification time changed and whose size
+# did not (the third review ran it with a file made by `touch`). Nothing here
+# turns it off. It is listed in infra/terraform/aws/README.md with the rest.
 git_here() {
   run_clean plain env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
-    git -c core.fsmonitor=false -c core.hooksPath=/dev/null -C "${AWS_MODULE_DIR}" "$@"
+    git -c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.excludesFile=/dev/null \
+    -C "${AWS_MODULE_DIR}" "$@"
+}
+
+# GIT_CONFIG_GLOBAL is read by git 2.32 and newer; an older git ignores it and
+# reads the caller's ~/.gitconfig, so the sentence above would be false. The
+# version is read from `git --version` ("git version 2.43.0", "git version 2.39.5
+# (Apple Git-154)") and compared as numbers, major and then minor, in base ten
+# (10#: a leading zero would be read as octal). A line it cannot read is refused.
+# Only major and minor are printed: a four-part version would be taken for an
+# address by redact. plan and apply call git, so they call this; validate and
+# destroy make no git call.
+readonly GIT_NEEDED_MAJOR=2
+readonly GIT_NEEDED_MINOR=32
+require_a_git_that_reads_its_own_settings() {
+  local line major minor
+  line="$(run_clean plain git --version 2>/dev/null)" ||
+    die "cannot run 'git --version'; this needs git ${GIT_NEEDED_MAJOR}.${GIT_NEEDED_MINOR} or newer, the first that reads GIT_CONFIG_GLOBAL"
+  [[ "${line}" =~ ^git\ version\ ([0-9]{1,6})\.([0-9]{1,6}) ]] ||
+    die "cannot read a version number from what 'git --version' printed; this needs git ${GIT_NEEDED_MAJOR}.${GIT_NEEDED_MINOR} or newer, the first that reads GIT_CONFIG_GLOBAL"
+  major="${BASH_REMATCH[1]}"
+  minor="${BASH_REMATCH[2]}"
+  if ((10#${major} > GIT_NEEDED_MAJOR || (10#${major} == GIT_NEEDED_MAJOR && 10#${minor} >= GIT_NEEDED_MINOR))); then
+    return 0
+  fi
+  die "git ${major}.${minor} is too old: this needs git ${GIT_NEEDED_MAJOR}.${GIT_NEEDED_MINOR} or newer, the first that reads GIT_CONFIG_GLOBAL; an older one reads the caller's own git configuration, which the script switches off for the calls it makes (infra/terraform/aws/README.md, 'What stops a session, and what does not')"
 }
 
 # What the local file may hold and what a value may be made of: digits, letters
@@ -299,16 +329,24 @@ prepare_state() {
 # is the one Terraform reads. Selecting the default workspace again leaves the
 # file in place, with the word default in it: the content is read, not the
 # file's existence. This reads the file rather than asking `terraform workspace
-# show`: no further call, and nothing for a stand-in to imitate. A file that is
-# empty or unreadable is refused too.
+# show`: no further call, and nothing for a stand-in to imitate.
+#
+# The whole file is the name, as Terraform reads it: the content with leading and
+# trailing white space trimmed (observed with `terraform workspace show` on
+# v1.16.5: " default \r\n\t\n" is the default workspace, and so is an empty or a
+# blank file; "default\nother" is not a name at all). A second line is therefore
+# not skipped. A file that cannot be read (a directory, a mode of 000) is
+# refused, and the shell's own words about it are not printed.
 require_default_workspace() {
-  local file="${AWS_MODULE_DIR}/.terraform/environment" name=default
+  local file="${AWS_MODULE_DIR}/.terraform/environment" name=default readable=yes
   if [[ -e "${file}" || -L "${file}" ]]; then
-    name=""
-    IFS= read -r name <"${file}" || true
+    { name="$(cat -- "${file}")"; } 2>/dev/null || readable=no
+    name="${name#"${name%%[![:space:]]*}"}"
+    name="${name%"${name##*[![:space:]]}"}"
+    if [[ -z "${name}" ]]; then name=default; fi
   fi
-  [[ "${name}" == default ]] ||
-    die "the module's directory is on a Terraform workspace other than the default one (.terraform/environment names it): Terraform would keep the state in terraform.tfstate.d/ in the checkout and not in the state under your home, and a removal would find it empty. Get back with: terraform -chdir=infra/terraform/aws workspace select default (infra/terraform/aws/README.md, State)"
+  [[ "${readable}" == yes && "${name}" == default ]] ||
+    die "the module's directory is not on Terraform's default workspace, or .terraform/environment cannot be read: Terraform would keep the state in terraform.tfstate.d/ in the checkout and not in the state under your home, and a removal would find it empty. Get back with: terraform -chdir=infra/terraform/aws workspace select default (infra/terraform/aws/README.md, State)"
 }
 
 # init with the local state's path, and with the committed lock file as the
@@ -352,13 +390,44 @@ module_changes() {
     die "cannot read the git status of the module; this has to run in a checkout of the repository"
 }
 
+# The number of *.tf and *.tf.json files in the module's directory that git does
+# not track, WHATEVER an ignore rule says: `ls-files --others` with no
+# --exclude-standard reads no ignore file at all (not ~/.config/git/ignore, not
+# .git/info/exclude, not a .gitignore in the module), so a file hidden by one is
+# counted as well as a plain untracked one. Terraform reads every such file in
+# the directory, and `status` does not show an ignored one. Only the directory's
+# own files count (':(glob)*' does not cross a slash): what init downloads under
+# .terraform/ is not read as part of this module, and the plan, its record and
+# the state are not .tf files. icase: a file system that ignores case hands
+# Main.TF to Terraform as main.tf. The names are never printed, only this count.
+untracked_terraform_files() {
+  local count
+  count="$(git_here ls-files --others -z -- ':(glob,icase)*.tf' ':(glob,icase)*.tf.json' 2>/dev/null |
+    tr -cd '\0' | wc -c | tr -d ' ')" ||
+    die "cannot read the list of untracked files in the module; this has to run in a checkout of the repository"
+  printf '%s\n' "${count}"
+}
+
+# "1 untracked Terraform file" or "3 untracked Terraform files", for a sentence.
+untracked_terraform_files_phrase() {
+  if (($1 == 1)); then
+    printf '1 untracked Terraform file (*.tf or *.tf.json)'
+  else
+    printf '%s untracked Terraform files (*.tf or *.tf.json)' "$1"
+  fi
+}
+
 drop_plan() { rm -f "${AWS_MODULE_DIR}/${PLAN_FILE}" "${AWS_MODULE_DIR}/${PLAN_RECORD_FILE}"; }
 
 # The SHA-256 of a file, as sixty-four lower-case hex digits and nothing else.
 file_sha256() {
   local out
-  out="$(sha256sum "$1" 2>/dev/null || shasum -a 256 "$1" 2>/dev/null)" ||
-    die "cannot compute a SHA-256 (neither sha256sum nor shasum is available)"
+  # From standard input: given a path, sha256sum puts a backslash in front of the
+  # digest when the path holds a backslash or a newline. (2>/dev/null comes
+  # first so that it also covers the shell's own words about a file it cannot
+  # open for the redirection.)
+  out="$(sha256sum 2>/dev/null <"$1" || shasum -a 256 2>/dev/null <"$1")" ||
+    die "cannot compute a SHA-256 (neither sha256sum nor shasum is available, or the file cannot be read)"
   printf '%s\n' "${out%% *}"
 }
 
@@ -383,11 +452,15 @@ cmd_plan() {
   require_pinned_account
   # Each is read into a variable first: a die inside $(...) would end only the
   # substitution, not the script.
-  local commit changes
+  local commit changes untracked
   commit="$(current_commit)"
   changes="$(module_changes)"
+  untracked="$(untracked_terraform_files)"
   if [[ -n "${changes}" ]]; then
     log "warning: the module directory has uncommitted changes; the plan is shown (reading it is free) but no record is written for it, so 'make aws-apply' will refuse it until they are committed and the plan is made again"
+  fi
+  if ((untracked > 0)); then
+    log "warning: the module directory holds $(untracked_terraform_files_phrase "${untracked}"), which Terraform reads whatever an ignore rule says; the plan is shown but no record is written for it, so 'make aws-apply' will refuse it. Commit the file if it belongs to the module; git cannot commit one that an ignore rule hides, so remove it. Then make the plan again"
   fi
   drop_plan # a plan that fails must not leave an older one to be applied
   init_with_state
@@ -401,10 +474,12 @@ cmd_plan() {
   # The record says "made from this commit, from a directory no change had
   # touched". The directory is read again now: a file edited while the plan ran
   # is a change the commit does not describe either.
-  local commit_after changes_after
+  local commit_after changes_after untracked_after
   commit_after="$(current_commit)"
   changes_after="$(module_changes)"
-  if [[ -n "${changes}" || -n "${changes_after}" || "${commit}" != "${commit_after}" ]]; then
+  untracked_after="$(untracked_terraform_files)"
+  if [[ -n "${changes}" || -n "${changes_after}" || "${commit}" != "${commit_after}" ||
+    "${untracked}" != 0 || "${untracked_after}" != 0 ]]; then
     log "no record was written: the plan above was made from a module directory that no commit describes, so 'make aws-apply' will refuse it; commit the change, then make the plan again"
     return 0
   fi
@@ -420,7 +495,7 @@ cmd_plan() {
 # plan again.
 require_a_plan_that_is_this_trees_and_fresh() {
   local record="${AWS_MODULE_DIR}/${PLAN_RECORD_FILE}" line_commit line_time line_hash
-  local planned_commit planned_time planned_hash now age commit changes
+  local planned_commit planned_time planned_hash now age commit changes untracked
   stale() {
     drop_plan
     die "$1; run 'make aws-plan' again"
@@ -450,6 +525,11 @@ require_a_plan_that_is_this_trees_and_fresh() {
   changes="$(module_changes)"
   [[ -z "${changes}" ]] ||
     stale "the module directory has uncommitted changes that the saved plan was not made from"
+  # What no ignore rule can hide: git status does not show a file an ignore file
+  # of the repository hides, and Terraform reads it.
+  untracked="$(untracked_terraform_files)"
+  ((untracked == 0)) ||
+    stale "the module directory holds $(untracked_terraform_files_phrase "${untracked}") that the saved plan was not made from, and Terraform reads it whatever an ignore rule says; remove it (git cannot commit a file that an ignore rule hides), or commit it if it belongs to the module"
   now="$(date +%s)"
   age=$((now - 10#${planned_time}))
   ((age >= 0 && age <= PLAN_MAX_AGE_SECONDS)) ||
@@ -465,9 +545,12 @@ cmd_apply() {
   # apply runs no init, so a workspace file left since the plan is checked here.
   # The plan is not dropped for it: it is still good once the workspace is back.
   require_default_workspace
-  require_a_plan_that_is_this_trees_and_fresh
   load_aws_env
   require_pinned_account
+  # Last of the checks, just before Terraform reads the plan: the hash and the
+  # age are taken after the sign-in call, which can hang or wait for a person,
+  # so neither is older than the call that follows them.
+  require_a_plan_that_is_this_trees_and_fresh
   log "terraform apply ${PLAN_FILE}"
   local status=0
   tf_signed apply -input=false "${PLAN_FILE}" 2>&1 | redact || status=$?
@@ -518,10 +601,12 @@ case "$1" in
     ;;
   plan)
     need_tools terraform aws git
+    require_a_git_that_reads_its_own_settings
     cmd_plan
     ;;
   apply)
     need_tools terraform aws git
+    require_a_git_that_reads_its_own_settings
     cmd_apply
     ;;
   destroy)

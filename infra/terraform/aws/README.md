@@ -375,10 +375,22 @@ What the module and the script do, each for a mistake and not for an attack:
   that no change had touched, within thirty minutes;
 - the Region in the local file is checked against the module's six before the
   `aws` CLI sees it, and each value in the file is at most 253 characters;
-- `git` runs with the caller's global and system configuration off and the two
-  settings that make it run a program (`core.fsmonitor`, `core.hooksPath`)
-  overridden, so a line in `~/.gitconfig` or in the repository's own file does
-  not run a program for the script;
+- `git` must be version 2.32 or newer (the first that reads
+  `GIT_CONFIG_GLOBAL`; `plan` and `apply` refuse an older one, a version they
+  cannot read included, and name the one they found), and runs with the caller's
+  global and system configuration files off and three settings overridden:
+  `core.fsmonitor` and `core.hooksPath`, the two that make `git status` run a
+  program, which outranks the repository's own file as well, and
+  `core.excludesFile`, the caller's default ignore file. A line in
+  `~/.gitconfig` or in `~/.config/git/config` does not run a program for the
+  script. A clean filter in the repository's own file is **not** stopped: see
+  "What the environment does not close";
+- an untracked `*.tf` or `*.tf.json` file in this directory is seen whatever
+  an ignore rule says: the script asks `git ls-files --others` with no ignore
+  file read at all (not the caller's, not `.git/info/exclude`, not a
+  `.gitignore` in this directory), so a plan made with one gets no record and
+  an apply refuses. Only the directory's own files count, not what `init`
+  downloads under `.terraform/`;
 - two instance types and the endpoint's address come from validated lists and
   ranges, and three variables are sensitive.
 
@@ -397,6 +409,38 @@ caller's own surroundings:
 - **A shell start-up variable** (`BASH_ENV`) runs code before the first line of
   the script, so before `set +x` and before anything else in it. Nothing in the
   script can stop that.
+- **A helper named in the AWS configuration.** A `credential_process` or a
+  sign-in helper in `~/.aws/config` runs when the `aws` CLI or Terraform's
+  provider reads the profile, and the script lets the file through (it passes
+  `HOME`, `AWS_PROFILE` and `AWS_CONFIG_FILE`). It reads none of it.
+- **Exported shell functions and `LD_PRELOAD`**, the same class as `BASH_ENV`.
+  `env -i` removes both for `terraform`, `aws` and `git`, which the script runs
+  through it (a scratch probe: the child of `env -i` saw no function and no
+  `LD_PRELOAD`). It does not remove them for the script itself: its own `bash`
+  imports an exported function when it starts and runs it when the script calls
+  a command of that name without `env -i` (`date`, `stat`, `tr`, `grep`,
+  `sha256sum`, `cat`, `wc`; the probe ran an exported `date`), and `LD_PRELOAD`
+  is loaded into that `bash` and into each program started without `env -i`.
+- **`~/.terraform.d`**, a local plugin directory under the home the script
+  passes on. Terraform reads it, and the script does not look at it.
+- **A clean filter in the repository's own file.** A `filter.<name>.clean`
+  program in `.git/config`, with an attributes line that names it (a committed
+  `.gitattributes`, or `.git/info/attributes`), runs during the script's
+  `git status` for a tracked file whose modification time changed and whose
+  size did not (the third review ran one that way, after a `touch`). The
+  overrides above do not reach it, and nothing is built for it. The older
+  argument that whoever can write that file can run a hook anyway does not hold:
+  the script turns hooks off.
+- **A changed `HOME` in the same checkout** plans against an empty state without
+  a stop. The state is under the home (see "State"), and `-reconfigure` replaced
+  the old "Backend configuration changed" stop. `destroy` refuses an empty state;
+  `plan` does not. The sign is the plan's own count of what it would add: every
+  resource of the module.
+- **A link at the plan's or the record's path** is followed: at the read (the
+  existence test, the hash, Terraform) and at the record's write. `plan` starts
+  by removing the path, which removes a link and not what it points at. Only a
+  writer running as the same user during the plan can use it, which is not an
+  honest mistake.
 
 ### The local file
 
@@ -447,7 +491,9 @@ prints an account number:
 | The identity call fails | Sign in, for example `aws sso login`, to the account you mean |
 | The signed-in account is not the pinned one | Sign in to the right account, or correct the pin if it is wrong |
 | A variable file or an override file in this directory, hidden or in another case included | Remove it; give values through the local file |
-| A Terraform workspace other than the default (`.terraform/environment`), at `plan`, `apply` or `destroy` | The owner, in a terminal: `terraform -chdir=infra/terraform/aws workspace select default` (a session's command guard asks) |
+| A Terraform workspace other than the default (`.terraform/environment`, or one that cannot be read), at `plan`, `apply` or `destroy` | The owner, in a terminal: `terraform -chdir=infra/terraform/aws workspace select default` (a session's command guard asks) |
+| `git` older than 2.32, or a version it cannot read, at `plan` or `apply` | Install a newer `git` |
+| An untracked `*.tf` or `*.tf.json` file in this directory, an ignore rule hiding it or not: `plan` shows the plan and writes no record; `apply` refuses | Remove it, or commit it if it belongs to the module; `make aws-plan` again |
 | `apply` with no saved plan | `make aws-plan` first |
 | `apply` with a plan that has no record, whose file is not the one the record names, that is another commit's, from a changed directory, or older than thirty minutes | `make aws-plan` again (the plan and its record are dropped) |
 | `destroy` with no terminal | Run it yourself, in a terminal |
@@ -515,8 +561,15 @@ made by hand is recorded in `.terraform/environment` and stays selected through
 later inits; Terraform then keeps that workspace's state in
 `terraform.tfstate.d/` in this directory, a checkout, and a removal would find
 the state under home empty. So `plan` and `destroy` refuse, after their init,
-unless the file is absent or says `default`, and `apply` (which runs no init)
-checks it too. The script reads the file instead of asking Terraform: it passes
+unless the file is absent or its whole content, trimmed of white space at both
+ends, is `default` or nothing, and `apply` (which runs no init) checks it too.
+That is how Terraform reads the file, observed with `terraform workspace show`
+on Terraform v1.16.5 on a scratch directory with no provider (no source was
+read): ` default \r\n\t\n`, an empty file and a blank one are the default
+workspace, and `default` followed by another line is an invalid name, so a
+second line is not skipped. A file that cannot be read (a directory, mode 000)
+is refused with the same sentence. The script reads the file instead of asking
+Terraform: it passes
 no `TF_WORKSPACE` and no `TF_DATA_DIR`, so this is the file Terraform reads, and
 no further call is made. Selecting the default workspace again leaves the file
 in place with the word `default` in it, which is why the content is what is
@@ -533,9 +586,12 @@ and `sha256=` (the SHA-256 of the plan file). `make aws-apply` applies the plan
 only if the plan file's SHA-256 is the recorded one (so a plan written by hand
 over the script's, with a `-target` or another variable, is refused), that
 commit is the one checked out now, the module's directory has no uncommitted
-change (`git status` of this directory, untracked files included), and the
+change (`git status` of this directory, untracked files included, and no
+untracked `*.tf` or `*.tf.json` file that an ignore rule hides from it), and the
 plan is less than thirty minutes old: the length of one plan, read and apply
-sitting. Otherwise it drops the plan and says to plan again. The time is read
+sitting. The plan is judged last, after the sign-in call and just before
+Terraform reads it, so neither its hash nor its age is taken before a call that
+can hang. Otherwise it drops the plan and says to plan again. The time is read
 as a plain decimal and in base ten: a leading zero would be read as octal by
 the shell, so anything but ten digits with no leading zero is refused.
 

@@ -100,13 +100,22 @@ def inline_ignores(text: str) -> list[str]:
 def module_blocks(text: str) -> list[str]:
     """Lines that open a ``module`` block: the counts of clusters and subnets
     cannot see inside one."""
-    return [line for line in text.splitlines() if re.match(r'\s*module\s+"', line)]
+    return [
+        line
+        for line in text.splitlines()
+        if re.match(r'\s*module\s+("[^"]+"|\w+)', line)
+    ]
 
 
 def count_resources(text: str, resource_type: str) -> int:
-    """Blocks of a resource type, whatever the indentation and spacing."""
+    """Blocks of a resource type, whatever the indentation and spacing, and
+    whether the labels are quoted or bare identifiers (HCL takes both)."""
     return len(
-        re.findall(rf'^\s*resource\s+"{resource_type}"\s+', text, flags=re.MULTILINE)
+        re.findall(
+            rf'^\s*resource\s+("{resource_type}"|{resource_type})\s+',
+            text,
+            flags=re.MULTILINE,
+        )
     )
 
 
@@ -400,6 +409,16 @@ def test_the_clusters_and_subnets_are_held_to_what_the_ignore_reasons_describe()
         ('resource "aws_subnet" "a" {}\nresource "aws_subnet" "b" {}\n', 2),
         ('resource "aws_subnet_other" "a" {}\n', 0),
         ('# resource "aws_subnet" "a" {}\n', 0),
+        # HCL takes a bare identifier as a label as well as a quoted string.
+        ("resource aws_subnet a {}\n", 1),
+        ('resource aws_subnet "a" {}\n', 1),
+        ('resource "aws_subnet" a {}\n', 1),
+        ("resource  aws_subnet   a {}\n", 1),
+        ("resource aws_subnet a {}\nresource aws_subnet b {}\n", 2),
+        ('resource aws_subnet a {}\nresource "aws_subnet" "b" {}\n', 2),
+        ("resource aws_subnet_other a {}\n", 0),
+        ("# resource aws_subnet a {}\n", 0),
+        ("resource aws_subnetwork a {}\n", 0),
     ],
 )
 def test_the_resource_count_tolerates_any_spacing(text: str, expected: int) -> None:
@@ -407,10 +426,33 @@ def test_the_resource_count_tolerates_any_spacing(text: str, expected: int) -> N
 
 
 @pytest.mark.parametrize(
-    "line", ['module "network" {', '  module   "network" {', 'module\t"network" {']
+    "line",
+    [
+        'module "network" {',
+        '  module   "network" {',
+        'module\t"network" {',
+        "module network {",  # a bare identifier is a label too
+        "  module   network {",
+        "module\tnetwork {",
+        "module network_a-1 {",
+    ],
 )
 def test_a_module_block_is_found(line: str) -> None:
     assert module_blocks(f'{line}\n  source = "./x"\n}}\n') == [line]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "# module network {",
+        'variable "module_name" {',
+        'resource "aws_x" "module_a" {',
+        "modules = {}",
+        "module_count = 1",
+    ],
+)
+def test_a_line_that_is_not_a_module_block_is_not_found(line: str) -> None:
+    assert module_blocks(f"{line}\n") == []
 
 
 def test_the_module_calls_no_module_that_could_hide_a_cluster_or_a_subnet() -> None:
@@ -517,6 +559,26 @@ def readme_prose() -> str:
         "a wrong name waits before it fails",
         # Pod Identity: session tags switched off.
         "`PackedPolicyTooLarge`",
+        # What the third review found: the git the script needs, what its git
+        # settings do and do not cover, and the files an ignore rule hides.
+        "`git` must be version 2.32 or newer",
+        "`core.excludesFile`, the caller's default ignore file",
+        "an untracked `*.tf` or `*.tf.json` file in this directory is seen whatever "
+        "an ignore rule says",
+        "The plan is judged last, after the sign-in call",
+        "a second line is not skipped",
+        "an empty file and a blank one are the default workspace",
+        # The things the environment does not close, the third review's list.
+        "**A helper named in the AWS configuration.**",
+        "`credential_process`",
+        "**Exported shell functions and `LD_PRELOAD`**",
+        "the probe ran an exported `date`",
+        "**`~/.terraform.d`**",
+        "**A clean filter in the repository's own file.**",
+        "the script turns hooks off",
+        "**A changed `HOME` in the same checkout**",
+        "the plan's own count of what it would add",
+        "**A link at the plan's or the record's path** is followed",
     ],
 )
 def test_the_readme_says_what_the_second_review_found_it_left_out(
@@ -531,3 +593,7 @@ def test_the_readme_no_longer_says_what_the_second_review_found_untrue() -> None
     assert "so a plan prints `(sensitive value)` for each" not in readme
     # The record was written for such a plan, and a revert made it applicable.
     assert "can therefore not be applied" not in readme
+    # The third review ran a clean filter from the repository's own file.
+    assert "in the repository's own file does not run a program for the script" not in (
+        readme
+    )
