@@ -1134,8 +1134,9 @@ when the script ends. The tool check leaves at most one refused `tool.call` row
 per server in the audit log per throttle window, and the identity check one
 refusal row per reason and minute.
 
-Where a check lives, and how to add one (S074; the split is tested, not yet
-run on a cluster). `smoke.sh` is the entry: the preconditions, the traps, the
+Where a check lives, and how to add one (S074; the split is tested and was
+seen on kind once, 2026-10-07: `make smoke` printed the same 46 PASS lines as
+the unsplit script). `smoke.sh` is the entry: the preconditions, the traps, the
 eleven calls and the summary, and a pair of lines for each part it sources. A
 check is a file in `smoke.d/`, `NN-name.sh` (`shared.sh` holds what several
 checks and the trap use), and it holds definitions only: its paragraph from the
