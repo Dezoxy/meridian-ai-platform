@@ -145,6 +145,12 @@ an access key, a cluster or database host, an e-mail address, an IPv4 address,
 and a secret key or session token after its label), which the Azure scripts'
 output meets too, and no other, so read a plan before pasting it anywhere.
 
+The checks around a saved plan that name no cloud (the default workspace, the
+refusal of a variable or override file, the plan record bound to its commit and
+hash, the tree checks) live in `planguard.sh`, which `aws.sh` sources as it
+sources `common.sh`; a wrapper for the Azure platform module, which does not
+exist yet, would source the same file.
+
 ## Prerequisites
 
 `az` (signed in with a user account: `az login`), `terraform` 1.16, `jq`,

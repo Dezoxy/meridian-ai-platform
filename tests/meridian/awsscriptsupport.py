@@ -1,15 +1,15 @@
 """What the tests of ``infra/terraform/aws.sh`` share (S036, S079).
 
-The script is copied, with ``common.sh``, into a temporary ``infra/terraform``
-tree that holds a stand-in module directory and is a git repository of its own,
-so it runs against nothing real: its module directory and its local file are
-resolved from its own location. Stub ``terraform`` and ``aws`` programs come
-first on ``PATH``; they record every call and answer from a file the test
-writes beside them (``stub.env``): the script runs both with an environment of
-its own choosing, so a variable the test sets in the process would never reach
-them. No credential, account, cluster or network is involved. Every account
-number, address and host here is made up: twelve identical digits, a
-documentation address and ``example.com``.
+The script is copied, with ``common.sh`` and ``planguard.sh``, into a temporary
+``infra/terraform`` tree that holds a stand-in module directory and is a git
+repository of its own, so it runs against nothing real: its module directory and
+its local file are resolved from its own location. Stub ``terraform`` and
+``aws`` programs come first on ``PATH``; they record every call and answer from
+a file the test writes beside them (``stub.env``): the script runs both with an
+environment of its own choosing, so a variable the test sets in the process
+would never reach them. No credential, account, cluster or network is
+involved. Every account number, address and host here is made up: twelve
+identical digits, a documentation address and ``example.com``.
 
 The stub ``terraform`` prints a line with an ARN and an account number, and a
 line with the identifiers a plan of instances prints, on every call, so a test
@@ -484,7 +484,7 @@ def make_tree(root: Path, row: Module = MANAGED) -> Tree:
     one module's directory the row names."""
     terraform_dir = root / "infra" / "terraform"
     (terraform_dir / row.directory).mkdir(parents=True)
-    for name in ("aws.sh", "common.sh"):
+    for name in ("aws.sh", "common.sh", "planguard.sh"):
         shutil.copy2(TERRAFORM_DIR / name, terraform_dir / name)
     # The real ignore file, so that what the script's checks see as "committed"
     # is what the repository's own patterns say.
