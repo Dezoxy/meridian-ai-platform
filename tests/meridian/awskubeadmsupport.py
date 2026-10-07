@@ -15,8 +15,11 @@ them, and one test (needs ``terraform``) holds the two renderings equal for the
 same inputs.
 """
 
+import gzip
 import hashlib
+import os
 import re
+import stat
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -101,6 +104,18 @@ def rendered(role: str) -> str:
 
 ROLES = ["control-plane", "worker"]
 
+# EC2 limits user data to 16 KB as sent; the instances send it gzipped
+# (user_data_base64 = base64gzip(...)), so the limit applies to the compressed
+# bytes. The raw guard is the session's number, against runaway growth.
+USER_DATA_LIMIT = 16 * 1024
+RAW_GUARD = 64 * 1024
+
+
+def user_data_sizes(role: str) -> tuple[int, int]:
+    """The rendered script's size raw and gzipped (Python's default level)."""
+    raw = rendered(role).encode("utf-8")
+    return len(raw), len(gzip.compress(raw))
+
 
 def code_of(script: str) -> str:
     """The script without its comment lines."""
@@ -111,11 +126,17 @@ def code_of(script: str) -> str:
 
 # ── stand-in programs ────────────────────────────────────────────────────────
 
-LOG = 'printf \'%s\\x1f\' {name} "$@" >>"{scratch}/calls"; echo >>"{scratch}/calls"'
+# Each call is logged with its arguments, and the HOME it was started with goes
+# to a file of its own: a script must start every program with HOME=/root.
+LOG = (
+    'printf \'%s\\x1f\' {name} "$@" >>"{scratch}/calls"; echo >>"{scratch}/calls"; '
+    'echo "$HOME" >>"{scratch}/homes"'
+)
 
 # The answer number N of a series of files <prefix>.0, <prefix>.1 ... is the
 # one for the Nth call, and the last one answers every later call. The number of
-# files is in <prefix>.total.
+# files is in <prefix>.total. A file <prefix>.N.err is what that call prints on
+# its error stream, and <prefix>.N.fail makes the call exit with status 255.
 PICK = """
 pick() {{
   local prefix="{scratch}/$1" n=0 total
@@ -123,10 +144,21 @@ pick() {{
   echo $((n + 1)) >"$prefix.count"
   total=$(<"$prefix.total")
   (( n >= total )) && n=$((total - 1))
+  [[ -e $prefix.$n.err ]] && cat "$prefix.$n.err" >&2
   [[ -e $prefix.$n.fail ]] && return 255
   cat "$prefix.$n"
 }}
 """
+
+# The option every apt-get call of the scripts holds: a wait for the package
+# lock that a first boot's own updater may be holding.
+APT_LOCK = ("-o", "DPkg::Lock::Timeout=300")
+KERNEL_MODULES = ("overlay", "br_netfilter")
+SYSCTL_FILE = (
+    "net.bridge.bridge-nf-call-iptables = 1\n"
+    "net.bridge.bridge-nf-call-ip6tables = 1\n"
+    "net.ipv4.ip_forward = 1\n"
+)
 
 STUBS = {
     "curl": """
@@ -211,10 +243,67 @@ for ((i = 0; i < ${#args[@]}; i++)); do
   fi
 done
 """,
-    "sysctl": "",
-    "apt-get": "",
+    # Only `sysctl --system`. A settings file that names the bridge keys is
+    # refused unless the module that makes them was loaded first (a stand-in's
+    # model of the kernel: without br_netfilter there is no such key to set).
+    "sysctl": """
+if [[ "$*" != "--system" ]]; then
+  echo "stub sysctl: unexpected $*" >&2; exit 99
+fi
+if grep -q '^net.bridge' "$BOOT_ROOT/etc/sysctl.d/k8s.conf" 2>/dev/null &&
+  [[ ! -e "{scratch}/loaded.br_netfilter" ]]; then
+  echo "sysctl: cannot stat /proc/sys/net/bridge/bridge-nf-call-iptables" >&2; exit 255
+fi
+""",
+    # One module per call: after the first name, modprobe reads its arguments as
+    # parameters of that module, so a call with two names is refused here. A file
+    # <scratch>/modprobe-fails holding a module's name makes that module fail.
+    "modprobe": """
+case "$*" in
+  overlay|br_netfilter) ;;
+  *) echo "stub modprobe: unexpected $*" >&2; exit 99 ;;
+esac
+if [[ -e "{scratch}/modprobe-fails" && $(<"{scratch}/modprobe-fails") == "$1" ]]; then
+  exit 1
+fi
+: >"{scratch}/loaded.$1"
+""",
+    # Only the two lock-timeout forms the scripts use, each with the option first
+    # and the exact package list: a typo in a flag or a package is exit 99.
+    "apt-get": """
+if [[ $1 != -o || $2 != DPkg::Lock::Timeout=300 ]]; then
+  echo "stub apt-get: no lock timeout in: $*" >&2; exit 99
+fi
+shift 2
+case "$*" in
+  update) ;;
+  "install -y apt-transport-https ca-certificates curl gpg containerd") ;;
+  "install -y kubelet kubeadm kubectl") ;;
+  *) echo "stub apt-get: unexpected $*" >&2; exit 99 ;;
+esac
+""",
     "apt-mark": "",
-    "systemctl": "",
+    # Three calls. A restart makes the socket appear under the boot root, unless
+    # the test left <scratch>/no-socket there; the socket is a copy (cp -a) of
+    # the one make_scratch made.
+    "systemctl": """
+case "$*" in
+  "enable containerd"|"enable kubelet") ;;
+  "restart containerd")
+    if [[ ! -e "{scratch}/no-socket" ]]; then
+      mkdir -p "$BOOT_ROOT/run/containerd"
+      cp -a "{scratch}/containerd.sock" "$BOOT_ROOT/run/containerd/containerd.sock"
+    fi ;;
+  *) echo "stub systemctl: unexpected $*" >&2; exit 99 ;;
+esac
+""",
+    # `ctr version`, answered from the series <scratch>/ctr.N (see PICK).
+    "ctr": """
+if [[ "$*" != "version" ]]; then
+  echo "stub ctr: unexpected $*" >&2; exit 99
+fi
+pick ctr
+""",
     "snap": "",
 }
 
@@ -294,6 +383,8 @@ def make_scratch(tmp_path: Path) -> Scratch:
     (tmp_path / "containerd.toml").write_text(CONTAINERD_CONFIG, encoding="utf-8")
     scratch.series("imds", [ADDRESS])
     scratch.series("param", [VALID + "\n"])
+    scratch.series("ctr", ["Client:\n  Version: stand-in\n"])
+    os.mknod(tmp_path / "containerd.sock", stat.S_IFSOCK | 0o600)
     return scratch
 
 
@@ -315,6 +406,7 @@ def run_script(
         "ADDRESS_ATTEMPTS": "3",
         "PUBLISH_ATTEMPTS": "3",
         "JOIN_ATTEMPTS": "3",
+        "CONTAINERD_ATTEMPTS": "3",
         **settings,
     }
     return subprocess.run(

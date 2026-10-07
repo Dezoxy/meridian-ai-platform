@@ -22,6 +22,7 @@
 set -euo pipefail
 # The alphabet of the join pattern (node-common) is bytes: see the note there.
 export LC_ALL=C
+export HOME=/root
 export PATH="$PATH:/snap/bin"
 
 ROLE='worker'
@@ -37,19 +38,53 @@ POLL_SECONDS="$${POLL_SECONDS:-10}"
 
 ${common}
 
+# What to say of the CLI's last error, from its error file $1: the first line,
+# at most 2000 bytes of it read, with every byte outside printable ASCII (the
+# alphabet is bytes: LC_ALL=C above) replaced by a question mark, cut to 200
+# characters. An AWS error line names an operation and a reason and holds no
+# parameter value, so no value is expected here. But the line is text from
+# outside, so one that has the shape of a token, of a CA hash or of a join
+# command is not shown at all: a line of the log is read by whoever reads the
+# log, for the node's life.
+the_last_error() {
+  local line='' token_shape='[a-z0-9]{6}\.[a-z0-9]{16}' hash_shape='[0-9a-f]{64}'
+  IFS= read -r -n 2000 line <"$1" || true
+  line=$${line//[^ -~]/?}
+  if [[ $line =~ $token_shape || $line =~ $hash_shape || $line == *'kubeadm join'* ]]; then
+    printf '%s' 'a line that looked like a join command, withheld'
+  elif [[ -z $line ]]; then
+    printf '%s' 'the AWS CLI printed no message'
+  else
+    printf '%s' "$${line:0:200}"
+  fi
+}
+
 # Reads the parameter until it holds a join command for the control plane's
 # address, and leaves its token and hash in JOIN_TOKEN and JOIN_HASH. The value
 # is never printed: it is a secret for an hour, and it may be anything.
+#
+# A read that fails is a try like any other (the placeholder is "not there yet"),
+# but the CLI's error stream goes to a file in the private directory, and the
+# line the worker gives up with carries the last failed read's error: without
+# it, a refusal (AccessDenied, no credentials, a wrong region) looks like a
+# parameter that was never written, and the hour is spent not knowing. A read
+# that succeeds clears it: the line describes the last try, not an old one.
 wait_for_the_join_command() {
-  local attempt value
+  local attempt value last_error=''
+  local error_file="$WORK_DIR/aws-error"
   for ((attempt = 1; attempt <= JOIN_ATTEMPTS; attempt++)); do
     # A NUL byte cannot live in a bash variable: command substitution would drop
     # it and print a warning of its own. tr turns each one into a byte (\001) that
     # no join command holds, so the value is refused by the pattern, silently, and
     # never read as the join command that is left when the NUL is dropped.
-    value=$(aws ssm get-parameter --region "$REGION" --name "$JOIN_PARAMETER_NAME" \
-      --with-decryption --query Parameter.Value --output text 2>/dev/null |
-      tr '\000' '\001') || value=''
+    if value=$(aws ssm get-parameter --region "$REGION" --name "$JOIN_PARAMETER_NAME" \
+      --with-decryption --query Parameter.Value --output text 2>"$error_file" |
+      tr '\000' '\001'); then
+      last_error=''
+    else
+      value=''
+      last_error=$(the_last_error "$error_file")
+    fi
     if parse_join_command "$value" "$CONTROL_PLANE_ADDRESS:$API_PORT"; then
       log "the parameter holds a join command"
       return 0
@@ -57,7 +92,7 @@ wait_for_the_join_command() {
     log "the parameter does not hold a join command yet (try $attempt of $JOIN_ATTEMPTS)"
     sleep "$POLL_SECONDS"
   done
-  die "gave up after $JOIN_ATTEMPTS tries: $JOIN_PARAMETER_NAME never held a join command for $CONTROL_PLANE_ADDRESS:$API_PORT"
+  die "gave up after $JOIN_ATTEMPTS tries: $JOIN_PARAMETER_NAME never held a join command for $CONTROL_PLANE_ADDRESS:$API_PORT$${last_error:+; the last error of the AWS CLI: $last_error}"
 }
 
 # Once per node, and the first thing the script does, before it installs or
@@ -79,7 +114,7 @@ join_the_cluster() {
     die "kubeadm join failed. The join command in the parameter may be older than the control plane (the control plane was replaced and the parameter kept): remove this environment and apply it again."
 }
 
-for setting in JOIN_ATTEMPTS POLL_SECONDS; do
+for setting in JOIN_ATTEMPTS POLL_SECONDS CONTAINERD_ATTEMPTS; do
   require_number "$setting"
 done
 

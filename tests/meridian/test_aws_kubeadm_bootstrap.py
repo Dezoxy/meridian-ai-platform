@@ -21,12 +21,14 @@ from pathlib import Path
 import pytest
 from awskubeadmsupport import (
     ADDRESS,
+    APT_LOCK,
     BOOTSTRAP_ID,
     CA_DIGEST,
     CALICO_VERSION,
     COMMON_VALUES,
     CONTROL_PLANE_VALUES,
     FINGERPRINT,
+    KERNEL_MODULES,
     MANIFEST,
     MANIFEST_SHA256,
     MINOR,
@@ -36,10 +38,13 @@ from awskubeadmsupport import (
     PLACEHOLDER,
     POD_CIDR,
     PORT,
+    RAW_GUARD,
     REGION,
     ROLES,
     SECONDS,
+    SYSCTL_FILE,
     TEMPLATES,
+    USER_DATA_LIMIT,
     VALID,
     WORKER_VALUES,
     code_of,
@@ -48,6 +53,7 @@ from awskubeadmsupport import (
     rendered,
     run_script,
     template_text,
+    user_data_sizes,
 )
 
 # ── terraform's rendering and the renderer here are one ─────────────────────
@@ -115,13 +121,28 @@ def test_a_template_uses_only_names_the_module_passes_and_no_directive(
 
 
 @pytest.mark.parametrize("role", ROLES)
-def test_a_rendered_script_fits_in_the_16_kb_ec2_allows_for_user_data(
+def test_a_rendered_script_gzipped_fits_in_the_16_kb_ec2_allows_for_user_data(
     role: str,
 ) -> None:
     # The EC2 page "Run commands when you launch an EC2 instance with user data
     # input" (read 2026-10-07): "User data is limited to 16 KB, in raw form,
-    # before it is base64-encoded."
-    assert len(rendered(role).encode("utf-8")) <= 16 * 1024
+    # before it is base64-encoded." The instances send gzip (user_data_base64 =
+    # base64gzip(...), which cloud-init unpacks), so the bytes that count are the
+    # compressed ones.
+    raw, compressed = user_data_sizes(role)
+
+    assert compressed <= USER_DATA_LIMIT, (
+        f"{role}: {compressed} gzipped bytes (raw {raw}) of {USER_DATA_LIMIT}"
+    )
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_a_rendered_script_stays_under_64_kib_raw_against_runaway_growth(
+    role: str,
+) -> None:
+    raw, compressed = user_data_sizes(role)
+
+    assert raw < RAW_GUARD, f"{role}: {raw} raw bytes (gzipped {compressed})"
 
 
 @pytest.mark.parametrize("role", ROLES)
@@ -213,7 +234,7 @@ def test_the_rendered_user_data_sets_no_test_variable_and_its_defaults_are_real(
 
     found = dict(re.findall(r'^(\w+)="\$\{\1:-([^}]*)\}"$', code, re.MULTILINE))
 
-    assert found == {"BOOT_ROOT": "", **defaults}
+    assert found == {"BOOT_ROOT": "", "CONTAINERD_ATTEMPTS": "20", **defaults}
     # None of them is exported or assigned a literal anywhere else.
     for name in found:
         assert len(re.findall(rf"^(export )?{name}=", code, re.MULTILINE)) == 1
@@ -241,6 +262,23 @@ def test_a_script_pins_the_alphabet_of_its_patterns_beside_its_error_handling(
 
     lines = code.splitlines()
     assert lines.index("export LC_ALL=C") == lines.index("set -euo pipefail") + 1
+    # HOME beside it: cloud-init may start a user-data script without one, and gpg
+    # and snap are the first programs that look for it.
+    assert lines.index("export HOME=/root") == lines.index("export LC_ALL=C") + 1
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_every_program_a_script_starts_has_root_as_its_home(
+    tmp_path: Path, role: str
+) -> None:
+    scratch = make_scratch(tmp_path)
+
+    done = run_script(scratch, role)  # the runner's HOME is the scratch directory
+
+    assert done.returncode == 0, done.stderr
+    homes = (tmp_path / "homes").read_text(encoding="utf-8").splitlines()
+    assert len(homes) == len(scratch.calls()) > 10
+    assert set(homes) == {"/root"}
 
 
 # ── what the scripts do, against stand-ins ──────────────────────────────────
@@ -562,7 +600,9 @@ def test_a_signing_key_with_another_fingerprint_is_refused_before_any_package(
     line = one_error_line(done, role)
     assert OTHER_FINGERPRINT in line
     assert "refusing to trust it" in line
-    for install in scratch.called("apt-get", "install"):
+    installs = scratch.called("apt-get", *APT_LOCK, "install")
+    assert installs  # the distribution's packages were installed, before the key
+    for install in installs:
         assert "kubeadm" not in install
     assert scratch.called("kubeadm") == []
 
@@ -591,10 +631,7 @@ def test_a_key_file_that_does_not_hold_exactly_one_primary_key_is_refused_unwrit
     # Nothing is written under /etc/apt, no keyring is made and the repository is
     # not added: the downloaded key stays in the script's private directory.
     assert not (tmp_path / "root" / "etc" / "apt").exists()
-    assert (
-        scratch.called("apt-get", "install", "-y", "kubelet", "kubeadm", "kubectl")
-        == []
-    )
+    assert scratch.called("apt-get", *APT_LOCK, "install", "-y", "kubelet") == []
     assert scratch.called("kubeadm") == []
 
 
@@ -686,7 +723,7 @@ def test_the_node_is_set_up_from_the_pinned_repository_and_containerd_uses_syste
     config = (root / "etc/containerd/config.toml").read_text()
     assert "SystemdCgroup = true" in config
     assert "SystemdCgroup = false" not in config
-    assert (root / "etc/sysctl.d/k8s.conf").read_text() == "net.ipv4.ip_forward = 1\n"
+    assert (root / "etc/sysctl.d/k8s.conf").read_text() == SYSCTL_FILE
     assert ["systemctl", "restart", "containerd"] in scratch.calls()
     assert ["snap", "install", "aws-cli", "--classic"] in scratch.calls()
 
@@ -705,13 +742,152 @@ def test_a_containerd_configuration_without_one_cgroup_setting_stops_the_script(
     assert scratch.called("kubeadm") == []
 
 
+@pytest.mark.parametrize("role", ROLES)
+def test_every_apt_get_call_waits_up_to_300_seconds_for_the_package_lock(
+    tmp_path: Path, role: str
+) -> None:
+    scratch = make_scratch(tmp_path)
+
+    done = run_script(scratch, role)
+
+    assert done.returncode == 0, done.stderr
+    calls = scratch.called("apt-get")
+    assert [call[3] for call in calls] == ["update", "install", "update", "install"]
+    for call in calls:
+        assert ("-o", "DPkg::Lock::Timeout=300") in pairwise(call)
+        assert call[1:3] == list(APT_LOCK)  # before the verb, as apt-get reads it
+    # And in the text: no apt-get line of the script is without the option.
+    lines = re.findall(r"^\s*apt-get .*$", code_of(rendered(role)), re.MULTILINE)
+    assert len(lines) == 4
+    assert all(" -o DPkg::Lock::Timeout=300 " in line for line in lines)
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_the_node_loads_overlay_and_br_netfilter_now_and_at_every_boot(
+    tmp_path: Path, role: str
+) -> None:
+    scratch = make_scratch(tmp_path)
+
+    done = run_script(scratch, role)
+
+    assert done.returncode == 0, done.stderr
+    # One module a call: modprobe reads the names after the first as parameters.
+    assert scratch.called("modprobe") == [["modprobe", m] for m in KERNEL_MODULES]
+    boot_file = tmp_path / "root" / "etc" / "modules-load.d" / "k8s.conf"
+    assert boot_file.read_text(encoding="utf-8") == "overlay\nbr_netfilter\n"
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_the_modules_are_loaded_before_the_sysctl_settings_are_applied(
+    tmp_path: Path, role: str
+) -> None:
+    scratch = make_scratch(tmp_path)
+
+    done = run_script(scratch, role)  # the sysctl stand-in refuses bridge keys
+    #                                   when br_netfilter was not loaded first
+
+    assert done.returncode == 0, done.stderr
+    order = [call[0] for call in scratch.calls() if call[0] in {"modprobe", "sysctl"}]
+    assert order == ["modprobe", "modprobe", "sysctl"]
+    assert scratch.called("sysctl") == [["sysctl", "--system"]]
+    settings = (tmp_path / "root" / "etc" / "sysctl.d" / "k8s.conf").read_text()
+    assert settings == SYSCTL_FILE
+
+
+@pytest.mark.parametrize("role", ROLES)
+@pytest.mark.parametrize("module", KERNEL_MODULES)
+def test_a_module_that_does_not_load_stops_the_script_before_settings_or_packages(
+    tmp_path: Path, role: str, module: str
+) -> None:
+    scratch = make_scratch(tmp_path)
+    (tmp_path / "modprobe-fails").write_text(module, encoding="utf-8")
+
+    done = run_script(scratch, role)
+
+    line = one_error_line(done, role)
+    assert module in line
+    assert scratch.called("sysctl") == []
+    assert scratch.called("apt-get") == []
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_the_script_waits_for_containerd_to_answer_and_goes_on_at_the_third_try(
+    tmp_path: Path, role: str
+) -> None:
+    scratch = make_scratch(tmp_path)
+    scratch.series("ctr", ["", "", "Client:\n"])
+    (tmp_path / "ctr.0.fail").touch()
+    (tmp_path / "ctr.1.fail").touch()
+
+    done = run_script(scratch, role)  # three tries is the bound of this run
+
+    assert done.returncode == 0, done.stderr
+    assert scratch.called("ctr") == [["ctr", "version"]] * 3
+    calls = scratch.calls()
+    restart = calls.index(["systemctl", "restart", "containerd"])
+    asked = [n for n, call in enumerate(calls) if call[0] == "ctr"]
+    assert restart < asked[0]
+    assert asked[-1] < min(n for n, call in enumerate(calls) if call[0] == "kubeadm")
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_a_containerd_that_never_answers_ends_the_script_after_the_bound_with_one_line(
+    tmp_path: Path, role: str
+) -> None:
+    scratch = make_scratch(tmp_path)
+    (tmp_path / "ctr.0.fail").touch()  # the one answer of the series is a failure
+
+    done = run_script(scratch, role)
+
+    line = one_error_line(done, role)
+    assert "gave up after 3 tries" in line
+    assert "containerd" in line
+    assert len(scratch.called("ctr")) == 3
+    assert scratch.called("kubeadm") == []
+    assert ["systemctl", "enable", "kubelet"] not in scratch.calls()
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_an_answer_one_try_after_the_bound_is_too_late(
+    tmp_path: Path, role: str
+) -> None:
+    scratch = make_scratch(tmp_path)
+    scratch.series("ctr", ["", "", "", "Client:\n"])
+    for number in range(3):
+        (tmp_path / f"ctr.{number}.fail").touch()
+
+    done = run_script(scratch, role)
+
+    line = one_error_line(done, role)
+    assert "gave up after 3 tries" in line
+    assert len(scratch.called("ctr")) == 3
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_a_socket_that_never_appears_is_never_asked_and_ends_the_script(
+    tmp_path: Path, role: str
+) -> None:
+    scratch = make_scratch(tmp_path)
+    (tmp_path / "no-socket").touch()  # the restart makes no socket
+
+    done = run_script(scratch, role)
+
+    line = one_error_line(done, role)
+    assert "gave up after 3 tries" in line
+    assert "containerd.sock" in line
+    assert scratch.called("ctr") == []
+    assert scratch.called("kubeadm") == []
+
+
 @pytest.mark.parametrize(
     ("role", "setting"),
     [
         ("control-plane", "ADDRESS_ATTEMPTS"),
         ("control-plane", "POLL_SECONDS"),
+        ("control-plane", "CONTAINERD_ATTEMPTS"),
         ("worker", "JOIN_ATTEMPTS"),
         ("worker", "POLL_SECONDS"),
+        ("worker", "CONTAINERD_ATTEMPTS"),
     ],
 )
 @pytest.mark.parametrize("value", ["ten", "-1", "1e3", "5; touch x", "1234567"])
@@ -965,6 +1141,166 @@ def test_a_value_that_is_not_exactly_a_join_command_joins_nothing_and_runs_nothi
     assert {c[0] for c in scratch.calls()[last_install + 1 :]} <= {"aws"}
     for call in scratch.calls():
         assert "touch" not in call and str(canary) not in " ".join(call)
+
+
+ACCESS_DENIED = (
+    "An error occurred (AccessDeniedException) when calling the GetParameter "
+    "operation: the role is not authorized to perform ssm:GetParameter with an "
+    "explicit deny in an identity-based policy"
+)
+THROTTLED = "An error occurred (ThrottlingException) when calling the GetParameter"
+
+
+def failing_reads(tmp_path: Path, *stderr: bytes | None) -> None:
+    """The parameter reads of a worker, one per entry, each exiting 255 and
+    printing the entry on its error stream (nothing for None)."""
+    for number, text in enumerate(stderr):
+        (tmp_path / f"param.{number}.fail").touch()
+        if text is not None:
+            (tmp_path / f"param.{number}.err").write_bytes(text)
+
+
+def gave_up(tmp_path: Path, *stderr: bytes | None) -> tuple[str, str]:
+    """Runs a worker whose reads all fail as given: its one error line, and what
+    the whole run printed."""
+    scratch = make_scratch(tmp_path)
+    scratch.series("param", [""] * len(stderr))
+    failing_reads(tmp_path, *stderr)
+
+    done = run_script(scratch, "worker")
+
+    return one_error_line(done, "worker"), done.stdout + done.stderr
+
+
+def test_a_worker_refused_by_the_service_says_so_when_it_gives_up(
+    tmp_path: Path,
+) -> None:
+    error = ACCESS_DENIED.encode()
+    assert len(ACCESS_DENIED) <= 200  # the whole line is carried, not a cut of it
+
+    line, output = gave_up(tmp_path, error + b"\n", error + b"\n", error + b"\n")
+
+    assert "gave up after 3 tries" in line
+    assert PARAMETER in line
+    assert ACCESS_DENIED in line
+    assert len(output.splitlines()) > 1  # the tries are logged, one line each
+    # The directory of the script's files is gone, the error file with it.
+    assert list((tmp_path / "tmp").iterdir()) == []
+
+
+def test_only_the_first_line_of_the_last_error_reaches_the_line(
+    tmp_path: Path,
+) -> None:
+    error = f"{ACCESS_DENIED}\nthe second line is not shown\nnor the third\n"
+
+    line, _ = gave_up(tmp_path, error.encode())
+
+    assert ACCESS_DENIED in line
+    assert "second line" not in line
+    assert "third" not in line
+
+
+def test_the_last_error_is_the_one_the_line_carries_not_the_first(
+    tmp_path: Path,
+) -> None:
+    line, _ = gave_up(
+        tmp_path, THROTTLED.encode() + b"\n", b"", ACCESS_DENIED.encode() + b"\n"
+    )
+
+    assert ACCESS_DENIED in line
+    assert "ThrottlingException" not in line
+
+
+def test_an_error_that_a_later_read_without_one_replaced_is_not_carried(
+    tmp_path: Path,
+) -> None:
+    scratch = make_scratch(tmp_path)
+    scratch.series("param", ["", PLACEHOLDER_VALUE + "\n"])  # then it only polls
+    failing_reads(tmp_path, ACCESS_DENIED.encode() + b"\n")
+
+    done = run_script(scratch, "worker")
+
+    line = one_error_line(done, "worker")
+    assert "gave up after 3 tries" in line
+    assert "AccessDeniedException" not in line
+
+
+def test_a_failed_read_that_printed_nothing_is_said_to_have_printed_nothing(
+    tmp_path: Path,
+) -> None:
+    line, _ = gave_up(tmp_path, None)
+
+    assert "gave up after 3 tries" in line
+    assert "printed no message" in line
+
+
+def test_the_error_is_cut_to_200_characters(tmp_path: Path) -> None:
+    error = b"E" + b"x" * 5000 + b"\n"
+
+    line, _ = gave_up(tmp_path, error)
+
+    assert "E" + "x" * 199 in line
+    assert "x" * 200 not in line
+
+
+def test_the_error_is_cut_even_when_it_has_no_newline(tmp_path: Path) -> None:
+    error = b"E" + b"x" * 5000  # a first line that is also the last, and long
+
+    line, _ = gave_up(tmp_path, error)
+
+    assert "E" + "x" * 199 in line
+    assert "x" * 200 not in line
+
+
+def test_every_character_outside_printable_ascii_is_replaced_in_the_line(
+    tmp_path: Path,
+) -> None:
+    raw = "An error: café‮ \x01\ttab\x1b[31m\rend".encode()
+
+    line, output = gave_up(tmp_path, raw + b"\n")
+
+    expected = re.sub(rb"[^ -~]", b"?", raw).decode("ascii")
+    assert expected in line
+    assert "?" in line
+    assert line.isascii() and line.isprintable()
+    assert "\x1b" not in output
+
+
+def test_a_nul_byte_in_the_error_is_dropped_with_no_bash_warning(
+    tmp_path: Path,
+) -> None:
+    line, _ = gave_up(tmp_path, b"An error\x00 occurred\n")  # one stderr line
+
+    assert "An error occurred" in line
+    assert "null byte" not in line
+
+
+JOIN_SHAPED = {
+    "a whole join command": f"An error occurred: bad value {VALID}",
+    "a bootstrap token": f"An error occurred: bad value {BOOTSTRAP_ID}",
+    "a CA hash": f"An error occurred: bad value {CA_DIGEST}",
+    "a CA hash with its prefix": f"An error occurred: sha256:{CA_DIGEST}",
+}
+
+
+@pytest.mark.parametrize("name", sorted(JOIN_SHAPED), ids=sorted(JOIN_SHAPED))
+def test_an_error_line_that_holds_the_shape_of_a_join_command_is_withheld(
+    tmp_path: Path, name: str
+) -> None:
+    error = (JOIN_SHAPED[name] + "\n").encode()
+
+    line, output = gave_up(tmp_path, error)
+
+    assert "gave up after 3 tries" in line
+    assert "withheld" in line
+    for part in (BOOTSTRAP_ID, CA_DIGEST, "kubeadm join"):
+        assert part not in output
+
+
+def test_the_masking_does_not_hide_an_ordinary_service_error(tmp_path: Path) -> None:
+    line, _ = gave_up(tmp_path, (ACCESS_DENIED + "\n").encode())
+
+    assert "withheld" not in line
 
 
 def test_a_join_that_fails_says_what_to_do_and_is_not_tried_again(

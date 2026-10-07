@@ -1,20 +1,28 @@
 # ---- shared by both boot scripts (templates/node-common.sh.tftpl) ----------
 #
 # The rendered text of this file sits inside the control plane's script and
-# inside the worker's. It needs ROLE, REGION, API_PORT and BOOT_ROOT to be set
-# before it, and it defines the log lines, the bounded download, the strict
-# reading of a join command and the installation of containerd and kubeadm.
+# inside the worker's. It needs ROLE, REGION, API_PORT, BOOT_ROOT and
+# POLL_SECONDS to be set before it, and it defines the log lines, the bounded
+# download, the strict reading of a join command and the installation of
+# containerd and kubeadm.
 #
 # The script that holds this text also sets LC_ALL=C beside its `set -euo
 # pipefail`, above it: the classes of JOIN_PATTERN ([0-9], [a-z]) are ASCII only
 # in that alphabet, and in a UTF-8 locale they match fullwidth digits, accented
-# letters and Arabic-Indic digits.
+# letters and Arabic-Indic digits. It sets HOME=/root on the next line: cloud-init
+# may start a user-data script without a HOME (from memory, no page was read),
+# and gpg and snap look for it.
 #
 # Terraform renders this file: every shell parameter expansion is written with
 # a doubled dollar sign here, and no percent sign is followed by a brace.
 
 KUBERNETES_MINOR='${kubernetes_minor}'
 KUBERNETES_APT_KEY_FINGERPRINT='${kubernetes_apt_key_fingerprint}'
+
+# The bound on the wait for containerd after its restart: a number of tries, one
+# POLL_SECONDS apart (20 tries are 100 seconds on the control plane and 200 on a
+# worker). A test shortens it; cloud-init sets none.
+CONTAINERD_ATTEMPTS="$${CONTAINERD_ATTEMPTS:-20}"
 
 # What a join command looks like: kubeadm join <IPv4 address>:<port> --token
 # <6 characters, a dot, 16 characters> --discovery-token-ca-cert-hash sha256:
@@ -81,7 +89,7 @@ install_aws_cli() {
 # and so do the control plane's manifest and join command. Removed at the end.
 make_work_dir() {
   WORK_DIR=$(mktemp -d)
-  trap 'rm -f "$WORK_DIR/release.key" "$WORK_DIR/keyring.gpg" "$WORK_DIR/calico.yaml" "$WORK_DIR/join-command"; rmdir "$WORK_DIR" || true' EXIT
+  trap 'rm -f "$WORK_DIR/release.key" "$WORK_DIR/keyring.gpg" "$WORK_DIR/calico.yaml" "$WORK_DIR/join-command" "$WORK_DIR/aws-error"; rmdir "$WORK_DIR" || true' EXIT
 }
 
 # Makes the keyring $2 from the downloaded signing key $1, and refuses (one
@@ -118,6 +126,28 @@ make_the_pinned_keyring() {
   fi
 }
 
+# `systemctl restart` can return before containerd's socket takes connections
+# (from memory), and kubeadm's preflight runs a moment later. So: until the
+# socket exists and `ctr version` answers on it, a bounded number of tries, then
+# one line. ctr, and not crictl: ctr is in the distribution's containerd package
+# itself ("File list of package containerd in noble", packages.ubuntu.com, read
+# 2026-10-07: /usr/bin/ctr), it needs no configuration file, and its default
+# address is this socket; crictl comes with the kubeadm repository's cri-tools
+# and needs an endpoint. Each ask is cut off at 10 seconds.
+wait_for_containerd() {
+  local socket="$BOOT_ROOT/run/containerd/containerd.sock"
+  local attempt
+  for ((attempt = 1; attempt <= CONTAINERD_ATTEMPTS; attempt++)); do
+    if [[ -S $socket ]] && timeout 10 ctr version >/dev/null 2>&1; then
+      log "containerd answers on $socket"
+      return 0
+    fi
+    log "containerd does not answer yet (try $attempt of $CONTAINERD_ATTEMPTS)"
+    sleep "$POLL_SECONDS"
+  done
+  die "gave up after $CONTAINERD_ATTEMPTS tries: containerd's socket $socket did not answer"
+}
+
 # containerd from the distribution, kubeadm, kubelet and kubectl from the
 # Kubernetes project's package repository for ONE minor version, whose signing
 # key must be the pinned one. Needs WORK_DIR (make_work_dir).
@@ -127,14 +157,32 @@ install_node() {
   local keyring="/etc/apt/keyrings/kubernetes-apt-keyring.gpg"
   local config="$BOOT_ROOT/etc/containerd/config.toml"
 
-  log "enabling IPv4 forwarding"
-  mkdir -p "$BOOT_ROOT/etc/sysctl.d"
-  printf 'net.ipv4.ip_forward = 1\n' >"$BOOT_ROOT/etc/sysctl.d/k8s.conf"
+  # IPv4 forwarding is what the Kubernetes page "Container Runtimes" (read
+  # 2026-10-07, v1.37) asks for, and it is the only setting that page lists: it
+  # names no kernel module and no bridge setting. The two modules and the two
+  # bridge settings are here on the review's word ("from memory"): kubeadm's
+  # preflight has long checked bridge-nf-call-iptables, which exists only while
+  # br_netfilter is loaded. They are harmless where a kernel needs none. The
+  # modules load before the settings are applied (a bridge key does not exist
+  # until br_netfilter is there), and they are listed for every later boot.
+  # modprobe takes ONE module per call: names after the first are parameters.
+  log "loading the kernel modules and enabling IPv4 forwarding"
+  mkdir -p "$BOOT_ROOT/etc/modules-load.d" "$BOOT_ROOT/etc/sysctl.d"
+  printf 'overlay\nbr_netfilter\n' >"$BOOT_ROOT/etc/modules-load.d/k8s.conf"
+  for module in overlay br_netfilter; do
+    modprobe "$module" || die "could not load the kernel module $module"
+  done
+  printf 'net.bridge.bridge-nf-call-iptables = 1\nnet.bridge.bridge-nf-call-ip6tables = 1\nnet.ipv4.ip_forward = 1\n' \
+    >"$BOOT_ROOT/etc/sysctl.d/k8s.conf"
   sysctl --system >/dev/null
 
+  # Every apt-get call waits up to 300 seconds for the package lock: on a first
+  # boot the distribution's own updater may hold it, and the default is to give
+  # up at once (from memory: neither apt-get(8) nor apt.conf(5) of noble, both
+  # read 2026-10-07, mentions the option).
   log "installing the packages"
-  apt-get update
-  apt-get install -y apt-transport-https ca-certificates curl gpg containerd
+  apt-get -o DPkg::Lock::Timeout=300 update
+  apt-get -o DPkg::Lock::Timeout=300 install -y apt-transport-https ca-certificates curl gpg containerd
 
   fetch "https://pkgs.k8s.io/core:/stable:/v$KUBERNETES_MINOR/deb/Release.key" "$WORK_DIR/release.key"
   make_the_pinned_keyring "$WORK_DIR/release.key" "$WORK_DIR/keyring.gpg"
@@ -144,8 +192,8 @@ install_node() {
   chmod 644 "$BOOT_ROOT$keyring"
   printf 'deb [signed-by=%s] https://pkgs.k8s.io/core:/stable:/v%s/deb/ /\n' \
     "$keyring" "$KUBERNETES_MINOR" >"$BOOT_ROOT/etc/apt/sources.list.d/kubernetes.list"
-  apt-get update
-  apt-get install -y kubelet kubeadm kubectl
+  apt-get -o DPkg::Lock::Timeout=300 update
+  apt-get -o DPkg::Lock::Timeout=300 install -y kubelet kubeadm kubectl
   apt-mark hold kubelet kubeadm kubectl
 
   # containerd's own default configuration, with the systemd cgroup driver the
@@ -159,5 +207,6 @@ install_node() {
     die "containerd's default configuration has no single SystemdCgroup setting to change"
   systemctl enable containerd
   systemctl restart containerd
+  wait_for_containerd
   systemctl enable kubelet
 }

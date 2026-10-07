@@ -16,6 +16,7 @@
 set -euo pipefail
 # The alphabet of the join pattern (node-common) is bytes: see the note there.
 export LC_ALL=C
+export HOME=/root
 export PATH="$PATH:/snap/bin"
 
 ROLE='control-plane'
@@ -138,7 +139,7 @@ publish_the_join_command() {
   die "gave up after $PUBLISH_ATTEMPTS tries: the join command was not written to $JOIN_PARAMETER_NAME"
 }
 
-for setting in ADDRESS_ATTEMPTS PUBLISH_ATTEMPTS POLL_SECONDS; do
+for setting in ADDRESS_ATTEMPTS PUBLISH_ATTEMPTS POLL_SECONDS CONTAINERD_ATTEMPTS; do
   require_number "$setting"
 done
 
