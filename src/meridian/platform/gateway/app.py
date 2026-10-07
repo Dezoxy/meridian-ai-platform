@@ -54,7 +54,7 @@ import time
 import uuid
 from collections.abc import Callable, Mapping
 from datetime import date
-from typing import Annotated, Any, NoReturn
+from typing import Annotated, Any, NoReturn, get_args
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from opentelemetry.sdk.metrics import MeterProvider
@@ -124,7 +124,7 @@ from meridian.platform.gateway.refusals import (
 from meridian.platform.gateway.replay import ReplayProvider
 from meridian.platform.gateway.resilience import CircuitBreaker
 from meridian.platform.gateway.routing import RefusalReason, decide
-from meridian.platform.gateway.settings import GatewaySettings
+from meridian.platform.gateway.settings import GatewayMode, GatewaySettings
 from meridian.platform.gateway.startup import (
     AZURE_KIND as AZURE_KIND,  # re-exported: the tests import it from here
 )
@@ -553,7 +553,7 @@ def create_app(
                     ),
                     "schema": {
                         "type": "string",
-                        "enum": ["replay", "recorded", "live"],
+                        "enum": list(get_args(GatewayMode)),
                     },
                 },
             },

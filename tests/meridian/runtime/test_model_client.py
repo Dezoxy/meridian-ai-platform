@@ -1,6 +1,7 @@
 """The runtime's gateway client sets the identity headers itself."""
 
 import json
+import logging
 import subprocess
 import sys
 import uuid
@@ -365,7 +366,11 @@ def test_a_client_of_the_refusal_header_alone_reads_a_withheld_one_as_filtered()
     None
 ):
     # Built from the refusal header's constant alone, as a runtime from before
-    # the second header reads a 400: no other header is looked at.
+    # the second header reads a 400: no other header is looked at. This test
+    # restates that reading and is close to a tautology on its own; the proof
+    # that the gateway's withheld answer still carries ``content-filter`` is
+    # ``test_a_refused_prompt_names_no_deployment_and_a_withheld_completion_names_it``
+    # in ``tests/meridian/gateway/test_gateway_guardrails.py``.
     answer = httpx.Response(400, json={}, headers=WITHHELD_HEADERS)
 
     reads_a_filtered_call = (
@@ -460,6 +465,41 @@ def test_a_withheld_completion_with_a_header_missing_names_no_deployment(
     assert raised.value.drafter is None
 
 
+def client_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    """What the client itself logged: httpx logs each request at INFO."""
+    return [r for r in caplog.records if r.name == "meridian.runtime.model_client"]
+
+
+def test_a_provenance_header_outside_its_pattern_is_said_once_without_its_value(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    canary = "CANARY claimant text"
+    headers = {**WITHHELD_HEADERS, DEPLOYMENT_HEADER: canary}
+
+    with caplog.at_level(logging.DEBUG), pytest.raises(ModelCallFilteredError):
+        model(refusing_client(headers, body={"detail": canary})).chat(
+            [{"role": "user", "content": "hi"}]
+        )
+
+    (record,) = client_records(caplog)
+    assert record.levelno == logging.WARNING
+    assert "ValidationError" in record.getMessage()
+    assert canary not in record.getMessage() + repr(record.args)
+    assert record.exc_info is None
+    assert canary not in caplog.text
+
+
+def test_a_withheld_completion_with_good_headers_logs_nothing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.DEBUG), pytest.raises(ModelCallFilteredError):
+        model(refusing_client(WITHHELD_HEADERS)).chat(
+            [{"role": "user", "content": "hi"}]
+        )
+
+    assert client_records(caplog) == []
+
+
 def test_a_provider_word_in_a_header_is_never_kept_by_the_error() -> None:
     canary = "CANARY claimant text"
     headers = {**WITHHELD_HEADERS, DEPLOYMENT_HEADER: canary}
@@ -526,6 +566,41 @@ def test_a_live_reply_with_a_finish_reason_and_an_unknown_field_parses() -> None
         output_tokens=1,
         finish_reason="length",
     )
+
+
+@pytest.mark.parametrize(
+    "named",
+    [
+        pytest.param({"deployment": "Not An ID"}, id="deployment-with-spaces"),
+        pytest.param({"deployment": "AOAI"}, id="deployment-in-capitals"),
+        pytest.param({"deployment": "a" * 65}, id="deployment-too-long"),
+        pytest.param({"deployment": ""}, id="deployment-empty"),
+        pytest.param({"provider": "azure openai"}, id="provider-with-a-space"),
+        pytest.param({"provider": "-azure"}, id="provider-leading-hyphen"),
+        pytest.param({"provider": "a" * 65}, id="provider-too-long"),
+        pytest.param({"provider": ""}, id="provider-empty"),
+    ],
+)
+def test_a_reply_naming_a_deployment_outside_the_id_pattern_is_no_usable_answer(
+    named: dict[str, str],
+) -> None:
+    # The stored proposal records both words as provenance, so a success is
+    # held to the same bounded words as a withheld completion's headers.
+    calls: list[tuple[str, str | None]] = []
+    client = ModelClient(
+        reply_client({**GATEWAY_REPLY, **named}),
+        tenant="claims-triage",
+        agent="claims-triage",
+        run_id=uuid.uuid4(),
+        max_calls=10,
+        on_call=lambda outcome, reason: calls.append((outcome, reason)),
+    )
+
+    with pytest.raises(ModelCallError) as raised:
+        client.chat([{"role": "user", "content": "hi"}])
+
+    assert raised.value.status_code == 0
+    assert calls == [("failed", "error")]
 
 
 def test_a_mode_the_runtime_does_not_know_is_no_usable_answer() -> None:

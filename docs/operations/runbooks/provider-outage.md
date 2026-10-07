@@ -34,7 +34,9 @@ Not this runbook:
   filter or as the model's own refusal of a structured request: billed
   either way. The headers `X-Meridian-Deployment`, `X-Meridian-Provider`
   and `X-Meridian-Mode` then name the deployment. A refused prompt
-  carries none of the four and was not billed.
+  carries none of the four and was not billed (both billing statements
+  are the gateway's accounting rule, tested with a scripted provider and
+  not seen against a real one).
 - 429 from the gateway is a tenant's limit:
   [budget exhaustion](budget-exhaustion.md). Upstream it reads the same,
   because the runtime answers 502 for any gateway refusal; the reason on

@@ -240,8 +240,9 @@ def invalid_fields(exc: ValidationError) -> tuple[tuple[str, str], ...]:
     nothing else: never the message, the input or the context, which quote the
     claimant's values (or the model's text). A list index is kept
     (``documents.3``); a key of the data is replaced (``DATA_KEY``). No model
-    whose errors reach here has a mapping whose values are validated, so the
-    keys of the data come only from an undeclared field
+    whose errors reach here has a mapping whose values are validated, and a
+    mapping with free keys is allowed only as a string key over ``Any``, which
+    cannot fail, so the keys of the data come only from an undeclared field
     (``test_model_error_locations.py`` walks them). It lives beside the models so
     that the calls to the runtime and the triage can both log with it."""
     errors = exc.errors(include_url=False, include_input=False, include_context=False)

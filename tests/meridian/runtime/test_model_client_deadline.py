@@ -3,6 +3,7 @@
 The clock is injected and a fake stream moves it, so nothing here sleeps.
 """
 
+import gzip
 import json
 import uuid
 from collections.abc import Iterator
@@ -311,6 +312,59 @@ def test_the_request_asks_for_no_content_encoding() -> None:
 
     (request,) = requests
     assert request.headers["Accept-Encoding"] == "identity"
+
+
+@pytest.mark.parametrize(
+    "coding", ["gzip", "GZIP", "deflate", "br", "zstd", "gzip, identity", " gzip "]
+)
+def test_a_reply_the_gateway_compressed_is_refused_before_a_chunk_is_decoded(
+    coding: str,
+) -> None:
+    clock = FakeClock()
+    stream = TrickleStream(clock, [gzip.compress(BODY)], seconds=0.0)
+    calls: list[tuple[str, str | None]] = []
+    model = client_over(
+        clock, stream, headers={"Content-Encoding": coding}, calls=calls
+    )
+
+    with pytest.raises(ModelCallError) as raised:
+        model.chat(MESSAGES)
+
+    assert raised.value.status_code == 0
+    assert not isinstance(raised.value, ModelCallTimeoutError)
+    assert stream.pulled == 0  # nothing was iterated, so nothing was decoded
+    assert stream.closed
+    assert calls == [("failed", "error")]
+
+
+@pytest.mark.parametrize("coding", ["identity", "Identity"])
+def test_a_reply_with_the_identity_coding_is_read_as_one_with_none(
+    coding: str,
+) -> None:
+    clock = FakeClock()
+    stream = TrickleStream(clock, [BODY], seconds=0.0)
+    calls: list[tuple[str, str | None]] = []
+    model = client_over(
+        clock, stream, headers={"Content-Encoding": coding}, calls=calls
+    )
+
+    result = model.chat(MESSAGES)
+
+    assert result.text == "drafted"
+    assert stream.pulled == 1
+    assert calls == [("completed", None)]
+
+
+def test_a_coding_on_an_error_status_changes_nothing_as_its_body_is_not_read() -> None:
+    clock = FakeClock()
+    stream = TrickleStream(clock, [gzip.compress(b"{}")], seconds=0.0)
+    model = client_over(clock, stream, status=502, headers={"Content-Encoding": "gzip"})
+
+    with pytest.raises(ModelCallError) as raised:
+        model.chat(MESSAGES)
+
+    assert raised.value.status_code == 502
+    assert stream.pulled == 0
 
 
 def test_a_streamed_body_that_is_not_json_is_no_usable_answer() -> None:

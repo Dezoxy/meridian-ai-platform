@@ -5,6 +5,7 @@ graph code neither sets headers nor knows the gateway's address (T-08).
 """
 
 import json
+import logging
 import threading
 import time
 import uuid
@@ -19,6 +20,8 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from meridian.platform.common.http import BoundedEntityId
 from meridian.platform.registry.models import DataClass
+
+logger = logging.getLogger(__name__)
 
 CHAT_PATH = "/v1/chat"
 DATA_CLASS_HEADER = "X-Meridian-Data-Class"
@@ -149,7 +152,9 @@ class _Reply(BaseModel):
 
     Unknown fields are ignored, so a newer gateway (a field added later) never
     breaks the runtime. An unknown mode is refused: the stored proposal records
-    it as provenance (T-39). So is a missing or unknown finish reason: a graph
+    it as provenance (T-39). So is a deployment or provider that is not a
+    bounded registry ID (the same words a withheld completion's headers are
+    held to), and a missing or unknown finish reason: a graph
     must know whether a reply was cut short. The runtime does not
     import the gateway's models: the two services share a wire contract, not
     code.
@@ -169,8 +174,8 @@ class _Reply(BaseModel):
         input_tokens: int
         output_tokens: int
 
-    deployment: str
-    provider: str
+    deployment: BoundedEntityId
+    provider: BoundedEntityId
     model: str
     mode: Literal["replay", "recorded", "live"]
     output: Output
@@ -183,7 +188,8 @@ class _DeadlinePassed(httpx.TimeoutException):
 
 
 class _ReplyTooLarge(Exception):
-    """The reply outgrew ``MAX_REPLY_BYTES``. Private and message-less."""
+    """The reply outgrew ``MAX_REPLY_BYTES``, or came in a content coding and
+    was refused unread. Private and message-less."""
 
 
 class _Provenance(BaseModel):
@@ -197,6 +203,14 @@ class _Provenance(BaseModel):
     mode: Literal["replay", "recorded", "live"]
 
 
+def _is_compressed(headers: httpx.Headers) -> bool:
+    """Whether a reply names a content coding other than ``identity``. The
+    client asks for none, but httpx decodes whatever arrives, so a coded reply
+    is refused before any chunk of it is read."""
+    coding = headers.get("Content-Encoding")
+    return coding is not None and coding.strip().lower() != "identity"
+
+
 def _drafter_of(headers: httpx.Headers) -> Drafter | None:
     try:
         named = _Provenance.model_validate(
@@ -206,8 +220,15 @@ def _drafter_of(headers: httpx.Headers) -> Drafter | None:
                 "mode": headers.get(MODE_HEADER),
             }
         )
-    except ValidationError:
-        return None  # a value outside its pattern is dropped, never carried
+    except ValidationError as exc:
+        # A value outside its pattern, or a header missing, is dropped and never
+        # carried, and said once: a billed call would otherwise show as not
+        # asked. The class only; the error would quote the header's value.
+        logger.warning(
+            "a withheld completion's provenance headers were not used: %s",
+            type(exc).__name__,
+        )
+        return None
     return Drafter(named.deployment, named.provider, named.mode)
 
 
@@ -250,9 +271,11 @@ class ModelClient:
         self._calls = 0
         self._lock = threading.Lock()
         self._headers = {
-            # No content coding: a compressed reply would be counted after it
-            # is decoded, and one chunk could then hold a thousand times what
-            # arrived. The gateway is in the same cluster; nothing is saved.
+            # No content coding asked for: the gateway is in the same cluster
+            # and nothing is saved. This does not stop a gateway that codes the
+            # reply anyway (httpx decodes it, and one chunk could then hold a
+            # thousand times what arrived, before the cap is read), so
+            # ``_exchange`` refuses a coded reply before it reads a chunk.
             "Accept-Encoding": "identity",
             "X-Meridian-Tenant": tenant,
             "X-Meridian-Agent": agent,
@@ -351,6 +374,8 @@ class ModelClient:
                 chunks: list[bytes] = []
                 size = 0
                 if 200 <= status < 300:
+                    if _is_compressed(response.headers):
+                        raise _ReplyTooLarge
                     for chunk in response.iter_bytes():
                         size += len(chunk)
                         if size > MAX_REPLY_BYTES:
@@ -359,8 +384,9 @@ class ModelClient:
                         self._check_deadline(started)
             return _Answer(status, filtered, b"".join(chunks), withheld, drafter)
         except _ReplyTooLarge:
-            # Counted on the decoded bytes, as they come; nothing of the body
-            # is kept or named, and the response is closed on the way out.
+            # Counted on the decoded bytes, as they come, or a coded reply
+            # refused unread; nothing of the body is kept or named, and the
+            # response is closed on the way out.
             self._observe("failed", "error")
             raise ModelCallError(0) from None
         except httpx.TimeoutException:

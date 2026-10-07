@@ -13,6 +13,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import get_args
 
 import httpx
 import pytest
@@ -58,7 +59,7 @@ from meridian.platform.gateway.providers.base import (
     ProviderReply,
 )
 from meridian.platform.gateway.resilience import FAILURE_THRESHOLD
-from meridian.platform.gateway.settings import GatewaySettings
+from meridian.platform.gateway.settings import GatewayMode, GatewaySettings
 from meridian.platform.gateway.walk import closing_for
 from meridian.platform.guardrails import Redaction
 from meridian.platform.registry import Registry, load_registry
@@ -980,6 +981,17 @@ def test_both_routes_list_400_for_the_content_filter(two: Gateway, path: str) ->
     }
     assert all(headers[name]["description"] for name in headers)
     assert set(headers) == {REFUSAL_HEADER, *WITHHELD_MARKS}
+
+
+@pytest.mark.parametrize("path", [CHAT, EMBEDDINGS])
+def test_the_mode_header_lists_the_modes_of_the_settings_and_no_other(
+    two: Gateway, path: str
+) -> None:
+    responses = two.app.openapi()["paths"][path]["post"]["responses"]
+
+    listed = responses["400"]["headers"][MODE_HEADER]["schema"]["enum"]
+
+    assert listed == list(get_args(GatewayMode))
 
 
 def test_a_header_value_is_listed_as_an_optional_header_of_both_routes(
