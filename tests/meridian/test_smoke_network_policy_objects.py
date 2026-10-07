@@ -93,6 +93,70 @@ def test_a_policy_of_a_service_that_is_not_deployed_is_not_named(
     assert not any(LINE in line for line in lines)
 
 
+def test_a_name_with_a_dot_is_compared_as_text_not_as_a_pattern(
+    tmp_path: Path,
+) -> None:
+    # A dot in a pattern matches any character: `claims.api` would have found
+    # the policy `claims-api`. The name is compared as it is written.
+    deployed = f"{ALL_DEPLOYED}\ndeployment.apps/model.gateway"
+    others = [*SEVEN, "model.gateway"]
+
+    lines, _ = lines_of(tmp_path, deployed=deployed, policy_list=policies(*others))
+    assert not any(LINE in line for line in lines)
+
+    other = tmp_path / "other"
+    other.mkdir()
+    lines, _ = lines_of(other, deployed=deployed, policy_list=policies(*SEVEN))
+    (line,) = [line for line in lines if line.startswith(LINE)]
+    assert line.startswith(f"{LINE} model.gateway ")
+    assert "model-gateway" not in line
+
+
+def test_a_name_with_characters_a_pattern_would_read_is_compared_as_text(
+    tmp_path: Path,
+) -> None:
+    for number, name in enumerate(("svc[0-9]+", "svc*", "a.*b", "^svc$")):
+        present = tmp_path / f"present-{number}"
+        absent = tmp_path / f"absent-{number}"
+        present.mkdir()
+        absent.mkdir()
+        deployed = f"{ALL_DEPLOYED}\ndeployment.apps/{name}"
+        # As a pattern each of these would match the policy `svc0` or `svcc`
+        # that sits in the list, so the name would count as found.
+        decoys = ["svc0", "svccc", "axxb", "svc"]
+
+        found, _ = lines_of(
+            present, deployed=deployed, policy_list=policies(*SEVEN, name, *decoys)
+        )
+        missing, _ = lines_of(
+            absent, deployed=deployed, policy_list=policies(*SEVEN, *decoys)
+        )
+
+        assert not any(LINE in line for line in found), name
+        (line,) = [line for line in missing if line.startswith(LINE)]
+        assert line.startswith(f"{LINE} {name} "), name
+
+
+def test_a_line_that_only_ends_in_the_name_is_not_the_services_policy(
+    tmp_path: Path,
+) -> None:
+    # The kind is one word and then a slash: a name that merely ends with the
+    # service's name, or has a second slash before it, is not its policy.
+    listed = "\n".join(
+        [
+            POLICY,
+            *(f"{DEFAULT_DENY}/{name}" for name in SEVEN if name != "policy-mcp"),
+            f"{DEFAULT_DENY}/not-policy-mcp",
+            f"{DEFAULT_DENY}/x/policy-mcp",
+        ]
+    )
+
+    lines, _ = lines_of(tmp_path, deployed=ALL_DEPLOYED, policy_list=listed)
+
+    (line,) = [line for line in lines if line.startswith(LINE)]
+    assert line.startswith(f"{LINE} policy-mcp ")
+
+
 def test_the_probes_and_the_pods_are_the_same_with_seven_services_as_with_one(
     tmp_path: Path,
 ) -> None:

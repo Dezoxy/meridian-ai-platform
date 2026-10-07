@@ -753,7 +753,7 @@ check_network_rate_store() {
 # Claims API's pod, and a service whose policy is missing is covered by
 # default-deny alone, which no probe from the Claims API would show.
 check_network_service_policies() {
-  local policies service missing=""
+  local policies service policy has missing=""
   if ! policies="$(kctl -n meridian get networkpolicy -o name)"; then
     fail "network policy: could not list the NetworkPolicies in meridian (kubectl's error is above)"
     return
@@ -761,7 +761,15 @@ check_network_service_policies() {
   while IFS= read -r service; do
     [[ -n "${service}" ]] || continue
     service="${service##*/}"
-    grep -qx "[^/]*/${service}" <<<"${policies}" || missing+="${missing:+, }${service}"
+    # The name part of "kind/name" is compared as text, never as a pattern.
+    has=""
+    while IFS= read -r policy; do
+      if [[ "${policy}" == */* && "${policy#*/}" == "${service}" ]]; then
+        has=1
+        break
+      fi
+    done <<<"${policies}"
+    [[ -n "${has}" ]] || missing+="${missing:+, }${service}"
   done <<<"$1"
   [[ -z "${missing}" ]] ||
     fail "network policy: no networkpolicy object for $(clean_lines "${missing}") in meridian, whose Deployment exists: the pods of a service without its own policy have no rule at all, so default-deny leaves them with no path in or out (make deploy applies the chart's policies)"
@@ -1133,8 +1141,8 @@ check_database_certificates() {
   if [[ "${days}" == 1 ]]; then unit=day; fi
   case "${result}" in
     far) pass "${what}: the earliest of ${count} is ${name}, with ${days} ${unit} left (ends ${ends_at}); the operator renews at ${DATABASE_CERTIFICATE_RENEWAL_DAYS} days, this line fails inside $((DATABASE_CERTIFICATE_MARGIN_SECONDS / 3600)) hours" ;;
-    close) fail "${what}: ${name} has ${days} ${unit} left (ends ${ends_at}), inside the margin of $((DATABASE_CERTIFICATE_MARGIN_SECONDS / 3600)) hours: the operator renews at ${DATABASE_CERTIFICATE_RENEWAL_DAYS} days and has not; read its log in cnpg-system" ;;
-    ended) fail "${what}: ${name} has ended ${days} ${unit} ago (${ends_at}) and was not renewed; read the operator's log in cnpg-system" ;;
+    close) fail "${what}: ${name} has ${days} ${unit} left (ends ${ends_at}), inside the margin of $((DATABASE_CERTIFICATE_MARGIN_SECONDS / 3600)) hours: the operator renews at ${DATABASE_CERTIFICATE_RENEWAL_DAYS} days and has not; read its log in meridian (the Deployment cnpg-cloudnative-pg)" ;;
+    ended) fail "${what}: ${name} has ended ${days} ${unit} ago (${ends_at}) and was not renewed; read the operator's log in meridian (the Deployment cnpg-cloudnative-pg)" ;;
     none) fail "${what}: the status of the Cluster platform-db holds no expiration (.status.certificates.expirations), so nothing is judged: the operator may have changed its status" ;;
     shape) fail "${what}: cannot tell when ${name} ends: its expiration is not in the form 'YYYY-MM-DD hh:mm:ss +0000 UTC' (another zone or another shape), so nothing is judged: has the operator changed its status?" ;;
     date) fail "${what}: cannot tell when ${name} ends: its expiration has the form 'YYYY-MM-DD hh:mm:ss +0000 UTC' but is not a date, so nothing is judged: has the operator changed its status?" ;;

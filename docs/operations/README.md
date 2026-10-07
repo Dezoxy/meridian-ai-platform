@@ -14,7 +14,7 @@ measures the thresholds and S028 runs the game day.
 | What | Where | Status |
 |---|---|---|
 | Service level objectives | [slo.md](slo.md) | Five with an indicator on kind, two designed, one (`triage-completion`) with counters since S064 that nothing reads; every target unmeasured |
-| Alert rules | [`infra/kind/alerts/meridian.yaml`](../../infra/kind/alerts/meridian.yaml), unit tests beside it | Implemented as code, checked by `make alerts`; applied by `make up` and, since S073, by `make deploy` (seen on kind on 2026-10-07), and read by check 11 of `make smoke` on every run, which compares each rule's expression and `for` as well as its name (seen on kind on 2026-10-07) (five groups and 19 rules loaded since S064, and all 20 in S066's third run, `MeridianRateStoreRefusing` among them; every rule healthy, no Meridian alert firing: seen on kind on 2026-10-06); `MeridianCertificateNotRenewed` seen pending, firing and resolved on kind on 2026-10-06; none of S064's four alerts and not `MeridianRateStoreRefusing` seen firing; `MeridianRateStoreRestartLoop` (S072: three restarts of the rate store's container in 15 minutes) implemented and unit-tested, applied by `make up` and `make deploy` but not yet seen loaded on a cluster, and not seen firing; notification designed |
+| Alert rules | [`infra/kind/alerts/meridian.yaml`](../../infra/kind/alerts/meridian.yaml), unit tests beside it | Implemented as code, checked by `make alerts`; applied by `make up` and, since S073, by `make deploy` (seen on kind on 2026-10-07), and read by check 11 of `make smoke` on every run, which compares each rule's expression and `for` as well as its name (seen on kind on 2026-10-07) (five groups and 19 rules loaded since S064, and all 20 in S066's third run, `MeridianRateStoreRefusing` among them; every rule healthy, no Meridian alert firing: seen on kind on 2026-10-06); `MeridianCertificateNotRenewed` seen pending, firing and resolved on kind on 2026-10-06; none of S064's four alerts and not `MeridianRateStoreRefusing` seen firing; `MeridianRateStoreRestartLoop` (S072: three restarts of the rate store's container in 15 minutes) implemented and unit-tested, applied by `make up` and `make deploy` and seen loaded on the warm kind cluster on 2026-10-07 (run R8: check 11 of `make smoke` passed with the tree's 21 rules), not seen firing; notification designed |
 | Dashboards | [`infra/kind/dashboards/`](../../infra/kind/dashboards/) | `gateway-cost.json` implemented on kind (S043); `platform-health.json` implemented as code and served by Grafana on kind, its queries run in Prometheus by check 11 of `make smoke`; whether each panel shows data stays a hand check |
 | Runbooks | [runbooks/](#runbooks) | Written from the code; only the certificate-expiry runbook's renewal procedure was run (kind, 2026-10-06); the other seven (the newest, telemetry missing, S064, and rate store, S066) and that runbook's other steps were not exercised, but for two commands S066's runs ran on kind on 2026-10-06: the budget-exhaustion runbook's `make gateway-upkeep` and the rate store runbook's ping as the `probe` user; and, from S073 on 2026-10-07, the certificate-expiry runbook's `make cert-renew` once, on a healthy Certificate (a denied request not seen) |
 
@@ -297,8 +297,11 @@ applied to one. The session that owns the cluster checks, on `main`:
 4. Every series a rule or the new dashboard names exists. `make smoke`
    does not read this: a rule over a missing series is healthy and quiet.
    Each of these returns a number in Grafana's Explore:
-   - `count(kube_deployment_status_replicas_available{namespace="meridian"})`,
-     expected 7 (the six services and, since S066, the rate store);
+   - `count(kube_deployment_status_replicas_available{namespace="meridian", deployment!="cnpg-cloudnative-pg"})`,
+     expected 7 (the six services and, since S066, the rate store; the
+     matcher leaves out the database operator's Deployment, which lives in
+     `meridian` since S072's cluster batch and is not a Meridian service, as
+     in the alert and the health dashboard);
    - `count(kube_pod_status_ready{namespace="meridian", pod=~"platform-db-[0-9]+", condition="true"})`,
      expected 1;
    - `count(kube_cronjob_status_last_successful_time{namespace="meridian", cronjob="meridian-sweep"})`,

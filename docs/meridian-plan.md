@@ -555,9 +555,9 @@ both readings the same hour ("yes both are right, go on").
 | S067 | Triage rules and screening | The one step of these that changes the triage graph's rules: claims of one policy that are open at the same time count for `frequent_claims` (T-76); the injection screen reads the description as posted, before the claimant's name is replaced; the redaction knows Hungarian forms of names and identifiers; the stored wording is compared with the manifest after ingestion (T-27, T-57); a wording version missing from `wording.EXCLUSION_CLAUSES` fails with a message that names it (moved here from S060, which may not change how the triage routes a claim); golden-set cases on the fraud indicators' boundaries and for an unknown policy number; `make eval` passes, and a change that needs `make eval-record` waits for the owner's yes, since it costs money. Built as (2026-10-06; implemented and tested, none of it run on a cluster): the Claims API screens the description as posted and hands the run one boolean, `posted_text_addresses_the_model`, which the assessor reads as a hit of its own screen (CLM-1053 and CLM-1054 are stopped, 26 of 66 attacks); the redaction finds the Hungarian national phone, tax number, domestic account number and personal identification number on their own and the social security and tax identification numbers after their word, and the claimant's name is replaced with Hungarian endings after a capital letter; a wording pair the table has no count for fails the run with the fixed code `wording-version-unknown` where the rules would read it (the log line names the product and version only when both pass a closed check), not with a message that names it, and a claim that is not valid facts fails with `claim-not-valid` after a log of its fields; the golden set holds 47 claims, seven of them new, from a second random stream, and the model is not asked about them; claims that are still open count for `frequent_claims` by the strict date rule of a decided one, and a withdrawn claim never does (migration 0025, the owner's decision of 2026-10-06); `meridian knowledge verify` compares the stored clauses with the manifest-verified wordings and the ingestion Job runs it after its write (migration 0026). The free replay passed after each landing that could move a recorded answer, and no paid recording was made | done | S060, S061, S064 |
 | S068 | Database upkeep and retention | The owner names the retention periods for `audit.events` and `gateway.usage` first (open since S011; without them the step builds the mechanism and schedules nothing); an insert-only audit table has a way to expire rows; migration 0017's rewrite of a large audit table has a way through that is written down and tested; the static check on migrations says what it cannot see or sees it; `expire_ledger` works in batches; a holder of the upkeep credential cannot stall the gateway with an open transaction; a login that is a member of `claims_sweep` is confined or refused where the database is made; no role creates temporary tables it does not need. Built as (2026-10-07; implemented and tested against PostgreSQL, none of it run on a cluster; no number of days and no schedule is set anywhere): audit rows expire through one function of the owner's that only a session logged in as the upkeep role reaches, `meridian gateway expire-audit` with a dry run that counts, in batches of at most 10,000, each with an audit row, and the rows the upkeep role wrote itself are never removed by it (migrations 0027, 0028); the ledger expires in batches of 100 to 10,000 usage rows on one connection, with a closing call for the counters and credits (0029, 0030); 0017's way through is written down in the migrations' README as needed by no database that exists, a test shows that it fails closed at its first heavy statement and the two ways out are designed, not built; the static check on migrations sees more statements and the README lists what it does not see, each entry pinned by a test; a database default ends a transaction left idle after 60 s (0031), which stops a forgotten transaction and not a deliberate one, so a holder of the upkeep credential can still stall a counter for the statement timeout; a member of `claims_sweep`, or of `gateway_upkeep`, is refused at every `meridian db migrate` after the files are applied, which detects at the next deploy and does not prevent; `pg_temp` is last in the path of every trigger and definer function, with a test over the whole catalog, and the right to make temporary tables stays with PUBLIC (decided, not built). Not built: the periods and a schedule (the owner's, four questions in the section), the briefs' expiry (waits for the owner), a parser for the static check | done (the periods are the owner's and are not set, nothing is scheduled; not built: the briefs' expiry and the removal of PUBLIC's right to make temporary tables, see the Done-when cell and the section) | S066 |
 | S069 | Runtime and gateway edges | Without a change to a prompt or a rule: a validation error in the triage's two answers logs the field; the tool-call limits can differ by agent, or the plan says why not; a failed resumed leg does not leave the first leg's value to be read as the answer; `drafted_by` is right for a completion the filter withheld and the provider billed; the runtime's client of the gateway is bounded per call; a resumed leg that outlived its lease cannot write over the leg that took the run; `service_url_problem` refuses what the HTTP client refuses; a shed tool call's audit row names its run where that can be checked; the refusal flood's count covers the caller check and the throttles; an embedding input is bounded in tokens; the health check watches the certificate the server loaded; the ingestion's data class has a tenant of its own (T-60, the owner's decision when the step opens). Cut in two on 2026-10-06 (the design in Part C): a first half with no lane, and a second half on the cluster, the server's certificate and the health check (R11) and the ingestion's tenant (R12, which the owner decides at S020). Built as, first half (2026-10-07; implemented and tested, none of it run on a cluster, no real provider called): the Claims API logs the failed fields of the runtime's answer, of the triage proposal and of the brief's output, and counts a stored proposal as stored; a leg ends its run only over the `updated_at` its own start or claim wrote, with no new column, and a late leg answers the stored status with no output; a resume that carries a value is refused with a 422; the runtime's call to the gateway has a deadline of 30 s as a whole, a timeout per phase, a reply cap of 1 MiB and `Accept-Encoding: identity`; a refused prompt and a withheld completion are told apart on the wire (`X-Meridian-Completion: withheld` and three headers naming the deployment) and the withheld one has its drafter on record; `service_url_problem` also asks the HTTP client; a shed tool call's row names its run where the run's own row can be read; every service writes the summary of a refusal flood's last window through one writer; a module that exits at import is a failed load; the access log's path is unquoted to a fixed point and loses a userinfo part; the scaffold names the host; the tool span names its step. Not built, each as a decision with its reason in the section: limits per agent (R2), an embedding bound in tokens (R10), a ceiling on the rate limits (B13), a breaker shared between processes (B14), one word for the two limits (B18), a holder column and the second host's scaffold | doing: the first half is done (2026-10-07); R11 waits for the cluster lane and R12 for the owner's decision at S020 | S064, S037 |
-| S070 | Claims intake and what the adjuster is told | The owner decides first whether uploads are built or stay out (T-38: the largest item here; if built it is a step of its own, split off when this one opens); a report dated as a recent loss is seen for what it is, or T-66 says why it cannot be; the adjuster's page marks a recommendation that rests on the model's answer, so a steered model's `approve` does not read as the rules'. Built as, first half (2026-10-07; implemented and tested against PostgreSQL and in the pages' own tests, none of it run on a cluster, nothing paid, no fingerprint moved): the adjuster's claim page says beside a recommendation whether it rests on a model's reading of the exclusion clauses or on the rules alone, and the queue marks it in a column, from one function over the stored fields (no new field, no migration); it reaches the 6 steered recommendations that wait for an adjuster and not the 28 automatic approvals, which no page lists; the page labels the loss date and the report date as not checked and shows two gaps in days, with no rule or bound, and T-66 says why; the claimant's name pattern is built from a read before the claim's row is locked and only for a request the claim can go on with, so a refused request pays no compile (a stale page and a documents post past the cap still do); the redaction is split into six modules by a proven move; the differential test classifies every lost run, its generator writes the forms it lacked and both date guards are pinned from both sides; the e-mail pass reads its placeholder from the mapping; and an international Hungarian phone number is cut at a space before a second number, in a form narrowed after a review (R3b) and narrowed again after a second (R3c, 951b72c), so that it turns the plain shape and not every text the row quoted. Not built, each with its reason in the section: uploads (the owner's decision is open), a bound on what a name may replace, a reorder of the assessor's checks, the wider cut of a dotted number with a `06` group and a third date guard (the owner's questions), and the fix of three known leaks of the phone matcher | doing: the first half is done (R3c and its review stand; the whole suite is the main session's); the owner's decision on uploads and four more questions are open, and the second half holds what the owner decides | S067 |
+| S070 | Claims intake and what the adjuster is told | The owner decides first whether uploads are built or stay out (T-38: the largest item here; if built it is a step of its own, split off when this one opens); a report dated as a recent loss is seen for what it is, or T-66 says why it cannot be; the adjuster's page marks a recommendation that rests on the model's answer, so a steered model's `approve` does not read as the rules'. Built as, first half (2026-10-07; implemented and tested against PostgreSQL and in the pages' own tests, none of it run on a cluster, nothing paid, no fingerprint moved): the adjuster's claim page says beside a recommendation whether it rests on a model's reading of the exclusion clauses or on the rules alone, and the queue marks it in a column, from one function over the stored fields (no new field, no migration); it reaches the 6 steered recommendations that wait for an adjuster and not the 28 automatic approvals, which no page lists; the page labels the loss date and the report date as not checked and shows two gaps in days, with no rule or bound, and T-66 says why; the claimant's name pattern is built from a read before the claim's row is locked and only for a request the claim can go on with, so a refused request pays no compile (a stale page and a documents post past the cap still do); the redaction is split into six modules by a proven move; the differential test classifies every lost run, its generator writes the forms it lacked and both date guards are pinned from both sides; the e-mail pass reads its placeholder from the mapping; and an international Hungarian phone number is cut at a space before a second number, in a form narrowed after a review (R3b) and narrowed again after a second (R3c, 951b72c), so that it turns the plain shape and not every text the row quoted. Not built, each with its reason in the section: uploads (the owner's decision is open), a bound on what a name may replace, a reorder of the assessor's checks, the wider cut of a dotted number with a `06` group and a third date guard (the owner's questions), and the fix of three known leaks of the phone matcher | doing: the first half is done (R3c and its review stand; the whole suite is the main session's); the owner's decision on uploads and four more questions are open, and the second half holds what the owner decides; so far it has built, with no word of the owner's, the property test's missing forms, the queue's judgment of a stored proposal by the claim page's function with a received time refused when it has no zone, and one shaped 500 for an answer that cannot be built after the proposal is stored (the section), and it did not build `drafted_by`, which waits for the owner | S067 |
 | S071 | Measurements that need a live model | Costs money (about fifty chat calls and some embedding calls; the owner says yes before any, and the amount is stated first): a real model's answers to the injection cases the screen lets through, recorded beside the golden recording; a model's refusal of a structured request seen from a real provider; retrieval measured with a real embedding, in the evaluation and in S038's one failing check; the judge compared with labels a person wrote for a sample; a held-out set for the injection screen, and a decision on what a false alarm may cost; CLM-0034's `unsure` settled by a prompt or recorded as the right answer; retrieval over a graph measured again only if the synthetic data gains something relational to find | todo | S067 |
-| S072 | The cluster outside `meridian`, second round | On kind: the Prometheus and CloudNativePG operators' reach into Secrets and ConfigMaps of every namespace is narrowed or recorded as accepted with its reason; DNS and the collector cannot carry data out unseen (T-84), or the residual is stated; writes to Prometheus and Loki pass a policy, and the three hops behind the collector are encrypted or the plan says why not; egress from `observability` and the admission webhooks' port are bounded; `cnpg-system` and `envoy-gateway-system` have Pod Security labels and a policy; the owner decides whether node-exporter stays off; Tempo mounts no API token | doing: four files-only contracts have landed (2026-10-07; implemented and tested, none of it seen on a cluster): Tempo's and Loki's pods mount no service-account token (three keys); `cnpg-system` and `envoy-gateway-system` warn and audit at Pod Security `restricted` from a render, not confirmed by the API server; the certificate policy for the services names the eight URIs and six DNS names the chart renders, not a wildcard; an alert on the rate store's restart loop. The documents record the four accounts that read Secrets in every namespace (not two), the accepted reaches, the residuals and the one measurement (seen on kind: the API server's calls arrive from the node's address on the pod network and pass a default-deny ingress). Left, on the cluster lane after S073's second half: the CloudNativePG operator confined (with a written fall-back), egress from `observability`, the webhooks' port, the policies of the two namespaces, the dry run of the labels, and the corrections the render and the measurement call for; the owner decides the writes clause and node-exporter (stays off) | S064, S066 |
+| S072 | The cluster outside `meridian`, second round | On kind: the Prometheus and CloudNativePG operators' reach into Secrets and ConfigMaps of every namespace is narrowed or recorded as accepted with its reason; DNS and the collector cannot carry data out unseen (T-84), or the residual is stated; writes to Prometheus and Loki pass a policy, and the three hops behind the collector are encrypted or the plan says why not; egress from `observability` and the admission webhooks' port are bounded; `cnpg-system` and `envoy-gateway-system` have Pod Security labels and a policy; the owner decides whether node-exporter stays off; Tempo mounts no API token | doing: the first part is on `main` (2026-10-07; implemented and tested, and seen on a warm cluster by run R8 in the limits the section gives: both pods run with no token, the labels applied, smoke's 46 lines and the 21 rules passed, the Certificates Ready but issued before under the old policy; the cold run R9 then approved all eight under the exact lists from nothing): Tempo's and Loki's pods mount no service-account token (three keys); the namespaces of the CloudNativePG operator and of Envoy Gateway warn and audit at Pod Security `restricted` from a render (the gateway's namespace confirmed by the API server's dry run with its proxy pod running, R9; the operator's namespace is gone); the certificate policy for the services names the eight URIs and six DNS names the chart renders, not a wildcard; an alert on the rate store's restart loop. The documents record the four accounts that read Secrets in every namespace (not two), the accepted reaches, the residuals and the one measurement (seen on kind: the API server's calls arrive from the node's address on the pod network and pass a default-deny ingress). The cluster batch is written in files, tested without a cluster and seen on kind by the cold run R9 (2026-10-07, 11:08 to 11:17 UTC, from the batch's commit; five contracts, W, E, C, N and S, and the fix contract F2; not seen: the guard, the fall-backs, a webhook failing closed, Loki's usage report refused, the four other pods of the node rule on the kubelet's port): no pod reaches the webhooks' port 10250 but Prometheus, on the operator's; egress from `observability` is denied by default and admitted by rule; the CloudNativePG operator is released into `meridian` under `config.clusterWide=false` and a policy of its own (`cnpg-system` is gone); `envoy-gateway-system` is denied by default and admitted by rule, and `make deploy` refuses a cluster without the operator's policy; smoke compares a Deployment's name as text. The infrastructure review of the batch is in (nothing critical or high; four medium findings answered by F2); left: the merge of `main`, the whole suite and the pull request, and the rows (the cluster on this machine is the one made from the batch's commit: no `make up` from `main` on it until the batch is merged); the owner decides the writes clause and node-exporter (stays off) | S064, S066 |
 | S073 | Renewals, upgrades and what smoke cannot see | On kind: a renewal is seen for the collector's certificate and the database's, and something alerts before the database's end; the services do not all restart in the same minute at a renewal; approver-policy is restarted when it hangs, and a repaired policy does not wait an hour for cert-manager's retry; a first install that fails has a way back that was tried; the chart bounds its rollback history and `make images` says what to remove; the scripts' `kubectl` calls have a request timeout; a manual sweep Job does not hide a stopped schedule; the failure paths of smoke's newer lines are seen once on a cluster with something broken on purpose; the line that reads approver-policy's wording says so when it fails; probes that time out under load have a recorded answer for the machine the cluster runs on now | doing: the first half is done (2026-10-07: the builds and the runs R0 to R4e, with the answer for the machine recorded); the second half is open: the ingestion's 503 word on a real refusal, the node paused with three deploys, certificates of one hour with all eight renewed, the cold run and a rotation of the rate store's password (the owner's to run or to accept as not seen); approver-policy's liveness probe is not built | S064, S066 |
 | S074 | Test suite and file sizes | Without the cluster: `infra/kind/smoke.sh`, `test_kind_manifests.py` and the four test files over 800 lines are split along the lines their own tests already cut; the six functions over 50 lines are under it (counted by signature plus body without the docstring, as the section says: by the whole count the row used, four of the six, `assess`, `build_report`, `build_injection_report` and `summarise`, are still over); the template-database fixture survives a test that patches the runner's file list; the tests that failed once under load (a lost connection in a parallel run, a tool server's timeout, the gateway's fallback test) are run repeatedly on the machine the suite runs on now and either hold by construction or are closed as not reproduced, with the numbers; the slowest test of the job is under ten seconds; one CPU-time helper; `unused_port()` on macOS has its answer written down; the owner decides whether CI gates on coverage | doing: the first half is done (2026-10-07; tested, none of it run on a cluster): the two upkeep test files, `test_toolserver_meters.py`, `test_claims_graph.py` and `test_kind_manifests.py` are split by moves a script proves, the template database's builder passes the list it read at import, the stack and demo tests that failed under load no longer rest on the machine's speed (argued; the measurement run, 25 loops of each beside a whole suite, has not run), the counting test takes 0.03 s alone where CI saw 47 s, and one CPU-time helper serves nine files; three questions wait for the owner (coverage in CI, a size check, a pytest-level timeout); the second half is built except what waits (2026-10-07; implemented and tested, none of it run on a cluster): S076's leftovers are closed or accepted row by row (the registry `schemas` link and `--check` line, the services edit's small ends, the scaffold's undo, the import walker's limits pinned, the golden set's workload tied to `Report` by its own validator, the claimant's closed tables read-only and three stale sentences), `run_command`, `build_report` and `render_summary` are under 50 lines by signature plus body (37, 47 and 29) with `--help`, every report and the committed summary byte for byte the same, and two of the half's own commits carried a defect that the review reproduced and a contract fixed; the third part (2026-10-07; moves a script proves, tested; seen on kind once: `make smoke` from the split as it stands printed 46 PASS, 0 FAIL, 0 SKIP, the same lines as the unsplit script's, the trace ID apart): `infra/kind/smoke.sh` is an entry of 1,185 lines and ten files under `infra/kind/smoke.d/` (`shared.sh` and nine checks, 36 to 644 lines), and checks 8 and 10 are still in the entry; what waits: the last cut (checks 8 and 10, after S072's cluster batch), the loaders' helper and the split of `test_redaction_hungarian.py` (S070), and the rows the section's last table keeps | S064, S066, S037 |
 | S075 | Harness, guard and Renovate | `make docs` notices a blank line that splits a table; the command guard's known gaps to a Secret's values and to superuser SQL are closed or listed where a session reads them, and a hook that times out has a known outcome; a rule for an implementer that edits through the shell, and a guard or a rule for `make up` and `make down` from an old checkout (both the owner's); the workflow linter knows the runner label; Renovate's week of waiting is a required check or the plan says why not (the owner's decision), an image is not proposed before the chart that installs it, and the two pgvector versions are one | done (not built: the two pgvector versions are not one, because the newest CloudNativePG image still holds 0.8.6; the owner chose package-manager holds over a required check, and uv's `exclude-newer` cannot go in before 2026-10-10; N4, the guard's own files, is the owner's open question 6; the shell-edit hook is inert until the owner sets `bashEditDiffEnabled`) | — |
@@ -744,7 +744,7 @@ that day; the rest stand as their step recorded them.
 | `enforce` for Pod Security Admission on the `meridian` namespace, which has `warn` and `audit` at `restricted` since S019: a server-side dry run of `enforce=restricted` reported no violation, but a cold `make up` under it (CloudNativePG's init Job) was not tried (T-85) | S019 | open | S020 |
 | The Model Gateway's egress rule towards the providers and Key Vault, with FQDN-aware egress or private endpoints (T-19); the chart has none, because on kind the gateway calls nothing outside | S019 | open | S020 |
 | No NetworkPolicy outside `meridian`: the collector accepts a push from any pod of another namespace (T-68, T-84). Since S055 the `cert-manager` namespace is one more without a policy and without Pod Security labels, though its pods meet `restricted` as rendered | S019, S055 | closed by S063 for `cert-manager` and `observability`: ingress denied except a rule for each peer, Pod Security labels at `restricted` (warn and audit), the collector open to `meridian`'s pods alone, probed by smoke on kind; what stays open has rows of its own | S063 |
-| DNS and the collector are open to the pods that use them and could carry data out (T-84) | S019 | closed in part by S072's documents (2026-10-07): the residual of DNS is stated in T-84 for every namespace whose egress admits the resolver, and no script touches the cluster's resolver. Open: the collector's half shrinks with egress from `observability`, which is the cluster batch | S072 |
+| DNS and the collector are open to the pods that use them and could carry data out (T-84) | S019 | closed in part by S072's documents (2026-10-07): the residual of DNS is stated in T-84 for every namespace whose egress admits the resolver, and no script touches the cluster's resolver. The collector's half is the egress policy of the cluster batch (contract E, `cd1d3b9`): `observability` denies egress by default and the collector may reach the resolver, Tempo, Prometheus and Loki on their ports and nothing else; implemented and tested without a cluster, and seen on kind by the cold run R9 (12 targets up, no container restarted, Loki's log without an error). DNS stays the way out there too (the resolver is admitted) | S072 |
 | The database pod may reach TCP 6443 at any address on kind, not only the API server's: its instance manager calls the API server at the node's own address (T-84) | S019 | closed by S063: `make up` fills the API server's address into the database's and cert-manager's policies, `make deploy` and `make smoke` compare the database's; proved by hand on kind | S063 |
 | Whether each service is safe to run with two replicas is not measured, so every disruption budget protects nothing yet (T-17) | S019 | open | S027 |
 | The images of the platform charts (Envoy Gateway, the Prometheus stack, Tempo, Loki, the operator and, since S055, cert-manager, whose pods read every Secret) are pinned by chart version, not by digest; PostgreSQL's, the collector's and telemetrygen's are by digest | S019 | closed by S063: every image a chart starts is pinned by its index digest and seen so on kind; four images that nothing starts stay by tag, and `infra/kind/README.md` says what would start each | S063 |
@@ -831,7 +831,7 @@ that day; the rest stand as their step recorded them.
 | `meridian gateway` has no way to run on a cluster: no workload holds the role's Secret (a test keeps it so), and the runbook labels the cluster path designed | S066 | closed by the step's second half (2026-10-06): `make gateway-upkeep` renders a Job of its own outside the release, under the role's Secret; on kind it read the open reservations, refused an expiry with nothing to remove and credited one token | S066 |
 | `expire_ledger` removes a month's rows in three statements under the connection's statement timeout: a very large expiry fails closed and removes nothing, and a batched expiry is not built (8 million usage rows took 2.1 s on a memory disk in the review) | S066 | closed by S068: the ledger expires in batches of 100 to 10,000 usage rows, each its own transaction on one connection, and a closing call removes the counters and credits of those months (migrations 0029, 0030); `expire_ledger` of 0020 stays and is the owner's alone. Implemented and tested against PostgreSQL, not run on a cluster | S068 |
 | `tests/meridian/db/test_gateway_upkeep_credit_expire.py` (about 975 lines) and `test_gateway_upkeep_migration.py` (about 840) are over the 800-line ceiling; their shared helpers would have to move first | S066 | closed by S074 (first half): the two files are eight (the largest 387 lines), their shared helpers are in `upkeepsupport.py`, and the collected counts (66 and 117) are unchanged | S074 |
-| The certificate policy admits any `*.meridian.svc` name and any service account's URI for a request in the namespace, so whoever can create a Certificate and a pod there can answer as another service, the rate store included, and capture the gateway's password for it (T-92) | S066 (security review; as it was since S056) | closed in part by S072 (contract P, `ae10294`; implemented and tested without a cluster, not seen on one): the two wildcards are the eight URIs and the six DNS names the chart renders, and a test holds both lists equal to the rendered Certificates both ways, so a request for a new name is refused; a request for a listed name is still approved whoever made it, because the requester of every Certificate is cert-manager's own account, so the residual stays and is stated in T-92 (whoever can create a Certificate and a pod in `meridian` can answer as a listed service, the rate store's included; the control is the cluster's access control, which no file here sets). Smoke's check 10 no longer proves the namespace selector alone: see the new row below | S072 |
+| The certificate policy admits any `*.meridian.svc` name and any service account's URI for a request in the namespace, so whoever can create a Certificate and a pod there can answer as another service, the rate store included, and capture the gateway's password for it (T-92) | S066 (security review; as it was since S056) | closed in part by S072 (contract P, `ae10294`; implemented and tested without a cluster; seen warm, R8, 2026-10-07: the lists are on the cluster and the eight Certificates are Ready, but they were issued before under the old policy, so an approval under the lists is not seen): the two wildcards are the eight URIs and the six DNS names the chart renders, and a test holds both lists equal to the rendered Certificates both ways, so a request for a new name is refused; a request for a listed name is still approved whoever made it, because the requester of every Certificate is cert-manager's own account, so the residual stays and is stated in T-92 (whoever can create a Certificate and a pod in `meridian` can answer as a listed service, the rate store's included; the control is the cluster's access control, which no file here sets). Smoke's check 10 stopped proving the namespace selector alone, and F1 restored it: see the new row below | S072 |
 | No image is scanned for known vulnerabilities in CI: the Redis image, like the others, is pinned by digest and read by Renovate, and nothing reports what is in it | S066 (infra review) | open | S022 |
 | A tenant's two rate limits are capped in the registry at a billion (S066), which keeps the script's arithmetic exact and binds nothing real; the rate store's memory is bounded by the request limit (about six entries per allowed request and tenant), and no ceiling tied to that memory exists | S066 (security review) | closed by S069 as a decision, not built: the registry already refuses tenants' limits that sum above a deployment's own (`check_tenant_limits`), a figure far below what the store's memory holds, for every candidate that states `rate_limits`; on a route of replay deployments alone only the billion applies, and the registry's README now says so | S069 |
 | A rotation of the rate store's password has no overlap: the store and the gateway restart one after the other, and model calls are refused with a 503 for the seconds between (the runbook says so) | S066 | open | S073 |
@@ -841,7 +841,7 @@ that day; the rest stand as their step recorded them.
 | Not seen on a cluster for the rate store: a 503 from the gateway while the store is down, `MeridianRateStoreRefusing` firing, two gateway replicas sharing a window, a store frozen by a script and restarted by its probe, and `make deploy` refusing a Secret older than the ACL | S066 | open | S073 |
 | The circuit breaker and the refusal throttles are per process: two gateway replicas each count failures on their own and may each write a throttled refusal row | S066 (design) | closed by S069 as accepted, as ADR 8 records, until a second replica of anything but the gateway exists; no code | S069 |
 | The rate store in Azure is designed only: a managed Redis in the same EU region, its cost and SKU, and whether Valkey replaces Redis 8 (run under its AGPLv3 option, unmodified) are open | S066 | open | S020 |
-| No rule reads the rate store's restarts: a store that restarts in a loop while few calls come (256 held connection slots do it every 70 to 90 seconds) resets every tenant's windows each time and stays under the refusal alert's two conditions | S066 (fourth security pass) | closed by S072 in files (contract R, `2fbf472`; implemented and unit-tested by `make alerts`, not loaded on a cluster and not seen firing): `MeridianRateStoreRestartLoop`, `warning`, three restarts of the store's container in 15 minutes (a renewal's restart and a start's liveness restart are at most two), with no wait; a loop slower than about seven minutes between restarts is not seen, which the kubelet's back-off cap rules out | S072 |
+| No rule reads the rate store's restarts: a store that restarts in a loop while few calls come (256 held connection slots do it every 70 to 90 seconds) resets every tenant's windows each time and stays under the refusal alert's two conditions | S066 (fourth security pass) | closed by S072 (contract R, `2fbf472`; unit-tested by `make alerts`; seen loaded on the warm cluster, R8, 2026-10-07: smoke's check 11 passed with the tree's 21 rules; not seen pending or firing): `MeridianRateStoreRestartLoop`, `warning`, three restarts of the store's container in 15 minutes (a renewal's restart and a start's liveness restart are at most two), with no wait; a loop slower than about seven minutes between restarts is not seen, which the kubelet's back-off cap rules out | S072 |
 | `make smoke` compares the loaded alert rules with the file by group and rule name, not by expression, and `make deploy` does not apply the rules: after a rule's expression changed, the old one stays loaded and smoke passes until `make up` is run (seen on kind, 2026-10-06) | S066 (fourth cluster run) | closed by S073 (K3, K4), seen on kind on 2026-10-07: `make deploy` applied the rules (run R3), smoke compared the expressions and `for` of all the rules with the file's (run R4) and named a changed `for` and a removed rule object, each put back by `make deploy` (run R4b); a changed expression was not seen | S073 |
 | `make deploy` checks the rate store's ACL rules and not that the password in the gateway's address is the one the ACL holds: a mismatch shows as refused calls, not at deploy | S066 (fourth security pass) | open | S073 |
 | The command guard does not ask before `make gateway-upkeep` with an argument that changes the ledger (`credit`, `close`, `expire --confirm`), and the audit row of such a change names the database role, not the person or session | S066 (third security pass) | closed in part by S075, the rest re-homed: the guard asks before `make gateway-upkeep` or `infra/kind/upkeep.sh` with a subcommand that can change the ledger (`credit`, `close`, `expire --confirm`), also behind `gmake`, `env`, `time`, `sudo` and `bash -c`; a variable or a backtick in `ARGS` asks. Open: the audit row of such a change names the database role, not the person or session, which needs a person to name (S021's sign-in) | S021 |
@@ -850,15 +850,15 @@ that day; the rest stand as their step recorded them.
 | `tests/meridian/workloads/claims_triage/test_claims_graph.py` is about 1,780 lines; its stubs and helpers would have to move to a support module before it can be split | S031 (python review) | closed by S074 (first half): the file (2,296 lines on the branch, 346 collected) is ten files (the largest 477 lines) and `graphsupport.py`; the collected total is unchanged | S074 |
 | A tool server deployed before its runtime refuses every call of an agent with workers (`worker-missing`). One image runs all six services on kind, so it cannot happen there; a rollout order (the runtime first) is needed where the services are deployed apart | S031 (security review) | open | S020 |
 | One workload declares workers; the scaffold for a new agent writes one without them, and nothing has built a second graph of subgraphs | S031 | closed by S076 as a decision, not built: a second supervisor-and-subgraph example written by the scaffold would be a second graph to keep true with no workload asking for it, and since S037 a new workload may be on either host; the scaffold's output and `config/registry/README.md` say that workers are an edit a person makes in `agents.yaml` | S076 |
-| The Prometheus operator and the CloudNativePG operator read and write Secrets and ConfigMaps in every namespace, so either can read the two authorities' keys, overwrite them, or change the ConfigMap `telemetry-ca` that says what the services trust for telemetry (they read it at each new connection: no restart, no alert) | S063 (security review) | open in part; S072's documents (2026-10-07) say, from a render, that FOUR accounts read Secrets in every namespace and that two more read ConfigMaps (T-68, T-88). Accepted, with the reason in the section: the Prometheus operator (no key narrows it), cert-manager's controller (reads and writes Secrets, needs both) and Envoy Gateway's controller (reads). To be built in the cluster batch: the CloudNativePG operator confined (`config.clusterWide=false`, released into `meridian`, so its rules are a Role there and not a ClusterRole over every namespace), with a written fall-back (if a cold `make up` does not bring the database up under it, the change is taken out and the reach is recorded as accepted with "tried, and what failed") | S072 |
+| The Prometheus operator and the CloudNativePG operator read and write Secrets and ConfigMaps in every namespace, so either can read the two authorities' keys, overwrite them, or change the ConfigMap `telemetry-ca` that says what the services trust for telemetry (they read it at each new connection: no restart, no alert) | S063 (security review) | open in part; S072's documents (2026-10-07) say, from a render, that FOUR accounts read Secrets in every namespace and that two more read ConfigMaps (T-68, T-88). Accepted, with the reason in the section: the Prometheus operator (no key narrows it), cert-manager's controller (reads and writes Secrets, needs both) and Envoy Gateway's controller (reads). Built by the cluster batch (contract C, `5e95705`; implemented and tested without a cluster, and seen on kind by the cold run R9: the operator Ready in `meridian`, the database healthy under it and after the chart's default deny): the CloudNativePG operator is released into `meridian` with `config.clusterWide=false` under a NetworkPolicy of its own, so its rules are a Role in `meridian` and its ClusterRole holds only nodes, webhook configurations and image catalogs (the chart also renders two ClusterRoles, `cnpg-cloudnative-pg-view` and `-edit`, that nothing binds or aggregates: a row below); `cnpg-system` is gone. The residual, stated: that Role still holds `pods/exec` and writes on Secrets and ConfigMaps over all of `meridian`, so the operator's account can still read and overwrite the six services' TLS keys and the ConfigMap `telemetry-ca` there; what stands against it is who can reach the account. The other three accounts stay accepted. The written fall-back (the change taken out and the reach recorded as accepted with "tried, and what failed") was not needed: the cold `make up` brought the database up under the confinement | S072 |
 | Prometheus's OTLP receiver and Loki's push API take writes from Grafana and from the collector directly, past the collector's policy and TLS; the three hops from the collector to Tempo, Loki and Prometheus are clear text inside `observability`; the collector asks a sender for no certificate, so each of the six services can push under another's name (T-68) | S063 (security review) | closed in part by S072's documents (2026-10-07): the three hops stay clear text, as a decision with its reason (T-90). Open: the writes to Prometheus and Loki, which wait for the owner's word (the row of S072 gives no "or" for them; the session recommends amending it to "or the residual is stated"); and the third part, a client certificate at the collector, which is outside the step's row and does not gate its close | S072 |
-| Egress from `observability` is open (Prometheus scrapes the kubelet and the API server at the node's address), and port 10250 of the three admission webhooks admits any pod: a forged review changes nothing, a flood against the two that fail closed can stall the issuing of certificates | S063 | open; S072 measured the address once (seen on kind, 2026-10-07: the API server's calls arrive from the node's address on the pod network and pass a default-deny ingress), and the bound is the cluster batch's: the peerless rules are removed or given that address, and `observability`'s egress is written with the node's address the scripts already hold | S072 |
-| `cnpg-system` and `envoy-gateway-system` have neither Pod Security labels nor a NetworkPolicy; Pod Security on the three labelled namespaces warns and audits and enforces nothing, and `audit` records nothing on kind (no audit policy) | S063 (security review) | closed in part by S072 (contract L, `80d26c9`; implemented and tested without a cluster): the two namespaces carry `warn` and `audit` at `restricted`, from a render of both charts' pods, "not confirmed by the API server"; Envoy's proxy pods are made at run time and were read in the source, not seen. Open: the server-side dry run of the level (cluster batch), the two namespaces' NetworkPolicies (cluster batch; the CloudNativePG operator's confinement removes `cnpg-system` if it holds), and the second half (enforce waits on a cold `make up`; `audit` needs a new cluster with an audit policy), which is outside the step's row | S072 |
+| Egress from `observability` is open (Prometheus scrapes the kubelet and the API server at the node's address), and port 10250 of the three admission webhooks admits any pod: a forged review changes nothing, a flood against the two that fail closed can stall the issuing of certificates | S063 | open in part; S072 measured the address once (seen on kind, 2026-10-07: the API server's calls arrive from the node's address on the pod network and pass a default-deny ingress), and the cluster batch bounds both (implemented and tested without a cluster, and seen on kind by the cold run R9: the three webhooks reached with no pod admitted, a pod in `default` timed out on each 10250, a pod in `observability` that no egress rule names timed out on the node's 10250 and 6443 where a pod in `default` was open, and Prometheus's 12 targets are up). Contract W (`67b6ef2`): cert-manager's webhook and approver-policy's, the two that fail closed, lose their peerless rule on 10250, so no pod reaches them (the API server comes in from the node); the Prometheus operator's rule is kept with Prometheus as its one peer, because its webhook and its metrics share the port. Contract E (`cd1d3b9`): `observability` denies egress by default and admits the resolver, the node's published address on 6443 and 10250 through the one placeholder the scripts fill, and each pod's named peers. Residuals, stated: one placeholder serves both ports, so the pods of the three workloads that need only the API server (the operator with its two hook Jobs, kube-state-metrics, Grafana) can open the kubelet's port too; the kubelet asks for a credential and their accounts hold no right on the node (not read on this cluster), and whether a pod's egress straight to the node on a port no rule names is refused has not been tried (the cold run tries it from Tempo's pod); the node passes every policy, so a policy here bounds pods and not the node (T-84). Not seen: the four other pods the node rule selects trying the kubelet's port, which the rule admits; a target found down is added once from what a run shows (none was found) | S072 |
+| `cnpg-system` and `envoy-gateway-system` have neither Pod Security labels nor a NetworkPolicy; Pod Security on the three labelled namespaces warns and audits and enforces nothing, and `audit` records nothing on kind (no audit policy) | S063 (security review) | closed in part by S072, implemented and tested without a cluster and seen on kind (the labels warm, R8; the batch's parts cold, R9, 2026-10-07). Labels, contract L (`80d26c9`): the two namespaces carried `warn` and `audit` at `restricted`, from a render of both charts' pods; the API server accepted them when `make up` applied them on the warm cluster (no warning was looked for then), and on the cold cluster a server-side dry run of `enforce=restricted` on `envoy-gateway-system`, with the controller and the proxy pod running, answered "labeled (server dry run)" with no warning, so the proxy pod made at run time is included (R9). Since contract C (`5e95705`) `cnpg-system` is gone (the operator is released into `meridian`, which is labelled), so L's labels for it were overtaken an hour after they landed and the labels stay on `envoy-gateway-system` alone. Policies: contract N (`faf3044`) gives `envoy-gateway-system` default-deny in both directions with five policies, and the operator has one of its own in `meridian` (contract C); the gateway's controller, Job and proxy came up under its default deny and the Gateway is programmed (R9). Open: the second half (enforce is not set anywhere, R9 only dry-ran it on one namespace; `audit` needs a new cluster with an audit policy), which is outside the step's row | S072 |
 | node-exporter is off on kind, so a node's CPU, memory and disk are not observed; it alone would hold `observability` at Pod Security `privileged` | S063 | open; the owner's to overturn; the session's decision of 2026-10-07 (S072, decision 7) is that it stays off, because no rule or dashboard reads its series and it alone would make `observability` privileged; asked in a status | S072 |
 | Renovate proposes a chart a week after its release and an image at once (the docker datasource gives no dependable release date for quay.io and ghcr.io), so an image's tag can be proposed before the chart that installs it; a note on the pull request says to leave it | S063 (infra review) | closed by S075: one rule switches off Renovate's tag updates for the 17 images a chart installs by default and keeps digest updates, so an image is not proposed before its chart (the collector's two images are outside it until their pin and the chart's appVersion agree); the chart's pull request moves the tags by hand | S075 |
 | A renewal has not been seen for the collector's certificate (90 days), its authority (a year) or the database's three certificates (90 days), and nothing alerts on the database's: cert-manager's series do not cover CloudNativePG's | S063 | open in part; S073 built the database line of smoke (passed on the real Cluster, run R4d, 2026-10-07; no alert can read the dates, since CloudNativePG exports no series for them, read in run R0); not seen: a renewal of the collector's certificate, of its authority or of the database's three, which needs a forced renewal of the collector's certificate (not run in this half) and, for the database's, a lifetime in whole days that no run can wait out | S073 |
 | Every role of the database may create temporary tables (PUBLIC's right on the database); nothing a role can shadow with one was found | S063 (database review) | closed by S068 as decided: the right stays with PUBLIC, because taking it away is a database-level privilege that the tests' copies of the template do not carry and two tests use the right as their control; the defence is completed instead: the four older trigger functions pin `pg_temp` last in their search path (0031) and a test over the migrated catalog fails for any trigger or definer function of the owner's schemas that does not (T-101). Tested against PostgreSQL, not run on a cluster | S068 |
-| `infra/kind/smoke.sh` is near 2,900 lines; a new check would be better as a file of its own, which needs the script split first. Tempo's pod mounts an API token it does not use | S063 | closed for the mechanism by S074 (third part, 2026-10-07): a new check is a new file `smoke.d/NN-name.sh` and one source pair in the entry (`infra/kind/README.md` says how; `test_smoke_parts.py` holds the layout), and the script's size is closed in part (nine checks and the shared code are parts under 800 lines; the entry is 1,185 lines until the last cut, which is S074's and waits for S072's cluster batch); Tempo's API token is re-homed to S072, whose row names it ("Tempo mounts no API token"). Tempo's half is closed in files by S072 (contract T, `f690173`; implemented and tested, not seen on a cluster): Tempo's and Loki's pods mount no token (Loki found by the render, with two keys); that either pod starts and works without it is for the cluster batch's run to show | S074 |
+| `infra/kind/smoke.sh` is near 2,900 lines; a new check would be better as a file of its own, which needs the script split first. Tempo's pod mounts an API token it does not use | S063 | closed for the mechanism by S074 (third part, 2026-10-07): a new check is a new file `smoke.d/NN-name.sh` and one source pair in the entry (`infra/kind/README.md` says how; `test_smoke_parts.py` holds the layout), and the script's size is closed in part (nine checks and the shared code are parts under 800 lines; the entry is 1,185 lines until the last cut, which is S074's and waits for S072's cluster batch); Tempo's API token is re-homed to S072, whose row names it ("Tempo mounts no API token"). Tempo's half is closed by S072 (contract T, `f690173`; implemented and tested, seen warm by R8, 2026-10-07): Tempo's and Loki's pods mount no token (Loki found by the render, with two keys); both pods were replaced, read `automountServiceAccountToken=false`, ran, and smoke's trace and log lines passed without a token | S074 |
 | No rule and no dashboard panel reads the values of S064's series: a jump in an assessment reason (`special-data`, `injection-suspected`, `filtered`), triages that fail by reason, a sweep finding that stays above zero, the tool servers' refusals, a runtime that cannot reach the gateway; and no rule reads a log line (kind's Loki runs no ruler) | S064 | open; thresholds need a measurement | S027 |
 | The log agent's own counters (its exporter's failures, the memory limiter's refusals) are scraped by nothing; a DaemonSet that does not exist leaves no series, so only smoke says the agent is gone; the kubelet's rotation can outrun the agent, and one flooding pod may stall the others' lines (not measured). The agent mounts the node's pod-log directory, so `logging` cannot be `restricted` and a compromised agent reads every pod's output on its node | S064 (infra review) | open; the second half is a stated residual (T-68). S072, 2026-10-07: the counters are not taken by the four contracts landed (an ingress rule from Prometheus to 8888, a monitor object and a rule, then a run); stays, and does not gate the step's close | S072 |
 | Not seen on a cluster after S064: any of the four telemetry alerts firing, a renewal of the telemetry authority with the log agent and the sweep as its readers, a line with an `exception` field, a run counted `not-saved` or `not-started`, a triage counted `failed`, a tool call counted `cancelled` | S064 | open; tests hold each | S073 |
@@ -898,14 +898,14 @@ that day; the rest stand as their step recorded them.
 | A true posted-text flag returns `injection-suspected` before the candidate clauses are screened, so a claimant who posts screened words hides the failure a poisoned clause would give (`wording-addresses-the-model`); a hit of the assessor's own screen did the same before S067 | S067 (security review, low) | closed by S070 as decided, in documents only: the order stays, because the claim goes to an adjuster either way and `meridian knowledge verify` compares the stored wording with its manifest without any claim; T-26 says so. The sentence in the assessor's docstring that the design promised is a code comment, which this step's documents contract could not write (the small ends row below) | S070 |
 | Forms of the claimant's name that the closed lists lack are not found (T-73): a name typed in lower case with a Hungarian ending (`kovácsnak`), the possessive on a name (`-om`, `-unk`), a part of under three letters, a consonant with an accent written without it, and a name whose first letter the text writes as another capital; a name that spells an ordinary word with an ending is replaced where it is capitalised ("Seat Leon" for a claimant named Leo). The pattern of the worst 200-character name is 12,141 characters (about 55 ms to compile, measured in F2r and pinned by a test), is compiled through `re._compiler`, a private function that fails closed if a Python release moves it, and in the claim moves is built while the claim's transaction is held (security review, low) | S067 (reviews) | closed by S070 in part: the pattern is built from a read before the claim's row is locked (A3), and only for a request the claim can go on with (A4), so the lock is not held for the compile and a refused request pays none (tested against PostgreSQL, with a second session's `FOR UPDATE NOWAIT` as the probe; not run on a cluster); a stale page and a documents post past the cap still pay one compile each (the ingress row below); `re._compiler` is named by a test that fails with a sentence if a release moves it; the pattern's size is unchanged; no form was added, by decision (taking every ending took seventeen golden words where the capital rule takes one), so the forms listed stay stated residuals in T-73 | S070 |
 | The redaction's residuals after S067 that are not the matcher's own fix (T-73): a Budapest number written `06-1x-YYYY-xx` with one separator reads as a date and is left in the clear (a named shape of the differential test; no other number can be written so, and no fix is planned); redaction is not idempotent where two numbers touch at a `+` or a `(`; a date followed by an amount shaped like a phone number (`Total 06 30 1250000 HUF`) is replaced; the rules cost about fifty times more per character on text made of the national prefix, still linear (the security review measured it, no test pins the factor); identity card, passport and licence numbers, vehicle plates, an account number without separators, and a social security or tax identification number after a word the list does not hold are not found. The matcher's own gaps have the four rows below, and every shape is pinned by `test_redaction_residuals.py` or held by `test_redaction_differential.py` | S067 (reviews) | open; the step's contract named none for these, and S069 holds the gateway's edges, the nearest | S069 |
-| The redaction cuts an international span at a dot or a slash and not at a space, so a national number after an international one and a plain space leaves its last seven digits (`+36 30 123 4567 06 20 765 4321` gives `[phone] 765 4321`; with slashes, `+36/83/701/902 00 36/73/48/9525` gives `[phone]/48/9525`, six digits). The fourth review's cut, prototyped and validated, is not built, because this matcher regressed twice on a fix made at the end of a round: in `_international_span`, cut at a space (the no-break and the other space characters too) followed by an optional opening parenthesis and `06` or `00`, only when the left part is a complete number by the numbering plan (`_phone_shape_holds`, 8 to 17 digits) and the right part is one the national rule accepts (`NATIONAL_PHONE` matches there and `_choose_national_phone_span` takes it), and otherwise as today, so `+36 1 060 1234`, `+36 30 0036 123` and `+36 1 234 5678 06 1` stay one number (a plain cut at a space leaves ten digits of `+36 1 060 1234`). Measured on the prototype: the differential's run-on hits fall from 62 to 3, no new shape, no count mismatch, and one test to change on purpose (the one that demands the run-on still loses); about 15 lines in a function that has regressed twice, so it needs pins of its own, written first | S067 (fourth review) | closed by S070 in part (implemented and tested; not run on a cluster): what is closed is two numbers one after the other at a space where the first is a complete Hungarian number and the national rule takes the second (`+36 30 123 4567 06 20 765 4321` and `+36/83/701/902 00 36/73/48/9525` give two `[phone]`), built with its pins written and seen red first (22 cut rows and 23 not-cut rows, each with its reason), the left part checked by the numbering plan (country code 36 and `national_phone_holds`, not by shape alone), and narrowed twice after two reviews, so that the cut is not made where a prefix token inside the second number begins a national number that reaches beyond it (the national pass would hand the third number its prefix); the run-on of the differential fell from 63 to 11. Not closed: the row's own text (`Tel: +36.62.7320.12 00 36 69 0619 45/(00 36).92.803.020.` gives `Tel: [phone] [phone].92.803.020.` again, the output from before the cut, which the wider condition gives back and which is pinned as a known leak); a foreign first number or one with a digit too many; about 0.03 per cent of ordinary texts (91 of 300,000 in the review), a second number with an inner group that starts `06` or `00` followed by an amount, a date or another number, which fall back to the leak from before the cut (`+36 30 135 7400 06 1 065 3027 250 000 Ft` gives `[phone] 3027 250 000 Ft`; `+36 25.805.094 06-49 068 916 06 12 2026 14` gives `[phone] 916 06 12 2026 14`); and the three known leaks of the national pass (the row below). The session accepted the fall-back and did not refine the condition. The claim that no text shows a digit the matcher before the cut hid was false for R3 and for R3b; the review of R3c, over about 2.84 million texts of its own grammars, found none, and a seeded property test in the suite now holds it (the section) | S070 |
+| The redaction cuts an international span at a dot or a slash and not at a space, so a national number after an international one and a plain space leaves its last seven digits (`+36 30 123 4567 06 20 765 4321` gives `[phone] 765 4321`; with slashes, `+36/83/701/902 00 36/73/48/9525` gives `[phone]/48/9525`, six digits). The fourth review's cut, prototyped and validated, is not built, because this matcher regressed twice on a fix made at the end of a round: in `_international_span`, cut at a space (the no-break and the other space characters too) followed by an optional opening parenthesis and `06` or `00`, only when the left part is a complete number by the numbering plan (`_phone_shape_holds`, 8 to 17 digits) and the right part is one the national rule accepts (`NATIONAL_PHONE` matches there and `_choose_national_phone_span` takes it), and otherwise as today, so `+36 1 060 1234`, `+36 30 0036 123` and `+36 1 234 5678 06 1` stay one number (a plain cut at a space leaves ten digits of `+36 1 060 1234`). Measured on the prototype: the differential's run-on hits fall from 62 to 3, no new shape, no count mismatch, and one test to change on purpose (the one that demands the run-on still loses); about 15 lines in a function that has regressed twice, so it needs pins of its own, written first | S067 (fourth review) | closed by S070 in part (implemented and tested; not run on a cluster): what is closed is two numbers one after the other at a space where the first is a complete Hungarian number and the national rule takes the second (`+36 30 123 4567 06 20 765 4321` and `+36/83/701/902 00 36/73/48/9525` give two `[phone]`), built with its pins written and seen red first (22 cut rows and 23 not-cut rows, each with its reason), the left part checked by the numbering plan (country code 36 and `national_phone_holds`, not by shape alone), and narrowed twice after two reviews, so that the cut is not made where a prefix token inside the second number begins a national number that reaches beyond it (the national pass would hand the third number its prefix); the run-on of the differential fell from 63 to 11. Not closed: the row's own text (`Tel: +36.62.7320.12 00 36 69 0619 45/(00 36).92.803.020.` gives `Tel: [phone] [phone].92.803.020.` again, the output from before the cut, which the wider condition gives back and which is pinned as a known leak); a foreign first number or one with a digit too many; about 0.03 per cent of ordinary texts (91 of 300,000 in the review), a second number with an inner group that starts `06` or `00` followed by an amount, a date or another number, which fall back to the leak from before the cut (`+36 30 135 7400 06 1 065 3027 250 000 Ft` gives `[phone] 3027 250 000 Ft`; `+36 25.805.094 06-49 068 916 06 12 2026 14` gives `[phone] 916 06 12 2026 14`); and the three known leaks of the national pass (the row below). The session accepted the fall-back and did not refine the condition. The claim that no text shows a digit the matcher before the cut hid was false for R3 and for R3b; the review of R3c, over about 2.84 million texts of its own grammars, found none, and a seeded property test in the suite now holds it (the section; the second half's G1 made it write two international numbers, a chain of them and a slash or a dot inside the second number, and today's matcher showed no digit that the matcher before the cut hid in any of them) | S070 |
 | A dotted or slashed international number is not found when one of its groups begins `06` or `00` (`+36.30.123.0630`, `+36/30/123/0630` and `+36.30.123.0030` stay whole; `+36/30/123/4567/0630` gives `[phone]/0630`), because the cut before such a group leaves fewer than 8 digits; about 2 % of the groups of a number written so. Not a regression (the matcher before the separator change found none of them), and pinned by `test_redaction_residuals.py`. The reviewer's wider cut (the validated cut of the row above, taken at `/` and `.` with `PHONE_JOIN` neutralised) cost two failing tests, one new shape in the differential (`12 +36.36.0679.55(06/36)/7660/10/`) and one over-redaction (`+36 30 123 4567/06/22` gives `[phone]`), so it is a decision of its own and not the row above's | S067 (fourth review) | open; not built in S070 and asked of the owner, whose recommendation from the session is to leave it as it is (about 2 % of the groups of a number written so, not a regression, pinned) | S070 |
 | The redaction's differential test has gaps (`test_redaction_differential.py`): it files a lost run under its first lost digit only, so a new leak in a later number of a text that already holds a named shape is filed under the named one (the mutation that brings back the parenthesised second number hid behind `30.06.30.8336.687 +36 30 123 4567/(06) 20 765 4321`; over the whole corpus it still fails); `00.` and `00/` forms and a date of three groups are not generated (a mutation that lets `_after_date_tail(2)` take three groups moved the hit counts and passed, one that hides `00.` after a date's tail changed nothing); the two date-lead guards, `DATE_LEAD` and `DATE_MONTH_LEAD`, can be loosened (the year dropped, any four-digit year, any day) with no failure, and only a month of 13 to 31 is caught; and the reference is the matcher before the guard, so a leak that both have is invisible (12,147 of the 12,281 texts that leave a digit of an inserted number in the clear leave it in the reference too). Classify every lost run, add the forms and the date of three groups to the generator, and bring the two guards under a test that fails when they are loosened | S067 (fourth review) | closed by S070 (R2, with R2b's pins), tests only: every lost run is classified on its own and the sweep passes only when each is named (an exact list of three known runs beside five named shapes, a fourth fails it: two of the mechanism R2 found, one of them the cut row's own text given back by R3c's narrowing, and one that is no regression); the generator writes `00.36`, `00/36` and the date of three groups; the hit counts are pinned (176, 40, 152, 7 and the run-on's 11); the shared-leak counts are pinned, so that they cannot grow unseen: 13,965 texts that leave an inserted digit and 13,829 of them that the reference leaves too, in place of the row's 12,281 and 12,147 (those were of the corpus before the generator learned the forms it lacked; the corpus has since grown by 2,000 seeded texts of a second number that ends in the next number's prefix, R3b, which is why the counts are larger); and `test_redaction_date_guards.py` holds both date-lead guards from both sides (13 rows that stay whole, 24 that are replaced), with the mutation run on a scratch copy showing each loosening the row named, and the ones the old tests missed, now caught. The strengthened sweep found that the old first-digit rule had hidden a real leak on `main` (the first of three known leaks, in the known-leaks row below) | S070 |
 | Two small ends of the redaction: `_replace_email` writes `EMAIL_PLACEHOLDER` directly, where `_replace_cards` now reads `PLACEHOLDERS["card"]`, so a test that swaps the mapping misses e-mail addresses; and a date whose day or month is `06` followed by eight or nine digits (`2026.10.06 12345678` gives `2026.10.[phone]`, `10.06 12345678` gives `10.[phone]`) is replaced, the date's own digits with it, though it is no number: over-redaction, which fails safe, and the matcher before the date guard replaced it too; pinned by `test_redaction_residuals.py` | S067 (fourth review, low) | closed by S070 in part: the e-mail pass reads `PLACEHOLDERS["email"]` as the card and phone passes do, with a test that swaps the mapping (R4); `claimant_name.py` still writes `EMAIL_PLACEHOLDER` directly (the small ends row below). The date half is not built and asked of the owner, whose recommendation from the session is to leave it (over-redaction fails safe, and a third date guard goes into a matcher whose date guard leaked twice) | S070 |
-| Three known leaks of the phone matcher leave digits of a phone number in the clear, each pinned by a test that says "A LEAK, open" with today's output, so nobody reads it as wanted behaviour (T-73). (i) A date-tail guard refuses a first number and the rescan's candidate inside it ends by taking the next number's prefix, so the rest of the second number stays visible: `2026/06/80/0624/98.(0036)/69/062/772/12` gives `2026/06/80/[phone]/69/062/772/12` (`test_a_known_leak_a_refused_date_tail_lets_the_next_number_be_cut_short`); on `main` today, where the old first-digit rule hid it from the differential test. (ii) The same mechanism one number later: `2.06.85.068.489/00 36.2050.641.88/06` gives `2.06.85.[phone].2050.641.88/06` (the first entry of `KNOWN_UNNAMED_RUNS`, held exact by `test_every_digit_the_old_matcher_hid_stays_hidden_but_in_the_named_shapes`). (iii) The national pass reads a number greedily through a last group that begins the next number: `06 20 765 43 06 20 123 4567` gives `[phone] 20 123 4567` on `main` with no international number (`test_a_known_leak_a_second_number_that_ends_in_a_06_group_takes_the_third_prefix`, whose last row is that text), found by the review of R3. Not fixed in S070, by the advisor's reading: a fix bounds a span at a following prefix, which is a new and fragile mechanism for a matcher that regressed twice on a fix made at the end of a round, and three behaviour changes of one matcher in one pull request is the shape that regressed it; "no rescan inside a refused candidate" would have been worse, since three of the five named shapes exist because the rescan starts inside a refused span. Also left, old behaviour and no regression, pinned: a foreign first number or one with a digit too many still runs on into the second (`+44 20 7946 0958 06 20 765 4321` and `+36 30 123 45678 06 20 765 4321` give `[phone] 765 4321`), and three texts that read as dates keep what the matcher before the cut kept (`+36 1 234 56 12 06 2026 12345` gives `[phone] 12345`, `+36 30 123 4567 06 12 2026 14` gives `[phone] 2026 14`, `+36 30 123 4567 06.12.2026` gives `[phone].2026`); the foreign first number is the likelier of these in a real claim (the review of R3). One more is the cost of the cut's last narrowing (R3c): the cut is not made where any prefix token inside the second number begins a national number that reaches beyond it, so the text the cut row quoted, `Tel: +36.62.7320.12 00 36 69 0619 45/(00 36).92.803.020.`, gives `Tel: [phone] [phone].92.803.020.` again (the output from before the cut: the entry of `KNOWN_UNNAMED_RUNS` that the cut had removed is back, so the exact list holds three, and the row sits in `GREEDY_NATIONAL_READING` under "A LEAK, open"), and so do about 0.03 per cent of ordinary texts, which keep the leak from before the cut; it is no loss against the matcher before the cut (the session accepted it and did not refine the condition, since a refined condition is a new mechanism) | S070 (the differential's sweep; the review of R3; the review of R3b) | open; home: S070's second half, which stays open while the owner's questions do, since it holds the redaction's files, its pins and its sweep, and S069's second half (the cluster, the server's certificate, the ingestion's tenant) has none of them; the owner decides first whether to build a bound at all, and if S070 closes without it the row needs another home | S070 |
-| Small ends S070 left, all low and in code or comments that its documents contract could not write: `claimant_name.py` writes `EMAIL_PLACEHOLDER` directly where the e-mail pass now reads the mapping; the docstrings of `test_redaction_residuals.py` and `test_redaction_differential.py` speak of the international run-on in the terms from before the cut, and a comment of the differential (`_international_run_on`) may still say it is cut only at a slash or a dot; the comment "Every pattern below is linear" now stands above the e-mail patterns only (`redaction_email.py`) and one above `redact` still gives a size for `redaction.py` that is now wrong; the `ClaimView` docstring in `adjuster.py` says the facts are the submission's fields as text and never the name, and they now hold two derived gap rows, and its module docstring says nothing of the mark; `assess`'s docstring does not say why the posted-text flag and the instruction in the description are checked before the clauses (decision 3 of S070); `adjuster.py` is 795 lines, so its next edit crosses the soft ceiling; `moves._take_from_state` has seven parameters, `_could_take_documents` ignores two of its three, and the run input's shape is built in two places in `triaging.py` (`input_for_run` and `run_input_with_documents`), held equal by a byte test and a frozen golden file; `RESTS_ON_NOTES` and `RESTS_ON_MARKS` are plain `Final` dicts, and the header "Recommendation rests on" is typed in both templates | S070 (reports and reviews) | open; low | S074 |
+| Three known leaks of the phone matcher leave digits of a phone number in the clear, each pinned by a test that says "A LEAK, open" with today's output, so nobody reads it as wanted behaviour (T-73). (i) A date-tail guard refuses a first number and the rescan's candidate inside it ends by taking the next number's prefix, so the rest of the second number stays visible: `2026/06/80/0624/98.(0036)/69/062/772/12` gives `2026/06/80/[phone]/69/062/772/12` (`test_a_known_leak_a_refused_date_tail_lets_the_next_number_be_cut_short`); on `main` today, where the old first-digit rule hid it from the differential test. (ii) The same mechanism one number later: `2.06.85.068.489/00 36.2050.641.88/06` gives `2.06.85.[phone].2050.641.88/06` (the first entry of `KNOWN_UNNAMED_RUNS`, held exact by `test_every_digit_the_old_matcher_hid_stays_hidden_but_in_the_named_shapes`). (iii) The national pass reads a number greedily through a last group that begins the next number: `06 20 765 43 06 20 123 4567` gives `[phone] 20 123 4567` on `main` with no international number (`test_a_known_leak_a_second_number_that_ends_in_a_06_group_takes_the_third_prefix`, whose last row is that text), found by the review of R3. Not fixed in S070, by the advisor's reading: a fix bounds a span at a following prefix, which is a new and fragile mechanism for a matcher that regressed twice on a fix made at the end of a round, and three behaviour changes of one matcher in one pull request is the shape that regressed it; "no rescan inside a refused candidate" would have been worse, since three of the five named shapes exist because the rescan starts inside a refused span. Also left, old behaviour and no regression, pinned: a foreign first number or one with a digit too many still runs on into the second (`+44 20 7946 0958 06 20 765 4321` and `+36 30 123 45678 06 20 765 4321` give `[phone] 765 4321`), and three texts that read as dates keep what the matcher before the cut kept (`+36 1 234 56 12 06 2026 12345` gives `[phone] 12345`, `+36 30 123 4567 06 12 2026 14` gives `[phone] 2026 14`, `+36 30 123 4567 06.12.2026` gives `[phone].2026`); the foreign first number is the likelier of these in a real claim (the review of R3). One more is the cost of the cut's last narrowing (R3c): the cut is not made where any prefix token inside the second number begins a national number that reaches beyond it, so the text the cut row quoted, `Tel: +36.62.7320.12 00 36 69 0619 45/(00 36).92.803.020.`, gives `Tel: [phone] [phone].92.803.020.` again (the output from before the cut: the entry of `KNOWN_UNNAMED_RUNS` that the cut had removed is back, so the exact list holds three, and the row sits in `GREEDY_NATIONAL_READING` under "A LEAK, open"), and so do about 0.03 per cent of ordinary texts, which keep the leak from before the cut; it is no loss against the matcher before the cut (the session accepted it and did not refine the condition, since a refined condition is a new mechanism) | S070 (the differential's sweep; the review of R3; the review of R3b) | open; home: S070's second half, which stays open while the owner's questions do, since it holds the redaction's files, its pins and its sweep, and S069's second half (the cluster, the server's certificate, the ingestion's tenant) has none of them; the owner decides first whether to build a bound at all, and if S070 closes without it the row needs another home. The property test's two missing generator forms, which the first half named here, are built (G1, the second half: the section); the matcher itself is unchanged | S070 |
+| Small ends S070 left, all low and in code or comments that its documents contract could not write: `claimant_name.py` writes `EMAIL_PLACEHOLDER` directly where the e-mail pass now reads the mapping; the docstrings of `test_redaction_residuals.py` and `test_redaction_differential.py` speak of the international run-on in the terms from before the cut, and a comment of the differential (`_international_run_on`) may still say it is cut only at a slash or a dot; the comment "Every pattern below is linear" now stands above the e-mail patterns only (`redaction_email.py`) and one above `redact` still gives a size for `redaction.py` that is now wrong; the `ClaimView` docstring in `adjuster.py` says the facts are the submission's fields as text and never the name, and they now hold two derived gap rows, and its module docstring says nothing of the mark; `assess`'s docstring does not say why the posted-text flag and the instruction in the description are checked before the clauses (decision 3 of S070); `adjuster.py` was 795 lines and is 777 since S070's second half moved the queue's judgment of a stored proposal into `adjuster_queue.py` (G2b), so it has 23 lines left under the soft ceiling; `moves._take_from_state` has seven parameters, `_could_take_documents` ignores two of its three, and the run input's shape is built in two places in `triaging.py` (`input_for_run` and `run_input_with_documents`), held equal by a byte test and a frozen golden file; `RESTS_ON_NOTES` and `RESTS_ON_MARKS` are plain `Final` dicts, and the header "Recommendation rests on" is typed in both templates | S070 (reports and reviews) | open; low | S074 |
 | What the adjuster's page looks like and what the demo script says of it, not seen: nobody rendered the claim page with its longer labels (the report date's is 68 characters, the first gap's 60; the list has no width rule, so nothing is cut, but no one looked); `infra/kind/demo.sh` prints "none (the rules decided; no model was called)" whenever `drafted_by` is null, which also covers an assessment `not_needed` with no recommendation and an `unavailable` assessment where no call was made, so it can disagree with the page's mark, which speaks of what a recommendation rests on; what `make smoke` reads of the queue page was not checked against the new column | S070 (A1, A4) | open; low | S073 |
-| The adjuster's page and queue, small ends of the mark and the dates (T-26, T-66): the queue reads `recommendation` and `assessment` from the stored JSON without validating the proposal, so a proposal that fails validation, which the claim page shows as "could not be read", can still carry a mark in the queue (a hand-written row only), and for a claim whose last triage failed it describes the latest stored proposal, as the Reason column does; the pairs the validator admits and the graph never writes (reject with none applies, approve with applies) are marked "model"; `received_at` must be aware and is not checked at run time; a form sent just before midnight in Vienna shows "1 day" for the second gap (the form stamps the day earlier than the API's `now()`), which is harmless; the first gap reads as a fact while it is two unchecked dates | S070 (reviews, A1, A4) | open; low | S070 |
+| The adjuster's page and queue, small ends of the mark and the dates (T-26, T-66): the queue read `recommendation` and `assessment` from the stored JSON without validating the proposal, so a proposal that fails validation, which the claim page shows as "could not be read", could still carry a mark in the queue (a hand-written row only), and for a claim whose last triage failed it describes the latest stored proposal, as the Reason column does; the pairs the validator admits and the graph never writes (reject with none applies, approve with applies) are marked "model"; `received_at` must be aware and was not checked at run time; a form sent just before midnight in Vienna shows "1 day" for the second gap (the form stamps the day earlier than the API's `now()`), which is harmless; the first gap reads as a fact while it is two unchecked dates | S070 (reviews, A1, A4) | closed in part by S070's second half (G2, `b8fbc23`, with G2b, `dca5b7b`; implemented and tested against PostgreSQL, not run on a cluster): the two things built are that the queue marks only a proposal that validates, by the claim page's own function (one that cannot be read shows "could not be read"; a page validates once per row, at most 100, and asks no database again), and that a received time without a zone raises `ValueError` in `day_gaps` and not a wrong number of days; the two pinned, each by a test named for what it holds, are the latest stored proposal for a claim whose last triage failed (the queue and the Reason column agree, on purpose) and the two unwritten pairs marked "model" (the safe side: the mark reads "look at this"); the two left are as the finding says, a "1 day" near midnight in Vienna, harmless, and a first gap that reads as a fact while it is two unchecked dates (the labels say "not checked"), and neither changes. The review's two smaller ends are new rows below | S070 |
 | A caller of the same tenant can tell a claim whose name has nothing to replace from one with a heavy name, by the extra time to a 409 on a claim in a refusing state (S070's pre-lock read compiles only for a request the claim can go on with, so the time still differs for a request that can); it shows the shape of a stored name the caller cannot read, not another tenant's data, and the status code already tells the caller the rest. The tenant has no per-user separation until a caller has an identity | S070 (security review, low) | open; low | S021 |
 | What a refused request still costs on the Claims API, and no limit at the ingress (T-02): a stale page and a documents post past the cap of twenty each pay one compile of the claimant's name before their 409 (about 55 ms of CPU for the worst name, in a thread pool under the GIL, so roughly one core held at about 18 requests a second from one caller with a maximal name), a claim that changes between the advisory read and the lock is compiled under the lock, and nothing limits the rate of any request on these routes; not measured: the cost of the name replacement and the posted-text screen on a 5,000-character description made to be slow, the memory of about forty worst-case compiles at once against the Claims API's 192 Mi, and PostgreSQL's connection limit against the thread pool, since `db.connect` does not pool. A rate limit at the ingress and the firewall of the Azure design have no step in T-02 | S070 (A4 and the security review) | open; the edge is S020's, and a limit inside the Claims API is decided there | S020 |
 | Not seen on a cluster after S070: the adjuster's claim page and queue with the mark and the new labels, the Claims API's read before the lock under real traffic, and a refused request's 409 without the compile; the tests hold each against PostgreSQL (a second session's `FOR UPDATE NOWAIT` shows the row unlocked while the pattern is built and locked while the documents are read) | S070 | open; tests hold each | S073 |
@@ -925,8 +925,11 @@ that day; the rest stand as their step recorded them.
 | The access log's path is the request's, not the route's template: a name written as a plain path segment is logged. uvicorn's access record holds five positional arguments only; Starlette sets `scope["route"]` after matching, and its `path` is the template, so logging it needs a middleware in each app that reads the matched route after the response and either sets a context variable the formatter reads or writes the app's own access line with uvicorn's silenced (T-03) | S069 (F1, security review) | open | S069 |
 | The runtime's client counts a reply of the gateway that fails validation as `failed` with `error` and logs nothing, so an operator sees a status and no field, where the Claims API now names the field of its own answers (T-03) | S069 (E5, boundary review) | open; low | S069 |
 | A leg's `_Written.raised` cannot tell a write that committed before the connection dropped from one that failed before it committed: if a clean no-match then follows an equal status written by another leg, the leg answers its own output for that other leg's write; it needs a hung leg, a database fault and an identical ending | S069 (boundary review, low) | open; low | S069 |
-| A stored `drafted_by` is a well-formed ID, three modes at most, and not checked against the registry the runtime already loads, so a compromised gateway could make the triage store an ID that names no deployment (it cannot store free text: the prompt version is the runtime's own); and the claimant's response shows a drafter for a withheld completion and none for a refused prompt, a small oracle for which filter fired (T-67) | S069 (boundary review) | open; low; S070's contracts did not reach it (nothing under the runtime's client or the stored `drafted_by` changed), so it stays for S070's second half | S070 |
-| A `ClaimResponse` that cannot be built after the proposal is stored ends as a 500 with no second count and no second triage; the state is consistent and a retry of `POST /claims` answers 409, but on the documents route (`moves.py`, `add_documents`) the exception escapes the `except HTTPException`, so the documents and the proposal are stored and the caller sees a 500; theoretical, since the response is built from parts already validated | S069 (boundary review, low) | open; low; S070 changed `moves.py` (the pattern's read before the lock) and left this path alone, so it stays for S070's second half | S070 |
+| A stored `drafted_by` is a well-formed ID, three modes at most, and not checked against the registry the runtime already loads, so a compromised gateway could make the triage store an ID that names no deployment (it cannot store free text: the prompt version is the runtime's own); and the claimant's response shows a drafter for a withheld completion and none for a refused prompt, a small oracle for which filter fired (T-67) | S069 (boundary review) | open; low; for the owner. S070's first half did not reach it, and the second half, so far, did not build it, on purpose: both of the row's parts are decisions. What the triage does with an ID that names no deployment changes what is stored when the gateway misbehaves, and what the claimant's response shows of a drafter is the API's contract | S070 |
+| A `ClaimResponse` that cannot be built after the proposal is stored ends as a 500 with no second count and no second triage; the state is consistent and a retry of `POST /claims` answers 409, but on the documents route (`moves.py`, `add_documents`) the exception escapes the `except HTTPException`, so the documents and the proposal are stored and the caller sees a 500; theoretical, since the response is built from parts already validated | S069 (boundary review, low) | closed by S070's second half (G3, `4c864f3`, and G4, `b1fc545`; implemented and tested against PostgreSQL, not run on a cluster), with the row's own claim corrected: the claims route did not shape the failure either, since both routes gave the bare 500 of the last middleware (`{"detail": "internal error"}`, no `claim_id`, no `run_id`, a log line without the claim). Now a `ValidationError` of the response model after the proposal is stored is one shaped 500 (the body `ClaimErrorBody` already declares, with the claim and the run) on `POST /claims`, on the documents route, which marks it stored, and on the send-back and retry routes, with one error line that holds the claim's ID, the error's class and the names of the fields it refused and no value, no second triage and no second count; a retry answers 409 on both routes with the state as it was. The `except` is `ValidationError` only; the review found a `try` in `_move_answer` that no valid answer can reach and G4 removed it | S070 |
+| A second number written with the prefix `00` directly after the first international number shows the loss the narrowing guards against (the cut's loss, with the narrowing taken out) in 2 of 1,265 replayed texts of the property test, one `(0036)` and one `00-36`, where the `+36` spelling shows it in 143 of 215; why the cut changes so little there was not looked into, and the test that pins which spellings show the loss (`..._the_spellings_that_show_the_loss_are_these`) uses a threshold, a quarter of a spelling's texts, that is arbitrary. Today's matcher loses no digit in any of them; it is worth a look before anyone claims that the plain form covers those spellings | S070 (G1 and the review of G1 to G3) | open; low | S070 |
+| A stored proposal nested about 100,000 deep raises `RecursionError` where the adjuster's queue fetches its rows (psycopg decodes the column with `json.loads`), before any row is judged, so one such row would break the whole queue page; the queue's query has read the whole proposal and not two text fields since G2, and the claim page reads the same column. 5,000 levels are fine, and the service stores only validated models, so only a hand-written row reaches it; PostgreSQL's own limit for nested `jsonb`, which decides whether it is reachable at all, was not checked. A stored object of many megabytes would likewise travel up to 100 times a page | S070 (review of G1 to G3, low) | open; low | S070 |
+| Two small ends of the queue's code, low: the page decides to log by comparing a display text (`rests_on == UNREADABLE_PROPOSAL_MARK`) where it could count the rows it could not read; and `_proposal_of` and `_queue_mark` are private names imported from `adjuster_queue.py` into `adjuster.py`, with `_queue_mark` wrapping a scalar in a one-tuple to fit a database row's signature, `row: tuple` not parameterised, `QueueRow.proposal: object` loose and `log: bool` a flag argument | S070 (review of G1 to G3) | open; low | S074 |
 | S069's tests that stop short: the takeover tests call the real claim from inside leg A's node and end leg B with a direct `finish_run`, so the guard is proven against PostgreSQL and no aged `updated_at` goes through two requests to `/resume`; the four throttle tests, the `SystemExit` test of `run_leg` and the guard's relaxation over `Any` were not red first, because they pin behaviour that already held (F1 mutated nothing to prove they can fail); the guard over the logged models passes a `TypedDict` field of any kind, whose key pydantic puts into an error's location (none of the five logged models has one today: flag `is_typeddict` as a free key), and a `dict[str, Any]` validated from a Python mapping with a key that is not a string logs that key (the wire is JSON, so not reachable from a request); under a load of about 150 `test_the_runtime_does_not_import_the_gateway_package` passed its 60 s bound around `uv run` and failed with nothing wrong (the re-read of F2, 2026-10-07) | S069 (python review, F1, E5, the re-read of F2) | open | S074 |
 | S069's small ends, all low: `ModelCallFilteredError.withheld` is read by nothing in `src`; `except (Exception, SystemExit)` stands twice in `common/entry_points.py` where a named tuple would keep them equal; the userinfo cut takes the `y` out of a plain path with an empty segment (`/files/x//y@z` gives `//z`, logs only); `ResumeRequest.input` is a required field that must be `{}`; a `GeneratorExit` from a coroutine closed by the garbage collector is counted `unexpected`, where `cancelled` is arguable; the sweep's import tests deny named prefixes only, so a web stack arriving through `uvicorn`, `mcp` or `anyio` alone would pass; `test_tool_client.py` is 1,091 lines, `test_runtime_app.py` 3,143 and `test_tool_server.py` 2,433, and `test_claims_meters.py` about 790; the helpers `State`, `Clock`, `make_client`, `summaries` and `summary_write_fails` are copied across the new test files, and `make_client` of `test_runtime_leg_counts.py` hard-codes `raise_server_exceptions=False`; the comment in `workers.py` that the graph module must not pull in the web framework is false as written, since `claims_triage.models` already loads `fastapi`, `starlette` and `psycopg` through `common.http` and `runtime.models`, before F2 as after it; repeated `Content-Encoding: identity` lines and an empty value are refused by the runtime's client (fail closed, no gateway sends either) | S069 (python and boundary reviews, E4, E5) | open | S074 |
 | The knowledge service's embedding client (`knowledge_mcp/embedding_client.py`) posts with a buffered call, so the whole reply of the gateway, 2xx or not, is held in memory before the client reads it, and nothing caps its size (the timeout is per read); the runtime's client got a streamed read with a cap in this step, and the same change is owed here | S073 (its contract K6 stopped on it, 2026-10-07) | open; low: the gateway is a peer behind mutual TLS | S069 |
@@ -974,7 +977,7 @@ that day; the rest stand as their step recorded them.
 | The test `test_the_probes_and_the_pods_are_the_same_with_seven_services_as_with_one` fails when the clock ticks between its two runs, because each names its pod `smoke-network-<epoch>` (it failed once in K10's broad run, and passed three times alone) | S073 (K10's report) | closed by S073 (2026-10-07, K14), after it failed this step's own pull request in CI: the harness gives both runs one fixed second, shown failing first under a clock made to tick; every other name the kind scripts build from the clock, a random number or a process ID was read against its tests, and none compares two runs | S073 |
 | The tests that hold the variable validations of the three Terraform modules (170 of them: 63 in `test_aws_script.py`, 107 in `test_gcp_module.py`) need the `terraform` program and SKIP where it is missing, and the `python` workflow installs only Helm and uv: on the hosted runner they have never run. Those modules are never applied, so CI was meant to be their gate, and the pull requests of S036 and S078 said "the tests hold" of runs made on the development machine alone. Every other tool the suite needs fails in CI when it is missing (`jq`, Helm, the database, Docker); this one skips without a word. Install the pinned `terraform` in the workflow (a `_VERSION` there needs a Renovate reader) or make the marker fail under CI as the `jq` one does | S073 (K14's reading of the pull request's skipped tests: 178, where the run before S078 merged had 71 and the development machine has 8) | closed by S079 (2026-10-07, K2c), as far as a check can close it before it has run: the count was 225 in four files (63 in `test_aws_script.py`, 107 in `test_gcp_module.py`, 53 in `test_aws_kubeadm_module.py`, 2 in `test_aws_kubeadm_bootstrap.py`; K2b then moved the managed module's rules into a fifth file); the marker, `needs_terraform` in `tests/meridian/terraformsupport.py`, fails the test under `GITHUB_ACTIONS=true` with one line when the program is missing and skips elsewhere (shown by hiding the program: 107 failed with the variable set and 107 skipped without it, on one file); the `python` workflow installs Terraform 1.16.5 through `hashicorp/setup-terraform` pinned to a commit, read by a rule of Renovate's `terraform` group, and a test holds that the pin satisfies every module's `required_version`. Not seen on the runner until this pull request's check: no run of the workflow has used the step yet, so whether the program installs there and every marked test passes stays open until that check is green | S079 |
 | Small ends of S068's last two commits, from a re-read that came back while its pull request was in its checks, none fixed there: the audit expiry's line after a failure does not say "at least" as the ledger's now does (the same commit of unknown outcome), and the kind script's test still holds the ledger's old line in its fixtures, so no test proves the script reads the new one; the two tests that plant a reserved row under a SHARE lock take the past month from a second reading of the clock, so a run in the milliseconds around a month's first instant would fail; a paragraph copied into two test files says the tests of the file call the expiry as the owner, which is true of their expiry tests only; no test asserts that a generic plan was in fact chosen on the sixth call; and only one of the two new concurrency tests was shown to fail under a mutation | S068 (a Python re-read of F3 and F4, 2026-10-07) | open; low | S074 |
-| Three small ends of the kind scripts that the infrastructure review of S073 left: `upkeep.sh` reads a `helm get` that timed out (status 124) as "the release is not installed" and says to run `make deploy`, though it stops and does no harm (L3); `smoke.sh` puts a Deployment's name unescaped into a basic regular expression, safe for a DNS label and not for a dotted name (L6); `kctl` gives a plain `delete` without `--wait=false` the request flag though it waits by default, and no call site is affected today (L7) | S073 (infrastructure review) | open | S073 |
+| Three small ends of the kind scripts that the infrastructure review of S073 left: `upkeep.sh` reads a `helm get` that timed out (status 124) as "the release is not installed" and says to run `make deploy`, though it stops and does no harm (L3); `smoke.sh` puts a Deployment's name unescaped into a basic regular expression, safe for a DNS label and not for a dotted name (L6); `kctl` gives a plain `delete` without `--wait=false` the request flag though it waits by default, and no call site is affected today (L7) | S073 (infrastructure review) | open in part: L6 is closed by S072's contract S (`0577663`; tested with stand-ins, and seen on kind by the cold run R9: smoke's 46 lines passed): `smoke.sh` compares a policy's name with the Deployment's as text, with no pattern, so a dotted name no longer matches its dash twin; L3 and L7 stay | S073 |
 | The restart share is read from `MERIDIAN_TLS_RESTART_SHARE` by `certlife._restart_share`: an empty value is 0, the old behaviour, so a chart typo that renders an empty share hides itself, while a value of only whitespace refuses the start (the Python review of S073, L4); a share written with Unicode digits or padded is read as a number | S073 (Python review) | open | S073 |
 | What a new 503 of the Model Gateway would have to look like to slip past `test_gateway_503_words.py`, so that the ingestion's word for it would be `unknown`: a status that is an attribute or an imported name (`status.HTTP_503_SERVICE_UNAVAILABLE`, `HTTPStatus.SERVICE_UNAVAILABLE`), a `JSONResponse` or `Response` with no `detail=` keyword, a site under `gateway/providers/` or outside `gateway/` and `common/` (the scan's glob is not recursive), a text from a second mapping like `LIMIT_ANSWERS`, or one of the four texts reused for another cause (the test passes and the word is then ambiguous); an f-string `detail` fails loudly | S073 (Python review) | open | S069 |
 | `meridian registry contracts` ends in a traceback and exit 1 for an output directory it cannot read (`--out` with mode 600, with or without `--check`), for a contract file it cannot read (mode 000) and for one that is not UTF-8, and it follows a dangling `--out` link and creates the link's target; `contract_problems` and `write_contracts` (`platform/toolserver/contracts.py`) catch nothing and `cli/registry.py` calls them bare. It predates S074 (the file is as on `main`); the smallest fix is `except (OSError, UnicodeDecodeError)` around both calls and a line through `_fail`, as `schemas` has | S074 (the re-read of the second half, L-e) | open; low | S074 |
@@ -983,14 +986,21 @@ that day; the rest stand as their step recorded them.
 | S074's second half has two tests that cannot be shown to fail on the code they replace: the `_replace` descriptor test (the fix is right by construction, no `os.close` is left; the test fails when `with open` is replaced by a bare `open`, not on the old code) and the `re._compiler` test (passes on any 3.13, the import fails first). Two low points are left on purpose: `_graded_cases` takes nine parameters because it mirrors `build_report`'s, and the test that pins four committed reports fails when a fifth is committed | S074 (reviews of the second half, L-b, L3, L4, L6) | open; low; no change planned | S074 |
 | S075's checks: the split-table check's docstring (`scripts/check_docs_consistency.py`) names fences and indented tables but not block quotes, a row without a closing pipe, an HTML comment or a lone header-like line, and the lane check's header (`.claude/hooks/check-lanes.sh`) does not say that `--` and `n/a` in "Out now" count as running; the limits are accepted and written in S074's section, and the smallest fixes are a docstring sentence and a header sentence, or two more values in `empty()`, which is a change to a harness hook and the owner's to approve | S075 (S074's second half) | open; not built | S074 |
 | Renovate has not run S075's three new rules: whether Docker Hub gives the Envoy chart a push date (else the chart waits indefinitely, `.github/renovate.json`), whether the `terraform` block's `description` key is accepted and whether the `agent-framework` label is made are unseen; nothing to code, a sentence to write when Renovate next runs (S078's branch edits the same file, so it is not touched before that merge) | S075 (S074's second half) | open; after Renovate's next run | S074 |
-| Sentences in `infra/` that a render of the add-ons' charts (2026-10-07) showed inexact: `manifests/cert-manager-networkpolicy.yaml` says the controller "reads every Secret" (near line 53), and cert-manager's controller also writes them; `manifests/telemetry-ca.yaml` (near lines 31 to 40) and `manifests/service-ca.yaml` (near line 18) list the readers of the authorities' keys without Envoy Gateway's controller, and say only the two operators write; `infra/kind/README.md` (near lines 253, 271, 294, 679, 2066 and 2090) and the comment in `smoke.d/05-cost-panel.sh` (check 5's paragraph, near line 30; near line 205 of `smoke.sh` until S074's split) name two cluster-wide readers or "the one switch"; the S063 section's sentence that the one switch drops every role the chart creates is history and stays, T-68 and row 708 say what the render showed | S072 (documents) | open: comments only, no behaviour; corrected with the cluster batch's edits to the same files | S072 |
-| `manifests/cert-manager-networkpolicy.yaml`, near lines 17 to 21, says the address the API server's calls arrive from "is not known, nobody has measured it", and `infra/kind/README.md` (near line 1631) and `manifests/observability-networkpolicy.yaml` (near lines 56 to 71) say the same of the other webhooks' port. Measured once on kind (S072, 2026-10-07): the calls of the API server to a pod arrive from the node's address on the pod network and pass a default-deny ingress. The sentence is to be corrected, and the peerless rules on 10250 (cert-manager's webhook, approver-policy's, the Prometheus operator's) bounded, in the cluster batch | S072 (measurement) | open | S072 |
-| Smoke's check 10 asks for a Certificate in `default` with the URI `.../sa/meridian-smoke-refused`. Since contract P the services' policy lists exact URIs, so that URI is also refused inside `meridian` and the check no longer proves the namespace selector alone (the test that held it says so: `test_the_request_is_in_a_namespace_the_services_policy_does_not_select`). Either `REFUSED_URI` becomes a listed name such as the gateway's and the old assertion returns, or the weaker check is accepted and the line says what it proves | S072 (contract P) | closed by S072 (F1), implemented and tested with stand-ins, not seen on kind: `REFUSED_URI` is the Claims API's listed URI, so the namespace selector is again the one reason for the refusal, and the test holds the URI, the duration and the usages against the policy's manifest; the cold run of the cluster batch sees it | S072 |
-| `BY_HAND` in `src/meridian/platform/cli/workload.py` lists what the scaffold leaves to a person (the service entry, a chart entry with a certificate) and does not say that a service with a Certificate needs its ID, and its `<service>.meridian.svc` name where it serves TLS, in the `meridian-services` policy's two lists or the issuer refuses its certificate (`config/registry/README.md` says so since contract P). Its test is read before the line is edited | S072 (contract P) | open | S072 |
+| Sentences in `infra/` that a render of the add-ons' charts (2026-10-07) showed inexact: `manifests/cert-manager-networkpolicy.yaml` says the controller "reads every Secret" (near line 53), and cert-manager's controller also writes them; `manifests/telemetry-ca.yaml` (near lines 31 to 40) and `manifests/service-ca.yaml` (near line 18) list the readers of the authorities' keys without Envoy Gateway's controller, and say only the two operators write; `infra/kind/README.md` (near lines 253, 271, 294, 679, 2066 and 2090) and the comment in `smoke.d/05-cost-panel.sh` (check 5's paragraph, near line 30; near line 205 of `smoke.sh` until S074's split) name two cluster-wide readers or "the one switch"; the S063 section's sentence that the one switch drops every role the chart creates is history and stays, T-68 and row 708 say what the render showed | S072 (documents) | open: comments only, no behaviour. The cluster batch's contracts (W, E, C, N) edited these files and took none of the sentences listed here: `cert-manager-networkpolicy.yaml` still says (near line 63) that the controller "reads every Secret of the cluster", and `telemetry-ca.yaml` (near line 37) that "the two operators can also write Secrets cluster-wide". Contract C made two more false: `telemetry-ca.yaml` (near lines 34 to 36) and `service-ca.yaml` (near lines 18 to 20) list the CloudNativePG operator among the cluster-wide readers of the authorities' keys, and in files it reads no Secret of `cert-manager` or `observability` any more. One comments-only change corrects them together | S072 |
+| `manifests/cert-manager-networkpolicy.yaml`, near lines 17 to 21, says the address the API server's calls arrive from "is not known, nobody has measured it", and `infra/kind/README.md` (near line 1631) and `manifests/observability-networkpolicy.yaml` (near lines 56 to 71) say the same of the other webhooks' port. Measured once on kind (S072, 2026-10-07): the calls of the API server to a pod arrive from the node's address on the pod network and pass a default-deny ingress. Closed by S072's contract W (`67b6ef2`; tested without a cluster, and the premise seen on kind by the cold run R9): the three sentences are rewritten to say who calls the port and why no rule admits it (and they carry the measurement's own limit: a webhook call through the Service was not seen separately), and the peerless rules on 10250 are gone for cert-manager's webhook and approver-policy's and bound to Prometheus for the operator's | S072 (measurement) | closed; the cold run saw the premise | S072 |
+| Smoke's check 10 asks for a Certificate in `default` with the URI `.../sa/meridian-smoke-refused`. Since contract P the services' policy lists exact URIs, so that URI is also refused inside `meridian` and the check no longer proves the namespace selector alone (the test that held it says so: `test_the_request_is_in_a_namespace_the_services_policy_does_not_select`). Either `REFUSED_URI` becomes a listed name such as the gateway's and the old assertion returns, or the weaker check is accepted and the line says what it proves | S072 (contract P) | closed by S072 (F1), tested with stand-ins and seen warm (R8, 2026-10-07: `make smoke` from `main`, 46 PASS, 0 FAIL, 0 SKIP): `REFUSED_URI` is the Claims API's listed URI, so the namespace selector is again the one reason for the refusal, and the test holds the URI, the duration and the usages against the policy's manifest; check 10's refused request was refused for its namespace | S072 |
+| `BY_HAND` in `src/meridian/platform/cli/workload.py` lists what the scaffold leaves to a person (the service entry, a chart entry with a certificate) and does not say that a service with a Certificate needs its ID, and its `<service>.meridian.svc` name where it serves TLS, in the `meridian-services` policy's two lists or the issuer refuses its certificate (`config/registry/README.md` says so since contract P). Its test is read before the line is edited | S072 (contract P) | open; the cluster batch took none of it (a change under `src/`, outside a batch of manifests, scripts and documents): it stays, does not gate the close, and the closing record re-homes it to a step that exists | S072 |
 | Loki's chart renders a ClusterRole with no rules (`loki-clusterrole`) bound to the `loki` ServiceAccount, and a `loki-memcached` ServiceAccount although memcached is off, whose token key contract T's two keys do not touch; no pod uses either, so they grant and mount nothing. Envoy Gateway's chart leaves its certgen RBAC and its topology-injector webhook configuration on the cluster after the hook ran (no delete policy on them) and renders a cluster-wide ValidatingAdmissionPolicy. A value that switches the first two off was not looked for | S072 (render) | open; noticed, harmless as rendered | S072 |
 | The three manifests that prove S074's third part (`cut-1.manifest`, `cut-2.manifest`, `cut-3.manifest`: line ranges for `scripts/shell_split_proof.py`) are in the session's handoff folder, outside the repository, so no clone can run the proofs again; the plan holds the commands and their output. Cuts 1 and 2 cannot be run again on the tip in any case: the files they name as targets changed after them | S074 (third part) | open: keep the three manifests in the repository beside the proof script (about 200 lines of text in all, each with its `--ref` in a first comment), or accept the recorded output as the evidence; the owner's decision, or the last cut's | S074 |
 | `shellcheck` has no runner, and the split made the by-hand run narrower: the earlier gates' `shellcheck infra/kind/*.sh` does not reach `infra/kind/smoke.d/`; the parts are linted through the entry alone (`shellcheck infra/kind/smoke.sh` follows each `# shellcheck source=` hint through `.shellcheckrc`; exit 0 after each cut), and a part linted by itself warns (SC2034 on `PSQL_OPTIONS`, `COLLECTOR_ENDPOINT` and `poll_error` in `shared.sh`, which checks that are not sourced then read). A runner would be a `make` target or a CI step that lints the entry; S075's row does not name it | S074 (third part) | open: not built; no step owns CI checks for shell, so S074 takes it or closes it as by hand | S074 |
 | `tests/meridian/test_smoke_trap.py` waits 60 s for each of its tests that runs the whole script against stubs when a part fails to source (a part missing from the scratch copy, a misnamed `.` line): the failure is slow, not fast (S074's harness contract SA, with the copy of `smoke.d/` switched off: 5 failed, 1 passed in 181 s) | S074 (third part) | open: a bound on the stub run that a failed source reaches sooner, or a test that sources the parts first; not built | S074 |
+| Loki's usage report to its vendor's statistics host is now refused by `observability`'s egress policy (contract E, `cd1d3b9`), and no value switches it off: `values/loki.yaml` has no `analytics` block, so the chart's default stands, which the contract read as on (Tempo's and Grafana's reports and update checks are off in their values). Loki should log a failed report and go on; the cold run R9 did not show it: Loki's log holds no line about the report (no attempt was logged in the run's nine minutes), so the refusal is not seen. `loki.analytics.reporting_enabled: false` is one value and one test, to be set only if the default is confirmed on | S072 (contract E) | open; the cold run's log holds no line about the report, so the default is still not confirmed on and the row stays open: the value is set in S072's close if a run shows the line, or the row is re-homed there | S072 |
+| `api_server_matches_policy` (`infra/kind/common.sh`, used by `make deploy` and `make smoke`) reads and compares the address in the database's policy alone, though `make up` fills the placeholder in five policies (the database's, cert-manager's, `observability`'s, the CloudNativePG operator's and Envoy Gateway's): a node address that changes under a running cluster (Docker restarted) shows in the other four as an operator, a webhook or the edge that stops working, and nothing compares it. Its message says "run `make up`", which is true for all five. Contracts C and N both noticed it and did not change it | S072 (contracts C and N) | open: a row of the same read and comparison for each policy, with the policy named in the message | S073 |
+| A warm cluster made before contract C is not detected by `up.sh`: it holds the CloudNativePG operator's release in its own namespace, cluster-wide, and Helm would meet cluster-scoped objects owned by the old release. The README, the script's comment and the new policy's header say to make the cluster again (`make down`, then `make up`), only for a cluster that is disposable and never to clear a fault nobody has looked at (CLAUDE.md, rule 8) | S072 (contract C) | closed by S072's F2 (`4050156`; in files, tested with stand-ins; the cold run did not offer it the old cluster, so the guard is not seen on kind): `make up` reads for the namespace `cnpg-system` after the holder check and before its first write, and stops with that sentence (or, when the read fails, with "that is not 'it does not exist'") instead of changing the cluster and failing at Helm's ownership check; the review found that the older behaviour would have cut the old operator off from the database first | S072 |
+| What the cluster batch's reports could not settle from files and the cold run cannot settle either, each costing a log line or a status and not a Ready pod: Grafana's plugin catalogue (the preinstall at start and the plugin update checks are not in the render; a refused download is logged and, by Grafana's documentation, does not hold readiness; not seen); whether Envoy Gateway's controller calls a proxy pod, and on what port (no such call is read in the files; the egress rules name none); ports 18001 and 18002 of the controller, which have no rule because their clients run only for a global rate-limit policy or a Wasm extension and the repository has neither; whether the Prometheus operator calls Prometheus's pods; and the connections a pod makes to itself (Tempo's modules and Prometheus scraping itself on 9090 and 8080 dial the pod's own address and are not filtered; Loki's compactor on 9095 dials a Service's cluster address, so the connection leaves the pod and comes back, and whether the plugin filters it is not known: the cold run R9 found no compactor or delete-request error in Loki's log, and every pod Ready with nothing restarted is all that run says about the other unknowns). A run that ends green shows that nothing failed in its minutes, not that these hold | S072 (contracts E and N) | open: each is read in the pods' logs of the cold run and, if one shows a refusal, one rule is added from what it shows; none gates the close | S072 |
+| The CloudNativePG chart renders two ClusterRoles of its own, `cnpg-cloudnative-pg-view` and `-edit` (read, and read and write, on the operator's own objects), bound to no account and aggregated to no built-in role (no aggregation label in the render); contract C left them. On AKS, where people sign in (S021), whether someone is bound to them is part of who may change a database Cluster | S072 (contract C) | open; noticed, harmless as rendered on kind | S020 |
+| The CloudNativePG operator being down is seen by no alert. Since contract C its Deployment `cnpg-cloudnative-pg` is in `meridian`, where `MeridianServiceUnavailable` and two panels of the health dashboard counted it as a Meridian service; F2 (`4050156`; tested, and the changed alert rule was loaded in the cold run R9 with smoke passing; the alert with the operator at zero replicas is not seen) excludes it from the alert and the panels because it is not one, so a database that is no longer reconciled while its operator is down shows nowhere. No alert was built | S072 (the infrastructure review of the batch, finding 4, and F2) | open: a rule on the operator's Deployment of its own (with a unit case), or the sentence that kind accepts it; the home is S073, which owns the alerts on what is absent or ends (the row on missing data above, the database's certificate end) | S073 |
+| The tests of the four policy files (`observability`, cert-manager, the CloudNativePG operator, Envoy Gateway) compare the files with each other and with constants in the test files, never with the charts' render, which lives outside the repository: the operator's pod label for Prometheus's rule, Loki's memberlist port on both halves, the operator's `instance` label (tied to the release name in `up.sh`, not to the chart's convention) and Envoy's `control-plane` label each have a second copy only in a test. A chart bump that renames one passes the tests, and the rule then selects nothing; the review ran no mutation (its question 6) | S072 (the infrastructure review of the batch) | open: one test that renders the pinned charts once (or reads a committed render) and holds each label and port the policies name against it | S074 |
 | The settings' deny globs for Read, Edit and Write name `~/.local/state/meridian-aws/**` and not the second module's state directory `~/.local/state/meridian-aws-kubeadm/`, a sibling and not a child, so a file tool of Claude Code is not denied that state, its plan or its record by the settings (the hook's patterns read `.tfstate`, `.tfplan` and `meridian-aws` as substrings and do deny a `cat` of the new state file: measured on 2026-10-07 from lines in a file, not in a live session). The hidden-variable globs (`./infra/terraform/aws/.*tfvars*`) name the first directory only too, and whether `./**/*.auto.tfvars*` matches a dot-name is not measured (the wrapper itself refuses such files). The review of K2b found the same (M2) and read it from the file: the Read tool answered "File does not exist" for both state paths, so its probe could not tell them apart. A tightening that needs no ask: three more globs and the mirror in the guard's case file | S079 (K2b's report; the session's measurement; the security review of K2b, M2 and L5) | closed by S079 (K6, 974d6d1; implemented, with cases; reviewed): the settings deny the Read, Edit and Write tools the second state directory and the second module's hidden variable files, and the settings test asks for the entries of every directory of the family | S079 |
 | A `terraform` run by hand in the second module's directory passes the command guard unasked for a plan: measured on 2026-10-07 on this branch's hook, from lines in a file and not in a live session, `-chdir` into `infra/terraform/aws-kubeadm` and a `cd` there followed by a plan both answered nothing, and so did `init` (as `init` does for the first module, which makes no cloud call). The hook reads the first module's directory as `terraform/aws` followed by an end character, and `terraform/aws-kubeadm` is no such text (a hyphen does not end it); the same lines for the first module ask for the plan and deny a by-hand apply, whereas an apply by hand in the second module's directory asks by the generic rule and is not denied. The settings' ask for a plan with `-chdir` into a path that holds `aws` also matches the second module's name, but the form with a `cd` has no such rule, and whether an ask beats an allow is not verified (a row above). The wrapper's own lines are read: `aws.sh plan aws-kubeadm` and the applying line ask, the removing line is denied, and a `cat` of either state file is denied. The security review of K2b measured more: for the second module `show`, `output`, `state list`, `workspace new` and `plan -out` answer nothing either, and a `tee` into its plan's path passes (`aws\.tfplan` does not match `aws-kubeadm.tfplan`), where for the first module the plan, `show`, `output` and `state list` ask and `plan -out`, an apply, `import`, `state rm` and `workspace new` are denied. `show` is the one that matters: after the owner's apply it reads the state with no credential, and `terraform` is not in the reader rule's program list. The review's fix is the module name `aws(-kubeadm)?` in the three patterns (`aws_dir_re`, `aws_cwd_re`, `aws_steer_path`) and the mirror in the case file; a target named `aws-kubeadm-plan` does not contain `aws-plan`, so a rule for the creating targets must name it | S079 (K2b's report; the session's measurement, checked again by the documents contract; the security review of K2b, M1) | closed by S079 (K6, 974d6d1; reviewed: the second module gets the first's decision in 1,682 shapes of the review's own): a by-hand plan, `show`, `output` or state listing in the second module's directory asks, and a plan written to a file, an import, a change of the state, a new workspace or an apply by hand is denied. The creating targets and the base's two narrowings wait for the owner to start the guard's task | S079 |
 | What the command guard still does not stop around a Terraform state, for both AWS modules, after K7 denied the writers and the copies (the security review of K6 and K7's report): `rm` and `unlink` are not writer verbs (making them so would also deny removing a saved plan by hand: a decision); readers outside the guard's list (`rev`, `paste`, `fold`, `column`, `tr <`, a `read` loop) print a copy that was made before K7 or by a verb it does not know; `touch`, `chmod`, `wget -O` and `openssl -out` are not writer verbs; `terraform init -backend-config=path=<state>` gets no decision from the hook and falls to an allow entry; a working directory at the parent of the modules is read as neither module; a quote or a backslash inside the module's name hides it (the guard's header says so); and K7's known false alarm: a writer verb or a redirect on any line that holds the state directory's name is denied, also for a file of that name elsewhere (`git mv` included) | S079 (review of K6; K7) | open; low to medium: no state exists until the owner's one apply; decide with the owner's guard task | S079 |
@@ -15685,10 +15695,12 @@ status is brought to say so):
 ### S070 — Claims intake and what the adjuster is told
 **Status:** doing · **Started:** 2026-10-07 · **Finished:** —
 **Left before it is done:** the owner's decision on uploads (the step
-started without it, and built nothing for them); and four more questions of
-the owner's (For the owner). The first half is written here as it stands
-(R3c and its review are in; the whole suite is the main session's); the
-second half takes what the owner decides.
+started without it, and built nothing for them); four more questions of
+the owner's (For the owner); and `drafted_by`, which the second half did not
+build (For the owner, second half). The first half is written here as it
+stands (R3c and its review are in; the whole suite is the main session's);
+the second half so far is written after it, and takes what the owner
+decides.
 **Goal:** the adjuster's page says whether a recommendation rests on a
 model's reading or on the rules alone and shows the claim's dates for what
 they are, the Claims API no longer builds the claimant's name pattern while
@@ -15737,7 +15749,9 @@ what each ended as):
   are automatic approvals that never wait for an adjuster, so no queue lists
   them and the mark never reaches the case an injection aims at; it reaches
   the 6 on CLM-0001 that keep the adjuster's route with reject turned to
-  approve. The mark is advice.
+  approve. The mark is advice. (The second half changed what the queue reads:
+  it judges the whole stored proposal with the claim page's function and
+  marks only one that validates; see the second half, below.)
 - **The loss date is shown as what it is, and T-66 says why not more
   (implemented, same status as above).** The page labels the loss date "as
   stated in the claim, not checked" and the report date "as submitted with
@@ -16133,7 +16147,8 @@ redaction, the name or the assessor):
   for one international number per text. Not generated by the suite's test: a
   text with two international numbers (where the output can be a mix of the
   cut and the output before it, per international number), and a slash or a
-  dot inside the second number. A follow-up in the known-leaks row's home.
+  dot inside the second number. A follow-up in the known-leaks row's home
+  (built in the second half, G1: see below).
 - **A model's behaviour.** The injection numbers are the scripted model's;
   what `gpt-4o` does with an injection it is shown is not measured (S071).
 
@@ -16225,6 +16240,240 @@ that nothing is built):
   sentence said "stays at 100" when it merged, written on a branch cut before
   S068, and was corrected by S072's pull request).
 
+**The second half so far (2026-10-07): what opened it.** Branch
+`s070-second-half`, cut from `main` at 828c380, the first half's merge. It
+opened on the rows homed at S070 that need no word of the owner: the
+property test's two missing generator forms (the first half's follow-up),
+the adjuster's page and queue small ends, a `ClaimResponse` that cannot be
+built after the proposal is stored, and `drafted_by`. Four contracts and one
+fix-up ran (G1, G2, G2b, G3, G4), each in a worktree of its own and carried
+to the branch by the session as one commit (five commits), then the Python
+review of G1 to G3, whose one high finding is the work of this record. G1
+touched one test file; G2 to G4 touched `adjuster.py`, `adjuster_queue.py`,
+`claim_dates.py`, `moves.py` and `triaging.py` under
+`src/meridian/workloads/claims_triage/` and their tests. No prompt, tool
+contract, screen, golden file or injection case changed, and neither the
+redaction's source nor the name's nor the assessor's, so no fingerprint
+moved; whether the free replay ran is the main session's line to fill. No
+migration, no new threat ID, nothing paid, nothing on a cluster.
+
+**Decisions of the second half** (the implementers' unless marked; the owner
+may overturn any):
+
+- **A chain family was added to the property test beyond the contract's two
+  forms** (G1). The first international number has a second number of its
+  own before the second international number begins; the plain form cannot
+  write the outputs that are neither matcher's for the whole text, and the
+  chain can. Assertion (b), that the output is the cut's or the matcher
+  before the cut's for the whole text, is not held for the chain; G4 put
+  back what that dropped, per character (below).
+- **The `00` spellings were not bent into showing a loss** (G1). The form as
+  the contract wrote it shows the loss only in the `+36` spelling; a test
+  pins which spellings show it, with a threshold (a quarter of a spelling's
+  texts) that is arbitrary, and the docstring says why was not looked into.
+- **The queue's cell says "could not be read"** (G2): the claim page's words
+  without "the stored proposal"; a row with no stored proposal, or the
+  walking skeleton's row, keeps an empty cell. A received time without a
+  zone raises `ValueError` (the error `lifecycle.py` raises for a
+  programming error before any SQL), with a message that holds no value.
+- **One page of the queue logs one line, with a count** (G2b): the per-row
+  judgment is silent when the queue calls it, the claim page logs as before,
+  and the warning of the claim page moved with the function from the logger
+  of `adjuster.py` to that of `adjuster_queue.py` (no test, alert, dashboard
+  or runbook names either).
+- **The claims route's 500 now carries `claim_id` and `run_id`** (G3). That
+  is the one observable change on that route: its declared `ClaimErrorBody`
+  already had both fields. The send-back, retry and claimant-form routes
+  share the handling and changed with it; the contract named only the
+  documents route. The owner may reverse it.
+- **`drafted_by` is not built** (the session's). Both of the row's parts are
+  decisions: what the triage does with an ID that names no deployment
+  changes what is stored when the gateway misbehaves, and what the
+  claimant's response shows of a drafter is the API's contract.
+
+**Advisor:** this record was written from the contracts and reports and
+records no consultation of the second half; the main session adds any it
+held.
+
+**Work log of the second half** (from `git log` of the branch; the counts are
+the reports'):
+
+- **G1**, `3ba3ccd` (tests only): the property test of the redaction writes
+  two international numbers one after the other at a space, a chain of them
+  and a slash or a dot inside the second number. The first 4,000 texts are
+  the same texts (a hash over text and form before and after, equal); 8,500
+  are generated, 8,414 replayed and 86 skipped (the allowance is 170); the
+  file's run time went from about 1 s to about 4 s.
+- **G2**, `b8fbc23`: the queue reads the whole stored proposal in the query it
+  already made and judges it with the claim page's function
+  (`_proposal_of`), so only a proposal that validates is marked; a received
+  time without a zone raises `ValueError` in `day_gaps`; two behaviours
+  pinned by tests named for what they hold (the latest stored proposal for a
+  claim whose last triage failed, and the two unwritten pairs marked
+  "model"). A page validates once per row that holds a proposal, at most 100.
+- **G2b**, `dca5b7b`: G2 had made the queue log one warning per unreadable
+  row at every load, up to 100 a page, which anyone who may open the queue
+  could multiply by reloading, and had left `adjuster.py` at 806 lines, six
+  over the ceiling. The judgment moved to `adjuster_queue.py` (`adjuster.py`
+  777 lines, the queue's module 139) and a page logs one line with the count.
+  The split-proof script ran on the move alone and had one expected failure
+  (the module's own logger in both files); it was not run again after the
+  log change.
+- **G3**, `4c864f3`: a `ValidationError` of the response model after the
+  proposal is stored is one shaped 500 on every route that triages (the
+  documents route marks it stored), with one error line and nothing counted
+  twice; a retry answers 409. Eight new tests (G4 removed one), four seen red
+  first.
+- **G4**, `b1fc545`: the review's findings (below): a `try` removed, the
+  error line names the fields, the chain's lost check put back, and four
+  small things (the page's log line reads right for a count of 1, `_joined`
+  has its return type, the property test's broken docstring sentence is
+  rewritten, `unbuildable` is `unbuildable_answer`).
+- **The review**, Python, of G1 to G3.
+- **D3**, this part and the documents.
+
+**What each found:**
+
+- **G1: today's matcher loses no digit in 4,500 new texts of three
+  families.** Replayed: 1,480 two-international texts, 1,461 chain texts and
+  1,494 slash-or-dot texts; with the cut's narrowing taken out they lose
+  digits in 145, 1,036 and 1,043 of them, so the forms can see the loss;
+  with today's matcher, in none. For a chain the output may be neither
+  matcher's for the whole text (one number cut and the other not, per
+  international number): 45 of the 1,461 are such, none loses a digit. Held
+  per character since G4: in all 1,461 chain texts the characters today's
+  matcher hides are within the union of what the matcher before the cut
+  hides and what the cut hides (1,238 within the first alone, 425 within the
+  second alone, none outside; the numbers are in G4's report). A second
+  number spelled with `00` directly after the first shows the cut's loss in 2
+  of 1,265 texts even with the narrowing taken out, where `+36` shows it in
+  143 of 215; why is not looked into (a new row).
+- **G2: the queue judged a stored proposal differently from its claim
+  page.** One stored proposal that fails validation (a recommendation to
+  approve with an exclusion) showed "model reading" in the queue and "could
+  not be read" on its claim page; both say "could not be read" now.
+- **G2b: G2 itself had made the queue log a warning per unreadable row at
+  every load, and one file six lines over the ceiling.** Both fixed in the
+  next commit.
+- **G3: the backlog row was wrong.** It said the claims route shaped the
+  failure and the documents route did not. Both gave the bare 500 of the
+  last middleware, `{"detail": "internal error"}`, with no claim and no run
+  and a log line without the claim. The map G3 wrote before building, read
+  from the code, is what showed it.
+- **G4: the review's findings, in code and tests** (below).
+
+**The review** (Python, G1 to G3; it ran the unbuildable path with stubs, the
+queue with 15 hostile stored values, the import orders and the property
+test's first 4,000 texts, and only read the rest). Verdict: yes after
+fixes; no critical finding, one high, two medium, seven low.
+
+- **High, documents:** the threat model's T-26 and two places of the plan said
+  the opposite of the code. This record fixes them (T-26, the backlog rows
+  and the first half's description of the queue's read).
+- **Medium 1:** `_move_answer`'s new `try` cannot fire from a valid
+  `ClaimResponse` (every field of `ClaimMoveResponse` has the same type or a
+  wider one, and an instance passes through unvalidated), fired only when the
+  test replaced the class, and marked no span. G4 removed it, its docstring
+  sentence and the one test that needed the stand-in; the two tests that
+  hold the documents route's shaped 500 and its `stored` mark do not pass
+  through it and stay. The row stays closed by the `try` in
+  `run_taken_triage`, which every route passes first.
+- **Medium 2:** the error line named no field, so an operator could not tell
+  which model refused what. G4 added the names and error types of the
+  refused fields, never a value; the test that no value of the stand-in is in
+  the line or the body stays.
+- **Low:** the queue now decodes the whole stored JSON (a row nested about
+  100,000 deep raises at the fetch; a new row); `adjuster.py` imports two
+  private names across modules and the page decides to log by comparing a
+  display text (a new row); the log line's plural, `_joined`'s annotation,
+  the broken docstring sentence and the name `unbuildable` (fixed by G4); the
+  chain family's skip rate, 39 of 1,500 against 0.5 per cent of the base
+  family, and the unexplained `00` figure (not changed); `adjuster.py` was
+  over the ceiling for one commit (history).
+- **Found sound:** the unbuildable path counts once and commits once on the
+  three call sites; the queue and the claim page share one judgment, and 15
+  hostile stored values gave "could not be read" without a raise; `day_gaps`
+  cannot raise for existing data (the column is `timestamptz NOT NULL`); the
+  first 4,000 texts of the property test are the same texts.
+
+**Result / verification of the second half so far:**
+
+- **Implemented and tested; none of it run on a cluster, nothing paid.** The
+  implementers' gates, as their reports print them: `tests/meridian/
+  workloads/claims_triage/` against PostgreSQL, `3539 passed in 74.17s` (G2
+  `3526 passed`, G2b `3531 passed`, G3 `3539 passed`); the guardrails' tests,
+  `1720 passed in 13.09s` (1,716 before G1 and 1,719 after it); `make lint`
+  ended `rc=0` in each. Several reports could not print an exit status in
+  the same shell, or piped a gate into `tail`, and say so; the pass there is
+  the printed last line. The whole suite is the main session's.
+- **The whole suite on the final tree:**
+
+The main session's run on the final tree, with `main` 8e2f4a1 merged in
+(S072's first part and S074's third; 6e04ff5): `make test` (372 tests),
+`make docs` (14 checks) and `make lint` ended 0; the whole suite at six
+workers beside the kind cluster and no other run with a database: 18,193
+passed, 8 skipped (3 min 29 s). An earlier run on the tree before S074's
+part was merged in (fe36a2a) had 18,097 passed, 8 skipped.
+
+- **Documents (D3), as run:** `make docs`, `make check` and `make test`, each
+  read by its exit status, are in the report of that contract.
+
+**Not seen, or not reached:**
+
+- **Anything on a cluster.** The queue's new words and the shaped 500 were
+  tested against PostgreSQL and never rendered or called on kind.
+- **The claimant's form route after an answer that cannot be built.** It was
+  read, not tested: the claim has moved on by then, so the claimant gets the
+  status page and not the "send again" notice, and no test holds it.
+- **A database-backed run by the reviewer.** The review ran no test that
+  needs PostgreSQL (the seven that skipped are presumably those); it read
+  the transaction order and the route handling and ran stubs.
+- **What G4's tests did not show red.** The error line's field names, the
+  count-of-1 line and the chain's subset assertion were edited with their
+  code and not seen failing first; for the subset assertion the argument is
+  arithmetic (without the cut's half, 223 chain texts fall outside).
+
+**Backlog rows, judged** (the rows are in Part B):
+
+- The adjuster's page and queue, small ends: closed in part by G2 (the two
+  built, the two pinned, the two left as they were).
+- A `ClaimResponse` that cannot be built after the proposal is stored:
+  closed by G3 and G4, with the row's own claim corrected.
+- The property test's two missing generator forms: closed by G1 (named in
+  the known-leaks row's home, and noted on that row and on the cut row).
+- A stored `drafted_by` is a well-formed ID: open, for the owner, with the
+  reason above.
+- A sentence of the small-ends row (`adjuster.py` is 795 lines) was brought
+  to 777.
+- New rows, each with its home: the `00` spelling's 2 of 1,265 (S070); a
+  stored proposal nested about 100,000 deep, which raises at the queue's
+  fetch (S070); the display-text comparison and the private names imported
+  across two modules (S074, one row).
+
+**For the owner** (none blocks the pull request; the default if unanswered is
+that nothing is built; the first half's (a) to (e) stand as written):
+
+- **Uploads (a), the bound on what a name may replace (c), and where the
+  three known phone leaks go (e).** Unchanged. The property test now writes
+  the forms it lacked and found no digit lost, which says nothing for or
+  against a fix of the three leaks: they are not losses against the matcher
+  before the cut.
+- **(f) `drafted_by`.** Not built. Two decisions: what the triage does with a
+  stored drafter ID that names no deployment, and what the claimant's
+  response shows of a drafter.
+- **(g) The claim brief's retention**, S068's third question (an age bound
+  for a brief nobody decides), which this half did not touch.
+
+**Follow-ups of the second half:**
+
+- In the backlog, each with its step: the `00` spelling's 2 of 1,265 and the
+  stored proposal nested about 100,000 deep (S070); the queue's display-text
+  comparison and its private names across two modules (S074).
+- **Rows changed in this half:** the adjuster's page and queue small ends,
+  the `ClaimResponse` row and the `drafted_by` row; the cut row, the
+  known-leaks row and the small-ends row carry a sentence each. T-26 and T-67
+  are brought to the code; no new threat ID.
+
 ### S072 — The cluster outside `meridian`, second round
 **Status:** doing · **Started:** 2026-10-07 · **Finished:** —
 **Goal:** on kind, what runs beside Meridian is held to what it needs, a
@@ -16240,10 +16489,13 @@ address of the API server's calls is known.
 **This record is written while the step is `doing`.** Four contracts of
 files only have landed (T, L, P, R below), the documents of this record are
 the fifth, and one measurement has been made on the cluster by the main
-session. The cluster batch is ahead and waits for the cluster lane, which
-S073's second half holds first. **Nothing but the measurement has been seen
-on the cluster.** Every capability below is labelled implemented (in files
-and tests, none run on a cluster), seen (on kind, by the measurement alone)
+session. The cluster batch was then ahead, waiting for the cluster lane; it
+is written in files since, and its record is the second part, "The cluster
+batch", after the first part's "Follow-ups". **Of the first part, the
+measurement and, later the same day, one run on a warm cluster (R8, below)
+have been seen on kind; nothing of the cluster batch has.** Every
+capability below is labelled implemented (in files and tests), seen warm
+(on kind, by R8, in the limits its entry gives), seen (by the measurement)
 or designed.
 
 **What the render changed in what the repository believed.** On 2026-10-07 a
@@ -16378,7 +16630,9 @@ reading, below, changed the second and the fourth):
    pods) and its webhook's service moves. **The written fall-back:** if a
    cold `make up` does not bring the database up under it within the
    contract, the change is taken out and the reach is recorded as accepted
-   with "tried, and what failed".
+   with "tried, and what failed". (Built in files since, by contract C: the
+   second part below says what changed on the way, and that the
+   confinement is not seen on kind.)
 3. **DNS, the residual stated.** No script touches the cluster's resolver; the
    five egress rules that name it (`meridian`'s chart policies, the
    database's, smoke's, `cert-manager`'s and `logging`'s) let a name carry a
@@ -16399,12 +16653,14 @@ reading, below, changed the second and the fourth):
    default, and the same reason that decides the writes decides them.
 5. **Egress from `observability` and the webhooks' port: measured, then
    bounded.** The measurement is made (above); the policies and the
-   placeholder's use are the cluster batch's, each seen by a cold `make up`.
+   placeholder's use are the cluster batch's, each seen by a cold `make up`
+   (written in files since, not yet seen: the second part below).
 6. **The two bare namespaces:** labels at `restricted` in `warn` and `audit`
    as the three labelled namespaces have (built, contract L), the server-side
    dry run on kind before they are called confirmed, and one policy each
    from the render's ports (the cluster batch; the CloudNativePG operator's
-   confinement removes one of the two namespaces if it holds).
+   confinement removes one of the two namespaces if it holds, and in files
+   it does: `cnpg-system` is gone, and `envoy-gateway-system` has its policy).
 7. **node-exporter stays off** unless the owner says otherwise: no rule or
    dashboard reads its series, and it alone would make `observability`
    privileged. Asked in a status.
@@ -16504,9 +16760,14 @@ webhooks' port (above).
     (a new pod is a new series); neither Loki nor Tempo renders anything
     that needs the API server; the three pods of the two operators'
     namespaces meet `restricted` in the render.
-- **The cluster batch has started in files** and is not in this record's
-  pull request: contract W (the webhooks' port) is written and waits on a
-  branch of its own, and the egress contract is out.
+- **R8, the first part on a warm cluster** (the main session's run, 2026-10-07,
+  10:42 to 10:48 UTC, from `main` 064e5ab, the first part as merged and not
+  the cluster batch): `make up` on the cluster that was already up, `make
+  deploy` and `make smoke`, each rc 0; what it saw and what it did not is in
+  "Not seen" below. The Certificates were issued before the run, so it is not
+  a cold run.
+- **The cluster batch** was not in the first pull request. It is written in
+  files since (W, E, C, N and S), and its log is in the second part below.
 
 **Result / verification:** the implementers' claims, not the main session's
 runs (the main session runs every gate on the branch and fills the line
@@ -16531,42 +16792,48 @@ at six workers: 18,057 passed, 8 skipped (4 min 5 s). The count is the same
 because F1 changed tests and added none to pytest (its new case is one of
 promtool's, run by `make alerts`: the implementer's run, `SUCCESS`).
 
-**Not seen** (nothing of the four contracts has met the cluster):
+**Seen warm** (run R8, above: `make up` on a cluster that was already up, rc
+0, no pod not Ready after it; the cluster batch was not on it):
 
-- the pods of Tempo and Loki starting and working without a token (a chart
-  that needs the API server it does not render a role for would show as a pod
-  that fails or restarts);
-- the two namespaces' labels against the API server (the server-side dry run
-  and the namespaces' warnings), and Envoy's proxy pods under `restricted`;
+- T: Tempo's and Loki's pods were replaced and read
+  `automountServiceAccountToken=false`, phase Running (`tempo-0`, `loki-0`);
+  smoke's trace line (a trace pushed and read back from Tempo) and its log
+  lines (Loki) passed afterwards, so both work without a token;
+- L: `cnpg-system` and `envoy-gateway-system` carry `warn` and `audit` at
+  `restricted` and no `enforce`: applied, so the API server accepted the
+  labels. No warning was looked for, because the run recreated no pod in
+  those two namespaces; the server-side dry run is still open;
+- P: the policy `meridian-services` on the cluster lists eight URIs and six
+  DNS names, and after `make deploy` (rc 0) all eight Certificates of
+  `meridian` are Ready. **The Certificates were issued before the run, under
+  the old policy:** Ready here means still valid, not approved under the
+  exact lists, which a renewal or a cold run shows;
+- F1: `make smoke` from `main`, rc 0, 46 PASS, 0 FAIL, 0 SKIP; check 10's
+  refused request, now with the Claims API's listed URI, was refused for its
+  namespace;
+- R: smoke's check 11, which compares the rules the cluster holds with the
+  tree's by name and expression, passed, so the tree's 21 rules, with
+  `MeridianRateStoreRestartLoop`, are loaded. The alert was not pending or
+  firing: the rate store had restarted twice in the hour before, as designed,
+  below the threshold of three in fifteen minutes.
+
+**Not seen** (what R8 did not show):
+
+- a cold `make up`: all eight Certificates approved under the exact lists
+  from nothing, and the hook Jobs;
+- the labels' server-side dry run and the namespaces' warnings, and Envoy's
+  proxy pods under `restricted`;
 - the services' policy refusing a request for an unlisted name (a new request
-  in `meridian`), smoke's check 10 with the Claims API's listed URI (F1), and
-  a cold `make up` approving all eight Certificates under the exact lists;
-- `MeridianRateStoreRestartLoop` loaded in Prometheus, healthy, or firing;
+  in `meridian`);
+- `MeridianRateStoreRestartLoop` firing;
 - the render's rights themselves: nobody asked the API server about any of the
   add-ons' accounts (`kubectl auth can-i` as a reader would show them; smoke
   asks only Grafana's and kube-state-metrics');
 - on another network plugin, UDP, and the webhook calls' own source address
   (the measurement's list above).
 
-**What is left**, in the order of the cluster batch (after S073's second half
-frees the lane, each seen by one cold `make up`; the measurement is first and
-is made):
-
-1. The webhooks' port and `observability`'s egress, one after the other
-   (both edit the same manifest and tests). The first is written and waits
-   on a branch of its own: the two webhooks that fail closed lose their
-   peerless rule, and the operator's rule keeps the port for Prometheus
-   alone, because its webhook and its metrics share it. The egress contract
-   is out.
-2. The CloudNativePG operator confined and released into `meridian`, with
-   the fall-back above; then the policy of `envoy-gateway-system` (and of
-   `cnpg-system` if the confinement is taken out).
-3. The server-side dry run of the labels, and the corrections of the new rows
-   (the comments the render and the measurement showed inexact; the
-   scaffold's `BY_HAND` line).
-4. Rows that stay open and do not gate the close, if the owner wants them:
-   the edge's access line, the log agent's counters, the rate store's own
-   metrics, a client certificate at the collector.
+**What is left** is in the second part below, "What is left now": the
+first part's list was the cluster batch, which is written in files since.
 
 **Backlog rows of this step** (the table's rows with the home S072; "closed"
 means this record closed it, and the row's status is brought to say so):
@@ -16575,25 +16842,32 @@ means this record closed it, and the row's status is brought to say so):
 |---|---|
 | The access logs (uvicorn's, the edge's) keep a request's query string | Stays: not taken; does not gate the close |
 | The Prometheus operator and kube-state-metrics may read Secrets in every namespace | Closed as accepted, with the render's facts (the owner may overturn) |
-| DNS and the collector are open to the pods that use them | Closed in part: DNS's residual stated; the collector's half is the egress contract |
-| The certificate policy admits any `*.meridian.svc` name | Closed in part by P, in files, not seen: no new name; the residual stays |
+| DNS and the collector are open to the pods that use them | Closed in part: DNS's residual stated; the collector's half is contract E's egress policy, seen on kind (R9: Prometheus's 12 targets up, no container restarted, Loki's log without an error) |
+| The certificate policy admits any `*.meridian.svc` name | Closed in part by P: no new name; the residual stays. The policy's lists are on the warm cluster (R8), and on the cold cluster all eight Certificates were approved under the exact lists from nothing (R9, seen on kind); a request for an unlisted name refused inside `meridian` is not seen |
 | The rate store's own metrics are scraped by nothing | Stays, as a stated residual (T-92) |
-| No rule reads the rate store's restarts | Closed by R, in files and unit-tested, not loaded on a cluster, not seen firing |
-| The Prometheus operator and the CloudNativePG operator read and write Secrets and ConfigMaps | Open in part: three accepted, the CloudNativePG operator to be confined with a fall-back |
+| No rule reads the rate store's restarts | Closed by R, unit-tested and seen loaded on the warm cluster (R8: smoke's check 11 passed with the 21 rules), not seen pending or firing |
+| The Prometheus operator and the CloudNativePG operator read and write Secrets and ConfigMaps | Open in part: three accepted; the CloudNativePG operator confined to `meridian` by contract C, seen on kind (R9: the database healthy under it, also after the chart's default deny; the fall-back not needed); the residual, a Role in `meridian` that still execs into pods and writes Secrets and ConfigMaps there, so the six services' TLS keys |
 | Prometheus's OTLP receiver and Loki's push API take writes | Closed in part: the hops' decision; the writes wait for the owner; the client certificate is outside the row |
-| Egress from `observability` is open, and port 10250 of the three webhooks | Stays: the cluster batch, with the address measured |
-| `cnpg-system` and `envoy-gateway-system` have neither labels nor a policy | Closed in part by L (labels, in files, not confirmed by the API server); the policies and the dry run are the cluster batch; enforce and audit are outside the row |
+| Egress from `observability` is open, and port 10250 of the three webhooks | Open in part: bounded by W and E, seen on kind (R9: the three webhooks reached with no pod admitted, probe (a) timed out on 10250, probe (b) timed out on the node's 10250 and 6443, 12 targets up); not seen: the four other pods the node rule selects trying the kubelet's port; the residuals are one placeholder for 6443 and 10250, and the node passing every policy |
+| `cnpg-system` and `envoy-gateway-system` have neither labels nor a policy | Closed in part, seen on kind: labels by L (applied on the warm cluster, R8; the API server's server-side dry run of `enforce=restricted` on `envoy-gateway-system`, with its proxy pod running, gave no warning, R9), `cnpg-system` gone by C, the gateway's namespace denied by default by N (its controller, Job and proxy came up, the Gateway programmed) and the operator's policy in `meridian` by C; enforce and audit are outside the row |
 | node-exporter is off on kind | Stays: the owner's; the session's decision is off |
-| `smoke.sh` is near 2,900 lines; Tempo's pod mounts an API token | Home S074; Tempo's half closed in files by T (Loki's too) |
+| `smoke.sh` is near 2,900 lines; Tempo's pod mounts an API token | Home S074; Tempo's half closed by T (Loki's too), seen warm (R8: both pods Running with no token, and smoke's trace and log lines passed) |
 | The log agent's own counters are scraped by nothing | Stays: not taken; does not gate the close |
 | Nothing alerts on missing data (home S073) | Not touched; its home is the owner's call |
+| Three ends of the kind scripts (S073's row: `upkeep.sh`'s timeout, `smoke.sh`'s unescaped name, `kctl`'s `--wait`) | Home S073; the second closed by S, seen on kind (R9: smoke's 46 lines); the other two stay |
+| The sentences in `infra/` the measurement answered (the webhooks' "nobody has measured it") | Closed by W; the premise they now state was seen on kind (R9) |
 
 **New rows** (Part B's follow-up backlog, each homed at this step's cluster
-batch): the sentences in `infra/` the render showed inexact; the sentences
-the measurement answers (the webhooks' "nobody has measured it"); smoke's
-check 10 after the exact lists (closed by F1, in files); the scaffold's
-`BY_HAND` line; Loki's empty
-ClusterRole and Envoy's hook leftovers.
+batch): the sentences in `infra/` the render showed inexact (still open, and
+contract C made two more false); the scaffold's `BY_HAND` line (still open);
+smoke's check 10 after the exact lists (closed by F1, seen warm: R8's smoke
+passed 46 lines); Loki's empty ClusterRole and Envoy's hook leftovers. The
+cluster batch adds seven, in Part B: Loki's usage report (S072), the one
+policy `api_server_matches_policy` reads (S073), a warm cluster made before C
+(closed by F2), the unknowns the cold run cannot settle (S072), the
+CloudNativePG chart's `view` and `edit` ClusterRoles (S020), the operator
+being down seen by no alert (S073) and the policy tests that never meet the
+charts' render (S074).
 
 **Follow-ups:**
 
@@ -16608,6 +16882,573 @@ ClusterRole and Envoy's hook leftovers.
   memory or disk is observed on kind). On AKS (S020) the operators' reach
   comes back with real stakes.
 
+**The cluster batch (second part of this record, 2026-10-07).** Five
+contracts of files and tests, each in a worktree of its own and carried to
+the step's branch `s072-cluster-batch` by the main session: W, E, C, N and
+S. **All of it is implemented in files and tested without a cluster, and
+the cold run R9 (2026-10-07, 11:08 to 11:17 UTC, from the batch's commit
+4050156) saw it on kind, in the limits its result below gives:** what R9
+printed is "seen on kind (R9)", and what its "Not seen" list names stays not
+seen. The first part's measurement and its warm run R8 are earlier. The
+infrastructure review of the batch has returned (below), and a fix contract,
+F2, answered it.
+
+**Work log of the cluster batch** (hashes are on the step's branch; each
+entry says what the contract does, the decision it rests on, what was not
+known and what would show it wrong):
+
+- **W, `67b6ef2`: no pod reaches the three admission webhooks' port.**
+  cert-manager's webhook and approver-policy's, the two that fail closed
+  (`failurePolicy: Fail`), lose the rule that admitted every pod on 10250;
+  an ingress policy with no rule denies every pod, and the API server still
+  comes in, because its calls start on the node and pass every policy (the
+  measurement). The two policies are kept with no `ingress` key, as the home
+  of the comment and of the fall-back. **The decision that departs from the
+  first part's reading:** the Prometheus operator's rule is not removed but
+  given Prometheus as its one peer, because the operator serves its webhook
+  and its `/metrics` on the same port and the chart's ServiceMonitor scrapes
+  it (read in the render, `kube-prometheus-stack.yaml:4674-4699`). Not
+  known: whether a webhook call through the Service leaves from the same
+  address as a pod-proxy call (the measurement took them as the same, not
+  seen separately). What would show it wrong: a certificate that is never
+  issued (a webhook that cannot be called fails closed, loudly), the
+  operator's target down on Prometheus's Targets page, or both; the
+  fall-back, written in each place, is the node's address on the pod
+  network as the peer and, since the review (F2), the node's published
+  address too, because after the Service's translation the source of a
+  webhook call may be either. Tests: nine failed and 45 passed before the
+  manifests changed; 113 passed after, in four files. **Seen on kind (R9):**
+  the API server reached all three webhooks with no pod admitted to their
+  port: cert-manager's release, approver-policy's policies and the database's
+  install all went through (the three places where a wrong premise would
+  have shown, in the review's order), the three authorities' Certificates
+  are Ready, and, the fourth and silent place, Prometheus's target for the
+  operator is up. Probe (a), a pod in `default` that no policy selects: the
+  edge's listener open (the control), and port 10250 of cert-manager's
+  webhook, approver-policy and the Prometheus operator each timed out. Not
+  seen: a webhook failing closed, and the fall-back (none was needed).
+- **E, `cd1d3b9`: egress from `observability` is denied by default and
+  admitted by rule.** Seven policies in `observability`'s file:
+  `default-deny-egress`, `egress-dns`, `egress-node`, `egress-prometheus`,
+  `egress-grafana`, `egress-otel-collector` and `egress-loki`. Every peer is
+  a pod by label or the placeholder; no rule lacks a peer, none is open to
+  every address, none has an empty selector, and the file holds no IPv4
+  literal. Each pod's rule is its own, so that a shared rule does not give
+  the collector the kubelet. The table of what each pod calls (the render of
+  2026-10-07 and the repository's files, not memory) is in the file's
+  header. **The decision:** `make up` refuses a file that holds its
+  placeholder twice, and the database's and cert-manager's tests pin that,
+  so one `egress-node` rule serves 6443 and 10250 and selects Prometheus, the
+  operator with its two hook Jobs, kube-state-metrics and Grafana; only
+  Prometheus needs the kubelet's port. The alternative, a function that
+  fills several placeholders, would change a shared function and its pinned
+  tests. 4194 and 10255 are in the kubelet's Endpoints object and are
+  scraped by nothing, so they are not opened. What now leaves the cluster
+  and is refused: Loki's usage report to its vendor's host (a row, below),
+  the one such call found. Not known, each costing a log line or a
+  status and not a Ready pod: Grafana's plugin catalogue (not in the
+  render); whether the operator calls Prometheus's pods; Loki's compactor
+  on 9095, which the review showed is a Service's cluster address, so the
+  connection leaves the pod and comes back and whether the plugin filters
+  it is not known (ingress on 9095 has been closed since S063 while Loki's
+  queries worked; the cold run reads Loki's log for a compactor or
+  delete-request error); Tempo's modules, which do dial the pod's own
+  address; Prometheus scraping itself on 9090 and 8080, which dials the
+  pod's address and is not filtered. What would show it wrong: a target down on
+  Prometheus's Targets page (the kubelet's three paths, the API server,
+  CoreDNS, cert-manager's controller, Grafana, kube-state-metrics, the
+  operator and Prometheus's two), a pod not Ready, a certificate not issued,
+  a refused connection in a pod's log other than Loki's report. The way back
+  is in the file's header: a target found down is added once, from what the
+  run shows; a second round of surprises takes the egress policy out and
+  states the gap. 294 tests passed in the seven files the contract named.
+  **Seen on kind (R9):** Prometheus's targets, read through the API server's
+  pod proxy, are 12 active and all up (cert-manager 1, the API server 1,
+  CoreDNS 2, Grafana 1, kube-state-metrics 1, the kubelet 3, the operator 1,
+  Prometheus 2); every pod Ready and no container restarted from the
+  cluster's making to the end of the run; Loki's log (the last 600 lines)
+  holds no compactor or delete-request error. Probe (b), a pod in
+  `observability` that no egress rule names: the edge's listener (open to
+  any source on its ingress side), the node's kubelet port 10250 and the
+  node's API server port 6443 each timed out, and the same three from a pod
+  in `default` were open (the control). So on this plugin a pod's egress to
+  the node is bounded by policy, on the kubelet's port too, for a pod no
+  rule selects: the review's open question is answered. Not seen: Loki's
+  usage report being refused (its log holds no line about it in the run's
+  nine minutes); the four other pods the node rule selects (the operator, its
+  hook Jobs, kube-state-metrics, Grafana) trying the kubelet's port, which
+  the rule admits; Grafana's plugin catalogue and the other unknowns (every
+  pod Ready and nothing restarted is all the run says about them).
+- **C, `5e95705`: the CloudNativePG operator is confined to `meridian` and
+  `cnpg-system` is gone.** The operator is released into `meridian` with
+  `config.clusterWide=false` (a `--set` in `up.sh`, not the values file),
+  under a policy of its own, `cnpg-operator`: ingress denied (no pod reaches
+  its 9443 or 8080), egress to the resolver, to the placeholder on 6443 and
+  to the database's pods on 8000. The database's own policy now admits the
+  operator by two pod labels and no namespace. Its Role is in `meridian`, so
+  its reach is every Secret and ConfigMap there and `pods/exec`, less than a
+  ClusterRole over every namespace and still the six services' TLS keys. The
+  decisions: 8000 only and not 5432, because the database's policy admits
+  the operator on 8000 alone and the Cluster has been healthy under it
+  (S019), and opening 5432 would widen the database; a warm cluster made
+  before this change is not migrated, and C left `up.sh` unable to detect
+  it; the review found that `make up` on such a cluster would have changed
+  it before failing, and F2 added a guard (below). **Contract L's labels
+  for `cnpg-system` and the README's rows for it were overtaken within the
+  hour after they landed:** the namespace does not exist in files any more.
+  No STOP condition fired: the Role in `meridian` suffices for what the
+  repository deploys (one Cluster, two Databases, one ConfigMap and one
+  `helm test` Job; no Backup, ScheduledBackup, Pooler or ImageCatalog was
+  found), the render's pod meets `restricted` by the render author's
+  checker (not the API server's), no change to the chart was needed. Not
+  known: that the operator works under the Role at run time, and under
+  `default-deny` once `make deploy` adds it (the operator's policy is
+  applied before the chart's). What would show it wrong: the lines in
+  `up.sh`'s comment (`helm release platform-db failed`, the ten-minute wait
+  for the Cluster ending, the roles wait ending with `cannotReconcile`), or
+  "Instance Status Extraction Error" after `make deploy`, or a timeout on
+  6443 or a "forbidden" in the operator's log. **The written fall-back
+  stands:** the confinement is taken out and the reach recorded as accepted
+  with "tried, and what failed". Nineteen new tests, 18 red first; 852
+  passed in the files the contract named. **Seen on kind (R9):** the cold
+  `make up` ended 0 with no `cnpg-system` among the namespaces; the operator's
+  pod runs in `meridian`, 1/1 with 0 restarts; the Cluster `platform-db`
+  says "Cluster in healthy state", and again 45 seconds after `make deploy`
+  had put the chart's default deny on the operator's pod. Its ClusterRole
+  holds three rules (nodes: get, list, watch; the two kinds of webhook
+  configuration: get, patch; clusterimagecatalogs: get, list, watch) and its
+  Role in `meridian` holds 20; its log (the last 600 lines) holds no
+  timeout, refusal or "forbidden". The confinement held, so the fall-back
+  was not taken. Not seen: `make deploy` refusing a cluster without the
+  operator's policy, and the guard F2 added (the old cluster was deleted
+  before the run, not offered to it).
+- **N, `faf3044`: `envoy-gateway-system` is denied by default and admitted by
+  rule.** Five policies: `default-deny`, `egress-dns`, `egress-node`,
+  `envoy-gateway` and `envoy-proxy`. The controller takes 18000 from the
+  proxy pods and calls DNS and the API server's address through the
+  placeholder; the proxy takes the listener's port from any address and
+  calls the controller on 18000, the Claims API in `meridian` on 8000 and
+  DNS. The proxy is selected by the two labels that have run on kind and
+  that smoke and the chart already name (`component=proxy` and
+  `owning-gateway-name=edge`), not by the source's other two, because a
+  selector that missed the proxy would cut it off. **`make deploy` now
+  refuses a cluster without the operator's policy**, as it did for the
+  database's, because the chart's `default-deny` would otherwise cut the
+  operator off. **Decisions:** the listener's rule has no peer, by design:
+  the edge's requests come from the laptop through kind's port mapping to a
+  NodePort, the Service keeps the source address (read in the controller's
+  source: `Local`, not seen), and that source is not the node's own address
+  on the pod network, so the measured pass of node-originated calls does not
+  cover it; it is the one rule without a peer in the file and a test holds
+  it single. `egress-node` selects every pod that is not a proxy pod
+  (`NotIn [proxy]`), because the controller and its certgen Job share no
+  label key and the placeholder may appear once; a pod added later to the
+  namespace would be selected too. Not known: whether the controller calls
+  a proxy pod and on what port (no such call is read in the files); ports
+  18001 and 18002, which have no rule because their clients run only for a
+  global rate-limit policy or a Wasm extension, which the repository has not;
+  the controller's webhook on 9443, `failurePolicy: Ignore`, so a policy
+  fault there would be silent; the literal source of the edge's requests;
+  the proxy pods' labels, which are made at run time. What would show it
+  wrong: the certgen Job unable to reach 6443 (`helm release envoy-gateway
+  failed` and `make up` stops: loud, and the first thing a cold run
+  shows), the Gateway `edge` not programmed, a proxy pod not Ready or with
+  an xDS connection error repeated, smoke's first line (a 404 from Envoy and
+  the counter moved) or the lines through the edge to the Claims API
+  failing. The way back is in the file's header: remove `default-deny`, run
+  smoke, record what failed. 25 new tests; 843 passed in the files named.
+  **Seen on kind (R9):** the certgen Job, the controller and the proxy came
+  up under the default deny (the release went through and the Gateway is
+  programmed: smoke's edge line passes); the edge's Service is a NodePort with
+  `externalTrafficPolicy=Local`, as read from the source; and the labels'
+  server-side dry run of `enforce=restricted` on `envoy-gateway-system`, with
+  the controller and the proxy pod running, answered "labeled (server dry
+  run)" with no warning, so the API server finds no pod there that violates
+  `restricted`, the proxy pod made at run time included. The run's "Not
+  seen" list says nothing more of this namespace.
+- **S, `0577663`: smoke compares a name as text, and two messages say
+  where the operator is.** In `check_network_service_policies` the pattern
+  that put a Deployment's name unescaped into a basic regular expression
+  is replaced by a comparison of the text after the first slash, so a
+  dotted name no longer matches its dash twin (the first of the three
+  small ends of the kind scripts in S073's row, the second; the other two
+  stay); the
+  two messages of check 10 name `meridian` and the Deployment
+  `cnpg-cloudnative-pg` and no longer the old namespace; and the line `make
+  up` prints for the gateway's policy names its controller and hook Job and
+  no longer says that all of its pods may reach 6443, which is untrue (the
+  proxy may not). Three new tests, two red first against the old script;
+  846 passed in the files named. Not known: that smoke's 46 lines still
+  pass on the cluster with the new loop (it is the same rule the old pattern
+  applied to every name that worked). One side effect to accept: the error
+  for an unreadable address names fewer policies than the file holds.
+  **Seen on kind (R9):** `make smoke`, with S's two hunks, ended 0 in 70
+  seconds: 46 PASS, 0 FAIL, 0 SKIP (the unsplit script: the batch's commit
+  does not hold the split).
+- **The review of the batch** (`infra-reviewer`, on `faf3044`, the tree
+  with W, E, C and N): returned, a cold run may start. Its result, with the
+  walk of a cold `make up`, is under "Result / verification of the cluster
+  batch".
+- **F2, `4050156`: what the review found, before the cold run.** In files
+  and tests; of it R9 saw only that smoke passed with the changed alert rule
+  loaded, and **the guard was not seen** (the old cluster was deleted before
+  the run, not offered to it). `make up` refuses a cluster that still holds
+  the namespace `cnpg-system` before it changes anything (a function in
+  `up.sh`, after the holder check and before the first write, so the
+  holder's record is not touched), and a read of that namespace that fails
+  stops the run too; the operator's Deployment is excluded from
+  `MeridianServiceUnavailable` and from two panels of the health dashboard
+  (an alert unit case for each side); the policies' comments say what is
+  known about Loki's compactor address and about a pod's egress to the node
+  (the Kubernetes page quoted with its date), and name the two unbound
+  ClusterRoles the operator's chart renders; the fall-back of W names both
+  addresses. Ten new tests for the sentences, a stub case and the guard's
+  cases; 532 passed in the files the contract named, `make alerts`,
+  `shellcheck`, `make docs` and `make lint` ended 0. The tests for the
+  sentences were written after the text, so they were not seen to fail.
+- **R9a, before the cluster is made again for the cold run** (the main
+  session, 2026-10-07, 11:04 UTC): it read what had restarted on the cluster.
+  22 containers had restarted. Every last end but one lies between 05:33:22
+  and 05:41:29 UTC, inside the machine's overload of that morning (recorded
+  as 05:27 to 05:42). The one outside is the edge proxy's `envoy` container,
+  which ended at 05:50:40 with exit 0, eight minutes after the overload's
+  recorded end, and is not explained beyond that: its previous log was not
+  read and went with the cluster. The database's previous container shut down
+  cleanly at 05:39:35, the node's kernel log holds no out-of-memory kill, and
+  nothing but the rate store restarted in the five hours after. The 171 rows
+  of the audit table went with the cluster.
+- **R9, the cold run** (the main session, 2026-10-07, 11:08 to 11:17 UTC, from
+  `4050156`; exit 0): after `make down` (3 seconds), `make up` in 273 seconds,
+  `make deploy` in 97, `make smoke` in 70 and `make up` again in 28; the
+  result is under "Result / verification of the cluster batch".
+
+**Decisions that changed since the first part's record** (the session's; the
+owner may overturn any):
+
+1. **The webhooks' rule is removed for two and kept with Prometheus as its
+   peer for the operator**, because the operator's webhook and its metrics
+   share a port. The first part's reading (remove the rules, or give them the
+   node's address) and W's contract took the operator's metrics to be on
+   another port.
+2. **The CloudNativePG operator was confined:** `cnpg-system` is gone, and
+   the first part's decision 2 ("will be confined") is built and seen on kind
+   (R9: the database healthy under it, the fall-back not needed). Contract
+   L's labels for
+   `cnpg-system` and the README's rows for it were overtaken within the
+   hour.
+3. **One placeholder serves 6443 and 10250.** The pods of the three
+   workloads besides Prometheus that call the API server (the operator with
+   its two hook Jobs, kube-state-metrics, Grafana) can therefore open the
+   kubelet's port too. The kubelet asks for a credential and their accounts
+   hold no right on the node (read in the render, not on this cluster). The
+   review corrected the reasoning: that a pod's egress straight to the node
+   on a port no rule names is refused was not tried (egress to the API
+   server's Service address is refused without a rule, which smoke's
+   network-policy line shows on every run). **The cold run answered it
+   (probe (b), seen on kind, R9):** a pod in `observability` that no egress
+   rule names timed out on the node's kubelet port 10250 and on its API
+   server port 6443, where a pod in `default` was open, so a pod's egress to
+   the node is bounded by policy on this plugin, on the kubelet's port too.
+   What stays not seen: the other four pods that the node rule selects (the
+   operator, its hook Jobs, kube-state-metrics, Grafana) trying the
+   kubelet's port, which the rule admits. The alternative changes a shared
+   function and its pinned tests.
+4. **The gateway's listener is open to any address, by design:** it is the
+   edge's public face on the laptop and its requests keep their source.
+5. **The residual of the CloudNativePG operator is stated:** its Role in
+   `meridian` still execs into pods and writes Secrets and ConfigMaps over
+   all of `meridian`, so the six services' TLS keys and the ConfigMap
+   `telemetry-ca` stay within its reach. The other three accounts stay
+   accepted as in the first part.
+6. **DNS is open in three more places:** `observability`'s, the operator's
+   and `envoy-gateway-system`'s policies each admit the resolver, so the
+   residual of the first part's decision 3 holds there too.
+7. **The node passes every policy** (the measurement), so every policy of the
+   batch bounds pods and not the node, and a process on the node reaches
+   every pod's port; the batch's rules say so where they rely on it.
+8. **The operator is not a Meridian service in the alert, the panels or the
+   SLI** (F2 and this record; the owner may overturn it): the Deployment
+   `cnpg-cloudnative-pg` is excluded from `MeridianServiceUnavailable`, from
+   two panels and, in `docs/operations/slo.md`, from the availability query
+   of the objective `service-availability`. The last changes what that
+   objective measures (the operator at zero replicas no longer reads as an
+   unavailable service), and the operator being down is then seen by no alert
+   (a row in Part B).
+
+**A fact for the record (no row).** The Kubernetes NetworkPolicy concept page
+says, of IP blocks, that traffic to and from the node a pod runs on is always
+allowed (read 2026-10-07 by the main session; F2's header quotes it exactly).
+On this cluster the "to" half does not hold for the API server's Service
+address: a pod's egress to it is refused without a rule, which smoke's
+network-policy line shows on every run, so the egress rules that name the
+placeholder are not decorative. Whether the "to" half holds for the node's
+address on a port no rule names was not tried until the cold run: probe (b)
+(seen on kind, R9) shows it does not hold there either, for a pod no rule
+selects.
+
+**Result / verification of the cluster batch:** the implementers' claims, not
+the main session's runs. W: four test files, 113 passed. E: seven test files,
+294 passed, and seven neighbours, 218. C: 852 passed in the named files and
+1,375 in the wider set. N: 843 passed. S: 846 passed. Each contract ran `make
+docs` (14 checks passed) and `make lint` (six contracts kept, none broken),
+and E, C, N and S ran `shellcheck` on the scripts they changed, with no
+output. No
+contract ran `make pytest` or the whole suite, and none touched the cluster.
+The infrastructure review of the batch returned; its result follows, then
+what F2 did with it.
+
+**The review of the batch** (`infra-reviewer`, on `faf3044`; it read the
+files, the render and the Envoy source on disk, and ran one pytest line over
+six policy test files, 165 passed, a Helm render of the operator's chart that
+matched the saved one apart from checksum lines, `shellcheck` and a count of
+the placeholder in each of the five files; it ran no mutation and no cluster
+command). **Verdict: a cold run may start, after `make down`, which the cold
+run implies anyway. Nothing critical, nothing high:** it found nothing in the
+files that it could show would break a cold `make up`. At the time,
+everything W, E, C and N rest on was unseen on a cluster, and the one
+measurement covers only the pod-proxy path. Four medium findings, each
+answered by F2 (in files and tests; the cold run below saw the others,
+not the guard):
+
+1. `up.sh`'s "Safe to run again; it converges" was false on a cluster made
+   before the batch. `make up` there would have applied the database's
+   changed policy first (the old operator, in `cnpg-system`, then loses
+   port 8000 to the database, and S019 saw "Instance Status Extraction
+   Error" within 40 seconds without that rule), then the two
+   deny-by-default policies and two releases, and only then stopped at
+   Helm's ownership check on the operator's release, with the holder's
+   record left `changing`. F2: a guard that stops before the first change
+   when the namespace `cnpg-system` exists, or when the read of it fails,
+   with the instruction `make down`, then `make up`, and the warning that
+   this destroys the cluster and its database; line 2 of the header says
+   what is true.
+2. The observability header called Loki's compactor connection "a pod's
+   connection to itself, not filtered", and the mechanism is wrong: the
+   address is a Service's cluster address, so the connection leaves the pod
+   and comes back, and the memberlist, which is headless and local, got both
+   rule halves while 9095 got none. F2: the sentence says that, that ingress
+   on 9095 has been closed since S063 while queries worked, and that the cold
+   run reads Loki's log for a compactor or delete-request error.
+3. The header on the 10250 egress rule said the other workloads "gain a
+   connection, not an access"; the precedent (S063's hand test, a refusal on
+   the pod-to-pod path) supports "does not break", not "bounds", because
+   nobody has tried a pod's egress straight to the node on a port no rule
+   names. F2: the header says what is known (egress to the API server's
+   Service address is refused without a rule: smoke's line) and what is not,
+   and the cold run tries it (answered by probe (b), below).
+4. C put the operator's Deployment `cnpg-cloudnative-pg` in `meridian`, so
+   `MeridianServiceUnavailable` and two panels of the health dashboard
+   ("Available replicas by service", "Container restarts") counted it as a
+   Meridian service. F2: the alert and the two panels exclude it, with an
+   alert unit case for each side (the operator at zero does not fire, a
+   service at zero does). The operator being down is therefore seen by no
+   alert: a row, below.
+
+Six low findings, in a clause each: smoke's two messages that named the old
+namespace (already fixed by S); the Kubernetes page's wording was recalled,
+not read (F2 quotes it, read 2026-10-07 by the main session, and says what
+this cluster shows beside it); the listener's "any pod can reach it anyway"
+was circular (F2: the rule admits every source, and a narrower one needs an
+address range the file's own test forbids); the log line that says "pods may
+reach 6443 alone" for every placeholder file (N's report flagged it, S fixed
+it for the gateway's); the evidence that the operator needs no 5432 was
+offered as its Role's rights, and is S019 (the database's policy never
+admitted it and the Cluster stayed healthy), while the operator's own egress
+policy is new and unproved until the run (F2); and the operator's chart's two
+unbound, unaggregated ClusterRoles, `cnpg-cloudnative-pg-view` and `-edit`,
+which the README did not name (F2). The review also gave the sentence "the
+two webhooks of cert-manager" for the two pods that fail closed, cert-manager's
+and approver-policy's (F2). It ran no mutation: the policy tests compare
+files with each other and with constants, never with the charts' render (a
+row, below).
+
+**The review's walk of a cold `make up`**, the list the cold run is read
+against (each step's connections are covered by a rule of the shape that has
+run since S063, except the webhook premise):
+
+1. The namespaces, then the five placeholder policies (the database's, the
+   operator's, cert-manager's, `observability`'s, Envoy's), then three plain
+   ones: policies exist before any pod.
+2. Envoy's release: the certgen Job runs under the deny-by-default policy
+   and needs DNS and 6443; then the controller (6443 and DNS) and the proxy's
+   first connection, xDS on 18000 by DNS.
+3. **cert-manager's release**: its post-install check makes the API server
+   call the webhook through its ClusterIP from the node, under a policy with
+   no ingress. **This is where a wrong webhook premise shows first**, loud, as
+   `helm release cert-manager failed`; then approver-policy's apply (retried
+   for 120 seconds, then it stops), then the database's install (the
+   operator's webhooks fail closed: loud), and last, silently, the Prometheus
+   operator's target (its webhooks are `Ignore`, so a failure shows only on
+   Prometheus's Targets page).
+4. The operator's release into `meridian` (DNS and 6443, both in its policy),
+   then Prometheus's stack (the operator and both hook Jobs carry the name
+   label `egress-node` selects), then `make deploy` (it requires both
+   policies; the chart's `default-deny` selects the operator's pod, whose own
+   policy already admits DNS, 6443 and 8000), then `make smoke` (the edge's
+   counter is read through the API server's pod proxy, the path measured).
+5. The review's caveat on the webhook premise: a pod-proxy dial and a
+   Service webhook dial are both started on the node, which is read and not
+   seen; the source after the Service's translation may be the node's
+   published address and not the first of the pod range, so F2's fall-back
+   names both.
+
+The four checks the review added to the cold run: watch the order above
+(cert-manager's release, approver-policy's apply, the database's install, then
+Prometheus's Targets page for the operator's target); one probe from Tempo's
+pod, which `egress-node` does not select, to the kubelet's port on the node's
+published address (if it is not refused, the header says so); Loki's log for
+compactor and delete-request errors; and the proxy Service's
+`externalTrafficPolicy` (expected `Local`).
+
+The main session's run on the batch's tree with `main` 8e2f4a1 merged in
+(S074's third part: the smoke script as an entry and ten parts; cadf82b):
+`make test` (372 tests), `make docs` (14 checks) and `make lint` ended 0;
+the whole suite at six workers beside the kind cluster and no other run
+with a database: 18,259 passed, 8 skipped (3 min 28 s). The merge of the
+smoke script was the one place both sides had changed: the batch's two
+hunks, in checks 8 and 10, merged into the entry without a conflict (the
+split left those two checks there for this reason); `bash -n` on the eleven
+files and `shellcheck` on the entry and the parts ended 0, and the 869 tests
+that read the script passed. And on the cluster the cold run made (run R10,
+11:30 UTC): `make smoke` from cadf82b, the first tree where the split and
+the batch meet: 46 PASS, 0 FAIL, 0 SKIP, its lines equal to the cold run's
+with the numbers and the trace ID masked. After `main` b132ee1 was merged in
+as well (S070's second half so far): `make test` (372 tests), `make docs`
+and `make lint` ended 0 on 58d6046, and the whole suite, started at 11:47
+UTC on the working tree of cd3af5e (58d6046 and one commit that moves a
+block of the plan and changes no other file; `make docs` was run again by
+hand on it): 18,299 passed, 8 skipped (3 min 20 s).
+
+**The cold run, R9** (the main session's, 2026-10-07, 11:08 to 11:17 UTC,
+from the batch's commit 4050156, which is W, E, C, N, S and F2; the
+documents after it change no file the cluster reads; script `r9.sh`, exit
+0). The old cluster was deleted first (`make down`, exit 0), after run R9a
+had read what had restarted on it; that deletion is the owner's standing
+leave for a disposable cluster and followed a reading, not a fault (rule 8).
+Every number below is what the run printed. **Seen on kind (R9):**
+
+- **`make up`, cold: exit 0 in 273 seconds,** no pod not Ready after it. The
+  namespaces are cert-manager, default, envoy-gateway-system, logging,
+  meridian, observability and the system's own: no `cnpg-system`.
+- **C:** the operator's pod runs in `meridian`, 1/1, 0 restarts; the Cluster
+  `platform-db` says "Cluster in healthy state", and again 45 seconds after
+  `make deploy` had put the chart's default deny on the operator's pod. Its
+  ClusterRole holds three rules (nodes: get, list, watch; the two kinds of
+  webhook configuration: get, patch; clusterimagecatalogs: get, list, watch);
+  its Role in `meridian` holds 20 rules; its log (the last 600 lines) holds
+  no timeout, refusal or "forbidden" (the one line the search matched is its
+  configuration line).
+- **W:** the API server reached all three webhooks with no pod admitted to
+  their port (cert-manager's release, approver-policy's policies and the
+  database's install all went through, the three places where a wrong premise
+  would have shown, in the review's order); the three authorities'
+  Certificates are Ready (`meridian-services-ca`, `telemetry-ca`,
+  `otel-collector`); Prometheus's target for the operator is up.
+- **E:** Prometheus's targets, read through the API server's pod proxy, are
+  12 active and all up (cert-manager 1, the API server 1, CoreDNS 2, Grafana
+  1, kube-state-metrics 1, the kubelet 3, the operator 1, Prometheus 2).
+- **N:** the certgen Job, the controller and the proxy came up under the
+  default deny (the release went through; the Gateway is programmed, and
+  smoke's edge line passes); the edge's Service is a NodePort with
+  `externalTrafficPolicy=Local`, as read from the source.
+- **The three probe pods**, each a pod that serves for a short time and ends
+  by itself:
+  - (a) in `default`, which no policy selects: the edge's listener open (the
+    control); port 10250 of cert-manager's webhook, of approver-policy and
+    of the Prometheus operator each timed out;
+  - (b) in `observability`, which no egress rule names: the edge's listener
+    (open to any source on its ingress side), the node's kubelet port 10250
+    and the node's API server port 6443 each timed out;
+  - (c) in `default`, the control for (b): the same three open.
+  So on this plugin a pod's egress to the node is bounded by policy, on the
+  kubelet's port too, for a pod no rule selects: the review's open question
+  is answered.
+- **`make deploy`: exit 0 in 97 seconds.** All eight Certificates of
+  `meridian` Ready, approved under the exact lists of contract P from
+  nothing, which the warm run could not show.
+- **`make smoke`: exit 0 in 70 seconds, 46 PASS, 0 FAIL, 0 SKIP,** with S's
+  two hunks, the listed URI and the new alert rule (the unsplit script: the
+  batch's commit does not hold the split).
+- **The labels, asked of the API server:** a server-side dry run of
+  `enforce=restricted` on `envoy-gateway-system`, with the controller and the
+  proxy pod running, answered "labeled (server dry run)" with no warning, so
+  the API server finds no pod there that violates `restricted`, the proxy
+  pod made at run time included.
+- **No container restarted** between the cluster's making and the end of the
+  run. **`make up` a second time: exit 0 in 28 seconds** (it converges on a
+  cluster it made); the holder's record reads S073, commit 4050156, state ok.
+- Loki's log (the last 600 lines): no compactor or delete-request error.
+
+**Cold timings** (also S073's R6, in part): `make down` 3 seconds; `make up`
+273; `make deploy` 97; `make smoke` 70; `make up` again 28; on the virtual
+machine, load about 1 during the run. R6's other parts (a first install made
+to fail and its way back; a policy narrowed before the first deploy) were not
+in this run.
+
+**Not seen** (what R9 did not show):
+
+- Loki's usage report being refused: its log holds no line about it (no
+  attempt was logged in the run's nine minutes);
+- the four other pods the node rule selects (the operator, its hook Jobs,
+  kube-state-metrics, Grafana) trying the kubelet's port: the rule admits
+  them, and only a pod no rule selects was tried;
+- the guard F2 added (`make up` on a cluster that still holds
+  `cnpg-system`): the old cluster was deleted before, not offered to it;
+- `make deploy`'s refusal without the operator's policy; the fall-backs
+  (none was needed); a webhook failing closed; UDP; another network plugin;
+- Grafana's plugin catalogue and the other unknowns of the reports: every pod
+  is Ready and nothing restarted, which is all the run says about them;
+- the split smoke script on this cluster (the batch's commit has the whole
+  script; the merge of `main` will bring the split);
+- what the first part's "Not seen" still lists after R8 and R9 (a request for
+  an unlisted name refused inside `meridian`, the alert firing).
+
+Three completed probe pods are left on the cluster (`default/s072-cold-a-…`,
+`observability/s072-cold-b-…`, `default/s072-cold-c-…`, label
+`meridian.kind/probe=s072-cold`). **The cluster on this machine is now the one
+made from the batch's commit, and `make up` from `main`, which does not hold
+the batch yet, should not be run on it until the batch is merged.**
+
+**What is left now** (the first part's list was the batch itself, which is
+written in files):
+
+1. Done: the infrastructure review of the batch and F2's answer to it
+   (above), the cold run and its three probes (R9, above), the labels'
+   server-side dry run, and the review's four added checks (the order, the
+   egress probe, Loki's log, the Service's `externalTrafficPolicy`).
+2. The merge of `main` into the batch's branch (it brings the split of
+   `smoke.sh`, which R9 did not run), the whole suite, and the pull request.
+   **The cluster on this machine is the one made from the batch's commit:
+   `make up` from `main`, which does not hold the batch yet, should not be
+   run on it until the batch is merged.** What R9 did not show stays in the
+   "Not seen" list above.
+3. The rows: Loki's usage report stays open (the run's log holds no line
+   about it), and the rest of Part B's rows of this step as judged below.
+4. The pull request for the batch, then the closing record of the step: the
+   rows that stay open and do not gate the close are re-homed there to a
+   step that exists (the edge's access line, the log agent's counters, the
+   rate store's own metrics, the scaffold's `BY_HAND` line), and the owner's
+   two questions above stand.
+
+**Backlog rows of the cluster batch** are judged in the first part's table
+above and in Part B: egress from `observability` and port 10250, open in
+part (seen on kind, R9, with the residuals stated); the two bare namespaces,
+closed in part (labels: the gateway's namespace stays, confirmed by the API
+server's dry run with its proxy pod running, and the operator's is gone;
+policies: the gateway's has one and the operator has one in `meridian`, both
+seen on kind); the operators' reach, open in part (three accepted, the
+CloudNativePG operator confined, seen; its Role in `meridian` is the
+residual); DNS and the collector, closed in part (the collector's half is
+E's egress policy, seen on kind); smoke's unescaped name, closed by S, seen
+(smoke's 46 lines) and its two ends left; the sentences the measurement
+answered, closed by W,
+and the sentences the render showed inexact, still open. Seven rows are new,
+each with its home: Loki's usage report (S072), the one policy
+`api_server_matches_policy` reads (S073), a warm cluster made before C
+(closed by F2), the unknowns the cold run cannot settle (S072), the
+CloudNativePG chart's `view` and `edit` ClusterRoles (S020), the operator
+being down seen by no alert (S073) and the policy tests that never meet the
+charts' render (S074).
 ### S079 — Self-managed Kubernetes: applied once on AWS, a scaffold on Google Cloud
 **Status:** doing · **Started:** 2026-10-06 · **Finished:** —
 **Goal:** a cluster whose control plane the owner's account runs itself, on the
@@ -17918,7 +18759,54 @@ real thing):
   (the manifests, `shellcheck` with no runner, `test_smoke_trap.py`'s 60 s per
   failed source), one sentence of S072's row corrected. No behaviour change,
   no new threat.
-- **PLAN-VERSION, 2026-10-07:** S079, first half: a Terraform module for a
+- **v0.77, 2026-10-07:** S070, second half so far (still `doing`):
+  the property test of the redaction writes the forms it lacked (two
+  international numbers, a chain of them, a slash or a dot inside the second
+  number) and today's matcher loses no digit in 4,500 new texts, held per
+  character for a chain; the adjuster's queue marks only a proposal that
+  validates, by the claim page's own function, and a page of it logs one line
+  with a count; a received time without a zone is an error; an answer that
+  cannot be built after the proposal is stored is one shaped 500 on every
+  route that triages (the backlog row had it wrong: the claims route gave
+  the bare 500 too). A review of the three first contracts found the threat
+  model and two places of the plan stating the opposite of the code, a `try`
+  that could not fire (removed) and an error line with no field names
+  (added). `drafted_by` is not built and waits for the owner. T-26 and T-67
+  brought to the code, no new threat. Four backlog rows judged, three new.
+  Tests and documents, none run on a cluster, no fingerprint moved.
+- **v0.78, 2026-10-07:** S072's cluster batch, five contracts written
+  in files, tested without a cluster and seen on kind by the cold run R9 (still
+  `doing`; the guard, the fall-backs and Loki's usage report refused were not
+  seen):
+  no pod reaches the webhooks' port 10250 but Prometheus, on the operator's
+  (W); egress from `observability` is denied by default and admitted by rule
+  (E); the CloudNativePG operator is released into `meridian` under
+  `config.clusterWide=false` and a policy of its own, so `cnpg-system` is gone
+  and contract L's labels for it were overtaken (C); `envoy-gateway-system`
+  is denied by default and admitted by rule, and `make deploy` refuses a
+  cluster without the operator's policy (N); smoke compares a name as text and
+  two messages name where the operator is (S). The first part was seen on a
+  warm cluster (run R8: the tokens, the labels applied, the 46 lines, the 21
+  rules loaded; the Certificates issued before, so no approval under the
+  exact lists). The infrastructure review of the batch found nothing critical
+  or high and four medium findings, answered by F2: `make up` refuses a
+  cluster made before the batch, the operator's Deployment is out of the
+  service alert, two panels and the availability objective, and the policies'
+  comments say what is known. T-68, T-84 and T-88 changed (T-92 only for the
+  warm run); T-90 read and unchanged; no new threat. Four backlog rows
+  judged in part (DNS and the collector, the operators' reach, egress and the
+  webhooks' port, the two namespaces), one closed (the measurement's
+  sentences), one end of a row of S073's closed, seven new, one of them
+  closed by F2 (a warm cluster made before the batch) and six open (homes
+  S072 twice, S073 twice, S074, S020). The cold run (11:08 to 11:17 UTC, exit
+  0): `make up` 273 seconds with no `cnpg-system`, the database healthy under
+  the confined operator, the three webhooks reached with no pod admitted,
+  Prometheus's 12 targets up, all eight Certificates approved under the exact
+  lists from nothing, smoke's 46 lines, a server-side dry run of `restricted`
+  on the gateway's namespace with its proxy pod running and no warning, and
+  a probe that answered the review's open question: a pod's egress to the
+  node is bounded by policy on this plugin, the kubelet's port included.
+- **v0.79, 2026-10-07:** S079, first half: a Terraform module for a
   self-managed Kubernetes cluster on AWS (one control-plane instance and two
   workers brought up by kubeadm from two boot scripts, Calico from a pinned
   manifest, the join command through one write-only parameter, no key pair and

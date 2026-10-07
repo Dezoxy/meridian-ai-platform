@@ -427,6 +427,41 @@ def test_the_workload_alerts_stay_in_the_namespace_the_chart_installs_into() -> 
         assert 'namespace="meridian"' in expression, alert["alert"]
 
 
+# The CloudNativePG operator's Deployment lives in `meridian` since S072 (contract
+# C) and is not a Meridian service: the alert that says "A Meridian service has no
+# available replica" must not count it. That the operator being down is seen by no
+# alert is a backlog row, not this alert's job.
+OPERATOR_DEPLOYMENT = "cnpg-cloudnative-pg"
+
+
+def test_the_service_alert_leaves_the_database_operator_out() -> None:
+    (alert,) = [a for a in alerts() if a["alert"] == "MeridianServiceUnavailable"]
+
+    assert alert["expr"].strip() == (
+        "kube_deployment_status_replicas_available"
+        f'{{namespace="meridian", deployment!="{OPERATOR_DEPLOYMENT}"}} == 0'
+    )
+    assert alert["for"] == "5m"
+    # Its unit cases: the operator at zero replicas stays quiet next to a service
+    # at zero that fires (promtool runs them: `make alerts`).
+    unit_tests = yaml.safe_load((ALERTS_DIR / "meridian.test.yaml").read_text())
+    (case,) = [
+        t
+        for t in unit_tests["tests"]
+        if t["name"].startswith("the database operator at 0 replicas")
+    ]
+    series = " ".join(s["series"] for s in case["input_series"])
+    assert f'deployment="{OPERATOR_DEPLOYMENT}"' in series
+    assert 'deployment="claims-api"' in series
+    (fired,) = [
+        a
+        for t in case["alert_rule_test"]
+        for a in t["exp_alerts"]
+        if t["alertname"] == "MeridianServiceUnavailable"
+    ]
+    assert fired["exp_labels"]["deployment"] == "claims-api"
+
+
 # ── The certificate alerts (S056) ────────────────────────────────────────────
 def certificate_rules() -> dict[str, dict]:
     return {rule["alert"]: rule for rule in groups()["meridian.certificates"]}

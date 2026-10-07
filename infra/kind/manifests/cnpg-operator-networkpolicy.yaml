@@ -1,0 +1,124 @@
+# The CloudNativePG operator's own NetworkPolicy (S072, contract C). It is kind's
+# platform, not the Meridian chart's: the operator is an add-on of this cluster,
+# installed by `make up` (chart `cloudnative-pg`, release `cnpg`), and on AKS
+# (S020) it will be installed another way, so the Meridian chart must not know
+# of it. The operator runs in `meridian` since this change, with
+# `config.clusterWide=false`: its rules over Secrets, ConfigMaps, pods (and
+# `pods/exec`), roles and the rest are a Role in `meridian` and no longer a
+# ClusterRole over every namespace; the ClusterRole is left with nodes (read),
+# the webhook configurations (get, patch) and image catalogs (read). The
+# chart's `default-deny` (applied by `make deploy`) selects every pod of
+# `meridian`, the operator's included, and allows nothing: without this file
+# the operator would lose DNS, the API server and the database's pods at the
+# first `make deploy`, and the database would stop being reconciled. `make up`
+# applies this file before the release, with the node's address in place of
+# the placeholder, as it does the database's policy next to it.
+#
+# The labels are those `helm template` renders for chart 0.29.1, release `cnpg`
+# (read 2026-10-07): the Deployment's selector. The second label is the
+# release's name, which up.sh gives the install; a test ties the two.
+#
+# Ingress: nothing. `Ingress` is in `policyTypes` and there is no `ingress` key,
+# so no pod reaches the operator's two ports: 9443 (its admission webhooks, nine
+# of them, `failurePolicy: Fail`, and the kubelet's probes) and 8080 (its
+# metrics, which nothing scrapes: the chart renders no monitor). The webhooks
+# are called by the API server alone, and it needs no rule. It calls from the
+# node, and a call that starts on the node passes every NetworkPolicy of this
+# cluster's network plugin: measured on kind 2026-10-07, the API server's call to a pod
+# arrived from the node's own address on the pod network (the first of the pod
+# range) and reached a pod of `meridian`, whose ingress is denied by default,
+# with no rule that admits it (seen on kind 2026-10-07, for a call by way of the
+# pod proxy; a webhook call through the Service's address is not seen
+# separately, and is taken to leave from the same place). The kubelet's probes
+# are not blocked by a policy. The kind cluster has one node and the API server
+# runs on it; a cluster with more than one node, or a plugin that polices the
+# node, would need one ipBlock peer on port 9443. If a cold `make up` shows the
+# webhooks unreachable (the install of `platform-db` fails with "failed calling
+# webhook ... cnpg.io", which fails closed), that peer is added with the node's
+# pod-network address, as the cert-manager file says for its two webhooks, and
+# with the node's published address too when that is not the source: after the
+# Service's translation the source of a call through a Service could be either
+# (not seen). This is the third place a wrong premise about the webhooks would
+# show in a cold run, after cert-manager's release and approver-policy's apply
+# (cert-manager's header gives the order).
+#
+# Egress, three rules and nothing else, each with a peer and a port:
+#   53    DNS: the cluster's DNS pods (UDP and TCP), the form of every other file
+#   6443  TCP to the API server's address alone, the placeholder `make up` fills
+#         in on every run (S063: the API server's address is the node's own and
+#         changes with the cluster, so the file holds a placeholder that is not a
+#         CIDR and a plain `kubectl apply -f` of it is refused). The operator
+#         works through objects: it reads and writes the Cluster's Secrets, Jobs,
+#         pods and status, and patches its webhook configurations, all through
+#         the API server
+#   8000  TCP to the pods of the Cluster `platform-db`, the instance manager's
+#         HTTP port: the operator asks each instance for its status there. The
+#         database's policy admits the operator on that port alone, by these
+#         pods' labels: the two rules are one fact, and a test ties them
+# Not 5432: the database's policy admits the operator on 8000 only and has never
+# admitted it on 5432, and the Cluster has been healthy under it (measured on the
+# owner's cluster, S019: with the rule, healthy; without it "Instance Status
+# Extraction Error" within 40 seconds). That is the evidence that the operator
+# does not need the SQL port: it was never given it there. It is evidence about
+# the database's INGRESS; the operator's EGRESS policy is new in this change, so
+# that nothing else is needed is unproved until a cold run. A rule for 5432 here
+# with no half in the database's policy would be half a rule; with the half, it
+# would widen the database. Nothing reaches the telemetry stack: the operator
+# sends no span, log line or metric, and the collector's own rule (which admits
+# the namespace `meridian`, and leaves the narrowing to the chart's egress rules)
+# is not an invitation to this pod, which has no rule towards it.
+#
+# What a cold `make up` must show: the operator Ready, the CRDs in place, the
+# Cluster `platform-db` Ready (the wait in up.sh), the roles reconciled and both
+# Databases applied, and `make deploy` and `make smoke` after it passing with
+# the chart's default-deny in place. A cluster made before this change keeps the
+# release in a namespace of its own and does not converge: Helm meets
+# cluster-scoped objects that the other release owns. `make up` refuses such a
+# cluster before it changes anything (up.sh), and it needs `make down` and then
+# `make up`. The operator's ClusterRole is left with nodes, the webhook
+# configurations and image catalogs; the chart also renders two ClusterRoles
+# that nothing binds or aggregates (`cnpg-cloudnative-pg-view` and
+# `cnpg-cloudnative-pg-edit`). If one cold `make up` does not bring the
+# database up, the change is taken out again (up.sh's comment above the install
+# says how and what it looks like), and the operator's reach is recorded as
+# accepted with "tried, and what failed".
+#
+# Implemented here, tested without a cluster (tests/meridian/
+# test_kind_cnpg_operator_confined.py); not seen on kind. That kindnet enforces
+# the egress rule after the Service's address is translated to the node's is
+# the database policy's fact (its header), not proved by a test here.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cnpg-operator
+  namespace: meridian
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cloudnative-pg
+      app.kubernetes.io/instance: cnpg
+  policyTypes: [Ingress, Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to: [{ipBlock: {cidr: API-SERVER-ADDRESS/32}}]
+      ports:
+        - port: 6443
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: platform-db
+      ports:
+        - port: 8000
+          protocol: TCP

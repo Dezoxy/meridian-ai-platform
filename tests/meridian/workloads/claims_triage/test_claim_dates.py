@@ -9,8 +9,9 @@ model.
 """
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone, tzinfo
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 from dbsupport import DatabaseHandle
@@ -29,6 +30,9 @@ from workloads.claims_triage.test_adjuster_pages import (
 from meridian.workloads.claims_triage import adjuster, claim_dates
 
 RECEIVED = datetime(2026, 7, 15, 12, 0, tzinfo=UTC)
+TOKYO = timezone(timedelta(hours=9))
+NEW_YORK = timezone(timedelta(hours=-4))
+VIENNA = ZoneInfo("Europe/Vienna")
 GAP_LABELS = (
     claim_dates.LOSS_TO_REPORT_LABEL,
     claim_dates.REPORT_TO_RECEIVED_LABEL,
@@ -114,6 +118,68 @@ def test_the_day_of_receipt_follows_the_zones_offset_through_both_change_days(
     rows = rows_for(claim, received)
 
     assert rows[claim_dates.REPORT_TO_RECEIVED_LABEL] == gap
+
+
+@pytest.mark.parametrize(
+    ("received", "reported", "gap"),
+    [
+        # 07:30 on the 15th in Tokyo (UTC+9) is 22:30 UTC on the 14th and
+        # 00:30 on the 15th in Vienna: the day of receipt is the 15th
+        (datetime(2026, 7, 15, 7, 30, tzinfo=TOKYO), "07-15", "0 days"),
+        # 22:30 on the 15th in New York (UTC-4, summer) is 04:30 on the 16th in
+        # Vienna: the zone of the value does not decide the day
+        (datetime(2026, 7, 15, 22, 30, tzinfo=NEW_YORK), "07-15", "1 day"),
+        (datetime(2026, 7, 15, 22, 30, tzinfo=NEW_YORK), "07-16", "0 days"),
+        # the same moment as a value in Vienna's own zone
+        (datetime(2026, 7, 16, 4, 30, tzinfo=VIENNA), "07-16", "0 days"),
+    ],
+)
+def test_a_received_moment_in_another_zone_gives_the_day_in_the_insurers_zone(
+    received: datetime, reported: str, gap: str
+) -> None:
+    claim = {"loss_date": "2026-07-01", "reported_on": f"2026-{reported}"}
+
+    rows = rows_for(claim, received)
+
+    assert rows[claim_dates.REPORT_TO_RECEIVED_LABEL] == gap
+
+
+@pytest.mark.parametrize(
+    "claim",
+    [
+        {"loss_date": "2026-07-01", "reported_on": "2026-07-13"},
+        # a programming error is an error whatever the claim holds
+        {},
+        None,
+    ],
+    ids=["a-claim-with-dates", "a-claim-with-none", "no-claim"],
+)
+def test_a_received_moment_without_a_zone_is_an_error_not_a_number_of_days(
+    claim: object,
+) -> None:
+    naive = datetime(2026, 7, 15, 12, 0)
+
+    with pytest.raises(ValueError, match="received_at must be aware") as refused:
+        rows_for(claim, naive)
+
+    assert "2026" not in str(refused.value)
+
+
+def test_a_zone_that_gives_no_offset_is_as_naive_as_none() -> None:
+    class NoOffset(tzinfo):
+        def utcoffset(self, dt: datetime | None) -> None:
+            return None
+
+        def dst(self, dt: datetime | None) -> None:
+            return None
+
+        def tzname(self, dt: datetime | None) -> str:
+            return "none"
+
+    received = datetime(2026, 7, 15, tzinfo=NoOffset())
+
+    with pytest.raises(ValueError, match="received_at must be aware"):
+        rows_for({"reported_on": "2026-07-13"}, received)
 
 
 def test_a_claim_with_no_received_moment_has_only_the_first_gap() -> None:

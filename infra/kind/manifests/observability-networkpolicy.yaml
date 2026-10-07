@@ -1,13 +1,15 @@
 # NetworkPolicies of the `observability` namespace (S063): Prometheus and its
 # operator, kube-state-metrics, Grafana, Tempo, Loki and the OpenTelemetry
 # Collector. kind's platform, not the Meridian chart's. `make up` applies this
-# before the first release of the namespace is installed, as it does the
-# database's policy. Pod labels and ports are those `helm template` renders with
-# infra/kind/values (read 2026-10-06; the Prometheus pods are the operator's and
-# carry the two labels the chart's Service selects them by); the kind cluster's
-# network plugin (kindnet) enforces both directions, and a rule by pod selector
-# holds for traffic sent to a Service's address. Tested without a cluster until
-# `make up` and `make smoke` have run on one.
+# before the first release of the namespace is installed, with the node's
+# address in place of the placeholder (see Egress below), as it does the
+# database's and cert-manager's policies. Pod labels and ports are those `helm
+# template` renders with infra/kind/values (read 2026-10-06 for the ingress
+# rules; the Prometheus pods are the operator's and carry the two labels the
+# chart's Service selects them by); the kind cluster's network plugin (kindnet)
+# enforces both directions, and a rule by pod selector holds for traffic sent to
+# a Service's address. Tested without a cluster until `make up` and `make smoke`
+# have run on one.
 #
 # Ingress: nothing, except the rules below, each a peer and a port.
 #   otel-collector   4318 TCP (OTLP over HTTP) from the pods of the namespace
@@ -28,8 +30,12 @@
 #                    (its default-deny leaves every pod of `meridian` without
 #                    egress, and only a pod that is given the collector's
 #                    address has a rule for it, tests/meridian/test_helm_
-#                    network_policy.py), and smoke's telemetrygen Jobs run in `meridian`
-#                    with a policy of their own (smoke-networkpolicy.yaml). A
+#                    network_policy.py), smoke's telemetrygen Jobs run in `meridian`
+#                    with a policy of their own (smoke-networkpolicy.yaml), and the
+#                    CloudNativePG operator's pod, which is in `meridian` since
+#                    S072, has no rule towards the collector: the operator's own
+#                    policy (cnpg-operator-networkpolicy.yaml) names DNS, the API
+#                    server and the database's pods and nothing else. A
 #                    pod of any other namespace (default, kube-system,
 #                    cert-manager, this one, `logging` but for the agent) cannot
 #                    push a trace, a log or a metric under a name that is not
@@ -53,24 +59,40 @@
 #                    native OTLP receiver, /api/v1/otlp)
 #   kube-state-      8080 from Prometheus (its ServiceMonitor)
 #   metrics
-#   prometheus-      10250 TCP, no peer. The API server calls the operator's
-#   operator         admission webhook (`failurePolicy: Ignore`: a call that
-#                    fails is let through, silently), and Prometheus scrapes
-#                    the same port. The API server is the kind node, at an
-#                    address that changes with every new cluster and that no
-#                    pod selector can name, so the rule names the port and no
-#                    peer: any pod of the cluster may open a connection to this
-#                    one port of this one pod. What it reaches is a TLS
-#                    endpoint that answers admission reviews, and it answers
-#                    anyone: any pod can post a forged review and read the
-#                    verdict. This webhook fails open, so a forged review or
-#                    a flood of them stops nothing; a review applies nothing,
-#                    so nothing is changed by a forged one. A rule by the
-#                    address the API server's calls arrive from would narrow
-#                    it, but that address is not known to be the endpoint's
-#                    and nobody has measured it, so the rule stays open (the
-#                    two webhooks of cert-manager, which fail closed, are the
-#                    ones a flood can stall: cert-manager-networkpolicy.yaml)
+#   prometheus-      10250 TCP from Prometheus alone. The one port of the operator
+#   operator         serves its admission webhook and its metrics, which the
+#                    chart's ServiceMonitor has Prometheus scrape (`https`), so
+#                    Prometheus is the one peer. The API server alone calls the
+#                    webhook (`failurePolicy: Ignore`: a call that fails is let
+#                    through, silently), and it needs no rule. It calls from
+#                    the node, and a call that starts on the node passes every
+#                    NetworkPolicy of this cluster's network plugin: measured
+#                    on kind 2026-10-07, the API server's call to a pod arrived
+#                    from the node's own address on the pod network (the first
+#                    of the pod range) and reached a pod of `meridian`, whose
+#                    ingress is denied by default, with no rule that admits it
+#                    (seen on kind 2026-10-07, for a call by way of the pod
+#                    proxy; a webhook call through the Service's address is not
+#                    seen separately, and is taken to leave from the same
+#                    place). The kind cluster has one node and the API server
+#                    runs on it. A rule for the API server would be
+#                    needed on a cluster with more than one node, or with a
+#                    plugin that polices the node: one ipBlock peer, filled in
+#                    the way the database's policy is. If a cold `make up`
+#                    shows the operator's webhook unreachable (an object it
+#                    should have refused is let through: it fails open, so
+#                    nothing says so), that peer is added with the node's
+#                    pod-network address, and with the node's published address
+#                    too when that is not the source: after the Service's
+#                    translation the source of a call through a Service could be
+#                    either (not seen). No other pod may reach the port (it
+#                    was open to every pod of the cluster until S072); the two
+#                    webhooks that fail closed, cert-manager's and
+#                    approver-policy's (two pods), are the ones a flood could
+#                    stall: cert-manager-networkpolicy.yaml. This
+#                    change is implemented here and tested without a cluster;
+#                    it is not seen on kind. If Prometheus's target for the
+#                    operator is down on the Targets page, this rule is wrong
 # Prometheus scrapes itself, on 9090 and on its reloader's 8080 (the chart's
 # self-monitoring ServiceMonitor). The rule above admits Grafana and the
 # collector only, and none is written for the pod itself: a connection from a
@@ -83,18 +105,126 @@
 # `make grafana`) is not a connection into the pod's network from another pod:
 # the container runtime opens it from inside the pod's own network namespace,
 # so no ingress rule is written for it; if the cluster shows it blocked, the
-# rule to add is port 3000 with no peer, as for the operator. The kubelet's
-# probes are not blocked by a policy.
+# rule to add is port 3000 with no peer (it would admit every pod: decide it
+# then). The kubelet's probes are not blocked by a policy.
 #
-# Egress is open, for every pod of the namespace, and that is a stated gap, not
-# an oversight. Prometheus scrapes the kubelet's port 10250 and cAdvisor on the
-# node and the API server on the node's own address, kube-state-metrics, the
-# operator, the sidecars of Grafana and the operator itself call the API
-# server, and none of those addresses is a pod that a selector can name; a
-# half-right egress policy that broke a cold `make up` would be worse. What an
-# open egress costs: a compromised pod here can reach every pod that accepts it,
-# and what it can reach outside this namespace is what that pod's namespace
-# admits (cert-manager's and the database's policies, and the chart's).
+# Egress (S072): denied for every pod by `default-deny-egress` and admitted by
+# the policies named below, one for each pod whose needs differ (one policy for
+# the namespace would hand every pod the widest reach: the collector, which holds
+# every span and log line of the platform, would get the kubelet). What each pod
+# calls was read from `helm template` of the pinned charts with infra/kind/values
+# on 2026-10-07 (kube-prometheus-stack 91.8.2, Loki 18.13.7, Tempo 3.1.0,
+# OpenTelemetry Collector 0.174.0) and from this repository's manifests, not from
+# memory; a chart bump that adds a call is a reason to render again:
+#   every pod        the cluster's DNS pods (kube-system, k8s-app=kube-dns), 53
+#                    UDP and TCP                                    egress-dns
+#   Prometheus       the API server (service discovery) and the kubelet, both
+#                    the node's address, 6443 and 10250             egress-node
+#                    Grafana 3000, kube-state-metrics 8080 and the operator
+#                    10250: the chart's three ServiceMonitors for pods of this
+#                    namespace; cert-manager's controller 9402 (the ServiceMonitor
+#                    in cert-manager-metrics.yaml, the port cert-manager's own
+#                    policy admits Prometheus on); the DNS pods' metrics 9153 (the
+#                    chart's CoreDNS ServiceMonitor: a headless Service in
+#                    kube-system that selects k8s-app=kube-dns)  egress-prometheus
+#   the operator     the API server alone: it works through objects. Its two
+#   and the hook     admission hook Jobs (the same name label) create the Secret
+#   Jobs             and patch the webhook configurations through it
+#                                                                   egress-node
+#   kube-state-      the API server alone: it lists and watches    egress-node
+#   metrics
+#   Grafana          the API server (its two sidecars watch the ConfigMaps
+#                    labelled for dashboards and datasources in this namespace)
+#                                                                   egress-node
+#                    Prometheus 9090, Tempo 3200, Loki 3100: its datasources
+#                                                                   egress-grafana
+#   collector        Tempo 4317, Prometheus 9090 (OTLP at /api/v1/otlp) and Loki
+#                    3100: its three exporters; no API server (no token, no
+#                    k8sattributes)                           egress-otel-collector
+#   Loki             its own pods, 7946 TCP and UDP: the memberlist it joins
+#                    through its Service (the egress half of the ingress rule
+#                    above)                                          egress-loki
+#   Tempo            nothing: local storage, memberlist with no join list, no
+#                    token, usage reporting off (values/tempo.yaml)
+# Not in the list because it is not a rule: Prometheus scraping itself (9090 and
+# its reloader's 8080, the chart's self-monitoring ServiceMonitor). A connection
+# from a pod to its own address stays inside the pod's network namespace and no
+# policy filters it, as the ingress side above says. The Targets page must show
+# both endpoints up; if one is down, a rule from the Prometheus pods to themselves
+# is the fix.
+#
+# The node. The API server and the kubelet are the node's published address. On
+# this cluster, which has one node, they are one address: the `kubernetes`
+# EndpointSlice in `default` and the Endpoints object the stack keeps in
+# kube-system for the kubelet both hold it (measured on kind 2026-10-07). One
+# rule names it, with the placeholder the other two policy files hold, which
+# `make up` fills in on every run through the same function, after validating
+# each address and refusing to go on when it cannot read one (S063); the policy
+# is evaluated after the Service's address is translated to the node's own. A
+# cluster with more nodes has a kubelet per node, at addresses the API server's
+# EndpointSlice does not hold: its kubelet rule would need each node's address
+# then. The kubelet's other two ports, 4194 and 10255, are in that Endpoints
+# object too, but the chart's kubelet ServiceMonitor names the port
+# `https-metrics` (10250) and its three paths only (metrics, cAdvisor, probes),
+# so nothing scrapes them and they are not opened. The one rule gives 10250 to
+# every pod that policy selects, though only Prometheus scrapes the kubelet: the
+# placeholder is held once per file (a test of each of the files says so, and
+# `make up` refuses a file that holds it twice), so one rule serves the pods that
+# need either port. Three workloads besides Prometheus are selected (the
+# operator with its two hook Jobs, kube-state-metrics and Grafana: five pods), and
+# they gain a path to the kubelet's port. Known: on this cluster a pod's egress to
+# the API server's Service address is refused without a rule (smoke's
+# network-policy check prints that line on every run: seen). Not known: whether a
+# pod's egress straight to the node's address on a port that no rule names is
+# refused; it has NOT been tried. Whether those pods are then kept out by the
+# kubelet's own check is also unread: it asks for a credential, and their
+# accounts have no rights on the node (not read on this cluster). The cold run
+# tries it once, from Tempo's pod (which no rule here reaches the node from) to
+# the kubelet's port 10250: if it is not refused, the header says so.
+#
+# What leaves the cluster, and is now refused. Loki sets no `analytics` block, so
+# its usage report to stats.grafana.org is on (its default) and is refused: Loki
+# logs a failed report and goes on. Tempo's reporting and Grafana's reporting and
+# update check are off in their values. The operator, kube-state-metrics,
+# Prometheus and the collector call nothing outside the cluster.
+#
+# Not known (a destination the files do not show):
+#   - Grafana's plugin catalogue (a preinstall of plugins at start, and update
+#     checks of plugins) is not in the render. A download is refused; Grafana
+#     logs it, and as far as its documentation says it does not hold readiness.
+#   - The operator's calls to Prometheus pods, if it makes any, are not in the
+#     render; the Prometheus resource's status comes through the API server.
+#   - Loki's compactor address is a Service's cluster address
+#     (loki.observability.svc.cluster.local:9095, values/loki.yaml), so that
+#     connection leaves the pod's network namespace and comes back to it: it is
+#     not a connection inside the pod, and whether the plugin filters it is not
+#     known. No ingress rule admits 9095, and none has since S063, while Loki's
+#     queries worked (seen then), so a break is not expected; no egress rule is
+#     written for it. A cold run reads Loki's log for a compactor or a
+#     delete-request error. Tempo's modules call each other at the pod's own
+#     address, which stays inside the pod's network namespace and is not
+#     filtered.
+# Each costs a log line or a status, none a Ready pod, as far as the files say.
+#
+# Implemented here, tested without a cluster (tests/meridian/
+# test_kind_observability_egress.py); not seen on kind. A cold `make up` must
+# show: every pod Ready, every target up on Prometheus's Targets page (the
+# kubelet's three paths, the API server, CoreDNS, cert-manager's controller,
+# Grafana, kube-state-metrics, the operator and Prometheus's two), certificates
+# issued, and smoke's 46 lines passing, with no pod's log naming a connection
+# that was refused but the usage report. Four reads besides: the order in which a
+# wrong premise about the webhooks would show (cert-manager's release first,
+# approver-policy's apply, the database's install, then, silently, this
+# operator's target on the Targets page: the operator's webhooks are `Ignore`);
+# one connection from Tempo's pod to the node's kubelet port 10250, which no rule
+# here gives that pod (whether it is refused is the open question above); Loki's
+# log, which must hold no compactor or delete-request error; and the proxy
+# Service's `externalTrafficPolicy` (envoy-gateway-networkpolicy.yaml). The way
+# back: a target found down is
+# added once, from what the run shows (its namespace, pod labels and port); a
+# second round of surprises takes the egress policy out again and states the gap
+# in its place, instead of a third guess (S063 judged a half-right egress policy
+# that breaks a cold `make up` worse than none).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -250,7 +380,16 @@ spec:
       app: kube-prometheus-stack-operator
   policyTypes: [Ingress]
   ingress:
-    - ports:
+    # Prometheus scrapes this port (the chart's ServiceMonitor, `https`): the
+    # webhook and the metrics share it, so this is the one peer. Nor does the
+    # API server need one: the API server calls from the node (the header says
+    # why). No other pod.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+              operator.prometheus.io/name: kube-prometheus-stack-prometheus
+      ports:
         - port: 10250
           protocol: TCP
 ---
@@ -274,3 +413,229 @@ spec:
       ports:
         - port: 8080
           protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-egress
+  namespace: observability
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-dns
+  namespace: observability
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-node
+  namespace: observability
+spec:
+  # The pods that call the API server or, Prometheus alone, the kubelet: all
+  # carry one of these name labels (the operator's, with the two hook Jobs).
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values:
+          - grafana
+          - kube-prometheus-stack-prometheus-operator
+          - kube-state-metrics
+          - prometheus
+  policyTypes: [Egress]
+  egress:
+    # The node, once: the placeholder `make up` fills in (the header says why
+    # one rule and one address serve both ports).
+    - to: [{ipBlock: {cidr: API-SERVER-ADDRESS/32}}]
+      ports:
+        - port: 6443
+          protocol: TCP
+        - port: 10250
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-prometheus
+  namespace: observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
+      operator.prometheus.io/name: kube-prometheus-stack-prometheus
+  policyTypes: [Egress]
+  egress:
+    # Grafana's /metrics.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: grafana
+              app.kubernetes.io/instance: kube-prometheus-stack
+      ports:
+        - port: 3000
+          protocol: TCP
+    # kube-state-metrics.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kube-state-metrics
+              app.kubernetes.io/instance: kube-prometheus-stack
+      ports:
+        - port: 8080
+          protocol: TCP
+    # The operator's metrics, on its webhook's port.
+    - to:
+        - podSelector:
+            matchLabels:
+              app: kube-prometheus-stack-operator
+      ports:
+        - port: 10250
+          protocol: TCP
+    # cert-manager's controller (cert-manager-metrics.yaml).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cert-manager
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: cert-manager
+              app.kubernetes.io/component: controller
+              app.kubernetes.io/instance: cert-manager
+      ports:
+        - port: 9402
+          protocol: TCP
+    # The DNS pods' metrics, which the chart's CoreDNS ServiceMonitor scrapes.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 9153
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-grafana
+  namespace: observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: grafana
+      app.kubernetes.io/instance: kube-prometheus-stack
+  policyTypes: [Egress]
+  egress:
+    # The datasources: Prometheus (the chart's own), Tempo and Loki.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+              operator.prometheus.io/name: kube-prometheus-stack-prometheus
+      ports:
+        - port: 9090
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: tempo
+              app.kubernetes.io/instance: tempo
+      ports:
+        - port: 3200
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: loki
+              app.kubernetes.io/instance: loki
+              app.kubernetes.io/component: single-binary
+      ports:
+        - port: 3100
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-otel-collector
+  namespace: observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: opentelemetry-collector
+  policyTypes: [Egress]
+  egress:
+    # The three exporters (values/otel-collector.yaml): traces to Tempo, metrics
+    # to Prometheus, logs to Loki.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: tempo
+              app.kubernetes.io/instance: tempo
+      ports:
+        - port: 4317
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+              operator.prometheus.io/name: kube-prometheus-stack-prometheus
+      ports:
+        - port: 9090
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: loki
+              app.kubernetes.io/instance: loki
+              app.kubernetes.io/component: single-binary
+      ports:
+        - port: 3100
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-loki
+  namespace: observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: loki
+      app.kubernetes.io/instance: loki
+      app.kubernetes.io/component: single-binary
+  policyTypes: [Egress]
+  egress:
+    # The memberlist, through its own Service (the ingress rule's other half).
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: loki
+              app.kubernetes.io/instance: loki
+              app.kubernetes.io/component: single-binary
+      ports:
+        - port: 7946
+          protocol: TCP
+        - port: 7946
+          protocol: UDP

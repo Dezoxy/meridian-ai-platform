@@ -97,7 +97,7 @@ today, from `infra/kind/README.md`:
 | Envoy Gateway | v1.9.2 | `envoy-gateway-system` |
 | cert-manager | v1.21.2 | `cert-manager` |
 | approver-policy | v0.28.0 | `cert-manager` |
-| CloudNativePG operator | chart 0.29.1 (operator 1.30.1) | `cnpg-system` |
+| CloudNativePG operator | chart 0.29.1 (operator 1.30.1) | `meridian` (S072; seen on kind in the cold run of 2026-10-07) |
 | PostgreSQL 17 with pgvector (`platform-db`) | — | `meridian` |
 | kube-prometheus-stack | 91.8.2 | `observability` |
 | Tempo | 3.1.0 | `observability` |
