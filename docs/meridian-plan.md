@@ -14639,7 +14639,31 @@ No other consultation is recorded.
   compared whole, each run saying its module, the README's state paragraph,
   the removal's order). Their results go below when they land:
 
-K6-RESULT
+- **K6 landed** (974d6d1): a tightening of the command guard and of the
+  project's deny list, and nothing else. Eleven patterns of the guard's AWS
+  rules take the second module's name beside the first's (the directory in
+  three spellings, the plan and state file names, the working directory, the
+  plan's path as a thing written to, the three `make` targets, which do not
+  exist yet, and the two patterns that refuse a pseudo-terminal or a trace
+  beside them). Measured on the cases: in the second module's directory a
+  plan, `show`, `output` and a listing of the state now ask where the hook
+  gave no decision; a plan written to a file, an import, a change of the
+  state, a new workspace and an apply by hand are denied where they passed or
+  only asked; six ways of writing into the saved plan are denied. Nine
+  settings entries: the Read, Edit and Write tools are denied the second
+  state directory and the module's hidden variable files, and the three
+  target names are asked or denied as their twins are. The first 1,940 cases
+  are byte for byte the same and none changed its decision; 181 cases were
+  added, 98 of them failing against the guard before; the settings test now
+  asks for the entries of every directory of the family, so a third module
+  fails it until it has them. The main session ran the guard's cases on the
+  commit as rebased: 2,293 `ok` lines, no failure. Not closed, for either
+  module, and said in the module's README: a write into a state file by
+  `tee`, `mv`, `install`, `ln`, `truncate` or a redirect (the hook names no
+  state file as a path to steer away from; the settings cover the three
+  tools only). The security review this change needs is out:
+
+K6-REVIEW-RESULT
 
 - **K6b landed** (e335061). The plan's record is held to exactly its four
   lines: a partial fifth line and a NUL, which the old read let through
