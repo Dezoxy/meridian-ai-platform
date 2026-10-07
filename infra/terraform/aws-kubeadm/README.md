@@ -260,11 +260,19 @@ where it shows. None is seen.
 - **The token in the log:** whether `--skip-token-print` also removes the
   `[bootstrap-token] Using token:` line and prints `<value withheld>` in the
   closing text (above).
-- **`snap` and the AWS CLI under cloud-init:** whether they work with no `HOME`
-  in the environment, and whether snapd finishes seeding within the script's
-  300 seconds (the command that waits for it has no page this module read).
-- **`br_netfilter` and `overlay`:** whether kubeadm's preflight needs either
-  module loaded; the script loads neither.
+- **`snap` and the AWS CLI under cloud-init:** whether they work there (the
+  scripts set `HOME` to `/root`, since cloud-init may give none), and whether
+  snapd finishes seeding within the script's 300 seconds (the command that
+  waits for it has no page this module read).
+- **`br_netfilter` and `overlay`:** the scripts load both, at once and at every
+  boot, and set the two bridge settings beside IP forwarding. Whether kubeadm's
+  preflight needs them is not known: the Kubernetes page on container runtimes
+  (read 2026-10-07) lists IP forwarding only. Whether the image has both
+  modules is not seen; a module that does not load ends the boot with one line.
+- **The package lock and containerd's socket:** `apt-get` waits up to 300
+  seconds for the lock (an option no page this module read documents), and the
+  script waits for containerd to answer before kubeadm runs. Neither wait has
+  been seen to be needed or to be enough.
 - **`ip_protocol = "4"`:** whether the provider and the API accept the IP-in-IP
   rules with the protocol number and no ports.
 - **containerd's configuration:** whether its default text has exactly one
