@@ -86,14 +86,15 @@ names the README to read for each.
 - **Title:** what is true after the change, as one sentence. Pull requests
   are squash-merged, so the title becomes the commit on `main`.
 - **Body:** fill in the [template](.github/pull_request_template.md). Under
-  Verification, say what you ran and what it printed. "Tests pass" with no
+  Evidence, say what you ran and what it printed. "Tests pass" with no
   output is not evidence, and a check you could not run is named as not
   run.
 - **Checks:** five must be green before a merge: `docs consistency`,
   `architecture model`, `derived diagrams`, `secret scan` and `python`.
 - **The plan's files:** if your change is a step, update its row and its
-  file under `docs/plan/steps/`. The change-log entry and a new step's
-  number are the owner's to add; do not pick a step number yourself.
+  file under `docs/plan/steps/`. The plan keeps no change log: the pull
+  request's description is the record, and the squash commit carries it.
+  A new step's number is the owner's to give; do not pick one yourself.
 
 ## Review and merge
 

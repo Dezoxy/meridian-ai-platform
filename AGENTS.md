@@ -10,9 +10,10 @@ views and the decisions.
 
 [docs/meridian-plan.md](docs/meridian-plan.md) is the single living plan: the
 step list (S000…), the session protocol and the open questions. Each step's
-section is a file of its own, `docs/plan/steps/S0NN.md`, and each change-log
-entry is a file in `docs/plan/changelog/`; the plan indexes the first and says
-how the second are named.
+section is a file of its own in a folder of twenty step numbers
+(`docs/plan/steps/S100-S119/S100.md`), which the plan indexes. The follow-up
+backlog is `docs/plan/backlog.md` (open rows) and
+`docs/plan/backlog-closed.md` (history).
 
 - Since 2026-10-08 steps run in worker sessions, one step and one worktree
   each, handed out by a dispatcher session (the plan's Part A, "A
@@ -32,9 +33,10 @@ how the second are named.
   which test targets take the machine's lock, and which worker counts to
   pass.
 - Record decisions and evidence in the step's file under `docs/plan/steps/`,
-  not in chat. A change-log entry is a file named for the pull request's
-  number, `docs/plan/changelog/pr-NNNN.md`, added once the pull request exists
-  (`pr-XXXX-<step>.md` until then; CI refuses that name).
+  not in chat. There is no change log (it ended with S100): the pull
+  request's description is the record, the squash commit carries it, and
+  the plan's Part A says what it must hold. A backlog row that closes moves
+  from `docs/plan/backlog.md` to `docs/plan/backlog-closed.md`.
 - Private context (job targeting, owner notes) is in the gitignored
   `.context/` folder. Read it only when a step needs it; never copy it into
   tracked files.
