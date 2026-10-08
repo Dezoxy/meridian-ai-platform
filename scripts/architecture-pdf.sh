@@ -53,7 +53,13 @@ if compgen -G "${generated}/mermaid-pdf/*.mmd" >/dev/null; then
     "${SCRIPT_DIR}/render-mermaid.sh" "${generated}/mermaid-pdf"
 fi
 
-docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -v "${arch}:/data" -w /data \
+# Pandoc runs as you, so the PDF is yours; under rootless Docker that is the
+# container's root (see render-mermaid.sh).
+container_user="$(id -u):$(id -g)"
+if docker info --format '{{.SecurityOptions}}' 2>/dev/null | grep -q 'name=rootless'; then
+  container_user="0:0"
+fi
+docker run --rm -u "${container_user}" -e HOME=/tmp -v "${arch}:/data" -w /data \
   "${PANDOC_IMAGE}" generated/architecture.md -o "generated/${pdf}" \
   --template eisvogel --pdf-engine=xelatex --resource-path=/data
 

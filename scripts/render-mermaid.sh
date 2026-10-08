@@ -20,8 +20,11 @@
 #                  the Makefile's pin.
 #
 # The container runs as you, so the folder needs no chmod and the PNGs are
-# yours. HOME=/tmp because the browser inside keeps a cache there and the user
-# has no home directory.
+# yours. Under rootless Docker "you" is the container's root: there your own
+# IDs name a user who cannot write the folder, and every render ended in
+# EACCES. HOME=/tmp because the browser inside keeps a cache there and the user
+# has no home directory. The container has no network: a diagram is drawn from
+# what the image holds, and its source can come from a pull request.
 set -euo pipefail
 
 : "${MERMAID_IMAGE:?Set MERMAID_IMAGE to your pinned Mermaid CLI image}"
@@ -36,6 +39,13 @@ if [ "${#files[@]}" -eq 0 ]; then
   exit 0
 fi
 
+# Rootless Docker maps the container's root to the caller. If `docker info`
+# cannot say, the caller's IDs stand, as before.
+container_user="$(id -u):$(id -g)"
+if docker info --format '{{.SecurityOptions}}' 2>/dev/null | grep -q 'name=rootless'; then
+  container_user="0:0"
+fi
+
 log="$(mktemp)"
 trap 'rm -f "${log}"' EXIT
 failed=0
@@ -43,7 +53,8 @@ for src in "${files[@]}"; do
   name="$(basename "${src}" .mmd)"
   # A PNG from an earlier run must not pass for this run's result.
   rm -f "${dir}/${name}.png"
-  if ! docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -v "${dir}:/data" \
+  if ! docker run --rm --network none -u "${container_user}" -e HOME=/tmp \
+    -v "${dir}:/data" \
     "${MERMAID_IMAGE}" -i "/data/${name}.mmd" -o "/data/${name}.png" -s 2 -b white \
     >"${log}" 2>&1; then
     failed=$((failed + 1))
