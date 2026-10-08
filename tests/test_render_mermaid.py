@@ -67,6 +67,7 @@ class RenderMermaid(unittest.TestCase):
     def runs(self) -> list[str]:
         return self.log.read_text().splitlines() if self.log.exists() else []
 
+    @unittest.skipIf(os.getuid() == 0, "as root the caller's IDs are 0:0 too")
     def test_the_container_runs_as_the_caller_when_docker_is_not_rootless(self) -> None:
         (self.diagrams / "a.mmd").write_text("flowchart LR\n  a --> b\n")
 
@@ -75,6 +76,7 @@ class RenderMermaid(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(self.runs()), 1)
         self.assertIn(f" -u {os.getuid()}:{os.getgid()} ", f" {self.runs()[0]} ")
+        self.assertNotIn(" -u 0:0 ", f" {self.runs()[0]} ")
 
     def test_the_container_runs_as_its_root_when_docker_is_rootless(self) -> None:
         # Under rootless Docker the container's root is the caller, and the
@@ -86,6 +88,7 @@ class RenderMermaid(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(" -u 0:0 ", f" {self.runs()[0]} ")
 
+    @unittest.skipIf(os.getuid() == 0, "as root the caller's IDs are 0:0 too")
     def test_the_container_runs_as_the_caller_when_docker_info_fails(self) -> None:
         (self.diagrams / "a.mmd").write_text("flowchart LR\n  a --> b\n")
 
@@ -93,6 +96,31 @@ class RenderMermaid(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(f" -u {os.getuid()}:{os.getgid()} ", f" {self.runs()[0]} ")
+
+    @unittest.skipIf(os.getuid() == 0, "as root the caller's IDs are 0:0 too")
+    def test_the_container_runs_as_the_caller_when_docker_info_says_nothing(
+        self,
+    ) -> None:
+        (self.diagrams / "a.mmd").write_text("flowchart LR\n  a --> b\n")
+
+        result = self.run_script("")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f" -u {os.getuid()}:{os.getgid()} ", f" {self.runs()[0]} ")
+
+    def test_the_container_has_no_capability_and_cannot_gain_privileges(self) -> None:
+        # The container's root, under rootless Docker, reads a diagram whose
+        # source can come from a pull request.
+        (self.diagrams / "a.mmd").write_text("flowchart LR\n  a --> b\n")
+
+        for security in (ROOTFUL, ROOTLESS):
+            with self.subTest(security=security):
+                self.log.unlink(missing_ok=True)
+                self.run_script(security)
+                run = f" {self.runs()[0]} "
+                self.assertIn(" --cap-drop ALL ", run)
+                self.assertIn(" --security-opt no-new-privileges ", run)
+                self.assertRegex(run, r" --pids-limit \d+ ")
 
     def test_the_container_has_no_network(self) -> None:
         (self.diagrams / "a.mmd").write_text("flowchart LR\n  a --> b\n")

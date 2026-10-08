@@ -23,7 +23,8 @@
 # yours. Under rootless Docker "you" is the container's root: there your own
 # IDs name a user who cannot write the folder, and every render ended in
 # EACCES. HOME=/tmp because the browser inside keeps a cache there and the user
-# has no home directory. The container has no network: a diagram is drawn from
+# has no home directory. The container has no network, no capability, no way
+# to gain a privilege and a limit on its processes: a diagram is drawn from
 # what the image holds, and its source can come from a pull request.
 set -euo pipefail
 
@@ -53,8 +54,9 @@ for src in "${files[@]}"; do
   name="$(basename "${src}" .mmd)"
   # A PNG from an earlier run must not pass for this run's result.
   rm -f "${dir}/${name}.png"
-  if ! docker run --rm --network none -u "${container_user}" -e HOME=/tmp \
-    -v "${dir}:/data" \
+  if ! docker run --rm --network none --cap-drop ALL \
+    --security-opt no-new-privileges --pids-limit 512 \
+    -u "${container_user}" -e HOME=/tmp -v "${dir}:/data" \
     "${MERMAID_IMAGE}" -i "/data/${name}.mmd" -o "/data/${name}.png" -s 2 -b white \
     >"${log}" 2>&1; then
     failed=$((failed + 1))

@@ -59,7 +59,8 @@ container_user="$(id -u):$(id -g)"
 if docker info --format '{{.SecurityOptions}}' 2>/dev/null | grep -q 'name=rootless'; then
   container_user="0:0"
 fi
-docker run --rm -u "${container_user}" -e HOME=/tmp -v "${arch}:/data" -w /data \
+docker run --rm --cap-drop ALL --security-opt no-new-privileges \
+  -u "${container_user}" -e HOME=/tmp -v "${arch}:/data" -w /data \
   "${PANDOC_IMAGE}" generated/architecture.md -o "generated/${pdf}" \
   --template eisvogel --pdf-engine=xelatex --resource-path=/data
 

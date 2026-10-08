@@ -20748,6 +20748,15 @@ fix is made in development-base first and copied here unchanged.
     without Mermaid needs. This repository holds several, so its Makefile's
     `mermaid-render` now fails when the extractor wrote none (the review's
     other note).
+  - The render container has no capability, cannot gain a privilege and
+    may hold 512 processes; the Pandoc container gets the first two (the
+    review's medium finding, below).
+  - Not taken from that review, with the reasons: Pandoc keeps its
+    network, because a repository from the base may embed a remote image
+    and without a network Pandoc leaves a hole with a warning, not a
+    failure; and the rule that picks the user stays written twice, in
+    the two scripts, the PDF script's copy proven by real builds on both
+    kinds of Docker and not by a stub.
   - The two scripts and the new test are copies of development-base's,
     byte for byte; only the Makefile's line is this repository's own.
 
@@ -20758,6 +20767,18 @@ the test it asked for decided the other way; and the guard against an empty
 extraction went into this repository's Makefile, where the session had meant
 to leave it out. Not consulted before the pull request: the base's pull
 request ran the unchanged path in CI, and the rest is a copy and documents.
+**Review:** the `infra-reviewer` read the scripts, the Makefile's line and
+the test after the pull request was opened and before it could merge: no
+critical or high finding, one medium (the render container, root under
+rootless Docker and reading text from a pull request, kept its default
+capabilities) and four low (two of the tests prove nothing when the suite
+runs as root; `docker info` answering with nothing had no case; the rule
+written twice; Pandoc's network). The medium and the first two low ones
+were fixed in the base (its pull request 53) and copied here. It found the
+choice of the container's root safe: only the daemon's own answer selects
+it, a failed or empty answer leaves the caller's IDs, and old diagram files
+cannot satisfy the Makefile's guard, because the extractor deletes them
+first.
 
 **Work log:** 2026-10-08. In development-base, a branch off its `main` at
 1d5b4b0: six tests with a stub `docker` on the PATH, three of them failing
@@ -20765,7 +20786,8 @@ request ran the unchanged path in CI, and the rest is a copy and documents.
 passing; its `make mermaid-render` and `make pdf` run on the virtual machine;
 pull request 52 there, merged as 02dec50 once its five checks were green,
 its `build` job among them (the PDF on a runner whose Docker is not
-rootless), and its content read on that `main`. Here, branch
+rootless), and its content read on that `main`; after the review, pull
+request 53 there for the container's limits and the tests. Here, branch
 `s092-rootless-render` off `main` at 2ce835b, after pull request 133 was
 merged and read on `main`: the three files copied from the base's `main` and
 compared, and one line in the Makefile.
@@ -20787,8 +20809,10 @@ compared, and one line in the Makefile.
   page 28; the import layering chapter from page 176, its Mermaid diagram on
   page 177 and RuntimeComponents on page 180. This is the first PDF with
   S089's, S090's and S091's pages, which their sections list as not seen.
-- `make lint`: exit 0. `make test`: "Ran 411 tests", "OK" (405 and the six
-  new). `make docs` and `make secret-scan`: in the pull request.
+- After the review's fixes all of the above ran again with the same
+  results: five diagrams, the guard, and a PDF of 377 pages.
+- `make lint`: exit 0. `make test`: "Ran 413 tests", "OK" (405 and the
+  eight new). `make docs` and `make secret-scan`: in the pull request.
 - Seen in CI: the base's pull request. This repository's `derived diagrams`
   job and, because `scripts/` and the `Makefile` changed, its
   `Docs / Architecture PDF` build run on the pull request.
