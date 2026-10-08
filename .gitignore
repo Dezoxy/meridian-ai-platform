@@ -31,6 +31,9 @@ dist/
 *.tfvars
 !*.tfvars.example
 kubeconfig*
+# The mock issuer's realm and the passwords and client secrets generated for it
+# (infra/kind/identity-realm.sh): made at `make up`, never committed.
+/infra/kind/.identity/
 infra/terraform/local.env*
 
 # Terraform

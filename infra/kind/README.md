@@ -193,6 +193,21 @@ The Prometheus tag is also the Makefile's `PROMTOOL_IMAGE`. Every image left
 by tag is one that nothing starts: if an ACME issuer, a rate-limit policy, a
 Thanos sidecar or `helm test` is added, its image needs a pin first.
 
+The mock issuer for sign-in (S021) is Keycloak, `KEYCLOAK_IMAGE` in
+`pins.env`: one line, `quay.io/keycloak/keycloak:26.8.0` by the index digest,
+because no chart installs it (the `identity` namespace's own Deployment will,
+so `up.sh` passes it to none yet) and Renovate proposes its tag in a group of
+its own. `identity-realm.sh OUTPUT_DIR REDIRECT_URI WEB_ORIGIN` writes the
+staff realm it imports (`meridian-staff`: four roles, a test user per role, the
+pages' client with the code flow and PKCE, the scripts' client with client
+credentials) and the password of each user and the secret of each client, new
+at every run, into a mode-600 `secrets.env` beside it; nothing is printed, and
+the directory must be one git ignores (`infra/kind/.identity/`). Status: the
+generator is implemented and tested without a cluster (`make test`); the image
+was run in a container, outside the cluster, by an opt-in rig
+(`MERIDIAN_KEYCLOAK_RIG=1 uv run pytest tests/meridian/test_keycloak_rig.py`,
+about 2 minutes and 2.5 GB free); nothing of it is on the cluster yet.
+
 To read what a chart installs by default (its tags must be the ones in
 `pins.env`), render it without the `--set` arguments, here for cert-manager;
 the other releases take their chart, repository, version and values file from
