@@ -540,3 +540,24 @@ Runtime may start a tool call that carries a run.
   every cross-service read and write with its code, what assumes one database,
   one image or one version), read from `main` at d1fd865 with nothing run, and
   the code paths in the couplings table
+
+Amended on 2026-10-07 (S082): the counts above were read at d1fd865 and are
+left as written. The tree holds 32 migration files and 60 test files under
+`tests/meridian/db/` since S080 added `0032_claim_files.sql` (it names only the
+`claims` schema, so 13 of the 32 files mix schemas) and its test. And since
+S082's first two moves, the Claims API imports `RunState` and `RunResponse`
+from `platform/common/runwire.py`, where they are defined, and the constants
+of the sweep it used from `platform/common/runlease.py`, not from the runtime;
+`runtime.models` and `runtime.sweep` re-export them. The point of the sentence
+stands: no contract between the services exists. The plan's S082 section has
+the counts and how they were taken.
+
+Noted on 2026-10-08 (S082, Move A): this record names no destination for the
+claims tool server's code, which row 4 of the couplings table says "first moves
+out of the claims workload's package". It moved to
+`src/meridian/platform/claims_mcp/`. The session chose that destination, after
+the advisor, by the precedent of the two tool servers that already serve
+domain data from `platform` (`policy_mcp` and `knowledge_mcp`); a new
+top-level layer was not chosen, because that would be the owner's decision.
+The couplings table keeps the path it had when it was written. The move is
+built and tested and has not yet been run on the cluster.

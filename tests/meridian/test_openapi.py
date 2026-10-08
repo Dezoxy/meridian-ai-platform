@@ -9,6 +9,9 @@ from starlette.applications import Starlette
 from starlette.routing import Route
 from toolsupport import CONTRACTS_DIR
 
+from meridian.platform.claims_mcp.app import (
+    create_app as create_claims_mcp,
+)
 from meridian.platform.gateway.app import create_app as create_gateway
 from meridian.platform.gateway.settings import GatewaySettings
 from meridian.platform.knowledge_mcp.app import create_app as create_knowledge_mcp
@@ -18,9 +21,6 @@ from meridian.platform.toolserver.settings import ToolServerSettings
 from meridian.runtime.app import create_app as create_runtime
 from meridian.runtime.settings import RuntimeSettings
 from meridian.workloads.claims_triage.app import create_app as create_claims
-from meridian.workloads.claims_triage.mcp_server.app import (
-    create_app as create_claims_mcp,
-)
 from meridian.workloads.claims_triage.settings import ClaimsSettings
 
 DSN = "postgresql://role@db.invalid/meridian"

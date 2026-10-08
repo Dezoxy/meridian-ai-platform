@@ -643,11 +643,13 @@ What is true after everything above, and is not fixed here.
   path and close nothing, and then writes the database administrator's password
   into that vault. A role is still needed to read it, but a valid token from any
   address reads it. The infrastructure review's default was to BLOCK a public
-  data service. **The owner decides on a firewall before any apply, and that is
-  undecided.** The two sides are in the plan's section for S020. A firewall is a
-  change to the applied foundation (default Deny plus the operator's address, a
-  sensitive variable with no default and no example), written free and applied
-  by the owner at the paid stop; it is not in this module.
+  data service. **The owner decided on a firewall on 2026-10-08 (it was undecided
+  until then): default deny, the operator's address allowed, private endpoints
+  for the cluster; designed, not written.** The two sides are in the plan's
+  section for S020. A firewall is a change to the applied foundation (default
+  Deny plus the operator's address, a sensitive variable with no default and no
+  example), written free and applied by the owner at the next apply; it is not
+  in this module.
 - **The state is not secret-free.** The password is not in it (it is ephemeral,
   and the schema marks both arguments write-only). But `authorized_ip_ranges` is
   a plain attribute and the state holds the **operator's address**; a

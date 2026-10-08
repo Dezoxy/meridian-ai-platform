@@ -38,6 +38,9 @@ from sweepsupport import LOGGER as SWEEP_LOGGER
 from sweepsupport import environ_of
 from tlssupport import LOOPBACK, loopback_sans, make_ca
 
+from meridian.platform.claims_mcp.app import (
+    create_app_from_env as claims_mcp_factory,
+)
 from meridian.platform.common.logformat import UVICORN_LOGGERS, JsonFormatter
 from meridian.platform.common.peercert import PeerCertProtocol
 from meridian.platform.gateway.app import create_app_from_env as gateway_factory
@@ -48,9 +51,6 @@ from meridian.platform.policy_mcp.app import create_app_from_env as policy_facto
 from meridian.runtime.app import create_app_from_env as runtime_factory
 from meridian.workloads.claims_triage import sweep
 from meridian.workloads.claims_triage.app import create_app_from_env as claims_factory
-from meridian.workloads.claims_triage.mcp_server.app import (
-    create_app_from_env as claims_mcp_factory,
-)
 
 CANARY_QUERY = "canary-query-5b21"
 CANARY_HEADER = "canary-header-5b21"

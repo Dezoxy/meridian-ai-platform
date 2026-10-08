@@ -5,14 +5,20 @@ import re
 import subprocess
 import tomllib
 
-import yaml
+from ciworkflowsupport import (
+    JOBS,
+    WORKFLOW,
+    WORKFLOW_TEXT,
+    steps_using,
+)
 from servicesupport import REPO_ROOT
 
 MAKEFILE = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
-WORKFLOW_TEXT = (REPO_ROOT / ".github" / "workflows" / "python.yml").read_text(
-    encoding="utf-8"
-)
-JOB = yaml.safe_load(WORKFLOW_TEXT)["jobs"]["python"]
+# The job that runs the tests (S074 split the one job `python` into several; the
+# service containers, the toolchain and the test step are the shards' job). The
+# checks of the other jobs and of the required check are in
+# test_ci_workflow_jobs.py.
+JOB = JOBS["tests"]
 # PostgreSQL 17 with pgvector (S012): the knowledge store needs the extension.
 # The -trixie suffix is the Debian release of kind's database image.
 IMAGE = re.compile(r"pgvector/pgvector:\d+\.\d+\.\d+-pg17-trixie@sha256:[0-9a-f]{64}")
@@ -108,12 +114,15 @@ def step_named(name: str) -> dict:
 def test_the_evaluation_gate_runs_after_the_tests_on_the_report_the_tests_write() -> (
     None
 ):
-    names = [s.get("name") for s in JOB["steps"]]
-    tests = step_named("Tests")
-    gate = step_named("Evaluation gate")
+    # S074 gave the gate a job of its own: the shards each run a part of the
+    # suite, so no shard is sure to hold the two tests that write the reports.
+    steps = JOBS["evaluation"]["steps"]
+    names = [s.get("name") for s in steps]
+    (tests,) = [s for s in steps if s.get("name") == "Evaluation reports"]
+    (gate,) = [s for s in steps if s.get("name") == "Evaluation gate"]
 
-    assert names.index("Evaluation gate") == names.index("Tests") + 1
-    assert names.index("Evaluation gate") < names.index("Registry validation")
+    assert names.index("Evaluation gate") == names.index("Evaluation reports") + 1
+    assert tests["run"] == "make eval-tests"
     written = tests["env"]["MERIDIAN_EVAL_REPORT"]
     assert written == "${{ runner.temp }}/claims-triage-report.json"
     # The gate reads the same file: runner.temp is $RUNNER_TEMP in a shell.
@@ -128,12 +137,29 @@ def test_the_evaluation_gate_runs_after_the_tests_on_the_report_the_tests_write(
     )
 
 
+def test_the_evaluation_job_runs_the_two_tests_the_make_eval_target_names() -> None:
+    recipe = MAKEFILE.split("\neval-tests:\n", 1)[1].split("\n\n", 1)[0]
+
+    assert recipe.strip() == (
+        "uv run pytest -n 0 $(EVAL_TEST) $(EVAL_INJECTION_TEST) -q"
+    )
+    # Neither report path is set here: the job's environment names them, as the
+    # job's step does above, and `make eval` sets its own for its own run.
+    assert "MERIDIAN_EVAL" not in recipe
+
+
 def test_the_makefile_has_the_four_evaluation_targets_in_its_phony_list() -> None:
     phony = next(
         line for line in MAKEFILE.splitlines() if line.startswith(".PHONY:")
     ).split()
 
-    for target in ("eval", "eval-compare", "eval-baseline", "eval-record"):
+    for target in (
+        "eval",
+        "eval-compare",
+        "eval-baseline",
+        "eval-record",
+        "eval-injection-record",
+    ):
         assert target in phony
         assert re.search(rf"^{target}:", MAKEFILE, re.MULTILINE)
 
@@ -213,12 +239,131 @@ def test_make_eval_record_runs_the_script_that_records_and_says_what_it_spends()
         MAKEFILE,
         re.MULTILINE,
     )
-    assert "about 60 chat calls, under EUR 0.50" in help_line
+    # The figures are the measured ones (S071): 55 chat calls and EUR 0.12 on
+    # 2026-10-03, and the ceiling the gateway holds for each tenant the run
+    # charges; the old "about 60 chat calls, under EUR 0.50" is gone.
+    assert "55 chat calls, EUR 0.12 as measured on 2026-10-03" in help_line
+    assert "EUR 0.50 for each of the two tenants" in help_line
+    assert "about 60" not in help_line
     assert "data/evaluation/" in help_line
+    assert help_line.endswith("(needs az login, Docker; the owner runs it)")
     assert re.search(r"^  eval-record\)$", foundation, re.MULTILINE)
     # The database container and port are the caller's to name.
     assert "PYTEST_DB_CONTAINER" in foundation
     assert "PYTEST_DB_PORT" in foundation
+
+
+FOUNDATION = (REPO_ROOT / "infra" / "terraform" / "foundation.sh").read_text(
+    encoding="utf-8"
+)
+
+
+def function_body(name: str) -> str:
+    return FOUNDATION.split(f"{name}() {{", 1)[1].split("\n}\n", 1)[0]
+
+
+def test_make_eval_injection_record_runs_the_script_and_says_what_it_spends() -> None:
+    (help_line,) = re.findall(
+        r"^## eval-injection-record\s+(.+)$", MAKEFILE, re.MULTILINE
+    )
+
+    assert re.search(
+        r"^eval-injection-record:\n\tinfra/terraform/foundation\.sh "
+        r"eval-injection-record$",
+        MAKEFILE,
+        re.MULTILINE,
+    )
+    assert help_line.startswith("SPENDS MONEY:")
+    assert help_line.endswith("(needs az login, Docker; the owner runs it)")
+    assert "52 on 2026-10-07" in help_line
+    assert "about EUR 0.12 expected" in help_line
+    assert "the gateway refuses the run past EUR 0.50" in help_line
+    assert "EUR 1.00" not in help_line
+    assert "no judge" in help_line
+    assert "data/evaluation" in help_line
+
+
+def test_the_script_has_the_injection_recording_as_a_case_and_a_function() -> None:
+    assert re.search(r"^  eval-injection-record\)$", FOUNDATION, re.MULTILINE)
+    assert "cmd_eval_injection_record\n" in FOUNDATION
+    assert "<init|plan|apply|smoke|outputs|gateway-live|eval-record|" in FOUNDATION
+    case = FOUNDATION.split("  eval-injection-record)\n", 1)[1].split(";;", 1)[0]
+    assert "need_tools terraform az jq docker uv make" in case
+    assert "cmd_eval_injection_record" in case
+
+
+def test_the_injection_recording_sets_both_opt_ins_and_runs_its_one_test() -> None:
+    recording = function_body("cmd_eval_injection_record")
+    (tests,) = re.findall(
+        r"^readonly EVAL_INJECTION_RECORD_TESTS='([^']+)'$", FOUNDATION, re.MULTILINE
+    )
+
+    assert "MERIDIAN_LIVE_AZURE=1" in recording
+    assert "MERIDIAN_EVAL_INJECTION_RECORD=1" in recording
+    # The golden recording's variable is not set, so neither run starts the other.
+    assert "MERIDIAN_EVAL_RECORD=1" not in recording
+    assert "MERIDIAN_EVAL_INJECTION_RECORD" not in function_body("cmd_eval_record")
+    assert "PYTEST_WORKERS=0" in recording
+    assert "${EVAL_INJECTION_RECORD_TESTS} -s -q" in recording
+    path, _, name = tests.partition("::")
+    assert (path, name) == (
+        "tests/meridian/test_injection_record.py",
+        "test_record_the_injection_cases_with_the_live_model",
+    )
+    assert f"def {name}(" in (REPO_ROOT / path).read_text(encoding="utf-8")
+    for variable in (
+        "PYTEST_DB_CONTAINER",
+        "PYTEST_DB_PORT",
+        "PYTEST_REDIS_CONTAINER",
+        "PYTEST_REDIS_PORT",
+    ):
+        assert f'[[ -z "${{{variable}:-}}" ]] || overrides+=' in recording
+
+
+def test_the_injection_recording_says_what_it_spends_in_the_scripts_words() -> None:
+    recording = function_body("cmd_eval_injection_record")
+    (line,) = [ln for ln in recording.splitlines() if ln.lstrip().startswith("log ")]
+
+    # The number of cases is read from the baseline at run time; the figure of
+    # the day is only the fallback for a baseline jq cannot read.
+    assert "model_asked == 1" in recording
+    assert "52 on 2026-10-07" in recording
+    assert "refuses the run past EUR 0.50" in line
+    assert "EUR 1.00" not in FOUNDATION
+    # The expected cost is the case count read from the baseline times a named,
+    # dated per-case figure, not a constant beside a count that moves (S071, L3).
+    assert "about EUR ${expected} expected" in line
+    assert "measured 2026-10-03" in line
+    assert "n * c" in recording
+    assert '-v c="${EVAL_INJECTION_EUR_PER_CASE}"' in recording
+    assert "about EUR 0.12 expected" not in line
+
+
+def test_the_per_case_figure_of_the_script_gives_the_expected_cost_of_52_cases() -> (
+    None
+):
+    (figure,) = re.findall(
+        r"^readonly EVAL_INJECTION_EUR_PER_CASE=(\d\.\d+)$", FOUNDATION, re.MULTILINE
+    )
+    comment = FOUNDATION.split("readonly EVAL_INJECTION_EUR_PER_CASE=", 1)[0]
+
+    # The figure is dated where it is named, and it is the README's measured
+    # maximum per claim.
+    assert "2026-10-03" in comment[-400:]
+    assert "0.0023" in (REPO_ROOT / "data/evaluation/README.md").read_text("utf-8")
+    assert f"{52 * float(figure):.2f}" == "0.12"
+    # The fallback, for a baseline jq cannot read, says the same figure.
+    assert "expected=0.12" in function_body("cmd_eval_injection_record")
+
+
+def test_the_figures_of_the_golden_recording_are_the_measured_ones() -> None:
+    recording = function_body("cmd_eval_record")
+    (line,) = [ln for ln in recording.splitlines() if ln.lstrip().startswith("log ")]
+
+    assert "55 chat calls" in line
+    assert "EUR 0.12 as measured on 2026-10-03" in line
+    assert "EUR 0.50 for each of the two tenants" in line
+    assert "about 60" not in FOUNDATION
 
 
 def test_the_recording_run_passes_the_redis_container_and_port_on_as_well() -> None:
@@ -254,6 +399,39 @@ def test_the_python_workflow_never_enables_a_live_or_recording_run() -> None:
     assert "MERIDIAN_LIVE_AZURE" not in WORKFLOW_TEXT
     assert "eval-record" not in WORKFLOW_TEXT
     assert "gateway-live" not in WORKFLOW_TEXT
+    # Nor the injection run's: its own variable, its own target (S071).
+    assert "MERIDIAN_EVAL_INJECTION_RECORD" not in WORKFLOW_TEXT
+    assert "eval-injection-record" not in WORKFLOW_TEXT
+
+
+PAID_NAMES = (
+    "eval-record",
+    "eval-injection-record",
+    "gateway-live",
+    "azure-smoke",
+    "MERIDIAN_EVAL_RECORD",
+    "MERIDIAN_EVAL_INJECTION_RECORD",
+    "MERIDIAN_LIVE_AZURE",
+)
+
+
+def test_no_workflow_file_names_a_paid_target_or_sets_an_opt_in_variable() -> None:
+    """All of them, not only the python workflow (the security review, section
+    8): a paid target or an opt-in variable anywhere under ``.github/workflows``
+    would let CI spend money. ``azure-smoke`` is held out with the paid ones
+    though it is cheap: no workflow signs in to Azure."""
+    workflows = sorted(
+        path
+        for pattern in ("*.yml", "*.yaml")
+        for path in (REPO_ROOT / ".github" / "workflows").glob(pattern)
+    )
+
+    assert len(workflows) >= 3
+    assert any(path.name == "python.yml" for path in workflows)
+    for path in workflows:
+        text = path.read_text(encoding="utf-8")
+        found = [name for name in PAID_NAMES if name in text]
+        assert found == [], f"{path.name} names {found}"
 
 
 # ── what the job costs can be read from a run (S057) ────────────────────────
@@ -294,7 +472,10 @@ def test_the_jobs_limit_is_twice_its_slowest_measured_run() -> None:
     # to 257.63 s on the development machine), so the slowest is about 14 min
     # 47 s, and twice that is 29 min 34 s, which is 30. The limit ends a job
     # that hangs; it is not a budget, and a run near it is a finding. Change
-    # the number and the workflow's comment together.
+    # the number and the workflow's comment together. Since S074 the suite runs
+    # in shards, each about a quarter of that; the limit stays the whole job's
+    # until a run on the hosted runner says what a shard takes, so the check is
+    # on the unsharded figure still, and the workflow's comment says so.
     slowest_seconds = 14 * 60 + 29
     with_coverage = slowest_seconds * 257.63 / 252.52
 
@@ -337,9 +518,15 @@ def test_the_floor_is_configured_in_one_place_and_equals_the_constant_here() -> 
     assert COVERAGE_CONFIG["run"]["source"] == ["src/meridian"]
     # Neither the Makefile nor the workflow repeats the number: pytest-cov takes
     # it from the configuration when `--cov` is given without `--cov-fail-under`.
-    for text in (MAKEFILE, WORKFLOW_TEXT):
-        assert "--cov-fail-under" not in text
-        assert not re.search(r"fail[-_]under\W*\d", text)
+    # The one exception, on purpose (S074): a shard runs a part of the suite and
+    # must apply no floor, which is `--cov-fail-under=0`, the switch that turns
+    # the configured floor off; it is a zero, not the number, and only the
+    # Makefile's shard variant of the switches has it.
+    assert "--cov-fail-under" not in WORKFLOW_TEXT
+    assert not re.search(r"fail[-_]under\W*\d", WORKFLOW_TEXT)
+    assert MAKEFILE.count("--cov-fail-under") == MAKEFILE.count("--cov-fail-under=0")
+    assert MAKEFILE.count("--cov-fail-under=0") == 2  # the variable and its comment
+    assert not re.search(r"fail[-_]under\W*\d", MAKEFILE.replace("fail-under=0", ""))
 
 
 def test_a_run_with_a_failed_test_does_not_print_the_floors_failure_as_well() -> None:
@@ -362,8 +549,61 @@ def test_the_help_lines_of_both_pytest_targets_say_what_coverage_does_to_a_subse
         assert "coverage floor" in line
 
 
-def test_the_suite_step_turns_coverage_on() -> None:
-    assert step_named("Tests")["env"]["COVERAGE"] == "1"
+def test_the_suite_step_turns_coverage_on_without_a_floor_and_names_its_file() -> None:
+    # A shard measures, applies no floor and keeps its data in a file named for
+    # it, outside the hidden files upload-artifact leaves out; the python job
+    # combines the files and applies the floor once.
+    env = step_named("Tests")["env"]
+
+    assert env["COVERAGE"] == "1"
+    assert env["COVERAGE_SHARD"] == "1"
+    assert env["COVERAGE_FILE"] == (
+        "${{ github.workspace }}/shard-${{ matrix.shard }}.coverage"
+    )
+
+
+def test_a_shards_coverage_switches_have_no_floor_and_no_report_and_only_then() -> None:
+    def pytest_line(*arguments: str) -> str:
+        environment = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("COVERAGE", "COVERAGE_SHARD", "PYTEST_ARGS", "MAKEFLAGS")
+        }
+        return subprocess.run(
+            ["make", "-n", "pytest", *arguments],
+            cwd=REPO_ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+
+    shard = pytest_line("COVERAGE=1", "COVERAGE_SHARD=1")
+    whole = pytest_line("COVERAGE=1")
+
+    assert "--cov --cov-report= --cov-fail-under=0 --no-cov-on-fail" in shard
+    # The whole-suite run is what it was: the report, and the configured floor.
+    assert "--cov-report=term:skip-covered" in whole
+    assert "--cov-fail-under" not in whole
+    # COVERAGE_SHARD alone turns nothing on, and COVERAGE=0 stays off.
+    assert "--cov" not in pytest_line("COVERAGE_SHARD=1")
+    assert "--cov" not in pytest_line("COVERAGE=0", "COVERAGE_SHARD=1")
+
+
+def test_make_coverage_floor_combines_the_shards_files_and_reports_with_the_floor() -> (
+    None
+):
+    recipe = MAKEFILE.split("\ncoverage-floor:\n", 1)[1].split("\n\n", 1)[0]
+    lines = [line.strip() for line in recipe.strip().splitlines()]
+
+    assert re.search(r"^COVERAGE_SHARDS_DIR\s*\?=", MAKEFILE, re.MULTILINE)
+    assert lines == [
+        "uv run coverage combine --keep $(COVERAGE_SHARDS_DIR)/*.coverage",
+        "uv run coverage report --skip-covered",
+    ]
+    # `coverage report` takes the floor from pyproject.toml's fail_under: no
+    # option here names a number.
+    assert "fail" not in recipe
 
 
 def test_both_pytest_targets_can_turn_coverage_on() -> None:
@@ -464,22 +704,22 @@ TERRAFORM_ACTION = "hashicorp/setup-terraform@"
 VERSIONS_FILES = sorted((REPO_ROOT / "infra" / "terraform").glob("*/versions.tf"))
 
 
-def terraform_step() -> dict:
-    (step,) = [
-        s for s in JOB["steps"] if s.get("uses", "").startswith(TERRAFORM_ACTION)
-    ]
+def terraform_step(job: str = "tests") -> dict:
+    (step,) = steps_using(job, TERRAFORM_ACTION)
     return step
 
 
 def test_the_workflow_installs_terraform_before_the_tests_without_its_wrapper() -> None:
-    steps = JOB["steps"]
-    setup = terraform_step()
+    # The job that runs the tests, which call terraform: the shards.
+    steps = JOBS["tests"]["steps"]
+    setup = terraform_step("tests")
+    (run,) = [s for s in steps if s.get("name") == "Tests"]
 
     assert re.fullmatch(r"hashicorp/setup-terraform@[0-9a-f]{40}", setup["uses"])
-    assert steps.index(setup) < steps.index(step_named("Tests"))
-    # One pin: the step reads the job's value. The tests read the program's own
-    # output, so the wrapper is off, and nothing else is given to the action (no
-    # credential, no hostname, no token).
+    assert steps.index(setup) < steps.index(run)
+    # One pin: the step reads the workflow's value. The tests read the
+    # program's own output, so the wrapper is off, and nothing else is given
+    # to the action (no credential, no hostname, no token).
     assert setup["with"] == {
         "terraform_version": "${{ env.TERRAFORM_VERSION }}",
         "terraform_wrapper": False,
@@ -490,12 +730,13 @@ def test_the_workflow_runs_no_terraform_command_of_its_own() -> None:
     # The tests call `terraform console` on scratch copies, which needs no
     # provider; a step that ran init would download one, and a plan would need a
     # credential the runner does not have.
-    for step in JOB["steps"]:
-        assert "terraform " not in step.get("run", ""), step
+    for job in JOBS.values():
+        for step in job["steps"]:
+            assert "terraform " not in step.get("run", ""), step
 
 
 def test_the_terraform_version_the_workflow_pins_is_one_every_module_accepts() -> None:
-    pinned = JOB["env"]["TERRAFORM_VERSION"]
+    pinned = WORKFLOW["env"]["TERRAFORM_VERSION"]
     major, minor, _patch = (int(part) for part in pinned.split("."))
 
     assert len(VERSIONS_FILES) >= 4

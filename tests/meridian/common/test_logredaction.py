@@ -25,7 +25,7 @@ FACTORY_MODULES = (
     "meridian.workloads.claims_triage.app",
     "meridian.platform.policy_mcp.app",
     "meridian.platform.knowledge_mcp.app",
-    "meridian.workloads.claims_triage.mcp_server.app",
+    "meridian.platform.claims_mcp.app",
 )
 
 

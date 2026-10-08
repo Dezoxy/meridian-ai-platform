@@ -36,6 +36,9 @@ from toolsupport import (
     unused_port,
 )
 
+from meridian.platform.claims_mcp.app import (
+    create_app as create_claims_app,
+)
 from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.platform.knowledge_mcp.app import create_app as create_knowledge_app
 from meridian.platform.policy_mcp.app import create_app as create_policy_app
@@ -46,9 +49,6 @@ from meridian.platform.toolserver.wire import (
     META_WORKER,
 )
 from meridian.runtime.toolprobe import Answer, main, succeeded
-from meridian.workloads.claims_triage.mcp_server.app import (
-    create_app as create_claims_app,
-)
 
 DSN = "postgresql://agent_runtime:s3cret-value@db.invalid/meridian"
 HOSTS = ("127.0.0.1:*",)

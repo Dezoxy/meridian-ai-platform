@@ -58,7 +58,17 @@ PYTEST_ARGS         ?=
 # the floor's failure as well: that run fails once, for the test (a passing run
 # below the floor still fails on the floor).
 COVERAGE            ?=
-PYTEST_COVERAGE_ARGS := $(if $(filter 1,$(COVERAGE)),--cov --cov-report=term:skip-covered --no-cov-on-fail,)
+# COVERAGE_SHARD=1 beside COVERAGE=1 is a shard's run in CI (S074): it measures
+# the lines, writes the data to COVERAGE_FILE, prints no report and applies no
+# floor, because a shard runs a part of the suite and a part is always under it.
+# `make coverage-floor` combines the shards' data and applies the floor once. It
+# is `--cov-fail-under=0` and not the absence of the option, which pytest-cov
+# fills in from pyproject.toml (the one place the number is written).
+COVERAGE_SHARD      ?=
+PYTEST_COVERAGE_ARGS := $(if $(filter 1,$(COVERAGE)),--cov $(if $(filter 1,$(COVERAGE_SHARD)),--cov-report= --cov-fail-under=0,--cov-report=term:skip-covered) --no-cov-on-fail,)
+# Where `make coverage-floor` finds the shards' coverage data: one file
+# shard-N.coverage for each shard (the python workflow downloads them here).
+COVERAGE_SHARDS_DIR ?= .coverage-shards
 # Worker processes for `make pytest` and `make pytest-db` (pytest-xdist -n): a
 # number, or auto for one per CPU core; 0 runs the tests in one process. Ten,
 # the owner's decision of 2026-10-06 for the 12-core development machine,
@@ -113,7 +123,7 @@ EVAL_INPUTS         := src config/registry data/synthetic data/evaluation/record
 
 STRUCTURIZR := docker run --rm -v "$(CURDIR)/$(ARCH_DIR):/w:ro"
 
-.PHONY: help validate inspect check docs test secret-scan view export mermaid-views mermaid-render mermaid pdf pdf-brief clean lint pytest pytest-db alerts eval eval-compare eval-baseline eval-record synthetic up deploy images helm-lint demo smoke gateway-upkeep grafana grafana-password cert-renew cluster-holder down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry aws-validate aws-scan aws-plan aws-apply aws-destroy gcp-validate gcp-scan aws-kubeadm-validate aws-kubeadm-scan gcp-kubeadm-validate gcp-kubeadm-scan azure-platform-validate azure-platform-scan
+.PHONY: help validate inspect check docs test secret-scan view export mermaid-views mermaid-render mermaid pdf pdf-brief clean lint pytest coverage-floor pytest-db alerts eval eval-tests eval-compare eval-baseline eval-record eval-injection-record synthetic up deploy images helm-lint demo smoke gateway-upkeep grafana grafana-password cert-renew cluster-holder down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry aws-validate aws-scan aws-plan aws-apply aws-destroy gcp-validate gcp-scan aws-kubeadm-validate aws-kubeadm-scan gcp-kubeadm-validate gcp-kubeadm-scan azure-platform-validate azure-platform-scan
 .DEFAULT_GOAL := help
 
 ## help            list the targets
@@ -136,6 +146,7 @@ check: validate inspect
 ## docs            fail when documentation contradicts the tree (links, indexes, ADRs, view register, IDs, headings)
 docs:
 	python3 scripts/check_docs_consistency.py
+	python3 scripts/check_plan_files.py
 
 ## test            unit tests for the checker and the Mermaid and PDF scripts
 test:
@@ -208,6 +219,11 @@ lint:
 pytest:
 	uv run pytest -n $(PYTEST_WORKERS) $(PYTEST_COVERAGE_ARGS) $(PYTEST_ARGS)
 
+## coverage-floor  combine the shards' coverage data (COVERAGE_SHARDS_DIR/*.coverage) and fail under the floor of pyproject.toml's [tool.coverage.report], the one place it is written; the shards run with COVERAGE=1 COVERAGE_SHARD=1 and apply none
+coverage-floor:
+	uv run coverage combine --keep $(COVERAGE_SHARDS_DIR)/*.coverage
+	uv run coverage report --skip-covered
+
 ## alerts          check Meridian's alert rules (infra/kind/alerts) with promtool and run their unit tests and the cost dashboard's gap tests (needs Docker and uv)
 alerts:
 	uv run python scripts/alert_rules.py extract .alerts
@@ -251,6 +267,10 @@ eval:
 	$(MAKE) pytest-db PYTEST_WORKERS=0 PYTEST_ARGS="$(EVAL_TEST) $(EVAL_INJECTION_TEST) -q"
 	$(MAKE) eval-compare
 
+## eval-tests      run only the two tests that write the evaluation reports, in one process, to the paths MERIDIAN_EVAL_REPORT and MERIDIAN_EVAL_INJECTION_REPORT name in the environment, against the database and Redis MERIDIAN_TEST_DATABASE_URL and MERIDIAN_TEST_REDIS_URL name (CI's evaluation job; make eval starts its own); no comparison
+eval-tests:
+	uv run pytest -n 0 $(EVAL_TEST) $(EVAL_INJECTION_TEST) -q
+
 ## eval-compare    compare the two reports with their baselines (meridian eval compare), both even when one fails; refuses a report older than a tracked file it is made from
 eval-compare:
 	@for report in "$(EVAL_REPORT)" "$(EVAL_INJECTION_REPORT)"; do \
@@ -273,9 +293,13 @@ eval-baseline:
 	MERIDIAN_EVAL_INJECTION_SUMMARY=$(abspath $(EVAL_INJECTION_SUMMARY)) \
 	$(MAKE) pytest-db PYTEST_WORKERS=0 PYTEST_ARGS="$(EVAL_TEST) $(EVAL_INJECTION_TEST) -q"
 
-## eval-record     SPENDS MONEY: about 60 chat calls, under EUR 0.50, on the live Azure models, with the judge, to record the golden set's answers and a variant prompt's; rewrites files under data/evaluation/ (needs az login, Docker; the owner runs it)
+## eval-record     SPENDS MONEY: 55 chat calls, EUR 0.12 as measured on 2026-10-03 (the gateway refuses a run past EUR 0.50 for each of the two tenants it charges), on the live Azure models, with the judge, to record the golden set's answers and a variant prompt's; rewrites files under data/evaluation/ (needs az login, Docker; the owner runs it)
 eval-record:
 	infra/terraform/foundation.sh eval-record
+
+## eval-injection-record  SPENDS MONEY: the injection cases the baseline says reach the model (52 on 2026-10-07, about EUR 0.12 expected; the gateway refuses the run past EUR 0.50), answered by the live Azure model with no judge, to write their recording, live report and summary under data/evaluation/ (needs az login, Docker; the owner runs it)
+eval-injection-record:
+	infra/terraform/foundation.sh eval-injection-record
 
 ## registry        validate config/registry, compare it with the Terraform snapshot and check the generated schemas and the tool-server contracts under api/mcp
 registry:

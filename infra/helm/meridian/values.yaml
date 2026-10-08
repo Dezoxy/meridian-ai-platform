@@ -338,7 +338,7 @@ services:
       - -m
       - meridian.platform.common.tlsstart
       - --factory
-      - meridian.workloads.claims_triage.mcp_server.app:create_app_from_env
+      - meridian.platform.claims_mcp.app:create_app_from_env
       - --host
       - 0.0.0.0
       - --port

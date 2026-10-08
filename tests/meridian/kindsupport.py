@@ -18,6 +18,7 @@ from chartsupport import (
 from opentelemetry.sdk.metrics.export import Metric, Sum
 from servicesupport import REPO_ROOT
 
+from meridian.platform.claims_mcp import SERVICE_NAME as CLAIMS_SERVER
 from meridian.platform.cli.db import (
     INGEST_DATABASE_URL_ENV,
     MIGRATIONS_DATABASE_URL_ENV,
@@ -45,7 +46,6 @@ from meridian.runtime.settings import (
     TOOL_SERVERS_ENV,
     RuntimeSettings,
 )
-from meridian.workloads.claims_triage.mcp_server import SERVICE_NAME as CLAIMS_SERVER
 from meridian.workloads.claims_triage.settings import RUNTIME_URL_ENV, ClaimsSettings
 from meridian.workloads.claims_triage.sweep import (
     DOCUMENTS_DEADLINE_ENV as SWEEP_DEADLINE_ENV,
@@ -206,9 +206,7 @@ FACTORIES = {
     "agent-runtime": "meridian.runtime.app:create_app_from_env",
     "model-gateway": "meridian.platform.gateway.app:create_app_from_env",
     POLICY_SERVER: "meridian.platform.policy_mcp.app:create_app_from_env",
-    CLAIMS_SERVER: (
-        "meridian.workloads.claims_triage.mcp_server.app:create_app_from_env"
-    ),
+    CLAIMS_SERVER: "meridian.platform.claims_mcp.app:create_app_from_env",
     KNOWLEDGE_SERVER: "meridian.platform.knowledge_mcp.app:create_app_from_env",
 }
 SETTINGS = {

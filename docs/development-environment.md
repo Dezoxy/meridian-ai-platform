@@ -3,7 +3,8 @@
 Where the work on this repository runs, what that machine needs, and what
 has to be carried to a new one. Written on 2026-10-05, when the work moved
 from a laptop to a dedicated virtual machine, and brought up to date on
-2026-10-06 with what that machine showed in its first two days. Nothing
+2026-10-06 with what that machine showed in its first two days, and on
+2026-10-08 with what runs before a pull request. Nothing
 here names a host, an address or an account: the repository is public.
 
 ## Why the work moved
@@ -38,7 +39,7 @@ fast on the virtual machine", below, has the measurements):
 | Resource | Estimated before the move | The virtual machine, measured 2026-10-06 | Why |
 |---|---|---|---|
 | Processor | 8 cores of its own, 12 if two steps run side by side | 12 cores; the load stood at 1 with the cluster up and seven agents at work, and near 8 during a whole suite with ten workers | The suite's workers and PostgreSQL beside them, and the cluster's own processes |
-| Memory | 24 to 32 GB | 11 GB, fixed. Enough: the cluster's node holds 3.3 GiB, and with six services deployed, five agents at work and one suite of four workers 5.5 GB stayed available | The estimate came from Docker Desktop's 8 GiB virtual machine, where the cluster and the test database shared one small memory; on Linux they share the host's |
+| Memory | 24 to 32 GB | 11 GB, fixed (11.4 GB on 2026-10-08). Enough on 2026-10-06: the cluster's node held 3.3 GiB, and with six services deployed, five agents at work and one suite of four workers 5.5 GB stayed available. On 2026-10-08 the node held about 5 GB and the whole suite with coverage needed about 5.5 GB at its peak, which is not enough together: see "What runs before a pull request" below | The estimate came from Docker Desktop's 8 GiB virtual machine, where the cluster and the test database shared one small memory; on Linux they share the host's |
 | Disk | 80 GB or more | 123 GB, 47 GB used with the cluster's images and seven checkouts | About 30 images on the first `make up`, the image `make deploy` builds on every change, and one checkout per step and per implementer |
 
 `infra/kind/README.md` says to give Docker at least 6 GiB for the cluster
@@ -98,7 +99,7 @@ clone plus the tools above is a working environment. What is not in git:
 | Sign-ins | `gh`, `az`, Docker | Sign in again on the new machine; nothing to copy |
 | The assistant's memory | `~/.claude/projects/<name from the checkout's path>/memory/` | Copy the folder to the name the new path gives, or the next session starts without it |
 | The assistant's saved sessions | `~/.claude/session-data/` | Optional; `/resume-session` reads the latest |
-| Unmerged work | Branches on GitHub | Each open step's branch is pushed at the end of a day, and its section in the plan's Part C says what is left; nothing is only local |
+| Unmerged work | Branches on GitHub | Each open step's branch is pushed at the end of a day, and its file under `docs/plan/steps/` says what is left; nothing is only local |
 
 After a fresh clone open `/hooks` once, as `CLAUDE.md` says, or the edit
 and command hooks do not run.
@@ -122,14 +123,17 @@ For the virtual machine both are recorded below.
 
 - **One whole suite at a time on a machine**, and none beside a deployed
   cluster unless the machine was measured to carry both. Measured on the
-  virtual machine on 2026-10-05, alone: the whole suite takes 2 min 42 s
-  with 4 workers (the default until then), 2 min 03 s with 8 and
-  1 min 55 s with 10. Ten is the Makefile's default since 2026-10-06,
-  the owner's decision; CI sets 4 for its four-core runner, and a step
-  that runs beside others passes 4 (an implementer 3, and the session's own
-  suite 6, while the cluster is up: the plan's Part A). Beside the deployed
-  cluster the suite took 3 min 10 s with 4 workers, with 5.5 GB still
-  available.
+  virtual machine on 2026-10-05, alone, with 9,423 tests: the whole suite
+  took 2 min 42 s with 4 workers (the default until then), 2 min 03 s with 8
+  and 1 min 55 s with 10 (kept as history; on 2026-10-08 the suite was
+  22,437 tests and took 3 min 46 s with the cluster stopped: see "What
+  things cost"). Since 2026-10-08 a whole suite is not run locally before a
+  pull request: CI runs it ("What runs before a pull request" below). Ten
+  is the Makefile's default since 2026-10-06, the owner's decision; CI sets
+  4 for its four-core runner, and a step that runs beside others passes 4
+  (an implementer 3, and the session's own suite 6, while the cluster is up:
+  the plan's Part A). Beside the deployed cluster the suite took 3 min 10 s
+  with 4 workers, with 5.5 GB still available.
 - **An unattended session runs in the Remote Control service on the
   machine, in tmux, not in a desktop session over SSH.** On the night of
   2026-10-05 a desktop session stood still for six hours while its
@@ -209,8 +213,9 @@ For the virtual machine both are recorded below.
 
 ## Working fast on the virtual machine
 
-What was measured on 2026-10-05 and 2026-10-06 on the machine the work moved
-to (12 cores, 11 GB of memory, which is fixed and will not grow), and what
+What was measured on 2026-10-05, 2026-10-06 and (where dated) 2026-10-08 on
+the machine the work moved to (12 cores, 11 GB of memory, which is fixed and
+will not grow), and what
 follows from it. Everything here was seen on that machine; nothing is a
 guess about another.
 
@@ -218,12 +223,13 @@ guess about another.
 
 | What | Time | Note |
 |---|---|---|
-| The whole suite, alone, 4 workers | 2 min 42 s | 9,423 tests |
+| The whole suite, alone, 4 workers | 2 min 42 s | 9,423 tests, 2026-10-05 |
 | The whole suite, alone, 8 workers | 2 min 03 s | |
 | The whole suite, alone, 10 workers | 1 min 55 s | The `Makefile`'s default |
 | The whole suite beside the deployed cluster, 4 workers | 3 min 10 s | 5.5 GB still available |
 | The whole suite, 6 workers, no coverage | 4 min 12 s | 2026-10-07, 20,015 tests; other sessions' work held the load at 4 to 6 |
 | The same suite with `COVERAGE=1` | 4 min 17 s | 20,028 tests, 2.0 % more; with the older tracing core it was 5 min 46 s and 5 min 53 s |
+| The whole suite with coverage, the cluster's node container stopped | 3 min 46 s | 2026-10-08, 22,437 passed and 9 skipped, coverage 99.14 %; the run needs about 5.5 GB at its peak, which is why the node (about 5 GB) was stopped |
 | `make up` from no cluster | 5 min 04 s | Every pinned image resolved on amd64 |
 | The first `make deploy` | 1 min 30 s | 61 s of it waits out the ingestion's token window |
 | `make smoke` | 40 to 52 s | Over 2026-10-06; 35 lines on the deployed cluster |
@@ -234,7 +240,43 @@ guess about another.
 
 Memory with the cluster and six services deployed, five agents at work and
 no suite running: 5.6 GB used, 5.7 GB available, about 2 GB of idle pages
-in swap. The kind node holds 3.3 GiB of it.
+in swap. The kind node holds 3.3 GiB of it. (2026-10-06; on 2026-10-08 the
+node held about 5 GB, as services were added.)
+
+### What runs before a pull request
+
+The owner's decision of 2026-10-08, about 04:45 UTC. The owner asked "What
+does it mean full suite in your understanding?" and then "Okay but ehy dont
+we just test those things that is modified?", and chose **"Affected tests,
+CI runs all (Recommended)"**; offered beside it were keeping the whole suite
+locally and a mixed rule. It replaces, for normal work, "Stop cluster during
+suite (Recommended)" of about 03:57 UTC the same morning, the answer after
+the machine stalled and was rebooted (offered beside that one: the whole suite
+only in CI; both up with a smaller suite). The plan's Part A ("Before
+pushing") holds the rule; this is what it rests on.
+
+- **Locally, before a pull request:** the tests of the changed areas (the
+  changed folders mapped to their test folders, `-n 4` at most; the
+  import-contract tests always; after a merge of `main`, the tests its
+  commits added), `make lint`, `make docs`, `make test` and the secret scan.
+  The cluster stays up.
+- **In CI, on the pull request:** the whole suite. The `python` job took
+  10 min 1 s to 14 min 29 s on the hosted runner before coverage and 14 min
+  0 s with it (2026-10-07), so about 15 minutes. A red run is fixed and pushed
+  again; nothing merges red.
+- **Why, measured:** the machine has 11.4 GB; the kind cluster's node holds
+  about 5 GB; the whole suite with coverage needs about 5.5 GB at its peak
+  (2026-10-08: 22,437 tests in 3 min 46 s with the cluster stopped). The
+  machine froze twice, on 2026-10-07 and 08, and was rebooted once. The
+  older figures above (2 min 42 s for 9,423 tests; the node at 3.3 GiB) are
+  history and were true of the machine on the day they were measured.
+- **A whole local run, when one is wanted by name,** is made with the
+  cluster's node container stopped for its length, the suite under a memory
+  cap and watched, the cluster started again after. The helper for it lives
+  outside the repository for now and is not a `make` target.
+- **The price, said plainly:** a test broken in a file the change did not
+  touch is found in CI, about 15 minutes after the push, not before it. The
+  same morning two count pins in `test_alert_rules.py` were such tests.
 
 ### Where the time goes
 
@@ -314,10 +356,13 @@ known.
   windows), which needs a name and a port of its own the same way:
   `PYTEST_REDIS_CONTAINER` and `PYTEST_REDIS_PORT`, handed to the tests as
   `MERIDIAN_TEST_REDIS_URL`.
-- **Named test files during a contract, the whole suite once per step.**
-  A contract's own files take seconds; the whole suite is the main
-  session's, alone, at the end.
-- **Ten workers alone, four beside others.** The whole suite alone uses
+- **Named test files during a contract; the changed areas' tests before a
+  pull request; the whole suite in CI.** A contract's own files take
+  seconds. ~~The whole suite is the main session's, alone, at the end of a
+  step~~ (until 2026-10-08); since then the whole suite is CI's ("What runs
+  before a pull request", above), and a local whole run is made by name.
+- **Ten workers alone, four beside others** (for a whole local run, or the
+  changed areas' tests at `-n 4` at most). The whole suite alone uses
   the default of ten. A run beside other steps passes `PYTEST_WORKERS=4`:
   three runs of ten would be thirty processes on twelve cores. While the
   cluster is up the session passes six and tells implementers three (a
@@ -358,7 +403,8 @@ two on 2026-10-07), all of them the session's own doing; the notes of S073
 hold the figures of three. It is what the machine carries, and it is not a
 reason to ask for a larger one.
 
-- **What the cluster holds.** The kind node alone is 3.3 GiB, and the cluster
+- **What the cluster holds.** The kind node alone is 3.3 GiB (about 5 GB on
+  2026-10-08, when the whole suite beside it no longer fitted), and the cluster
   with six services and five agents at work left 5.7 GB available (above). A
   test database keeps its PostgreSQL data in memory.
 - **`/tmp` is memory.** On the development machine `/tmp` is a tmpfs, so
@@ -409,6 +455,9 @@ reason to ask for a larger one.
 
 ### What to keep to
 
+- Before a pull request, the changed areas' tests at `-n 4` at most and the
+  whole suite in CI (since 2026-10-08, "What runs before a pull request",
+  above); a whole local run only by name, with the cluster's node stopped.
 - One run with a test database at a time while the cluster is up (above),
   with six workers for a whole suite and three for any other run.
 - A test database's port outside Linux's ephemeral range (32768 to
@@ -508,3 +557,57 @@ what a person at the keyboard needs.
   on this machine (257.63 s against 252.52 s at six workers, 2026-10-07; see
   "What things cost"). The data files a run leaves, `.coverage` and
   `.coverage.*`, are ignored by git.
+
+### How CI runs the suite
+
+CI is the only place that runs every test (the owner, 2026-10-08), so its job
+is built to fail closed. Every pull request and every push to main runs the
+same four jobs of `.github/workflows/python.yml`, side by side:
+
+- `static`: lint, the chart, the alert rules and the registry.
+- `tests`: the suite in four shards, each with a PostgreSQL and a Redis
+  service container. A test belongs to the shard its node id hashes to
+  (`tests/conftest.py`; `MERIDIAN_TEST_SHARD` out of `MERIDIAN_TEST_SHARDS`,
+  both unset on a developer's machine, which runs everything). The split is by
+  a hash of the id, so by count and not by time: the shards hold about a quarter
+  of the tests each and not a quarter of the seconds. The count is
+  `TEST_SHARD_COUNT` at the top of the workflow and the matrix is the list
+  `[1, 2, 3, 4]` written out beside it; raising the count is those two edits in
+  that file, and a test fails on one without the other. Each shard measures
+  coverage, applies no floor and uploads its coverage data and a small report.
+- `evaluation`: the two tests that write the evaluation reports, and the gate
+  that compares them with the baselines.
+- `python`, the required check, last. It succeeds only when `static`, `tests`
+  and `evaluation` all succeeded: a failed, cancelled or skipped job fails it
+  (`scripts/ci_python_verdict.py`, with a unit test over every combination of
+  results GitHub can give, of which one succeeds). It then downloads the four
+  artifacts, checks that each shard left its coverage file and its report,
+  combines the coverage and applies the 98 % floor of `pyproject.toml` once.
+
+The reports are how CI proves that the shards are the whole suite. A shard
+writes, when `MERIDIAN_TEST_SHARD_REPORT` names a file, the shard and the count,
+the number of tests collected before the selection, the number it kept and the
+SHA-256 of the sorted list of all the node ids. The kept count is taken after
+every deselection, so an option that drops tests (`-k`, `-m`, `--deselect`,
+`--lf`) fails the check. `python` refuses unless there is one report for each
+shard, every digest and every total is the same and the kept counts add up to
+the total; it prints the total and the four kept counts.
+
+There is no shortcut for a pull request that changes only documents: it runs
+the whole suite too. A fast path for such pull requests was built (S074) and
+removed again: the test files that name a document are 207 files and 44 % of
+the suite's tests, which in one job is about seven minutes, longer than the four
+shards take side by side, and a hand-kept list of them could miss a test.
+
+What it costs, measured on GitHub in pull request 139 (2026-10-08):
+
+| | One job | Four shards |
+|---|---|---|
+| The tests | 14 min 41 s | 3 min 52 s to 4 min 50 s a shard (5,606 to 5,652 passed each) |
+| A job | 15 min 36 s | 4 min 26 s to 5 min 26 s |
+| Pull request to a green `python` | about 16 min | about 6 min |
+
+`static` took 30 s, `evaluation` 1 min 17 s and `python` 15 s; the combined
+coverage was 99.14 % from the four files. The two evaluation tests run twice,
+once in a shard and once in `evaluation`, about 85 s of runner time (a backlog
+row, S074).

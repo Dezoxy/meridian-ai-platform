@@ -9,7 +9,8 @@ Three things, each pinned here and run where it can be:
   ``PING`` as the ACL user ``probe`` (``up.sh`` writes it: no password, no key, no
   channel, exactly ``+ping``) and pass only when the OUTPUT is ``PONG``. The
   rendered scripts are run here against a stand-in ``redis-cli``; the proof on the
-  pinned image (healthy, frozen, restarted) is in the step's Part C section.
+  pinned image (healthy, frozen, restarted) is in the step's file under
+  docs/plan/steps/.
 * Redis's side is tighter: TLS 1.3 alone, and 1 MB for a bulk and for a client's
   query buffer, which bounds what an authenticated ``SCRIPT LOAD`` can put in
   memory. The header of the template says what no directive bounds.

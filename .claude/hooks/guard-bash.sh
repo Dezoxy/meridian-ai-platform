@@ -368,6 +368,200 @@ fi
 
 shopt -s nocasematch
 
+# ---- S071: copies of the command for the rules S071 adds (G4) ----
+# Everything between here and "hard denies" is ADDED: helpers and copies. No
+# variable of the rules above is assigned again, and the pass that builds
+# hook_cmd is neither edited nor called with other arguments: the rules that
+# read hook_cmd (main's older rules) read exactly what they read before. The
+# rules S071 adds read the copies below, each only to ASK or DENY more; a
+# rule that is added can tighten and cannot weaken (S071, G4: the pass that
+# builds hook_cmd was changed in G2 and G3, and each change weakened a rule of
+# main in a way the next review found; the decision was to stop touching it).
+#   - unsep: the text with ; & | and newline INSIDE quoted pieces turned into
+#     blanks, because the rules that look for a target after make cut on a
+#     separator without knowing a quote (make -C "a;b" eval-record). The copy of
+#     it is cmd_q (of cmd), and a rule reads it in addition to the text it read
+#     before, never instead. (A copy of hook_cmd was made in G4 and is gone in
+#     G5: a rule that read it without a command-word gate asked or denied on a
+#     search with an alternation inside quotes, rg "make (aws-apply|aws-destroy)".)
+#   - cmd_prose_blank: a pass of its OWN over the raw cmd, with the same job as
+#     the pass that builds hook_cmd (the quoted value of -m, -am, --message,
+#     --body, --title and --notes is emptied, unless it holds a command
+#     substitution), for the two rules that must not ask on a commit message or a
+#     pull request body that names the raw request or the identity library.
+#   - aws_make_quoted: make as the command word of a segment, behind
+#     assignments, env, sudo and the like (an option's argument is not the
+#     command word: sudo -u make git commit ... is a commit), then an AWS target
+#     after it, read from the raw cmd: a QUOTED word that is exactly a target
+#     (make -m "aws-apply": GNU make ignores -m, so the quoted word is the target,
+#     and the pass that builds hook_cmd empties it as a message), unless it is the
+#     value of a variable (K="aws-destroy"), or an unquoted word that is one when a
+#     separator inside an earlier quoted argument hid it from main's rules (make
+#     -f "a&b.mk" aws-destroy). The command-word gate is what keeps a search or an
+#     echo that holds the words (rg "make (aws-apply|aws-destroy)" docs) as main
+#     gives it. A quoted word after a shell's -c or after eval is scanned too.
+# Each helper masks the quoted pieces ONCE with a filler of the same length and
+# works on that, so the cost is a few scans of the text and not one scan for
+# every flag. A python3 that is missing or fails leaves the text as it is,
+# which is the stronger direction (the rules then read the raw command).
+# shellcheck disable=SC2016  # the Python sources below are meant to stay literal
+s071_unsep_py='
+import re, sys
+PIECE = re.compile(r"\x27[^\x27]*\x27|\"(?:[^\"\\]|\\.)*\"")
+sys.stdout.write(PIECE.sub(lambda m: re.sub(r"[;&|\n]", " ", m.group(0)), sys.stdin.read()))
+'
+# shellcheck disable=SC2016
+s071_prose_py='
+import re, sys
+PROSE = r"((?<![\w-])-(?![A-Za-z]*c)[A-Za-z]*m|--message|--body|--title|--notes)(\s+|=)?"
+SINGLE = r"\x27[^\x27]*\x27"
+DOUBLE = r"\"(?:[^\"\\]|\\.)*\""
+QUOTED = "(?:" + SINGLE + "|" + DOUBLE + ")"
+ATOM = re.compile(PROSE + "(" + QUOTED + "+)|" + QUOTED)
+PIECE = re.compile(QUOTED)
+def value_of(m):
+    value = m.group(3)
+    executes = any(
+        p[0] == "\"" and ("$(" in p or "`" in p) for p in PIECE.findall(value)
+    )
+    value = re.sub(r"[;&|\n]", " ", value) if executes else "\"\""
+    return m.group(1) + (m.group(2) or "") + value
+def read(text):
+    def atom(m):
+        if m.group(3) is not None:
+            return value_of(m)
+        quoted = m.group(0)
+        return quoted[0] + read(quoted[1:-1]) + quoted[-1]
+    return ATOM.sub(atom, text)
+sys.stdout.write(read(sys.stdin.read()))
+'
+# shellcheck disable=SC2016
+s071_awsmake_py='
+import re, sys
+PIECE = re.compile(r"\x27[^\x27]*\x27|\"(?:[^\"\\]|\\.)*\"")
+ASSIGN = r"[A-Za-z_]\w*=\S*"
+# The prefixes that run the next word as a command. An option that takes an
+# ARGUMENT (sudo -u USER, env -u NAME, timeout -s SIG, xargs -I STR, nice -n N,
+# time -f FMT, exec -a NAME) eats the word after it, so that make as the argument
+# of an option (sudo -u make git commit ...) is not the command word. The second
+# alternative of a flag refuses an argument-taking letter followed by a blank, so
+# the engine cannot take -u as a flag without argument when the first fails.
+# The letters of a flag are CASE-SENSITIVE ((?-i: ...) inside the pattern that is
+# compiled with re.I): the tools tell -h from -H, -p from -P and -i from -I, and a
+# flag read as a neighbour of its own case eats the real command word (sudo -H
+# make, sudo -P make, xargs -p/-i/-l make: G5, MEDIUM-1). The words themselves
+# (sudo, make) stay case-blind on purpose, as the rules of main are (nocasematch): a
+# denied command in an unusual case is denied, which is the stronger direction. Letters
+# that take an argument SEPARATED by a blank are listed, and only those: env -S
+# is left out, because env -S make ... runs make (its string is the command line,
+# so make is the command word, and a quoted string after env -S is scanned as a
+# body below); xargs -e, -i and -l take their argument attached or none.
+# nohup, command, builtin and setsid take flags of their own (command -p, setsid
+# -f), and the word after them is still the command word; command -v and -V only
+# look a name up and run nothing, so they are not read as a prefix.
+def flag(args):
+    return r"(?-i:-[" + args + r"]\s+\S+|-(?![" + args + r"]\s)\S+)"
+OWN_FLAGS = r"(?:\s+-(?![A-Za-z]*[vV])\S+)*"
+PREFIX = (
+    r"(?:(?:"
+    r"sudo(?:\s+" + flag("ugphCDRTUrt") + r")*"
+    r"|env(?:\s+" + flag("uCP") + r")*"
+    r"|timeout(?:\s+" + flag("sk") + r")*(?:\s+\d+[smhd]?)?"
+    r"|xargs(?:\s+" + flag("InLPsEda") + r")*"
+    r"|nice(?:\s+" + flag("n") + r")*"
+    r"|time(?:\s+" + flag("fo") + r")*"
+    r"|exec(?:\s+" + flag("a") + r")*"
+    r"|(?:nohup|command|builtin|setsid)" + OWN_FLAGS +
+    r")\s+(?:" + ASSIGN + r"\s+)*)*"
+)
+COMMAND_WORD = re.compile(
+    r"\s*(?:(?:if|then|do|else|elif|while|until|!)\s+)*"
+    r"(?:" + ASSIGN + r"\s+)*" + PREFIX + r"(?:\S*/|\$\{?)?(?:g|gnu)?make(?![\w-])",
+    re.I,
+)
+# A target is a QUOTED word that is exactly an AWS target (not the value of a
+# variable: K="aws-destroy" is make test with K set, and the character before the
+# piece is =), or an unquoted word that is one (the quoted pieces are masked, so
+# a separator inside an earlier quoted argument hides nothing).
+TARGET = re.compile(r"\s*aws-(?:kubeadm-)?(destroy|apply|plan)\s*$", re.I)
+WORD = re.compile(r"(?<!\S)aws-(?:kubeadm-)?(destroy|apply|plan)(?![\w.-])", re.I)
+# A quoted word after the -c of a shell (bash -c "...", sh -lc ..., not grep -c,
+# wc -c or cut -c) or after eval is a command line of its own and is scanned the same
+# way, to a depth of three. A double-quoted body is unescaped first (\" and \\).
+# Between the shell and its -c the gate allows what people type (G6, MEDIUM-2): a
+# flag in one word (-x, -eu, +e, --norc, --login, --posix), a flag that ends in o
+# or O and its option name (-o pipefail, -eo pipefail, -euo pipefail, -O extglob,
+# +o history), and --rcfile or --init-file and its file, in any number. The
+# argument of those is a word that does not start with - or + , so that each word
+# has ONE reading and a run of them cannot be split two ways (no backtracking
+# blow-up). The window before the quote is still 80 bytes: more flags than fit in
+# it are not read (a pinned gap). The gate stays anchored on a shell word, so
+# grep -c, wc -c, cut -c and rg -c are what main gives. Also a body: "$SHELL" -c,
+# su [user] -c (up to four words between, none a quote or separator), and a quoted
+# string after env -S (env -S with a quoted string runs it as a command line).
+SHELL_OPTS = (
+    r"(?:\s+(?:--(?:rcfile|init-file)\s+[^\s+-]\S*"
+    r"|[-+][A-Za-z]*[oO]\s+[^\s+-]\S*"
+    r"|[-+]\S+))*"
+)
+BODY = re.compile(
+    r"(?:^|[\s;&|(/])(?:(?:ba|z|da|k|a)?sh|\"?\$\{?SHELL\}?\"?)"
+    + SHELL_OPTS + r"\s+-[A-Za-z]*c\s+$"
+    r"|(?:^|[\s;&|(])eval\s+$"
+    r"|(?:^|[\s;&|(/])su(?:\s+[^\s;&|\"\x27]+){0,4}?\s+-[A-Za-z]*c\s+$"
+    r"|(?:^|[\s;&|(/])env(?:\s+-\S+)*\s+-[A-Za-z]*S\s+$",
+    re.I,
+)
+rank = {"": 0, "plan": 1, "apply": 2, "destroy": 3}
+def scan(text, depth):
+    masked = PIECE.sub(lambda m: m.group(0)[0] + "x" * (len(m.group(0)) - 2) + m.group(0)[-1], text)
+    cuts = [-1] + [m.start() for m in re.finditer(r"[;&|\n(`{]", masked)] + [len(masked)]
+    worst = ""
+    for i in range(len(cuts) - 1):
+        start, end = cuts[i] + 1, cuts[i + 1]
+        word = COMMAND_WORD.match(masked, start, end)
+        if word is None:
+            continue
+        for piece in PIECE.finditer(text, word.end(), end):
+            if piece.start() and text[piece.start() - 1] == "=":
+                continue
+            hit = TARGET.match(piece.group(0)[1:-1])
+            if hit and rank[hit.group(1).lower()] > rank[worst]:
+                worst = hit.group(1).lower()
+        for hit in WORD.finditer(masked, word.end(), end):
+            if rank[hit.group(1).lower()] > rank[worst]:
+                worst = hit.group(1).lower()
+    if depth < 3:
+        for piece in PIECE.finditer(text):
+            if BODY.search(text, max(0, piece.start() - 80), piece.start()):
+                body = piece.group(0)[1:-1]
+                if piece.group(0)[0] == "\"":
+                    body = re.sub(r"\\(.)", r"\1", body, flags=re.S)
+                inner = scan(body, depth + 1)
+                if rank[inner] > rank[worst]:
+                    worst = inner
+    return worst
+sys.stdout.write(scan(sys.stdin.read(), 0))
+'
+s071_unsep() { # $1=the text: the text with the separators inside quoted pieces blanked
+  if [[ "$1" == *[\;\&\|]* || "$1" == *$'\n'* ]] && [[ "$1" == *[\"\']* ]]; then
+    printf '%s' "$1" | python3 -I -c "$s071_unsep_py" 2>/dev/null || printf '%s' "$1"
+  else
+    printf '%s' "$1"
+  fi
+}
+s071_prose_blank() { # $1=the text: the quoted values of the message options emptied
+  printf '%s' "$1" | python3 -I -c "$s071_prose_py" 2>/dev/null || printf '%s' "$1"
+}
+s071_aws_make_quoted() { # $1=the raw text: destroy, apply, plan or nothing
+  printf '%s' "$1" | python3 -I -c "$s071_awsmake_py" 2>/dev/null || true
+}
+# The copy, made only when a rule below can use it.
+cmd_q="$cmd"
+if [[ "$cmd" == *azure-* || "$cmd" == *record* || "$cmd" == *gateway-live* ]]; then
+  cmd_q="$(s071_unsep "$cmd")"
+fi
+
 # ---- hard denies ----
 [[ "$cmd" =~ rm[[:space:]]+-[a-z]*r[a-z]*f?[[:space:]]+(/|~|\$HOME|\.\.($|/)) ]] && \
   decide deny "Recursive force-delete of a sensitive path. Run it yourself if truly intended."
@@ -912,6 +1106,26 @@ if [[ "$hook_cmd" == *aws* || -n "$aws_in_module" ]]; then
   unhelped "$hook_cmd" "$aws_deny_re" && \
     decide deny "That deletes AWS resources, or prints a new credential, a database login token, a decrypted value or a role's credentials to the transcript. Run it yourself; the owner's removal is make aws-destroy (infra/terraform/aws.sh destroy aws-kubeadm for the self-managed module)."
 fi
+# S071 (G4, G5), an ADDED deny for the AWS removal, beside the one above, reading
+# the raw cmd through aws_make_quoted. It denies what the rule above denies in
+# the plain form, so a decision that was none or an ask on main can only become
+# a deny. It fires only when make is the command word of a segment (behind
+# assignments and the prefixes, an option's argument not counting) and an AWS
+# removal target stands after it: as a QUOTED word that is exactly the target
+# (make -m "aws-destroy" is a removal, GNU make ignores -m, and the pass that
+# builds hook_cmd empties the quoted word after -m as if it were a commit
+# message), or as an unquoted word when a separator inside an earlier quoted
+# argument hid it from the rule above (make -f "a&b.mk" aws-destroy). The
+# command-word gate is why this may deny: git commit -m "make aws-destroy",
+# echo "make aws-destroy", rg "make (aws-apply|aws-destroy)" docs and
+# make test K="aws-destroy" are not read by it and stay what main gives. The
+# apply and plan targets found the same way only ask (further below).
+s071_aws_removal_deny="make aws-destroy, make aws-kubeadm-destroy and aws.sh destroy remove the AWS environment and are the owner's to run (hard rule 8): in a terminal, from a machine or user where no session holds the credentials (infra/terraform/aws/README.md or infra/terraform/aws-kubeadm/README.md, \"Removal\")."
+s071_aws_target=""
+if [[ "$cmd" == *aws-* && "$cmd" == *make* ]]; then
+  s071_aws_target="$(s071_aws_make_quoted "$cmd")"
+  [[ "$s071_aws_target" == destroy ]] && decide deny "$s071_aws_removal_deny"
+fi
 if [[ "$hook_cmd" == *TF_* || "$hook_cmd" == *AWS_ENDPOINT_URL* ]]; then
   [[ "$hook_cmd" =~ $aws_tf_assign_re && "$hook_cmd" =~ $aws_tf_target_re ]] && \
     decide deny "A TF_* or AWS_ENDPOINT_URL* assignment in front of terraform, tofu, aws, aws.sh or make aws-* changes what they run (a log level, extra arguments, a variable, a workspace, a configuration file, an endpoint). Set the value in the module or the local file instead."
@@ -1007,6 +1221,156 @@ state_re="${runner}${script_path}state\.sh${script_end}"
 foundation_apply_re="${runner}${script_path}foundation\.sh[[:space:]]+[\"${sq}]?apply${script_end}"
 [[ "$cmd" =~ $foundation_apply_re ]] && \
   decide ask "foundation.sh apply creates or changes Azure resources; confirm the plan and subscription first."
+# The asks for a paid model call (S071, G1). `make eval-record`,
+# `make eval-injection-record` and `make gateway-live` run, through
+# infra/terraform/foundation.sh, real calls on the live Azure models and spend
+# money; the settings allow `make *`, so nothing else asks before them. A signed-
+# in session is one command from a paid run, and the owner's yes to a stated
+# cost comes first (the plan's Part A). `make azure-smoke` passes on purpose: it
+# is three calls to prove the deployments answer, well under a cent, and the
+# free replay (`make eval`, `eval-baseline`, `eval-compare`) calls no model. The
+# three rules read cmd, as the Azure rules above do, not hook_cmd as the AWS
+# rules do: quoted text is read as a use, so an echo, a search or a message on
+# the command line that names a target asks (a commit message goes in with
+# -F file: the file is no command line, but a heredoc on -F - stays in the text
+# and asks). They ask and never deny, so the owner can say yes.
+#   - the make rule is azure_make_re with the three targets, `gmake` too, a
+#     quote, a bracket or a backtick after the word make ($(command -v make)
+#     eval-record, ${MAKE} eval-record, 'make' eval-record) and an end that also
+#     takes `<`, `>` and a backtick (make eval-record>run.log). A target that a
+#     variable or a substitution builds, a quote inside a word, a loop over
+#     targets and a script copied under another name are not read (the header's
+#     list of what the guard does not see);
+#   - the script rule has no anchor to a command start (foundation_apply_re
+#     reads one, with an interpreter, its flags and a path): a word that ends in
+#     foundation.sh followed by one of the three sub-commands, so a copy of the
+#     script under another name, bash -o errexit in front, or a quoted path asks;
+#   - the opt-in rule reads the variables the paid tests read, anywhere in the
+#     command, for any value that is not 0 or empty (the tests read 1 and
+#     nothing else; a form of 1 this rule did not foresee still asks): it does
+#     not need the word pytest, because make test hands the environment on.
+paid_end="([[:space:]]|\$|[;&|)<>\"${sq}\`])"
+paid_target="(eval-record|eval-injection-record|gateway-live)"
+paid_make_re="(^|[^[:alnum:]_.-])(g|gnu)?make[\"${sq})}\`]*[[:space:]]+([^;&|${nl}]*[[:space:]])?[\"${sq}]?${paid_target}${paid_end}"
+paid_script_re="foundation\.sh[\"${sq}]?[[:space:]]+[\"${sq}]?${paid_target}${paid_end}"
+if [[ "$cmd" == *record* || "$cmd" == *gateway-live* ]]; then
+  [[ "$cmd" =~ $paid_make_re || "$cmd" =~ $paid_script_re ]] && \
+    decide ask "make eval-record, make eval-injection-record, make gateway-live and the foundation.sh sub-commands behind them call a live model and spend money: the owner's yes to a stated cost comes first (make azure-smoke, three calls under a cent, and make eval, which replays the recording, do not ask)."
+fi
+paid_env_re="(^|[^[:alnum:]_])(MERIDIAN_LIVE_AZURE|MERIDIAN_EVAL_RECORD|MERIDIAN_EVAL_INJECTION_RECORD)[:+]?="
+paid_env_off_re="^(0|\"0\"|${sq}0${sq}|\"\"|${sq}${sq})?([[:space:]]|\$|[;&|)<>])"
+paid_env_ask="MERIDIAN_LIVE_AZURE, MERIDIAN_EVAL_RECORD and MERIDIAN_EVAL_INJECTION_RECORD opt in the tests that call a live model and spend money: the owner's yes to a stated cost comes first (set to 0 or to nothing, they ask no question)."
+if [[ "$cmd" == *MERIDIAN_* ]]; then
+  paid_env_text="$cmd"
+  paid_env_reads=0
+  while [[ "$paid_env_text" =~ $paid_env_re ]]; do
+    [ $(( ++paid_env_reads )) -le 16 ] || decide ask "$paid_env_ask"
+    paid_env_text="${paid_env_text#*"${BASH_REMATCH[0]}"}"
+    [[ "$paid_env_text" =~ $paid_env_off_re ]] || decide ask "$paid_env_ask"
+  done
+fi
+# ---- S071 (G4): ADDED asks, beside the three paid targets' rules above ----
+# Each block below is an added rule. It reads the raw cmd or a copy made at the
+# top, only asks, and sits after every deny of the file (the last deny is above
+# these lines), so it can turn a none into an ask and cannot turn a decision of
+# main into a weaker one.
+#
+# 1. The paid targets by CO-OCCURRENCE, with no command-word gate: the word make
+#    (make, gmake, gnumake, $MAKE, ${MAKE}, a path that ends in make) anywhere in
+#    the command and a whole-word paid target anywhere in it. This closes a
+#    target in a variable or a loop (T=eval-record; make $T), xargs, a separator
+#    in an unquoted substitution (make -C $(cd x; pwd) eval-record) and a quoted
+#    separator at once, which the rules above (make, then no separator, then the
+#    target) cannot. The price, paid on purpose: a command that names make and a
+#    paid target in different places asks too (a commit message typed on the
+#    command line that names make and eval-record, make eval-baseline followed
+#    by a search for gateway-live). A false ask costs the owner a click; a
+#    missed one costs money. The rules above stay as they are. A target must not
+#    begin inside a longer name (my-eval-record, xgateway-live stay none: the
+#    left boundary excludes a hyphen), with one exception that a hyphen is the
+#    reason for: the default-value expansions of the shell, ${T:-eval-record},
+#    ${T-gateway-live}, ${T:=eval-record}, ${T:+eval-record} and ${T:?eval-record},
+#    which hand the target to make (s071_default_re: an operator character right
+#    before the target inside ${...}). The false ask this adds is a name that
+#    begins with an operator inside braces (${T:-my-eval-record}).
+s071_make_word_re="(^|[^[:alnum:]_.-])(g|gnu)?make([^[:alnum:]_.-]|\$)"
+s071_target_re="(^|[^[:alnum:]_.-])${paid_target}${paid_end}"
+s071_default_re="\\\$\\{[^}]*[-=+?]${paid_target}(${paid_end}|})"
+s071_paid_ask="make eval-record, make eval-injection-record, make gateway-live and the foundation.sh sub-commands behind them call a live model and spend money: the owner's yes to a stated cost comes first (make azure-smoke, three calls under a cent, and make eval, which replays the recording, do not ask)."
+if [[ "$cmd" == *record* || "$cmd" == *gateway-live* ]]; then
+  [[ "$cmd" =~ $s071_make_word_re && ( "$cmd" =~ $s071_target_re || "$cmd" =~ $s071_default_re ) ]] && \
+    decide ask "$s071_paid_ask"
+  # 2. The flags variable: GNU make 4.4.1 reads a target given after -- from
+  #    MAKEFLAGS and from GNUMAKEFLAGS (measured on a scratch Makefile with
+  #    harmless targets), so MAKEFLAGS="-- eval-record" make runs the paid target
+  #    with no target on the line. An assignment to either name that holds a
+  #    paid target asks, with or without the word make on the line, and in the
+  #    quoted-separator copy as well.
+  s071_flags_re="(MAKEFLAGS|GNUMAKEFLAGS)[:+]?=[^;&|${nl}]*[[:space:]\"${sq}]${paid_target}${paid_end}"
+  [[ "$cmd" =~ $s071_flags_re || "$cmd_q" =~ $s071_flags_re ]] && decide ask "$s071_paid_ask"
+fi
+# 3. The Azure targets behind a quoted separator: azure_make_re of main, read on
+#    cmd_q as well (make -C "a;b" azure-apply).
+if [[ "$cmd" == *azure-* ]]; then
+  [[ "$cmd_q" =~ $azure_make_re ]] && \
+    decide ask "make azure-state and make azure-apply create or change Azure resources; confirm the plan and subscription first."
+fi
+# 4. The AWS apply and plan targets, found from the raw cmd by aws_make_quoted
+#    (s071_aws_target, made above) with make as the command word: behind a make
+#    option and a QUOTED word (make -m "aws-apply"), or after a separator inside
+#    an earlier quoted argument (make -C "a;b" aws-apply). The wording is the one
+#    of main's asks.
+s071_aws_apply_ask="make aws-apply, make aws-kubeadm-apply and aws.sh apply (the managed module or the self-managed one, aws-kubeadm) create the AWS environment and COST MONEY: it bills by the hour until make aws-destroy (aws.sh destroy aws-kubeadm). The owner runs it, after reading the plan, from a machine or user where no session holds the credentials (infra/terraform/aws/README.md or infra/terraform/aws-kubeadm/README.md); confirm only if that is where this runs."
+s071_aws_plan_ask="make aws-plan, make aws-kubeadm-plan and aws.sh plan (either module) sign in to AWS with the owner's credentials and read the account; they need those credentials, and no session should hold them (infra/terraform/aws/README.md or infra/terraform/aws-kubeadm/README.md). Confirm that this is the owner's own session."
+[[ "$s071_aws_target" == apply ]] && decide ask "$s071_aws_apply_ask"
+[[ "$s071_aws_target" == plan ]] && decide ask "$s071_aws_plan_ask"
+# 5. The paid call itself, not only its three targets (the owner signs in to
+#    Azure on this machine): `az rest` (any method: a POST to a deployment is a
+#    paid call, and a GET with a token is nothing a session needs) and a Python
+#    line that builds a credential from the Azure identity library reach the
+#    models without a target and without the gateway's ceiling, route and audit.
+#    Both are decided by the command word, as the az rules above are: a search
+#    for a credential class or the module (grep -rn DefaultAzureCredential src)
+#    names no interpreter and stays free. A search whose QUOTED pattern names the
+#    raw request asks (grep -rn "az rest" docs), and so does a pytest -k that
+#    names a class: quoted text is read as a use, as in the az rules above, and
+#    blanking the quoted pattern of a search was tried and taken out in S036 (it
+#    hid a command substitution inside the pattern). The rules read cmd_prose_blank, the copy in which
+#    the quoted value of a message option (a commit message, a pull request
+#    body) is emptied and the separators inside quoted pieces are blanks, so a
+#    message that names them is none. The identity rule asks when the
+#    interpreter word and a credential name stand in the SAME segment (cut at
+#    ; & | and newlines), except in a command with a heredoc, whose body is on
+#    other lines of the same command and is read whole; and when the interpreter
+#    segment is bare python reading standard input (python3, python3 -), the
+#    segment before the pipe is read for the names too (echo "..." | python3),
+#    while rg X | python3 -m json.tool stays none. uv run and uvx count as an
+#    interpreter only when python, a script file (.py) or a heredoc dash follows.
+#    Not read: a script written to a file and run by name (the header's
+#    file-then-run gap), another interpreter, a quoted or variable command word,
+#    and the repository's own code that builds a credential (no name is on the
+#    line).
+s071_az_rest_re="${cloud_cli}az[[:space:]]+([^;&|${nl}]*[[:space:]])?[\"${sq}]?rest[\"${sq}]?${paid_end}"
+s071_id_re="azure[.]identity|(Default|AzureCli|AzureDeveloperCli|AzurePowerShell|ManagedIdentity|ClientSecret|ClientCertificate|Environment|ChainedToken|Chained|InteractiveBrowser|DeviceCode|Workload|VisualStudioCode|UsernamePassword|SharedTokenCache)(Azure)?Credential|get_bearer_token_provider|azure_cli_token_provider"
+s071_py_re="(^|[^[:alnum:]_.-])(i?python[0-9.]*|uv[[:space:]]+run[[:space:]]+([^;&|]*[[:space:]])?(i?python[0-9.]*|-|[^[:space:];&|]*\.py)|uvx[[:space:]]+([^;&|]*[[:space:]])?i?python[0-9.]*)([^[:alnum:]_.-]|\$)"
+s071_bare_py_re="^[[:space:]]*(([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*|env|sudo|nohup|time|command|exec)[[:space:]]+)*[^[:space:]]*python[0-9.]*([[:space:]]+-)?[[:space:]]*\$"
+s071_door="a session may not build its own path to a live model: the gateway's targets (make eval-record, make eval-injection-record, make gateway-live) are the only door, and the owner's yes to a stated cost comes first."
+if [[ "$cmd" == *rest* || "$cmd" == *credential* || "$cmd" == *azure?identity* || "$cmd" == *token_provider* ]]; then
+  s071_text="$(s071_unsep "$(s071_prose_blank "$cmd")")"
+  [[ "$s071_text" =~ $s071_az_rest_re ]] && \
+    decide ask "az rest calls an Azure endpoint with the owner's token, and a request to a model deployment is a live call that spends money without the gateway's ceiling, route and audit: ${s071_door}"
+  s071_id_ask="A Python line that names the Azure identity library's credential classes mints the token a direct call to a model needs, a live call that spends money without the gateway's ceiling, route and audit: ${s071_door}"
+  if [[ "$s071_text" == *"<<"* ]]; then
+    [[ "$s071_text" =~ $s071_id_re && "$s071_text" =~ $s071_py_re ]] && decide ask "$s071_id_ask"
+  else
+    s071_prev=""
+    while IFS= read -r seg; do
+      [[ "$seg" =~ $s071_id_re && "$seg" =~ $s071_py_re ]] && decide ask "$s071_id_ask"
+      [[ "$seg" =~ $s071_bare_py_re && "$s071_prev" =~ $s071_id_re ]] && decide ask "$s071_id_ask"
+      s071_prev="$seg"
+    done < <(printf '%s\n' "$s071_text" | sed -E 's/(&&|\|\||;|\||&)/\n/g')
+  fi
+fi
 # The asks for the AWS environment (S036); the denies are above, with the
 # reasoning. `make aws-validate` and `make aws-scan` change nothing in AWS and
 # pass, as `make azure-plan` does. They read hook_cmd (a commit message that
