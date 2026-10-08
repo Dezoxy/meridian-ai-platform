@@ -103,6 +103,11 @@ TRIVY_IMAGE         := ghcr.io/aquasecurity/trivy:0.75.0@sha256:af6acf9a6b85dfe3
 # The adjuster's decision `make demo` posts for a claim referred to an adjuster:
 # approve, reject or request_documents (the script refuses anything else).
 DECISION            ?= approve
+# How many claims `make demo-seed` posts (the first of data/synthetic/claims.json,
+# 1 to 47; the first 40 are the golden set) and the seconds it waits after each
+# claim it triaged (0 to 60). The script refuses anything else.
+COUNT               ?= 40
+PACE_SECONDS        ?= 2
 # The evaluation of the claims workload (S017, S050): the baseline committed in
 # Git, the report a run writes (gitignored) and the one test that writes it. It
 # replays a real model's recorded answers through the Model Gateway (CI and
@@ -123,7 +128,7 @@ EVAL_INPUTS         := src config/registry data/synthetic data/evaluation/record
 
 STRUCTURIZR := docker run --rm -v "$(CURDIR)/$(ARCH_DIR):/w:ro"
 
-.PHONY: help validate inspect check docs test secret-scan view export mermaid-views mermaid-render mermaid pdf clean lint pytest coverage-floor pytest-db alerts eval eval-tests eval-compare eval-baseline eval-record eval-injection-record synthetic up deploy images helm-lint demo smoke gateway-upkeep grafana grafana-password cert-renew cluster-holder down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry aws-validate aws-scan aws-plan aws-apply aws-destroy gcp-validate gcp-scan aws-kubeadm-validate aws-kubeadm-scan gcp-kubeadm-validate gcp-kubeadm-scan azure-platform-validate azure-platform-scan
+.PHONY: help validate inspect check docs test secret-scan view export mermaid-views mermaid-render mermaid pdf clean lint pytest coverage-floor pytest-db alerts eval eval-tests eval-compare eval-baseline eval-record eval-injection-record synthetic up deploy images helm-lint demo demo-seed smoke gateway-upkeep grafana grafana-password cert-renew cluster-holder down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry aws-validate aws-scan aws-plan aws-apply aws-destroy gcp-validate gcp-scan aws-kubeadm-validate aws-kubeadm-scan gcp-kubeadm-validate gcp-kubeadm-scan azure-platform-validate azure-platform-scan
 .DEFAULT_GOAL := help
 
 ## help            list the targets
@@ -326,6 +331,10 @@ images:
 ## demo            deploy, post a synthetic claim at http://claims.meridian.localhost:8088, find its trace across the five services that triage it in Tempo and, when it is referred to an adjuster, decide it and find that trace too (make demo DECISION=reject; approve, reject or request_documents)
 demo: deploy
 	DECISION="$(DECISION)" infra/kind/demo.sh
+
+## demo-seed       post the first COUNT (default 40, at most 47) synthetic claims through the edge, one at a time, so the adjuster's and the claimant's pages show content; kind only, synthetic data only, the gateway's replay mode is simulated and calls no model so it costs nothing; safe to run twice (a failed triage is tried again); decides nothing; needs make deploy and 2,500 MB of free memory, and refuses while a test database runs (make demo-seed COUNT=47 adds the seven claims after the golden set)
+demo-seed:
+	COUNT="$(COUNT)" PACE_SECONDS="$(PACE_SECONDS)" infra/kind/demo-seed.sh
 
 ## smoke           prove the edge, pgvector, the policy, knowledge and migration stores, a trace, log and metric reaching Grafana's datasources, the cost dashboard and, once deployed, one call per tool server through the runtime's client, the gateway's series, the adjuster's and claimant's pages, the sweep's last Job and that its schedule has not stopped, that three connections no network policy allows are blocked and one it allows is not, that the gateway refuses a caller with no identity or with another CA's certificate, that the certificate policy stands and the issuer refuses a request from another namespace, and that the alert rules are loaded, healthy and quiet and the health dashboard is served
 smoke:

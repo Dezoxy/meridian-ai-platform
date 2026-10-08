@@ -533,9 +533,9 @@ host and path answers 404.
 
 ## Prerequisites
 
-Docker (running), `kind`, `kubectl`, `helm`, `openssl` and `jq`. `make smoke`
-and `make demo` also need `curl`. `make up`, `make deploy`, `make smoke` and
-`make gateway-upkeep` also need `timeout` (coreutils; it bounds a call of
+Docker (running), `kind`, `kubectl`, `helm`, `openssl` and `jq`. `make smoke`,
+`make demo` and `make demo-seed` also need `curl`. `make up`, `make deploy`,
+`make smoke` and `make gateway-upkeep` also need `timeout` (coreutils; it bounds a call of
 `kubectl` that no flag bounds, see "How long the scripts wait for the API
 server", S073), and refuse to start without it. The wrapper reads two behaviours
 of it, the statuses 124 (ended) and 137 (killed after the grace); GNU `timeout`
@@ -569,6 +569,7 @@ node image, Kubernetes components and the platform).
 | `make helm-lint` | `helm lint --strict` on the chart with kind's values and every Job on (the upkeep Job with one argument and a suffix, which it needs to render). Needs no cluster; CI runs it. |
 | `make alerts` | Prometheus's own checker (`promtool`, from a pinned image) on the alert rules, then their unit tests. Needs Docker and no cluster; CI runs it. |
 | `make demo` | Runs `make deploy`, then posts a synthetic claim and finds its trace in Tempo; when the claim waits for an adjuster, posts the decision (`make demo DECISION=reject`; approve by default) and finds that trace too. Prints PASS only when each trace has at least one span from each service it must cross (a service Tempo lists with no span does not count) and its span counts have settled (unchanged for three readings, six seconds). Passed on the cluster on 2026-10-06 with spans from every service, in 30 s; the zero-span rule and the FAIL wording "alternated" were tested against a stub and not seen on the cluster. |
+| `make demo-seed` | Needs `make deploy`. Posts the first `COUNT` synthetic claims (40 by default, at most 47; `PACE_SECONDS` apart, 2 by default) through the edge one at a time, so the adjuster's and the claimant's pages show content; prints a line a claim and the counts by state. Kind only; the model is simulated, so it costs nothing; safe to run twice; decides nothing. Reads who holds the cluster and stops for another holder unless `TAKE_CLUSTER=1` is in front of it; refuses under 2,500 MB of free memory and while a test database container runs. Written and tested against stand-ins; not run on a cluster. See "Filling the pages with claims". |
 | `make smoke` | One PASS, FAIL or SKIP line per check; exits non-zero on any FAIL. |
 | `make gateway-upkeep ARGS="..."` | Needs `make up` (the Secret `gateway-upkeep-db`) and `make deploy` (the image). Runs the gateway's upkeep command (`meridian gateway`, S066) as a Job of its own under the database role `gateway_upkeep` and prints its output; `ARGS` is the subcommand and its arguments (`reservations --older-than 15`, `close ATTEMPT_ID --reason SLUG`, `credit TENANT --tokens N --reason SLUG`, `expire --before YYYY-MM --reason SLUG [--limit N] [--confirm]`, `expire-audit --before YYYY-MM-DD --reason SLUG [--limit N] [--confirm]`; only the date form of `expire-audit` passes the word check below, which allows no colon or plus sign). `infra/kind/upkeep.sh` splits `ARGS` on blanks into an array without reading any of it as shell and refuses, before it asks the cluster anything, a word with a character outside letters, digits, `.`, `_`, `=` and `-`: a quote, a backslash, a `$`, a backtick, a newline or a glob character among them. It passes the words to `helm template` as one JSON list (`--set-json`), with a suffix of its own so that a second run is a new Job, applies the Job outside the release (`make deploy` neither creates nor removes it) with the image the release runs, waits for it and prints its log through the same filter as the deploy's Jobs. Exit code 0 when the Job succeeded; 1 when it failed (the command exits 1 on a refusal, `ERROR GUnnn`, and 2 on a usage error: both are a Failed Job, never retried), when it did not finish in three minutes or when `make up` or `make deploy` is missing (`make` itself returns 2 for the failed recipe). A failure whose output holds a line that says what the command removed "before the failure" (the two expiries remove in batches, and a failure can follow batches that committed) says what stays removed and that running the command again continues; one that holds the command's own `ERROR GUnnn` line and no such line says that the refusal changed nothing; every other failure, and a Job that did not finish, says that the change may have been applied and to read the reservations or the audit rows before running it again, because a credit is a new row on every run. Make itself expands `$(...)` and `$$` in a value given on its command line before the script sees it (the script's header and the target's help line say so); what reaches the script is then checked as above. The Job and its output are kept for a day. Implemented and tested (stub `kubectl`, the real chart), and run on kind on 2026-10-06 (second and third runs of S066): a read, a refusal and a credit of one token; the audit row of the credit was not read on the cluster. |
 | `make grafana` | Port-forward Grafana to <http://127.0.0.1:3000>. User `admin`. |
@@ -2520,6 +2521,84 @@ triage failed; a claim's page shows its proposal, citations and audit trail
 and records the decision. The pages have no sign-in yet (threat model
 T-69), and the edge serves them only to the laptop.
 
+### Filling the pages with claims: `make demo-seed` (S098)
+
+`make demo` posts one claim and decides it, so the adjuster's queue and the
+claimant's lookup stay nearly empty. `make demo-seed` posts the first `COUNT`
+claims of `data/synthetic/claims.json` (40 by default, the golden set; at most
+47) so that both pages show content. Written and tested against stand-ins for
+`curl`, `kubectl`, `docker` and `sleep`; **not run on a cluster yet** (hard rule
+7): the figures below that a run would give are marked as not measured.
+
+- **Kind only, synthetic only.** It stops before it posts anything when the
+  Docker engine is not a local unix socket, when there is no `kubeconfig` of
+  this checkout or the cluster does not answer, when another checkout holds the
+  cluster (`TAKE_CLUSTER=1` in front of the command goes on; it only reads the
+  record and never writes it), when under 2,500 MB of memory is available
+  (the figure is printed), and while a container whose name has `pytest-db` or
+  `pytest-redis` in it runs (a test database). A `COUNT` that is not a whole
+  number from 1 to 47 and a `PACE_SECONDS` that is not one from 0 to 60 stop it
+  with a usage line before any of that.
+- **Through the API, one at a time.** Each claim is posted to
+  `http://claims.meridian.localhost:8088/claims` with the same body as `make
+  demo` and a `traceparent` of its own, so each has its audit trail and its
+  triage run in the runtime, exactly as one posted by hand. The post answers
+  after the triage, with the claim's state. Only when that does not settle the
+  claim (a state of `submitted` or `triaging`, a 409 that says another request
+  is triaging it, or a 5xx after which the claim is stored) the script reads
+  the state over the JSON route the adjuster's pages have
+  (`GET /adjuster/claims/<id>/proposal`) every 3 seconds, for at most 120 (the
+  Claims API's lease on a triage); a claim still in progress then is counted as
+  "not settled" and the run goes on. The next claim is posted after
+  `PACE_SECONDS` (2 by default). It does not wait for traces in Tempo.
+- **The model is simulated.** On kind the Model Gateway runs in replay mode: no
+  model is called and nothing is billed, so a run costs nothing. A claim whose
+  triage needs the model's answer gets none it can trust and is referred to an
+  adjuster (`docs/demo.md`, the first caveat); the rules decide the others.
+- **It decides nothing.** A referred claim stays in the adjuster's queue until
+  a person decides it. `make demo` does decide the claim it posts.
+- **Safe to run twice.** A claim that already has a triage proposal answers
+  409 and is skipped and counted; a claim whose ID exists with other content
+  (the claimant's form stamps its own report date) is counted apart and named
+  by its ID; both leave the claim as it is. A claim whose triage failed is
+  triaged again by the next run (the Claims API takes a `triage_failed` claim
+  again, up to five triages in all; a claim at that cap is counted apart).
+- **A failed triage is counted and shown**, never hidden, and does not stop the
+  run. The gateway refuses a call that comes faster than its tenant's request
+  rate allows (`tenant-request-rate`, `docs/demo.md`), which fails the triage
+  of a claim; whether 2 seconds between claims is enough was not measured, and
+  `PACE_SECONDS=5` spaces them further.
+- **What it prints.** One line a claim: its ID, what happened (`posted`,
+  `skipped`, `different`, `waited`, `at-cap`, `not-settled`) and its state;
+  then the counts by what the claims are now (referred to an adjuster,
+  approved, rejected, awaiting documents, triage failed, withdrawn, not settled,
+  skipped, other content) and where to look: `/adjuster/claims` and
+  `/claimant/claims` on the edge. Never a claimant's name, a policy holder, a
+  description or any field of a claim but its ID and its state, and a refusal's
+  text only when it is a sentence.
+- **Its exit status** is non-zero only when the edge cannot be reached, a post
+  is refused for a reason other than the 409s above (the run stops there, after
+  the summary of what had happened), or no claim could be posted (every claim
+  answered "other content"). A second run that skips every claim exits 0.
+- **How long.** Each claim is one triage run plus the pause; about two to four
+  minutes for 40 is an estimate, not a measurement.
+- **`COUNT=47`** adds `CLM-0041` to `CLM-0047`, the seven claims made after the
+  golden set from a second random stream (`data/synthetic/README.md`): three
+  with one fraud indicator on its boundary, three one day off it, and one whose
+  policy number no policy has. Then `make demo`, which posts the next claim with
+  no proposal, has none left and stops ("every claim ... is already triaged");
+  with the default 40 it posts `CLM-0041` next.
+- **The sweep's findings change.** The claims leave rows for the scheduled
+  sweep to read, so the six values `make smoke` prints on its second sweep line
+  (`sweep findings`, check 7: `documents-overdue`, `triage-not-started`,
+  `triage-abandoned`, `runs-ended`, `threads-cleaned`, `failures`) can differ
+  after a seed. That line asserts that each of the six series has a sample in
+  the last 15 minutes and prints the values; it compares none of them with a
+  number, so seeded claims cannot make it fail (read in `smoke.d/07-sweep.sh`,
+  not run after a seed). The triage runs inside the Claims API's request, so
+  stopping this script strands no claim; the sweep moves a claim stranded by a
+  dead API pod to `triage_failed`, as it does for any claim.
+
 ## The scheduled sweep
 
 A CronJob `meridian-sweep` (S052, in the chart's
@@ -2733,6 +2812,7 @@ Which commands read it and which do not:
 | `make deploy` | Before it builds or runs anything | `changing` right after the check passes, `ok` at the end, when it ended well |
 | `make cert-renew` | After it checked `CERT` and found the cluster, before it reads the Certificates; a refusal after that (not a Certificate, none in the namespace) leaves the record as it was | `ok` right after the write succeeded; nothing when it only refused, found the Certificate already being issued, or the write was refused (the record is then as it was) |
 | `make demo` | Only through `make deploy`, which it runs first; then it posts a claim without asking | Through `make deploy` |
+| `make demo-seed` | Yes, before it posts anything; another holder stops it unless `TAKE_CLUSTER=1` is in front of it (S098) | No |
 | `make down` | Before it deletes the cluster; a cluster that does not answer stops it (`TAKE_CLUSTER=1` deletes it all the same) | No: the record goes with the cluster |
 | `make cluster-holder` | Yes, and prints it | No |
 | `make smoke`, `make gateway-upkeep`, `make images`, `make grafana`, `make grafana-password` | No | No |
