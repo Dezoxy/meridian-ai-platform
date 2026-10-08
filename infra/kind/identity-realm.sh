@@ -251,6 +251,19 @@ stable_id() {
   printf '%s-%s-%s-%s-%s' "${hex:0:8}" "${hex:8:4}" "${hex:12:4}" "${hex:16:4}" "${hex:20:12}"
 }
 
+# require_distinct_keys SPEC: stop when two users or two clients of the spec map to
+# one name in secrets.env (a dot and an underscore, or two spellings of a client id,
+# both become the same `envname`). The realm's lookup of a secret by its key would
+# give both the one value, and two accounts would share a password without a word.
+# It says the key (a name, never a value) and runs before anything is written.
+require_distinct_keys() {
+  local duplicate
+  duplicate="$(jq -r "${JQ_DEFS}${JQ_KEYS}" <<<"$1" | sort | uniq -d | sed -n 1p)" ||
+    die "could not list the secret names of the spec"
+  [[ -z ${duplicate} ]] ||
+    die "two users or clients of the spec map to the same secret name ${duplicate}; nothing was written: rename one so that the names differ after upper-casing and replacing every character that is not a letter or digit with an underscore"
+}
+
 # write_realm SPEC OUT_DIR REALM_FILE: make the secrets the spec needs, write the
 # realm file, and append the secrets to the secrets file.
 write_realm() {
@@ -276,12 +289,14 @@ write_realm() {
 
 main() {
   (($# == 3)) || usage
-  local out redirect=$2 origin=$3 realm_file=meridian-staff-realm.json
+  local out spec redirect=$2 origin=$3 realm_file=meridian-staff-realm.json
   [[ ${redirect} =~ ^https?://[^[:space:]*]+\*?$ ]] ||
     die "REDIRECT_URI must be an http(s) URL with no space, and at most one '*', at its end"
   [[ ${origin} =~ ^https?://[^/[:space:]*]+$ ]] ||
     die "WEB_ORIGIN must be scheme, host and port only: no path, no trailing slash, no '*'"
-  need_tools jq openssl
+  need_tools jq openssl sort uniq sed
+  spec="$(staff_spec "${redirect}" "${origin}")"
+  require_distinct_keys "${spec}"
   out="$(absolute_path "$1")"
   [[ ! -e ${out} || -d ${out} ]] || die "${out} exists and is not a directory"
   require_untracked "${out}" "${realm_file}"
@@ -291,7 +306,7 @@ main() {
   fi
   : >"${out}/${SECRETS_FILE_NAME}"
   chmod 600 "${out}/${SECRETS_FILE_NAME}"
-  write_realm "$(staff_spec "${redirect}" "${origin}")" "${out}" "${realm_file}"
+  write_realm "${spec}" "${out}" "${realm_file}"
   log "wrote ${out}/${realm_file} and ${out}/${SECRETS_FILE_NAME} (mode 600)"
   log "the passwords and client secrets are new and are in ${SECRETS_FILE_NAME} only; they are not printed"
 }

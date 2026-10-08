@@ -19,8 +19,10 @@
 #                       name and password, and nothing else of the Secret, after one
 #                       line that says they are disposable test passwords of the
 #                       local mock issuer. The ONLY command that prints a password.
-#                       It refuses a Docker engine or a cluster that is not the local
-#                       one, and refuses when standard output is not a terminal
+#                       It refuses a Docker engine that is not the local one, a
+#                       kubeconfig whose server is not 127.0.0.1, localhost or [::1]
+#                       and a cluster that does not answer, and refuses when
+#                       standard output is not a terminal
 #                       unless MERIDIAN_IDENTITY_SHOW=1 is set, so that a pipe or a
 #                       log file does not collect passwords by accident
 #   Both read the realm Secret `keycloak-realm` (the cluster's own copy of the cast:
@@ -61,9 +63,12 @@
 #     realm file, which holds the users' passwords and the clients' secrets because
 #     Keycloak reads them there) and keycloak-credentials (the same values as
 #     KEY=value lines, for the Claims API's and the scripts' copies, which Y3 and
-#     Y7 make). Nothing of either is printed or put on a command line. A second run
-#     KEEPS the Secrets it finds: a new realm ends every session (new keys, new
-#     passwords and secrets), so MERIDIAN_IDENTITY_ROTATE=1 is asked for by name
+#     Y7 make). Nothing of either is printed or put on a command line. Both carry
+#     one annotation, a generation made once per run (Y2f). A second run KEEPS the
+#     Secrets it finds when both carry the same generation: a new realm ends every
+#     session (new keys, new passwords and secrets), so MERIDIAN_IDENTITY_ROTATE=1 is
+#     asked for by name. A pair that is not of one generation (a run stopped between
+#     the two, or made before generations were recorded) is made anew, both
 #   - the two policies that open the other ends (identity-peers-networkpolicy.yaml)
 #   - the Deployment, Service and route (identity.yaml), the image from KEYCLOAK_IMAGE
 #     of pins.env (by digest; no tag lives anywhere else), and a pod annotation that
@@ -87,6 +92,9 @@ readonly IDENTITY_NAMESPACE=identity
 readonly IDENTITY_REALM_SECRET=keycloak-realm
 readonly IDENTITY_REALM_KEY=meridian-staff-realm.json
 readonly IDENTITY_CREDENTIALS_SECRET=keycloak-credentials
+# The annotation both Secrets carry, one value for the run that made them (Y2f), in
+# the prefix of the pod template's realm annotation (identity.yaml).
+readonly IDENTITY_GENERATION_KEY=meridian.local/identity-generation
 readonly IDENTITY_NAMESPACE_FILE="${KIND_DIR}/manifests/identity-networkpolicy.yaml"
 readonly IDENTITY_PEERS_FILE="${KIND_DIR}/manifests/identity-peers-networkpolicy.yaml"
 readonly IDENTITY_WORKLOAD_FILE="${KIND_DIR}/manifests/identity.yaml"
@@ -129,7 +137,7 @@ on_exit() {
   local status=$?
   cleanup_work
   if ((status != 0 && changes_started == 1)); then
-    printf 'identity: the add-on is partly made: this run stopped after its first change. infra/kind/identity.sh status says what is on the cluster; MERIDIAN_IDENTITY=keycloak make up again converges (every apply is server-side and the Secrets are kept), and the record of who holds the cluster says changing until it does\n' >&2
+    printf 'identity: the add-on is partly made: this run stopped after its first change. infra/kind/identity.sh status says what is on the cluster; MERIDIAN_IDENTITY=keycloak make up again converges (every apply is server-side; the Secrets are kept when both are of one generation and both are made anew when not), and the record of who holds the cluster says changing until it does\n' >&2
   fi
 }
 trap on_exit EXIT
@@ -191,16 +199,29 @@ secret_exists() {
   [[ -n "${found}" ]]
 }
 
-# publish_secret NAME SOURCE_FLAG: make or replace the Secret NAME from the file
-# SOURCE_FLAG names (--from-file=KEY=PATH or --from-env-file=PATH). The Secret goes
-# from kubectl to jq to kubectl on pipes, so no value is on a command line, and
-# nothing is printed.
+# publish_secret NAME SOURCE_FLAG GENERATION: make or replace the Secret NAME from the
+# file SOURCE_FLAG names (--from-file=KEY=PATH or --from-env-file=PATH), with the
+# annotation IDENTITY_GENERATION_KEY set to GENERATION (the run's one value, the same
+# on both Secrets: a rotation that stops between the two leaves two values, and the
+# next run sees it). The Secret goes from kubectl to jq to kubectl on pipes, so no
+# secret value is on a command line (the generation is none), and nothing is printed.
 publish_secret() {
   kctl -n "${IDENTITY_NAMESPACE}" create secret generic "$1" "$2" --dry-run=client -o json |
-    jq '.metadata.labels = {"app.kubernetes.io/part-of": "meridian-identity"}
+    jq --arg key "${IDENTITY_GENERATION_KEY}" --arg generation "$3" \
+      '.metadata.labels = {"app.kubernetes.io/part-of": "meridian-identity"}
+      | .metadata.annotations = {($key): $generation}
       | del(.metadata.creationTimestamp)' |
     kctl -n "${IDENTITY_NAMESPACE}" apply --server-side --force-conflicts -f - >/dev/null ||
     die "could not make the Secret $1 in ${IDENTITY_NAMESPACE} (kubectl's error is above)"
+}
+
+# secret_generation NAME: the generation annotation of the Secret NAME on stdout
+# (empty when it has none). Read with a jsonpath on .metadata.annotations alone:
+# never the Secret's data. Run it in a command substitution and stop on its status.
+secret_generation() {
+  kctl -n "${IDENTITY_NAMESPACE}" get secret "$1" \
+    -o "jsonpath={.metadata.annotations.${IDENTITY_GENERATION_KEY//./\\.}}" ||
+    die "could not read the generation of the Secret $1 (kubectl's error is above)"
 }
 
 # sweep_stale_realms CACHE: what a killed run (kill -9, a power cut) left. It looks
@@ -239,23 +260,36 @@ sweep_stale_realms() {
   done
 }
 
-# ensure_secrets: the two Secrets exist. Both found and no rotation asked for: kept.
-# Otherwise the realm is made anew (a folder under the user's cache, mode 700,
-# removed at once) and both Secrets are made or replaced.
+# ensure_secrets: the two Secrets exist. They are KEPT only when both are there, no
+# rotation is asked for and both carry the same non-empty generation (the annotation
+# publish_secret sets, one value for the run that made them). The two are replaced one
+# after the other, so a run that dies between them leaves a new realm beside old
+# credentials; a pair that is not of one generation (that, or made before generations
+# were recorded) is never kept. Otherwise the realm is made anew (a folder under the
+# user's cache, mode 700, removed at once) and both Secrets are made or replaced, each
+# with this run's generation.
 ensure_secrets() {
   { set +x; } 2>/dev/null
-  local realm_there=0 credentials_there=0 cache work
+  local realm_there=0 credentials_there=0 cache work generation
+  local realm_generation credentials_generation
   cache="${XDG_CACHE_HOME:-${HOME:?HOME is not set}/.cache}/meridian-identity"
   sweep_stale_realms "${cache}"
   if secret_exists "${IDENTITY_REALM_SECRET}"; then realm_there=1; fi
   if secret_exists "${IDENTITY_CREDENTIALS_SECRET}"; then credentials_there=1; fi
   if ((realm_there && credentials_there)) && [[ "${MERIDIAN_IDENTITY_ROTATE:-}" != 1 ]]; then
-    log "identity: the Secrets ${IDENTITY_REALM_SECRET} and ${IDENTITY_CREDENTIALS_SECRET} exist and are kept (MERIDIAN_IDENTITY_ROTATE=1 makes new ones; that ends every session, because the passwords, the clients' secrets and the keys all change)"
-    return 0
-  fi
-  if ((realm_there != credentials_there)); then
+    realm_generation="$(secret_generation "${IDENTITY_REALM_SECRET}")" || exit 1
+    credentials_generation="$(secret_generation "${IDENTITY_CREDENTIALS_SECRET}")" || exit 1
+    if [[ -n "${realm_generation}" && "${realm_generation}" == "${credentials_generation}" ]]; then
+      log "identity: the Secrets ${IDENTITY_REALM_SECRET} and ${IDENTITY_CREDENTIALS_SECRET} exist, are of one generation and are kept (MERIDIAN_IDENTITY_ROTATE=1 makes new ones; that ends every session, because the passwords, the clients' secrets and the keys all change)"
+      return 0
+    fi
+    log "identity: the Secrets ${IDENTITY_REALM_SECRET} and ${IDENTITY_CREDENTIALS_SECRET} are not of one generation (a run stopped between the two, or they were made before generations were recorded); both are made anew"
+  elif ((realm_there != credentials_there)); then
     log "identity: only one of the two Secrets exists; both are made anew"
   fi
+  generation="$(openssl rand -hex 8)" || die "openssl rand failed"
+  [[ "${generation}" =~ ^[0-9a-f]{16}$ ]] ||
+    die "openssl rand did not give 8 random bytes as 16 hex characters"
   mkdir -p -- "${cache}"
   chmod 700 -- "${cache}"
   work="$(mktemp -d "${cache}/realm.XXXXXX")" ||
@@ -265,10 +299,10 @@ ensure_secrets() {
     die "the realm generator failed (its message is above); nothing was loaded"
   [[ -s "${work}/${IDENTITY_REALM_KEY}" && -s "${work}/secrets.env" ]] ||
     die "the realm generator left no realm file or no secrets file in ${work}"
-  publish_secret "${IDENTITY_REALM_SECRET}" "--from-file=${IDENTITY_REALM_KEY}=${work}/${IDENTITY_REALM_KEY}"
-  publish_secret "${IDENTITY_CREDENTIALS_SECRET}" "--from-env-file=${work}/secrets.env"
+  publish_secret "${IDENTITY_REALM_SECRET}" "--from-file=${IDENTITY_REALM_KEY}=${work}/${IDENTITY_REALM_KEY}" "${generation}"
+  publish_secret "${IDENTITY_CREDENTIALS_SECRET}" "--from-env-file=${work}/secrets.env" "${generation}"
   cleanup_work
-  log "identity: the Secrets ${IDENTITY_REALM_SECRET} and ${IDENTITY_CREDENTIALS_SECRET} are made in ${IDENTITY_NAMESPACE} (nothing of them is printed; the folder they came from is removed)"
+  log "identity: the Secrets ${IDENTITY_REALM_SECRET} and ${IDENTITY_CREDENTIALS_SECRET} are made in ${IDENTITY_NAMESPACE}, generation ${generation} (nothing of them is printed; the folder they came from is removed)"
 }
 
 # realm_fingerprint: the SHA-256 (hex) of the realm Secret's content as the cluster
@@ -398,18 +432,20 @@ status() {
 
 # The jq programs of `users` and `passwords`. Each picks fields of the people in the
 # realm file, never of a service account (it has serviceAccountClientId) and never of
-# a client, and gives one tab-separated line a person. A user with no password stops
-# the second: a half list of logins would read as a whole one.
+# a client, and gives one tab-separated line a person. A user with no name stops both
+# (a null would shift the columns), and a user with no password stops the second: a
+# half list of logins would read as a whole one.
 # shellcheck disable=SC2016 # the $names in the program are jq's
 readonly IDENTITY_USERS_FILTER='. as $realm | .users[]? | select(.serviceAccountClientId == null)
   | ((.groups // []) | map(ltrimstr("/"))) as $member
   | ([$realm.groups[]? | select(.name as $n | any($member[]; . == $n)) | .realmRoles[]?]
      + (.realmRoles // []) | unique) as $roles
-  | [.username, "\(.firstName // "") \(.lastName // "")",
+  | [(.username // error("a user has no name")), "\(.firstName // "") \(.lastName // "")",
      ($member | if length == 0 then "(none)" else join(",") end),
      ($roles | if length == 0 then "(none)" else join(",") end)] | @tsv'
 readonly IDENTITY_PASSWORDS_FILTER='.users[]? | select(.serviceAccountClientId == null)
-  | [.username, (.credentials[0].value // error("a user has no password"))] | @tsv'
+  | [(.username // error("a user has no name")),
+     (.credentials[0].value // error("a user has no password"))] | @tsv'
 
 # read_cast FILTER: the realm file as the cluster holds it in the Secret
 # keycloak-realm, through a pipe into jq with FILTER, on stdout. The Secret's content
@@ -418,7 +454,10 @@ readonly IDENTITY_PASSWORDS_FILTER='.users[]? | select(.serviceAccountClientId =
 # can quote a value, and a fixed sentence is said instead. It stops, with a
 # sentence, when the Secret is not there (the add-on was never made on this cluster),
 # holds no realm file, is not a realm file, or gives no user. Run it in a command
-# substitution and stop on its status, as realm_fingerprint is.
+# substitution and stop on its status, as realm_fingerprint is. What it gives is
+# stripped of control characters (all but the tab and the newline), so that a name in
+# the Secret cannot move the cursor or recolour the terminal of the person reading it
+# (as `status` does with what it prints).
 read_cast() {
   { set +x; } 2>/dev/null
   local encoded cast
@@ -429,7 +468,8 @@ read_cast() {
     die "could not read the Secret ${IDENTITY_REALM_SECRET} (kubectl's error is above)"
   [[ -n "${encoded}" ]] ||
     die "the Secret ${IDENTITY_REALM_SECRET} holds no ${IDENTITY_REALM_KEY}"
-  cast="$(printf '%s' "${encoded}" | base64 -d 2>/dev/null | jq -r "$1" 2>/dev/null)" ||
+  cast="$(printf '%s' "${encoded}" | base64 -d 2>/dev/null | jq -r "$1" 2>/dev/null |
+    LC_ALL=C tr -cd '[:print:]\t\n')" ||
     die "the content of the Secret ${IDENTITY_REALM_SECRET} could not be read as a realm file with a name for every user (and a password, for passwords); nothing is printed"
   [[ -n "${cast}" ]] ||
     die "the realm in the Secret ${IDENTITY_REALM_SECRET} holds no users"
@@ -444,17 +484,50 @@ users() {
   need_cluster
   cast="$(read_cast "${IDENTITY_USERS_FILTER}")" || exit 1
   printf '%-18s  %-22s  %-26s  %s\n' "USER NAME" "DISPLAY NAME" "GROUP" "ROLE"
-  while IFS=$'\t' read -r name display group role; do
+  printf '%s\n' "${cast}" | while IFS=$'\t' read -r name display group role; do
     printf '%-18s  %-22s  %-26s  %s\n' "${name}" "${display}" "${group}" "${role}"
-  done <<<"${cast}"
+  done
+}
+
+# require_loopback_cluster: the server of the context kctl uses is on this machine.
+# need_cluster trusts whatever infra/kind/kubeconfig says for the context, and
+# require_local_docker reads the Docker endpoint only, so a kubeconfig of a developer's
+# own, with the context's name and a remote server, would pass both and have a password
+# printed from the wrong cluster. The URL is read from the kubeconfig file with
+# `config view --minify` (no call to the cluster) and its host must be 127.0.0.1,
+# localhost or [::1], exactly. Anything else, or a value that cannot be read, stops
+# before a Secret is read, with a sentence that names the host.
+require_loopback_cluster() {
+  local server hostport host shown
+  server="$(kctl config view --minify -o 'jsonpath={.clusters[0].cluster.server}' 2>/dev/null)" ||
+    server=""
+  if [[ "${server}" =~ ^[A-Za-z][A-Za-z0-9+.-]*://([^/?#]*) ]]; then
+    hostport="${BASH_REMATCH[1]##*@}"
+    if [[ "${hostport}" == \[* ]]; then
+      host="${hostport%%]*}]"
+    else
+      host="${hostport%%:*}"
+    fi
+  else
+    host=""
+  fi
+  case "${host}" in
+    127.0.0.1 | localhost | "[::1]") return 0 ;;
+  esac
+  shown="$(printf '%s' "${host}" | LC_ALL=C tr -cd '[:print:]' | cut -c 1-80)"
+  if [[ -z "${shown}" ]]; then
+    die "could not read the server of the cluster's context from ${KUBECONFIG_FILE}, so it cannot be shown to be on this machine; nothing was read"
+  fi
+  die "the cluster's context in ${KUBECONFIG_FILE} points at the host ${shown}, which is not 127.0.0.1, localhost or [::1]: the passwords are of the local kind cluster only; nothing was read"
 }
 
 # passwords: the one place a password is printed, and only on request. The checks
 # that cost nothing come first and read nothing: the variable, and the terminal. A
 # pipe or a file would keep the passwords; a person who means it says so with
-# MERIDIAN_IDENTITY_SHOW=1. Then a local engine and a cluster that answers (the
-# kubeconfig and the context of the local cluster alone, common.sh). The notice is
-# printed after the read, so that a refusal prints nothing on standard output.
+# MERIDIAN_IDENTITY_SHOW=1. Then a local engine, a kubeconfig whose server is on this
+# machine (require_loopback_cluster) and a cluster that answers (the kubeconfig and
+# the context of the local cluster alone, common.sh). The notice is printed after the
+# read, so that a refusal prints nothing on standard output.
 passwords() {
   { set +x; } 2>/dev/null
   local shown="${MERIDIAN_IDENTITY_SHOW:-}" cast name password
@@ -465,12 +538,13 @@ passwords() {
   fi
   need_tools kubectl jq base64 awk timeout
   require_local_docker
+  require_loopback_cluster
   need_cluster
   cast="$(read_cast "${IDENTITY_PASSWORDS_FILTER}")" || exit 1
   printf 'These are disposable test passwords of the local mock issuer (Keycloak on kind), made for this cluster; MERIDIAN_IDENTITY_ROTATE=1 replaces them.\n'
-  while IFS=$'\t' read -r name password; do
+  printf '%s\n' "${cast}" | while IFS=$'\t' read -r name password; do
     printf '%-18s  %s\n' "${name}" "${password}"
-  done <<<"${cast}"
+  done
 }
 
 # note_when_off: what `make up` says with the switch off. A read that fails is

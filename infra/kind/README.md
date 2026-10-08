@@ -2879,7 +2879,8 @@ and `ok` at its end. A refusal that changed nothing (memory, a bad pin) leaves
 `ok`; a run that stops half way leaves `changing`, also when `identity.sh up` is
 run by hand, and prints on standard error that the add-on is partly made and
 that `identity.sh status` says what is there. Running `make up` again converges:
-every apply is server-side, and the Secrets are kept.
+every apply is server-side, and the Secrets are kept when both are of one
+generation and made anew when not (see "The realm and the Secrets").
 
 **The realm and the Secrets.** `identity-realm.sh` makes the realm at run time
 into a folder under `${XDG_CACHE_HOME:-~/.cache}/meridian-identity/`, mode 700,
@@ -2892,14 +2893,21 @@ is not a folder, skips a folder touched in the last 60 minutes (a run in
 progress), deletes the regular files of the others and then the folder itself
 with `rmdir`, and leaves alone, with a line that says so, a folder that holds
 anything else. The values are loaded into the two Secrets through pipes and are
-never printed or put on a command line. A second run keeps the Secrets it finds.
-`MERIDIAN_IDENTITY_ROTATE=1` makes new ones, and that ends every session: the
-test users' passwords, the clients' secrets and the signing keys all change. A
-pod that is running never imports a realm again, so the pod template carries
-the SHA-256 of the realm Secret's content (an annotation, read as the gateway
-of the telemetry stack reads its certificate's; the content is never printed):
-a changed realm rolls the pod on any run, also a plain run after a rotation
-that was interrupted before the Deployment was applied. The Claims API's own
+never printed or put on a command line. Both carry one annotation,
+`meridian.local/identity-generation`, 16 hex characters made once per run (no
+secret; read from the annotations, never the data). A second run keeps the
+Secrets it finds only when both are there and carry the same generation, so a
+rotation that died between the two is made anew by the next plain run; a
+cluster whose Secrets were made before generations were recorded gets new ones,
+and so new passwords, at its next `make up` with the switch on.
+`MERIDIAN_IDENTITY_ROTATE=1` makes new ones on request, and that ends every
+session: the test users' passwords, the clients' secrets and
+the signing keys all change. A pod that is running never imports a realm again,
+so the pod template carries the SHA-256 of the realm Secret's content (an
+annotation, read as the gateway of the telemetry stack reads its certificate's;
+the content is never printed): a changed realm rolls the pod on any run, also a
+plain run after a rotation that was interrupted before the Deployment was
+applied. The Claims API's own
 copy of its client secret is Y3's and Y4's to make.
 
 **The cast (Y2e).** The realm holds seven test people of one fictional
@@ -2937,17 +2945,25 @@ make identity-passwords          # each user name and password; prints secrets
 
 `users` is read-only and reads the realm Secret, so it lists the people the
 cluster really holds, with the group and the role each has: `up` keeps the
-Secrets it finds, and a cluster made before the cast still holds the four
-`test-<role>` users, with roles of their own and no group, until
-`MERIDIAN_IDENTITY_ROTATE=1 MERIDIAN_IDENTITY=keycloak make up` makes the new
-realm. `make identity-passwords` is the only code path that prints a password.
+Secrets it finds when they are of one generation, and a cluster made before the
+cast still holds the four `test-<role>` users, with roles of their own and no
+group, until `MERIDIAN_IDENTITY=keycloak make up` makes the new realm (a pair
+made before generations were recorded is made anew by a plain run).
+`make identity-passwords` is the only code path that prints a password.
 Its first line says they are disposable test passwords of the local mock issuer,
-made for this cluster, and that a rotation replaces them. It refuses a Docker
-engine that is not local and a cluster that does not answer (the checks `up`
-makes), and it refuses when its output is not a terminal, so a pipe or a log
-file does not keep the passwords by accident; `MERIDIAN_IDENTITY_SHOW=1` says
-that you mean it. Like `make grafana-password`, it is for a terminal of your
-own: in a session its output is the transcript.
+made for this cluster, and that a rotation replaces them. It
+refuses a Docker engine that is not local, a kubeconfig whose server for the
+cluster's context is not `127.0.0.1`, `localhost` or `[::1]` (read from the
+file, before any Secret is read, so a stale kubeconfig of another cluster
+cannot print its passwords) and a cluster that does not answer, and it refuses
+when its output is not a terminal, so a pipe or a log file does not keep the
+passwords by accident; `MERIDIAN_IDENTITY_SHOW=1` says that you mean it. Like
+`make grafana-password`, it is for a terminal of your own: in a session its
+output is the transcript. It prints what the realm Secret holds, which is what
+Keycloak runs once the pod has rolled onto that Secret: after a rotation that
+stopped half way, run `make up` again first. `users` and `passwords` print
+ASCII only (control characters and any other byte of a name are dropped, so
+that a name cannot write to your terminal); the cast's names are ASCII.
 
 This is **kind only** and a **mock issuer**: on Azure the issuer is Entra ID and
 there is no cast. And signing in with these users **does nothing in the pages

@@ -99,7 +99,22 @@ case "${all}" in
       echo "${count}" >"${STUB_DIR}/count"
       mv "${STUB_DIR}/incoming" "${STUB_DIR}/applied-${count}"
       echo "APPLIED ${count} ${file##*/}" >>"${STUB_DIR}/calls"
+      # A Secret applied from JSON keeps its annotations, as the cluster would.
+      doc="${STUB_DIR}/applied-${count}"
+      secret="$(jq -r 'select(.kind == "Secret").metadata.name' "${doc}" 2>/dev/null)"
+      [[ -z "${secret}" ]] ||
+        jq -c '.metadata.annotations // {}' "${doc}" >"${STUB_DIR}/notes-${secret}"
     fi
+    ;;
+  *"config view"*) printf '%s' "${STUB_SERVER-https://127.0.0.1:6443}" ;;
+  *"get secret "*"-o jsonpath={.metadata.annotations."*)
+    name="${all#*get secret }"
+    name="${name%% *}"
+    key="${all##*annotations.}"
+    key="${key%\}}"
+    key="${key//\\./.}"
+    notes="${STUB_DIR}/notes-${name}"
+    printf '%s' "$(jq -r --arg key "${key}" '.[$key] // empty' "${notes}" 2>/dev/null)"
     ;;
   *"get secret keycloak-realm -o jsonpath"*)
     if [[ -f "${STUB_DIR}/cluster-keycloak-realm" ]]; then
@@ -468,12 +483,13 @@ def test_the_files_are_gone_when_the_run_fails_halfway(tmp_path: Path) -> None:
 
 
 def test_a_second_run_keeps_the_secrets_it_finds(tmp_path: Path) -> None:
-    run = run_script(tmp_path, "up", realm_secret=True, credentials_secret=True)
+    # Y2f: kept only with one generation, so the first run makes them (not a flag).
+    assert run_script(tmp_path, "up").process.returncode == 0
+    run = run_script(tmp_path, "up")
 
     assert run.process.returncode == 0, run.output
     assert not [c for c in run.calls if "create secret" in c]
     assert run.leftovers() == []  # no generator ran, no folder was made
-    assert not (run.cache / "meridian-identity").exists()
     assert "kept" in run.output and "MERIDIAN_IDENTITY_ROTATE=1" in run.output
     assert "ends every session" in run.output
     assert not [c for c in run.calls if "rollout restart" in c]
