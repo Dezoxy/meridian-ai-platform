@@ -18,7 +18,8 @@ def _watched_modules_after_importing(module: str) -> list[str]:
         f"import {module}\n"
         "print(json.dumps(sorted(\n"
         "    m for m in sys.modules\n"
-        "    if m.split('.')[0] in {'langgraph', 'langchain', 'langchain_core'}\n"
+        "    if m.split('.')[0] in {'langgraph', 'langchain', 'agent_framework'}\n"
+        "    or m.split('.')[0].startswith(('langchain_', 'langgraph_'))\n"
         "    or m == 'meridian.runtime' or m.startswith('meridian.runtime.')\n"
         "    or m == 'meridian.workloads' or m.startswith('meridian.workloads.')\n"
         ")))\n"
@@ -59,3 +60,5 @@ def test_the_old_place_is_gone_with_no_stub_behind() -> None:
 
     assert result.returncode != 0
     assert "ModuleNotFoundError" in result.stderr, result.stderr
+    # The old path itself is what is missing, not something its parent imports.
+    assert f"No module named '{OLD_PLACE}" in result.stderr, result.stderr
