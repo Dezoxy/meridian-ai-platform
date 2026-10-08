@@ -445,8 +445,10 @@ def test_the_tests_step_prints_its_slowest_tests() -> None:
     assert tests["run"] == "make pytest"
     assert tests["env"]["PYTEST_ARGS"] == "--durations=25"
     assert re.search(r"^PYTEST_ARGS\s*\?=\s*$", MAKEFILE, re.MULTILINE)
+    # Since S099 the recipe's shell takes the machine's test lock first
+    # (tests/test_machine_lock.py); the run behind it is what it was.
     assert re.search(
-        r"^pytest:\n\tuv run pytest -n \$\(PYTEST_WORKERS\)"
+        r"^pytest:\n\t\$\(MACHINE_LOCK\) && uv run pytest -n \$\(PYTEST_WORKERS\)"
         r" \$\(PYTEST_COVERAGE_ARGS\) \$\(PYTEST_ARGS\)$",
         MAKEFILE,
         re.MULTILINE,
