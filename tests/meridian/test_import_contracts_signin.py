@@ -1,5 +1,5 @@
 """Prove that the three import contracts of the sign-in modules (S021) detect a
-violation: ``jwt`` only from the two modules that check a token, the sign-in
+violation: ``jwt`` only from the three modules that check a token, the sign-in
 modules not from the services or the graph code, and ``common`` not importing
 the gateway.
 
@@ -26,6 +26,9 @@ SIGNIN_MODULES = [
     f"{COMMON}.signinkeys",
     f"{COMMON}.signinsession",
     f"{COMMON}.signinguard",
+    f"{COMMON}.signinflow",
+    f"{COMMON}.signinstate",
+    f"{COMMON}.signinidtoken",
 ]
 CLAIMS_TRIAGE = "meridian.workloads.claims_triage"
 
@@ -87,7 +90,7 @@ def platform_packages_missing_from(project: Path, contract: str) -> set[str]:
         pytest.param(COMMON, id="common-but-not-the-sign-in-modules"),
     ],
 )
-def test_an_import_of_jwt_outside_the_two_sign_in_modules_breaks_the_contract(
+def test_an_import_of_jwt_outside_the_three_sign_in_modules_breaks_the_contract(
     project_copy: Path, package: str, source: str
 ) -> None:
     # Arrange
@@ -102,13 +105,13 @@ def test_an_import_of_jwt_outside_the_two_sign_in_modules_breaks_the_contract(
     assert f"{probe} -> jwt" in output, output
 
 
-def test_the_two_sign_in_modules_do_import_jwt_and_keep_the_contract(
+def test_the_three_sign_in_modules_do_import_jwt_and_keep_the_contract(
     project_copy: Path,
 ) -> None:
-    # Arrange: the two ignored edges are real ones, so the contract is not
+    # Arrange: the three ignored edges are real ones, so the contract is not
     # kept only because nobody imports the library.
     common = project_copy / "src" / "meridian" / "platform" / "common"
-    for module in ("signin", "signinkeys"):
+    for module in ("signin", "signinkeys", "signinidtoken"):
         source = (common / f"{module}.py").read_text(encoding="utf-8")
         assert "import jwt" in source or "from jwt" in source
 
@@ -117,10 +120,12 @@ def test_the_two_sign_in_modules_do_import_jwt_and_keep_the_contract(
 
     # Assert
     assert exit_code == 0, output
-    assert f"{JWT_CONTRACT} KEPT (2 ignored imports)" in output, output
+    assert f"{JWT_CONTRACT} KEPT (3 ignored imports)" in output, output
 
 
-def test_the_jwt_contract_ignores_exactly_the_two_modules_that_check_a_token() -> None:
+def test_the_jwt_contract_ignores_exactly_the_three_modules_that_check_a_token() -> (
+    None
+):
     contract = contract_named(JWT_CONTRACT)
 
     assert contract["type"] == "forbidden"
@@ -128,6 +133,7 @@ def test_the_jwt_contract_ignores_exactly_the_two_modules_that_check_a_token() -
     assert set(contract["ignore_imports"]) == {
         f"{COMMON}.signin -> jwt",
         f"{COMMON}.signinkeys -> jwt",
+        f"{COMMON}.signinidtoken -> jwt",
     }
     # Indirect imports count: no allowance for them.
     assert not contract.get("allow_indirect_imports", False)
@@ -188,8 +194,33 @@ def test_a_service_or_graph_package_importing_the_guard_breaks_the_contract(
     assert f"{probe} -> {COMMON}.signinguard" in " ".join(output.split()), output
 
 
+@pytest.mark.parametrize(
+    "package",
+    [
+        pytest.param("meridian.runtime", id="runtime"),
+        pytest.param("meridian.platform.toolserver", id="toolserver"),
+        pytest.param("meridian.workloads.claim_brief", id="claim-brief"),
+        pytest.param("meridian.platform.claims_mcp", id="claims-mcp"),
+    ],
+)
+def test_a_service_or_graph_package_importing_the_flow_breaks_the_contract(
+    project_copy: Path, package: str
+) -> None:
+    # Arrange: the page flow holds the client's credential and a person's
+    # transaction; no service imports it.
+    probe = add_probe_in(project_copy, package, f"import {COMMON}.signinflow\n")
+
+    # Act
+    exit_code, output = run_lint_imports(project_copy)
+
+    # Assert
+    assert exit_code != 0, output
+    assert SIGNIN_CONTRACT in output, output
+    assert f"{probe} -> {COMMON}.signinflow" in " ".join(output.split()), output
+
+
 @pytest.mark.parametrize("module", SIGNIN_MODULES)
-def test_each_of_the_four_sign_in_modules_is_forbidden_to_the_gateway(
+def test_each_of_the_seven_sign_in_modules_is_forbidden_to_the_gateway(
     project_copy: Path, module: str
 ) -> None:
     # Arrange
@@ -231,6 +262,9 @@ def test_the_claims_triage_graph_importing_the_session_breaks_the_contract(
     [
         pytest.param(CLAIMS_TRIAGE, "signinguard", id="claims-api-guard"),
         pytest.param(CLAIMS_TRIAGE, "signinsession", id="claims-api-session"),
+        pytest.param(CLAIMS_TRIAGE, "signinflow", id="claims-api-flow"),
+        pytest.param(CLAIMS_TRIAGE, "signinstate", id="claims-api-state"),
+        pytest.param(CLAIMS_TRIAGE, "signinidtoken", id="claims-api-id-token"),
         pytest.param(COMMON, "signin", id="common-itself"),
     ],
 )
@@ -247,7 +281,7 @@ def test_the_claims_api_and_common_may_import_the_sign_in_modules(
     assert exit_code == 0, output
 
 
-def test_the_sign_in_contract_forbids_exactly_the_four_modules() -> None:
+def test_the_sign_in_contract_forbids_exactly_the_seven_modules() -> None:
     contract = contract_named(SIGNIN_CONTRACT)
 
     assert contract["type"] == "forbidden"

@@ -10,6 +10,7 @@ import base64
 import hashlib
 import hmac
 import json
+import secrets
 from collections.abc import AsyncIterator, Callable, Iterator
 from typing import Any
 
@@ -19,9 +20,17 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from jwt.algorithms import RSAAlgorithm
+from signinflowsupport import KEYS_URL as FLOW_KEYS_URL
+from signinflowsupport import FlowKit, TokenEndpoint, flow_settings
 
 from meridian.platform.common.signin import SigninSettings
+from meridian.platform.common.signinflow import SigninFlow
 from meridian.platform.common.signinkeys import KeySet
+from meridian.platform.common.signinsession import (
+    MIN_SESSION_KEY_BYTES,
+    SessionKeys,
+    SessionSettings,
+)
 
 ISSUER = "https://id.example.test/realms/meridian-staff"
 AUDIENCE = "meridian-api"
@@ -212,3 +221,26 @@ def signin_hmac_with_public_key(
         return hmac.new(pem, signing_input, hashlib.sha256).digest()
 
     return sign
+
+
+@pytest.fixture
+def flow_kit(
+    signin_issuer: FakeIssuer,
+    signin_rsa_pool: list[rsa.RSAPrivateKey],
+    signin_clock: FakeClock,
+) -> FlowKit:
+    """The pages' sign-in flow (S021 Y3) wired to a fake issuer: the key set is
+    the issuer's, the token endpoint a mock that checks what the real one does.
+    The session cookie is not ``Secure``, as on kind."""
+    credential = secrets.token_urlsafe(24)
+    settings = flow_settings(client_credential=credential)
+    sessions = SessionSettings(
+        keys=SessionKeys(current=secrets.token_bytes(MIN_SESSION_KEY_BYTES)),
+        secure=False,
+    )
+    keys = KeySet(FLOW_KEYS_URL, clock=signin_clock, transport=signin_issuer.transport)
+    endpoint = TokenEndpoint(credential)
+    flow = SigninFlow(
+        settings, sessions, keys, transport=endpoint.transport, clock=signin_clock
+    )
+    return FlowKit(keys, signin_rsa_pool[0], settings, sessions, endpoint, flow)

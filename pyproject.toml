@@ -348,12 +348,15 @@ source_modules = [
     "meridian.platform.toolserver",
 ]
 forbidden_modules = ["jwt"]
-# The two modules that parse and verify are the ignored edges. An ignored edge
-# leaves the graph, so a chain through them (signinguard -> signin -> jwt) is no
-# violation either.
+# The three modules that parse and verify are the ignored edges: the access
+# token's check, the key set's reader and the ID token's check at the pages'
+# callback (signinidtoken; signinflow calls it and imports no JWT library). An
+# ignored edge leaves the graph, so a chain through them (signinguard -> signin
+# -> jwt) is no violation either.
 ignore_imports = [
     "meridian.platform.common.signin -> jwt",
     "meridian.platform.common.signinkeys -> jwt",
+    "meridian.platform.common.signinidtoken -> jwt",
 ]
 
 [[tool.importlinter.contracts]]
@@ -380,6 +383,9 @@ forbidden_modules = [
     "meridian.platform.common.signinkeys",
     "meridian.platform.common.signinsession",
     "meridian.platform.common.signinguard",
+    "meridian.platform.common.signinflow",
+    "meridian.platform.common.signinstate",
+    "meridian.platform.common.signinidtoken",
 ]
 
 [[tool.importlinter.contracts]]
