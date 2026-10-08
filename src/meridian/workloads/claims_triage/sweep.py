@@ -49,6 +49,7 @@ from meridian.runtime.sweep import (
     delete_thread_checkpoints,
     end_abandoned_run,
     leftover_threads,
+    lock_run,
 )
 from meridian.workloads.claims_triage.lifecycle import (
     AGENT,
@@ -135,7 +136,6 @@ WHERE r.agent = ANY(%(agents)s) AND r.status = ANY(%(statuses)s)
 ORDER BY random()
 LIMIT %(limit)s
 """
-LOCK_RUN = "SELECT tenant FROM runtime.runs WHERE run_id = %s FOR UPDATE SKIP LOCKED"
 IS_KEPT = """
 SELECT EXISTS (
     SELECT 1 FROM claims.claims AS c
@@ -327,14 +327,14 @@ def end_run_unless_kept(conn: psycopg.Connection, run_id: UUID) -> bool:
     again, so the keep rule holds at the moment of the update and not only when
     the run was listed; the update itself still compares status and age.
     """
-    locked = conn.execute(LOCK_RUN, (run_id,)).fetchone()
-    if locked is None:
+    tenant = lock_run(conn, run_id)
+    if tenant is None:
         return False
     kept = conn.execute(
         IS_KEPT,
         {
             "run_id": run_id,
-            "tenant": locked[0],
+            "tenant": tenant,
             "waiting_state": WAITING_STATE,
             "waiting_brief_state": WAITING_BRIEF_STATE,
             "lease": float(RUNNING_LEASE_SECONDS),

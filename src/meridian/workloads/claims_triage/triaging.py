@@ -28,8 +28,8 @@ from meridian.platform.common.http import (
     database_failure,
     error_answer,
 )
+from meridian.platform.common.runwire import RunResponse, RunState
 from meridian.platform.common.telemetry import mark_error, set_span_attributes
-from meridian.runtime.models import RunResponse, RunState
 from meridian.workloads.claims_triage.claimant_name import description_for_run
 from meridian.workloads.claims_triage.lifecycle import (
     AGENT as AGENT,

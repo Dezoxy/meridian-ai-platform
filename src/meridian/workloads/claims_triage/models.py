@@ -18,8 +18,8 @@ from pydantic import (
 from pydantic_core import ErrorDetails
 
 from meridian.platform.common.http import ErrorBody
+from meridian.platform.common.runwire import RunState
 from meridian.platform.common.wire import NoNul, WireModel
-from meridian.runtime.models import RunState
 from meridian.workloads.claims_triage.lifecycle import LifecycleState
 
 Peril = Literal[
