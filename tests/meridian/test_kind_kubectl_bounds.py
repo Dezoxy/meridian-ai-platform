@@ -69,10 +69,7 @@ KNOWN_VERBS = {
     "annotate",
     "patch",
     "auth",
-    # S021, Y2f: `config view --minify` in identity.sh reads the kubeconfig file
-    # and sends nothing to the cluster, so the default class is right for it.
-    "config",
-}
+} | {"config"}  # S021, Y2f: `config view` reads the kubeconfig file, asks no cluster
 # The three calls that stay a raw ``kubectl``: a port-forward is started in the
 # background, and ``kctl ... &`` would background a subshell, whose process id
 # is not kubectl's, so the script's ``kill`` would leave kubectl running. A file
