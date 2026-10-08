@@ -33,6 +33,9 @@ from toolsupport import (
     tracer_of,
 )
 
+from meridian.platform.claims_mcp.app import (
+    create_app as create_claims_app,
+)
 from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.platform.policy_mcp.app import create_app as create_policy_app
 from meridian.platform.registry import load_registry
@@ -47,9 +50,6 @@ from meridian.runtime.tool_transport import (
     KEEPALIVE_SECONDS,
     THREAD_NAME,
     ToolTransport,
-)
-from meridian.workloads.claims_triage.mcp_server.app import (
-    create_app as create_claims_app,
 )
 
 # In the argument and in the address of a call that must leave nothing behind.

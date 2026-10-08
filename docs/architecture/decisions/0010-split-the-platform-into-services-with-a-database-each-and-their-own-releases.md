@@ -551,3 +551,13 @@ of the sweep it used from `platform/common/runlease.py`, not from the runtime;
 `runtime.models` and `runtime.sweep` re-export them. The point of the sentence
 stands: no contract between the services exists. The plan's S082 section has
 the counts and how they were taken.
+
+Noted on 2026-10-08 (S082, Move A): this record names no destination for the
+claims tool server's code, which row 4 of the couplings table says "first moves
+out of the claims workload's package". It moved to
+`src/meridian/platform/claims_mcp/`. The session chose that destination, after
+the advisor, by the precedent of the two tool servers that already serve
+domain data from `platform` (`policy_mcp` and `knowledge_mcp`); a new
+top-level layer was not chosen, because that would be the owner's decision.
+The couplings table keeps the path it had when it was written. The move is
+built and tested and has not yet been run on the cluster.

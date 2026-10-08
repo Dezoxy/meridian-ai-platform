@@ -654,7 +654,7 @@ which another branch adds.
 | ID | Step | Done when | Status | Depends |
 |---|---|---|---|---|
 | S081 | The decision record for the move toward services | [ADR 10](architecture/decisions/0010-split-the-platform-into-services-with-a-database-each-and-their-own-releases.md) is accepted and indexed: it says what the owner decided (five databases on one server, six images with independent versions, the tool servers trusting the authenticated caller with the lost double check accepted as a risk, the audit trail as an outbox per service, a fresh baseline per database, the building after the steps in flight) apart from the session's own design, lists the ten couplings with the step that replaces each, what stays shared, the consequences and the two checkpoints; this table exists and Part D's questions 7 and 8 are answered; `make docs`, `make check` and `make test` pass. Nothing is built. `doing` until the pull request is merged, then `done` | doing | — |
-| S082 | Code in the wrong place moves; import contracts per service | With no change in behaviour and no assertion of an existing test changed: the claims tool server leaves the claims workload's package, the Claims API no longer imports the runtime's models or its sweep's constants (the models both sides use sit in a module of their own), the sweep's runtime SQL sits with the runtime, and the workloads' graphs sit in a package of their own; an import contract keeps each service's package from importing another service's; `make lint`, `make pytest` and `make smoke` pass. Designed | doing: the sweep's lock statement and the run's shared models and constants are moved (the first two moves, 2026-10-07; implemented and tested against PostgreSQL, **not deployed**: no chart, image or manifest changed and `make smoke` was not run) on the step's branch `s082-code-moves`, and its pull request is held until S071's free half and S072's client certificates are on `main`; the claims tool server's move waits for S072, the graphs' move, whose shape the owner chose on 2026-10-08 (the triage graph moves to a sibling package: the section), for S071's free half and S021's routes contract, and the per-service import contract comes last | S081, and the four steps that were in flight on 2026-10-07 merged (S071's free half, S072's client certificates, S080 and S020's code half): the session's reading of the owner's words, see the section |
+| S082 | Code in the wrong place moves; import contracts per service | With no change in behaviour and no assertion of an existing test changed: the claims tool server leaves the claims workload's package, the Claims API no longer imports the runtime's models or its sweep's constants (the models both sides use sit in a module of their own), the sweep's runtime SQL sits with the runtime, and the workloads' graphs sit in a package of their own; an import contract keeps each service's package from importing another service's; `make lint`, `make pytest` and `make smoke` pass. Designed | doing: the sweep's lock statement and the run's shared models and constants are moved (the first two moves, 2026-10-07; implemented and tested against PostgreSQL, **not deployed**: no chart, image or manifest changed and `make smoke` was not run) and are on `main` since pull request 140; the claims tool server's move (Move A, 2026-10-08: it now sits in `meridian.platform.claims_mcp`) is built, tested and **seen on the local kind cluster** (run MR1: the pod starts by the new path, smoke 56 of 56); the graphs' move, whose shape the owner chose on 2026-10-08 (the triage graph moves to a sibling package: the section), for S071's free half and S021's routes contract, and the per-service import contract comes last | S081, and the four steps that were in flight on 2026-10-07 merged (S071's free half, S072's client certificates, S080 and S020's code half): the session's reading of the owner's words, see the section |
 | S083 | Six packages, six images, a tag per service | A `uv` workspace holds a common library (`common`, `registry` and `guardrails`), the tool-server library and one package per service, each with its own dependencies and version; the runtime's image installs the graphs' package; the jobs ship with the service that owns their data; one build file makes six images; the chart takes a tag per service and `make deploy` builds and loads all six; `make demo` and `make smoke` pass on kind with six images on one database. First checkpoint: the images half of the owner's choice. Designed | todo | S082 |
 | S084 | The tool servers take the binding from the caller; two reads become calls | A tool server takes a call's run, agent, tenant and claim from the Agent Runtime's authenticated call and reads neither `runtime.runs` nor `claims.claims`; a call without a binding is refused; the knowledge server asks the policy server for a policy's wording version and the policy server asks the claims tool server for a policy's other claims, each over mutual TLS under a registry entry, a chart value and a NetworkPolicy; ADR 4's one-caller rule is changed for the two paths and the change recorded; T-22 is rewritten with the accepted risk, stating what the double check caught and what is left. Designed | todo | S082 |
 | S085 | The audit outbox, the relay and the central trail | Each service writes its audit row into an audit table of its own in the transaction of its business write, with the insert-only and stamp triggers; a relay copies the rows into a central audit table that owns retention and serves the adjuster's trail by claim; a relay that lags or stops is seen by an alert, and the services keep writing; the gateway's audit row is settled in the design and said (in the ledger's transaction, or kept apart); built inside the one database, as a table per schema (the owner's decision, Part D's question 7). Designed | todo | S082 |
@@ -22036,17 +22036,18 @@ model no longer do.
 
 ### S082 — Code in the wrong place moves; import contracts per service
 **Status:** doing · **Started:** 2026-10-07 · **Finished:** —
-**Left before it is done:** the pull request of the first two moves, held until
-S071's free half and S072's client certificates are on `main`; Move A (the
-claims tool server); Move D (the graphs), which waits for the owner; the
-per-service import contract; and `make smoke` on the cluster for Move A. Plan
+**Left before it is done:** Move D (the graphs); the per-service import
+contract. Moves C and B are on `main` (pull request 140) and Move A ran on the
+local kind cluster on 2026-10-08 (run MR1, below). Plan
 version of this part: the changelog's entry for S082.
 
 **Goal:** the code that sits in the wrong place for a split into services moves,
 with no change in behaviour and no assertion of an existing test changed, and
 an import contract keeps each service's package from importing another's.
 Labels: Moves C and B below are **implemented and tested, not deployed**; Move
-A, Move D and the per-service contract are **designed**.
+A is **implemented, tested and seen on the local kind cluster** (run MR1,
+2026-10-08; kind only); Move
+D and the per-service contract are **designed**.
 
 **What the map found** (a read-only map of `main` at ae94424; nothing was run;
 the paths and lines are those of that commit). The row reads as four lifts of
@@ -22223,6 +22224,64 @@ Evidence (the implementer's runs, in the worktree of its contract):
   ends in "Designed" and stays; the status cell says what is implemented, what
   is tested and that nothing is deployed.
 
+**Move A, the claims tool server, 2026-10-08 (built, tested and run on the
+local kind cluster).** On the step's branch `s082-move-a`, from the
+implementer's contract MA1:
+
+- **Run MR1 on the local kind cluster** (2026-10-08, 06:31 to 06:35 UTC, from
+  the branch at 8bc4ee8; nothing deleted). `make up` on the warm cluster ended
+  0 in 33 seconds and `make deploy` ended 0 in 97 seconds (a new image,
+  `meridian:9995af4e21e0`, the migrations, the release). Before, the tool
+  server's Deployment started
+  `meridian.workloads.claims_triage.mcp_server.app:create_app_from_env`; after,
+  its command holds `--factory
+  meridian.platform.claims_mcp.app:create_app_from_env`, one pod Ready, no
+  restart, and its log is five lines: four of the server starting and one
+  `POST /mcp HTTP/1.1 200`. `make smoke`: 56 passed, 0 failed, 0 skipped, among
+  them "each server (policy-mcp, knowledge-mcp, claims-mcp) answered
+  unknown-run through the runtime's client, over TLS with its certificate".
+  **Not seen:** a claim triaged end to end through the moved server (`make
+  demo` was not run), and the move on anything but kind. One pod of the
+  namespace was in `Error` during the run: a sweep job of 2026-10-07 at about
+  19:20 UTC, the evening of the machine's overload, older than this run and
+  not looked into here.
+
+- **Destination: `meridian.platform.claims_mcp`.** ADR 10 names none. The
+  session chose it, after the advisor, by the precedent of the two tool servers
+  that already serve domain data from `platform` (`policy_mcp`,
+  `knowledge_mcp`); a new top-level layer was not chosen, because that would be
+  the owner's decision. ADR 10 gets a dated note.
+- **A pure move.** `git mv` of `mcp_server/__init__.py`, `app.py` and `tools.py`
+  to `src/meridian/platform/claims_mcp/`; no name inside changed
+  (`SERVICE_NAME` is still `claims-mcp`) except `app.py`'s two import lines,
+  which name the new package. No re-export and no stub is left in the old
+  place; a test fails if the old module can still be found. The 17 test import
+  lines in 16 files and the three strings (`kindsupport.py`, the log redaction
+  test, the import contracts' subprocess probe) name the new path, and the
+  chart's command line for `claims-mcp` is the one chart change.
+- **The import contracts.** `meridian.platform.claims_mcp` is in the
+  provider-SDK contract's `source_modules`, as the other two tool servers are
+  (the layers contract and the agent-framework contract cover `platform` as a
+  whole). A planted `import openai` in it breaks the contract, as it does for
+  `policy_mcp`.
+- **One behaviour difference, said and tested.** Importing
+  `meridian.workloads.claims_triage.mcp_server` ran the parent package's
+  `__init__`, which imports `meridian.runtime` (it sets the msgpack
+  strictness flag before the agent framework loads). The tool server no longer
+  imports the runtime, which is wanted (a platform package must not). Nothing
+  in the three files relied on the flag or on anything else the parent's
+  `__init__` did: the files import `psycopg`, `starlette`, the OpenTelemetry
+  SDK, `platform.common` and `platform.toolserver`, and none imports LangGraph.
+  A fresh-interpreter test (`tests/meridian/test_claims_mcp_footprint.py`)
+  asserts that importing `meridian.platform.claims_mcp.app` leaves
+  `meridian.runtime`, `langgraph` (and `langchain*`) and `meridian.workloads`
+  out of `sys.modules`.
+- **The chart.** `helm template` with the kind values, before and after,
+  differs in one line: the `claims-mcp` Deployment's argument after
+  `--factory` is `meridian.platform.claims_mcp.app:create_app_from_env`. The
+  main session runs the image and `make smoke` on kind; until then this move is
+  **not deployed**.
+
 **Corrections of counts, found by the map.** The map read ADR 10's "31
 migration files" and "59 test files" at d1fd865; the tree holds more since
 S080.
@@ -22263,10 +22322,11 @@ reviewer's report recorded here.
    `smoke.sh`, `deploy.sh`, `smoke.d/*` and `infra/kind/README.md` (which holds
    the sweep's `python -m` line), and Move A changes the chart, so `make
    smoke` runs through them. Its own pull request, with an image and a cluster
-   run. The destination is **proposed, not decided**: ADR 10 names none (it
-   says only that the code "first moves out of the claims workload's
-   package"); the candidate is `meridian.platform.claims_mcp`, beside the other
-   two tool servers. That puts it under the contract that keeps `platform` from
+   run. The destination, decided by the session on 2026-10-08 after the
+   advisor (ADR 10 names none; it says only that the code "first moves out of
+   the claims workload's package"), is `meridian.platform.claims_mcp`, beside
+   the other two tool servers (built; see "Move A" above). That puts it under
+   the contract that keeps `platform` from
    importing the agent framework (hard rule 5), and into the `source_modules`
    of the provider-SDK contract, a list derived from the filesystem
    (`tests/meridian/test_import_contracts.py:492-512`): an edit of
@@ -24064,3 +24124,15 @@ row.
   the selection on 6,000 synthetic ids. Not seen on GitHub: `python` red from a
   failing test, a cancelled run, a re-run of one shard. One backlog row (the
   evaluation tests run twice, about 85 s). The whole suite was not run locally.
+- **v0.98, 2026-10-08:** S082 Move A, the claims tool server, built and
+  tested on `s082-move-a`, and **run on the local kind cluster** (run MR1:
+  the pod starts by the new path, smoke 56 of 56). The three files of
+  `workloads/claims_triage/mcp_server/` moved with `git mv` to
+  `platform/claims_mcp/`, the destination the session chose after the advisor
+  by the precedent of `policy_mcp` and `knowledge_mcp` (ADR 10 names none and
+  gets a dated note). No re-export is left behind; the 17 test import lines in
+  16 files, the three strings and the chart's command line name the new path,
+  and the package joins the provider-SDK contract's list. The one behaviour
+  difference: the tool server no longer imports the runtime as a side effect of
+  its old parent package, and a fresh-interpreter test holds it. The rendered
+  chart differs from `main`'s in that one argument.
