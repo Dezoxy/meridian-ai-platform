@@ -1,7 +1,7 @@
-"""Tests for the step status line, Part F and ``--write`` of check_plan_files.py (S101).
+"""Tests for the step status line, Part E and ``--write`` of check_plan_files.py (S101).
 
 A step's status is one line in its own file; Part B's tables hold only the step
-numbers; the plan's last part holds two generated tables between two marker
+numbers; the plan's last part holds three generated tables between two marker
 lines. Each test starts from the right tree of test_check_plan_files.py (one
 done step, S001), plants one fault and expects one finding.
 
@@ -22,16 +22,14 @@ from test_check_plan_files import (  # noqa: E402
     BACKLOG,
     BEGIN,
     END,
-    ENTRY,
     FENCE,
     PLAN,
-    PLAN_BEFORE_F,
+    PLAN_BEFORE_E,
     S001_ROW,
     STEP,
     PlanCase,
     block,
-    in_part_e,
-    part_f,
+    part_e,
 )
 
 STEP_PATH = "docs/plan/steps/S000-S019/S001.md"
@@ -62,8 +60,12 @@ def flight_row(step, title, started, word):
     return f"| {started} | {step} | {title} | {word} | {link(step)} |\n"
 
 
-def plan_with(finished="", flight=""):
-    return PLAN_BEFORE_F + part_f(block(finished, flight))
+def todo_row(step, title):
+    return f"| {step} | {title} | {link(step)} |\n"
+
+
+def plan_with(finished="", flight="", todo=""):
+    return PLAN_BEFORE_E + part_e(block(finished, flight, todo))
 
 
 class StatusLine(PlanCase):
@@ -137,10 +139,15 @@ class StatusLine(PlanCase):
         self.put(step_text(status() + " · "))
         self.assertIn(FORM, self.one())
 
-    def test_todo_with_no_start_passes_and_stands_in_flight(self):
+    def test_todo_with_no_start_passes_and_stands_in_not_started(self):
+        self.put(step_text(status("todo", started="—", finished="—")))
+        self.write(PLAN_PATH, plan_with(todo=todo_row("S001", "One")))
+        self.assertEqual(self.found(), [])
+
+    def test_a_todo_step_is_not_in_flight(self):
         self.put(step_text(status("todo", started="—", finished="—")))
         self.write(PLAN_PATH, plan_with(flight=flight_row("S001", "One", "—", "todo")))
-        self.assertEqual(self.found(), [])
+        self.assertIn("make plan-progress", self.one())
 
     def test_blocked_and_dropped_pass_and_stand_in_flight(self):
         for word in ("blocked", "dropped"):
@@ -167,8 +174,7 @@ class StatusLine(PlanCase):
         for head in (
             "## Part C — Step details\n",
             "## Part D — Open questions\n",
-            "## Part E — Changelog\n",
-            "## Part F — Where the steps stand\n",
+            "## Part E — Where the steps stand\n",
         ):
             with self.subTest(part=head[:9]):
                 self.assertIn(head, PLAN)
@@ -194,11 +200,10 @@ class PartB(PlanCase):
 
     def test_a_status_column_in_a_table_of_another_part_is_not_part_bs(self):
         table = "\n| ID | Step | Status |\n|---|---|---|\n"
-        # Not Part F: its generated table of steps in flight has a Status column.
         for head in (
             "## Part C — Step details\n",
             "## Part D — Open questions\n",
-            "## Part E — Changelog\n",
+            "## Part E — Where the steps stand\n",
         ):
             with self.subTest(part=head[:9]):
                 self.assertIn(head, PLAN)
@@ -242,17 +247,17 @@ class PartB(PlanCase):
         self.assertIn("S002 has no row in Part B", self.one())
 
 
-class PartF(PlanCase):
-    def test_a_plan_without_part_f_is_a_finding(self):
-        self.write(PLAN_PATH, PLAN_BEFORE_F)
+class PartE(PlanCase):
+    def test_a_plan_without_part_e_is_a_finding(self):
+        self.write(PLAN_PATH, PLAN_BEFORE_E)
         # With no readable part B the step files have no row either: two findings.
-        self.assertEqual(self.found()[0], "the plan has no '## Part F — ' heading")
+        self.assertEqual(self.found()[0], "the plan has no '## Part E — ' heading")
 
-    def test_part_f_before_part_e_is_a_finding(self):
-        part = part_f(block(S001_ROW))
-        plan = PLAN.replace(part, "").replace("## Part E", part + "\n## Part E")
+    def test_part_e_before_part_d_is_a_finding(self):
+        part = part_e(block(S001_ROW))
+        plan = PLAN.replace(part, "").replace("## Part D", part + "\n## Part D")
         self.write(PLAN_PATH, plan)
-        self.assertIn("B, C, D, E and F are not in that order", self.found()[0])
+        self.assertIn("B, C, D and E are not in that order", self.found()[0])
 
     def test_a_missing_begin_marker_is_one_finding(self):
         self.write(PLAN_PATH, PLAN.replace(BEGIN + "\n", ""))
@@ -281,12 +286,8 @@ class PartF(PlanCase):
         self.write(PLAN_PATH, PLAN.replace(" never by hand", " not by hand"))
         self.assertIn("the begin marker line", self.one())
 
-    def test_an_entry_in_part_f_is_not_part_es_finding(self):
-        self.write(PLAN_PATH, PLAN + "\n" + ENTRY)
-        self.assertEqual(self.found(), [])
-
-    def test_marker_lines_in_part_e_are_not_part_fs(self):
-        self.write(PLAN_PATH, in_part_e(f"{BEGIN}\n{END}\n"))
+    def test_marker_lines_in_part_d_are_not_part_es(self):
+        self.write(PLAN_PATH, PLAN.replace("## Part E", f"{BEGIN}\n{END}\n\n## Part E"))
         self.assertEqual(self.found(), [])
 
 
@@ -295,7 +296,7 @@ class Block(PlanCase):
         self.write(STEP_PATH, step_text(status("doing", finished="—")))
         found = self.one()
         self.assertIn("make plan-progress", found)
-        self.assertIn('"Finished steps" and "In flight"', found)
+        self.assertIn('"Finished steps", "In flight" and "Not started"', found)
 
     def test_a_new_step_file_makes_the_block_stale(self):
         row = "| S002 | Two | x | — |\n"
@@ -318,7 +319,7 @@ class Block(PlanCase):
         self.write(PLAN_PATH, PLAN.replace(END, "A note.\n" + END))
         self.assertIn("make plan-progress", self.one())
 
-    def test_no_step_at_all_is_two_empty_tables(self):
+    def test_no_step_at_all_is_three_empty_tables(self):
         (self.repo / STEP_PATH).unlink()
         self.write(PLAN_PATH, plan_with())
         self.assertEqual(self.found(), [])
@@ -355,9 +356,10 @@ class Block(PlanCase):
             flight_row("S007", "Step 7", "2026-09-30", "doing")
             + flight_row("S006", "Step 6", "2026-10-01", "doing")
             + flight_row("S008", "Step 8", "2026-10-01", "blocked")
-            + flight_row("S004", "Step 4", "—", "todo")
         )
-        right = base.replace(block(S001_ROW), block(finished, flight))
+        right = base.replace(
+            block(S001_ROW), block(finished, flight, todo_row("S004", "Step 4"))
+        )
         self.write(PLAN_PATH, right)
         self.assertEqual(self.found(), [])
         # The same block with two rows swapped is stale: the order is checked.
@@ -367,6 +369,31 @@ class Block(PlanCase):
         self.assertNotEqual(swapped, flight)
         self.write(PLAN_PATH, base.replace(block(S001_ROW), block(finished, swapped)))
         self.assertIn("make plan-progress", self.one())
+
+    def test_not_started_holds_the_todo_steps_by_step_number(self):
+        rows = "| S002 | Two | x | — |\n| S003 | Three | x | — |\n"
+        base = PLAN.replace("| S002 | Two | x | — |\n", rows)
+        for step, title in (("S003", "Three"), ("S002", "Two")):
+            line = status("todo", "—", "—")
+            self.write(
+                f"docs/plan/steps/S000-S019/{step}.md", step_text(line, title, step)
+            )
+        todo = todo_row("S002", "Two") + todo_row("S003", "Three")
+        self.write(PLAN_PATH, base.replace(block(S001_ROW), block(S001_ROW, "", todo)))
+        self.assertEqual(self.found(), [])
+        swapped = todo_row("S003", "Three") + todo_row("S002", "Two")
+        self.write(
+            PLAN_PATH, base.replace(block(S001_ROW), block(S001_ROW, "", swapped))
+        )
+        self.assertIn("make plan-progress", self.one())
+
+    def test_every_step_that_is_not_done_or_todo_is_in_flight(self):
+        for word in ("doing", "blocked", "dropped"):
+            with self.subTest(word=word):
+                self.write(STEP_PATH, step_text(status(word, finished="—")))
+                row = flight_row("S001", "One", "2026-09-27", word)
+                self.write(PLAN_PATH, plan_with(flight=row))
+                self.assertEqual(self.found(), [])
 
     def test_an_unescaped_pipe_in_a_title_is_escaped(self):
         for title, cell in (("One | Two", "One \\| Two"), ("a \\| b", "a \\| b")):
@@ -396,14 +423,15 @@ class Write(PlanCase):
     def test_a_stale_tree_becomes_clean_and_a_second_run_changes_nothing(self):
         self.stale()
         self.assertEqual(len(self.found()), 1)
+        counts = "plan progress: 0 finished, 1 in flight, 0 not started\n"
         code, out, _ = self.run_main("--write")
-        self.assertEqual((code, out), (0, "plan progress: 0 finished, 1 in flight\n"))
+        self.assertEqual((code, out), (0, counts))
         self.assertEqual(self.found(), [])
         written = self.plan_bytes()
         path = self.repo / PLAN_PATH
         os.utime(path, ns=(10**18, 10**18))
         code, out, _ = self.run_main("--write")
-        self.assertEqual((code, out), (0, "plan progress: 0 finished, 1 in flight\n"))
+        self.assertEqual((code, out), (0, counts))
         self.assertEqual(self.plan_bytes(), written)
         self.assertEqual(path.stat().st_mtime_ns, 10**18)
 
@@ -411,9 +439,19 @@ class Write(PlanCase):
         path = self.repo / PLAN_PATH
         os.utime(path, ns=(10**18, 10**18))
         code, out, _ = self.run_main("--write")
-        self.assertEqual((code, out), (0, "plan progress: 1 finished, 0 in flight\n"))
+        counts = "plan progress: 1 finished, 0 in flight, 0 not started\n"
+        self.assertEqual((code, out), (0, counts))
         self.assertEqual(path.stat().st_mtime_ns, 10**18)
         self.assertEqual(self.plan_bytes(), PLAN.encode())
+
+    def test_a_todo_step_is_written_to_not_started_and_counted(self):
+        self.write(STEP_PATH, step_text(status("todo", "—", "—")))
+        code, out, _ = self.run_main("--write")
+        counts = "plan progress: 0 finished, 0 in flight, 1 not started\n"
+        self.assertEqual((code, out), (0, counts))
+        self.assertEqual(
+            self.plan_bytes().decode(), plan_with(todo=todo_row("S001", "One"))
+        )
 
     def test_the_bytes_outside_the_markers_are_untouched(self):
         before = "Prose before.\r\n\tTabbed, trailing space \n"
@@ -431,7 +469,7 @@ class Write(PlanCase):
         self.assertIn(flight_row("S001", "One", "2026-09-27", "doing"), between)
 
     def test_missing_markers_write_nothing_and_exit_one(self):
-        plan = PLAN_BEFORE_F + "## Part F — Where the steps stand\n\nNo markers.\n"
+        plan = PLAN_BEFORE_E + "## Part E — Where the steps stand\n\nNo markers.\n"
         self.write(PLAN_PATH, plan)
         code, out, err = self.run_main("--write")
         self.assertEqual((code, out), (1, ""))

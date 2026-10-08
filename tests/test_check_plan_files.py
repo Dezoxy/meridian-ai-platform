@@ -3,9 +3,9 @@
 The plan's step sections are files in folders of 20 steps, the follow-up backlog is
 two files, and the check keeps those files and the plan one story. Each test builds
 a small tree that is right, plants one violation and expects one finding; the
-clean tree must pass, and the real repository must pass too. The status line, Part F
-and ``--write`` (S101) are tested in test_plan_progress.py, which shares this
-fixture.
+clean tree must pass, and the real repository must pass too. The status line, Part E
+and ``--write`` (S101) are tested in test_plan_progress.py, and the plan's row,
+question and size gate (S102) in test_plan_gate.py; both share this fixture.
 
 Run: python3 -m unittest discover -s tests
 """
@@ -13,16 +13,21 @@ Run: python3 -m unittest discover -s tests
 import contextlib
 import importlib.util
 import io
+import re
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
+SCRIPTS = HERE.parent / "scripts"
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(SCRIPTS))
+import plan_gate  # noqa: E402
 from test_check_docs_consistency import load_checker_for  # noqa: E402
 
-SCRIPT = HERE.parent / "scripts" / "check_plan_files.py"
+SCRIPT = SCRIPTS / "check_plan_files.py"
 FENCE = "`" * 3
 
 BEGIN = '<!-- plan-progress: begin (written by "make plan-progress", never by hand) -->'
@@ -34,20 +39,23 @@ FLIGHT_HEAD = (
     "\n### In flight\n\n"
     "| Started | Step | Title | Status | File |\n|---|---|---|---|---|\n"
 )
+NOT_STARTED_HEAD = "\n### Not started\n\n| Step | Title | File |\n|---|---|---|\n"
 
 
-def block(finished="", flight=""):
+def block(finished="", flight="", todo=""):
     """The lines between the markers, as the plan holds them, from literal rows."""
-    return FINISHED_HEAD + finished + FLIGHT_HEAD + flight + "\n"
+    return (
+        FINISHED_HEAD + finished + FLIGHT_HEAD + flight + NOT_STARTED_HEAD + todo + "\n"
+    )
 
 
-def part_f(between):
-    return f"## Part F — Where the steps stand\n\n{BEGIN}\n{between}{END}\n"
+def part_e(between):
+    return f"## Part E — Where the steps stand\n\n{BEGIN}\n{between}{END}\n"
 
 
 # The literal block for the fixture's one step, S001 (done, finished 2026-09-28).
 S001_ROW = "| 2026-09-28 | S001 | One | [S001.md](plan/steps/S000-S019/S001.md) |\n"
-PLAN_BEFORE_F = f"""# Plan
+PLAN_BEFORE_E = f"""# Plan
 
 ## Part B — Roadmap and step list
 
@@ -66,17 +74,14 @@ Template:
 
 ## Part D — Open questions
 
-## Part E — Changelog
-
-The change log ended with S100.
-
 """
-PLAN = PLAN_BEFORE_F + part_f(block(S001_ROW))
-
-
-def in_part_e(text):
-    """The right plan with ``text`` at the end of Part E, before Part F."""
-    return PLAN.replace("## Part F", text + "\n## Part F")
+PLAN = PLAN_BEFORE_E + part_e(block(S001_ROW))
+# A step table's header (S102 gates its rows) and a question table's.
+STEP_HEADER = "| ID | Step | Done when | Depends |"
+QUESTION_HEADER = (
+    "| # | Question | Needed by | Default if unanswered |\n|---|---|---|---|\n"
+)
+FIGURE = re.compile(r"fixed text is ([\d,]+) bytes")
 
 
 STATUS = "**Status:** done · **Started:** 2026-09-27 · **Finished:** 2026-09-28"
@@ -113,12 +118,25 @@ class PlanCase(unittest.TestCase):
         self.write("docs/plan/steps/S000-S019/S001.md", STEP)
         self.write("docs/plan/backlog.md", BACKLOG)
         self.write("docs/plan/backlog-closed.md", BACKLOG_CLOSED)
+        # The real ceiling fits the real plan, not this small one: the fixture's
+        # own ceiling sits 1,024 bytes over its fixed text, inside the slack.
+        patch = mock.patch.object(plan_gate, "FIXED_TEXT_MAX", 0)
+        patch.start()
+        self.addCleanup(patch.stop)
+        plan_gate.FIXED_TEXT_MAX = self.figure() + 1024
 
     def write(self, name, text):
         path = self.repo / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(text.encode())
         return path
+
+    def figure(self):
+        """The fixed-text figure the check measures, read from its finding."""
+        plan_gate.FIXED_TEXT_MAX = 0
+        hits = [m[1] for x in self.found() if (m := FIGURE.search(x))]
+        self.assertEqual(len(hits), 1, hits)
+        return int(hits[0].replace(",", ""))
 
     def found(self):
         return self.mod.problems(self.repo)
@@ -138,8 +156,8 @@ class PlanFiles(PlanCase):
         self.assertEqual(self.found(), [])
 
     def test_a_plan_that_promises_no_file_needs_no_folder(self):
-        bare = "## Part B — x\n\n## Part C — x\n\n## Part D — x\n\n## Part E — x\n\n"
-        self.write("docs/meridian-plan.md", bare + part_f(block()))
+        bare = "## Part B — x\n\n## Part C — x\n\n## Part D — x\n\n"
+        self.write("docs/meridian-plan.md", bare + part_e(block()))
         (self.repo / "docs/plan/steps/S000-S019/S001.md").unlink()
         self.assertEqual(self.found(), [])
 
@@ -461,12 +479,6 @@ class ChangeLogGone(PlanCase):
         (self.repo / "docs/plan/changelog").symlink_to(self.repo / "nowhere")
         self.assertIn(self.REMEDY, self.one())
 
-    def test_an_entry_left_in_part_e_is_reported_with_the_same_remedy(self):
-        self.write("docs/meridian-plan.md", in_part_e(ENTRY))
-        found = self.one()
-        self.assertIn("Part E of the plan holds an entry", found)
-        self.assertIn(self.REMEDY, found)
-
     def test_the_stand_in_and_the_ci_switch_are_gone(self):
         self.assertFalse(hasattr(self.mod, "check_changelog"))
         self.assertFalse(hasattr(self.mod, "CHANGELOG_FILE"))
@@ -477,7 +489,6 @@ class ChangeLogGone(PlanCase):
     def test_the_check_imports_no_migration_script(self):
         text = SCRIPT.read_text()
         self.assertNotIn("plan_split", text)
-        self.assertNotIn("sys.path", text)
 
 
 class PartHeadings(PlanCase):
@@ -488,8 +499,7 @@ class PartHeadings(PlanCase):
             ("B", "## Part B — Roadmap and step list"),
             ("C", "## Part C — Step details"),
             ("D", "## Part D — Open questions"),
-            ("E", "## Part E — Changelog"),
-            ("F", "## Part F — Where the steps stand"),
+            ("E", "## Part E — Where the steps stand"),
         ):
             with self.subTest(part=letter):
                 self.write(
@@ -500,30 +510,30 @@ class PartHeadings(PlanCase):
                     any(f"no '## Part {letter} — ' heading" in x for x in found), found
                 )
 
-    def test_an_entry_under_a_hyphenated_part_e_heading_is_not_missed(self):
-        plan = PLAN.replace("## Part E — Changelog", "## Part E - Changelog")
-        self.write("docs/meridian-plan.md", plan + ENTRY)
-        self.assertTrue(any("Part E" in x for x in self.found()))
-
     def test_a_doubled_heading_is_a_finding_not_a_traceback(self):
-        self.write("docs/meridian-plan.md", PLAN + "\n## Part E — Changelog\n")
+        self.write("docs/meridian-plan.md", PLAN + "\n## Part E — Again\n")
         self.assertIn("Part E has two headings", self.found()[0])
 
     def test_parts_out_of_order_are_a_finding(self):
         plan = PLAN.replace("## Part D — Open questions", "## Part X")
-        plan = plan.replace("## Part E — Changelog", "## Part D — Open questions")
-        plan = plan.replace("## Part X", "## Part E — Changelog")
+        plan = plan.replace("## Part E — Where", "## Part D — Open questions\n\nWhere")
+        plan = plan.replace("## Part X", "## Part E — Where")
         self.write("docs/meridian-plan.md", plan)
-        self.assertIn("not in that order", self.found()[0])
+        self.assertIn("B, C, D and E are not in that order", self.found()[0])
 
-    def test_an_entry_of_any_label_left_in_part_e_is_reported(self):
-        for label in ("v0.99", "PLAN-VERSION", "#145", "#XXXX", "v0.NN"):
-            with self.subTest(label=label):
-                entry = f"- **{label}, 2026-10-09:** left behind.\n"
-                self.write("docs/meridian-plan.md", in_part_e(entry))
-                found = self.found()
-                self.assertEqual(len(found), 1, found)
-                self.assertIn("Part E of the plan holds an entry", found[0])
+    def test_a_part_heading_after_part_e_is_one_finding_each(self):
+        for letter in ("F", "G"):
+            with self.subTest(letter=letter):
+                late = f"\n## Part {letter} — Late\n\nA late part.\n"
+                self.write("docs/meridian-plan.md", PLAN + late)
+                found = self.one()
+                self.assertIn(f"'## Part {letter} — ' heading after Part E", found)
+                self.assertIn("Part E is the last", found)
+
+    def test_a_part_heading_after_part_e_in_a_fence_is_text(self):
+        late = f"\n{FENCE}text\n## Part F — Late\n{FENCE}\n"
+        self.write("docs/meridian-plan.md", PLAN + late)
+        self.assertEqual(self.found(), [])
 
     def test_a_step_heading_in_any_old_form_is_reported(self):
         forms = (
@@ -538,10 +548,8 @@ class PartHeadings(PlanCase):
                 with self.subTest(heading=heading, where=where):
                     plan = PLAN.replace(where, f"{heading}\n\nBody.\n\n{where}")
                     if where == "## Part E":
-                        plan = PLAN.replace(
-                            "## Part E — Changelog",
-                            f"## Part E — Changelog\n\n{heading}\n",
-                        )
+                        head = "## Part E — Where the steps stand"
+                        plan = PLAN.replace(head, f"{head}\n\n{heading}\n")
                     self.write("docs/meridian-plan.md", plan)
                     found = self.found()
                     self.assertTrue(
@@ -780,6 +788,9 @@ class TheRealRepository(unittest.TestCase):
         at = lines.index("plan-progress:")
         self.assertEqual(lines[at + 1], "\tpython3 scripts/check_plan_files.py --write")
         self.assertTrue(lines[at - 1].startswith("## plan-progress "))
+        self.assertIn(
+            "Part E (finished steps, steps in flight, steps not started)", lines[at - 1]
+        )
         phony = next(x for x in lines if x.startswith(".PHONY:"))
         self.assertIn("plan-progress", phony.split())
 

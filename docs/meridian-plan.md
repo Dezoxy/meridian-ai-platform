@@ -257,8 +257,8 @@ problem". So:
 - **Part D holds open questions only.** An answered one moves, whole,
   to `docs/plan/questions-closed.md` and keeps its number.
 - **The plan's text outside its rows does not grow.** `make docs` holds
-  it under a ceiling (`FIXED_TEXT_MAX` in `scripts/check_plan_files.py`)
-  that is lowered when the plan shrinks. A new rule takes the room of an
+  it under a ceiling (`FIXED_TEXT_MAX` in `scripts/plan_gate.py`) that is
+  lowered when the plan shrinks. A new rule takes the room of an
   old sentence; raising the ceiling is the owner's decision.
 - **A pull request titled for a step changes that step's file**
   (`S102: …` changes `S102.md`); CI refuses one that does not.
@@ -1005,16 +1005,21 @@ not here.
 | 2026-10-07 | S080 | File uploads for a claim, before sign-in | doing | [S080.md](plan/steps/S080-S099/S080.md) |
 | 2026-10-07 | S082 | Code in the wrong place moves; import contracts per service | doing | [S082.md](plan/steps/S080-S099/S082.md) |
 | 2026-10-08 | S102 | The plan reads as a plan, and a gate keeps it so | doing | [S102.md](plan/steps/S100-S119/S102.md) |
-| — | S022 | Delivery pipeline | todo | [S022.md](plan/steps/S020-S039/S022.md) |
-| — | S026 | M2 exit | todo | [S026.md](plan/steps/S020-S039/S026.md) |
-| — | S083 | Six packages, six images, a tag per service | todo | [S083.md](plan/steps/S080-S099/S083.md) |
-| — | S084 | The tool servers take the binding from the caller; two reads become calls | todo | [S084.md](plan/steps/S080-S099/S084.md) |
-| — | S085 | The audit outbox, the relay and the central trail | todo | [S085.md](plan/steps/S080-S099/S085.md) |
-| — | S086 | The sweep in two | todo | [S086.md](plan/steps/S080-S099/S086.md) |
-| — | S087 | Five databases | todo | [S087.md](plan/steps/S080-S099/S087.md) |
-| — | S088 | Contracts, versions and independent release | todo | [S088.md](plan/steps/S080-S099/S088.md) |
-| — | S093 | Claimants sign in as themselves | todo | [S093.md](plan/steps/S080-S099/S093.md) |
-| — | S094 | Sign-in at the edge | todo | [S094.md](plan/steps/S080-S099/S094.md) |
-| — | S095 | Retention and erasure of uploaded files | todo | [S095.md](plan/steps/S080-S099/S095.md) |
+
+### Not started
+
+| Step | Title | File |
+|---|---|---|
+| S022 | Delivery pipeline | [S022.md](plan/steps/S020-S039/S022.md) |
+| S026 | M2 exit | [S026.md](plan/steps/S020-S039/S026.md) |
+| S083 | Six packages, six images, a tag per service | [S083.md](plan/steps/S080-S099/S083.md) |
+| S084 | The tool servers take the binding from the caller; two reads become calls | [S084.md](plan/steps/S080-S099/S084.md) |
+| S085 | The audit outbox, the relay and the central trail | [S085.md](plan/steps/S080-S099/S085.md) |
+| S086 | The sweep in two | [S086.md](plan/steps/S080-S099/S086.md) |
+| S087 | Five databases | [S087.md](plan/steps/S080-S099/S087.md) |
+| S088 | Contracts, versions and independent release | [S088.md](plan/steps/S080-S099/S088.md) |
+| S093 | Claimants sign in as themselves | [S093.md](plan/steps/S080-S099/S093.md) |
+| S094 | Sign-in at the edge | [S094.md](plan/steps/S080-S099/S094.md) |
+| S095 | Retention and erasure of uploaded files | [S095.md](plan/steps/S080-S099/S095.md) |
 
 <!-- plan-progress: end -->
