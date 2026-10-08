@@ -42,6 +42,10 @@
 #      Loki, OpenTelemetry Collector, and (S064) the log agent: a second release
 #      of the collector's chart, the contrib build, as a DaemonSet in `logging`
 #      that sends the output of `meridian`'s pods to the collector
+#   5. only with MERIDIAN_IDENTITY=keycloak (S021, Y2b), after the record is `ok`:
+#      the sign-in issuer add-on, identity.sh (README, "The sign-in issuer"); it
+#      records `changing` itself after its last check and `ok` at its end; off,
+#      nothing of it is made
 # Every version is pinned in pins.env.
 # Who holds the cluster (S075, common.sh): on a cluster that exists, another
 # holder stops this before it changes anything unless TAKE_CLUSTER=1; the record
@@ -54,6 +58,8 @@ set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 # shellcheck source=gateways.sh
 . "$(dirname "${BASH_SOURCE[0]}")/gateways.sh"
+# A mistyped MERIDIAN_IDENTITY stops here, before anything is done (common.sh).
+identity_switch_check
 
 readonly HELM_TIMEOUT=10m
 readonly ROLES_TIMEOUT=300
@@ -500,7 +506,10 @@ log "edge: Envoy Gateway"
 install_release envoy-gateway envoy-gateway-system "${ENVOY_GATEWAY_CHART}" \
   "${ENVOY_GATEWAY_VERSION}" "" envoy-gateway.yaml \
   --set "global.images.envoyGateway.image=${ENVOY_GATEWAY_IMAGE_REPOSITORY}:${ENVOY_GATEWAY_IMAGE_TAG}@${ENVOY_GATEWAY_IMAGE_DIGEST}"
-kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/gateway.yaml" >/dev/null
+# The edge's manifest is the committed file, unless MERIDIAN_IDENTITY=keycloak
+# widens who may attach a route to it (gateways.sh, S021 Y2b).
+edge_manifest="$(edge_gateway_manifest)" || exit 1
+kctl apply --server-side --force-conflicts -f - <<<"${edge_manifest}" >/dev/null
 
 log "identity: cert-manager, who may ask for a certificate, and the CA for the services"
 install_release cert-manager cert-manager "${CERT_MANAGER_CHART}" \
@@ -747,4 +756,16 @@ kctl -n envoy-gateway-system wait --for=condition=Available deployment \
 # Every wait above ended well: only now is the cluster claimed (S075). A run that
 # stopped earlier leaves the record as it was.
 record_cluster_holder ok
+
+# The sign-in issuer (S021, Y2b): an add-on, off unless MERIDIAN_IDENTITY=keycloak,
+# and after the record above, so that a refusal for lack of memory, which changes
+# nothing, leaves `ok`. On, identity.sh records `changing` itself after its last
+# check and `ok` at its end, so a half-made add-on leaves `changing`. Off, it says
+# one line when an earlier run left its namespace, and a failure of that line
+# stops nothing.
+if identity_on; then
+  "${KIND_DIR}/identity.sh" up
+else
+  "${KIND_DIR}/identity.sh" note || log "identity: the note about the sign-in issuer failed; make up is otherwise done"
+fi
 log "done. Next: make smoke | make grafana | export KUBECONFIG=${KUBECONFIG_FILE}"

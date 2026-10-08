@@ -32,6 +32,11 @@ dependencies = [
     "opentelemetry-sdk==1.45.0",
     "psycopg[binary]==3.3.6",
     "pydantic==2.13.5",
+    # Checks a user's bearer token (S021, common/signin.py): RS256 only, the
+    # algorithms list fixed in code. Already locked, through mcp and msal, so
+    # pinned directly at the version the lock holds; the crypto extra is the
+    # RSA support, on the locked cryptography.
+    "pyjwt[crypto]==2.15.1",
     "python-multipart==0.0.32",
     "pyyaml==6.0.3",
     # The gateway's shared rate windows (S066, T-45): synchronous client only, no
@@ -317,3 +322,79 @@ forbidden_modules = [
     "meridian.platform.evaluation",
     "meridian.platform.cli",
 ]
+
+[[tool.importlinter.contracts]]
+name = "only the sign-in modules import the JWT library (S021)"
+type = "forbidden"
+# The check of a person's bearer token is the one place a token is parsed and a
+# signature verified; PyJWT was already installed through mcp and msal, and an
+# import of it elsewhere would be a second, unreviewed check. The same source
+# list as the provider contract, with the gateway added, because import-linter
+# has no "all except" form; test_import_contracts_signin.py fails when a new
+# package under src/meridian/platform/ is missing from it.
+source_modules = [
+    "meridian.workloads",
+    "meridian.runtime",
+    "meridian.platform.claims_mcp",
+    "meridian.platform.cli",
+    "meridian.platform.common",
+    "meridian.platform.evaluation",
+    "meridian.platform.gateway",
+    "meridian.platform.guardrails",
+    "meridian.platform.knowledge_mcp",
+    "meridian.platform.migrations",
+    "meridian.platform.policy_mcp",
+    "meridian.platform.registry",
+    "meridian.platform.toolserver",
+]
+forbidden_modules = ["jwt"]
+# The three modules that parse and verify are the ignored edges: the access
+# token's check, the key set's reader and the ID token's check at the pages'
+# callback (signinidtoken; signinflow calls it and imports no JWT library). An
+# ignored edge leaves the graph, so a chain through them (signinguard -> signin
+# -> jwt) is no violation either.
+ignore_imports = [
+    "meridian.platform.common.signin -> jwt",
+    "meridian.platform.common.signinkeys -> jwt",
+    "meridian.platform.common.signinidtoken -> jwt",
+]
+
+[[tool.importlinter.contracts]]
+name = "services and graph code do not import the sign-in modules (S021)"
+type = "forbidden"
+# People sign in at the Claims API (the page and JSON routes); services identify
+# each other by certificate (meridian.platform.common.identity), and a person's
+# token, cookie or principal never crosses a service boundary. The sources are
+# the gateway, the runtime, the tool servers and the graph code of the
+# workloads; the Claims API's own modules (claims_triage.app and its routers)
+# are the ones that may import them. Indirect imports count.
+source_modules = [
+    "meridian.platform.gateway",
+    "meridian.runtime",
+    "meridian.platform.toolserver",
+    "meridian.platform.knowledge_mcp",
+    "meridian.platform.policy_mcp",
+    "meridian.platform.claims_mcp",
+    "meridian.workloads.claim_brief",
+    "meridian.workloads.claims_triage.graph",
+]
+forbidden_modules = [
+    "meridian.platform.common.signin",
+    "meridian.platform.common.signinkeys",
+    "meridian.platform.common.signinsession",
+    "meridian.platform.common.signinguard",
+    "meridian.platform.common.signinflow",
+    "meridian.platform.common.signinstate",
+    "meridian.platform.common.signinidtoken",
+]
+
+[[tool.importlinter.contracts]]
+name = "the shared platform code does not import the gateway"
+type = "forbidden"
+# The gateway imports meridian.platform.common (env, http, identity), so a
+# reverse import is a cycle. A setting both need, such as the environment's
+# variable name, is therefore repeated in common with a test that ties the two
+# copies (test_signin_session.py), until it moves into common.env. Indirect
+# imports count.
+source_modules = ["meridian.platform.common"]
+forbidden_modules = ["meridian.platform.gateway"]

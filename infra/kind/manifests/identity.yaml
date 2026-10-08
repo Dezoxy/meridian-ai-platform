@@ -1,0 +1,245 @@
+# Keycloak, the local sign-in issuer, as one Deployment in the namespace `identity`
+# (S021, Y2b): an add-on that is OFF unless MERIDIAN_IDENTITY=keycloak, applied by
+# infra/kind/identity.sh after the namespace and its policies
+# (identity-networkpolicy.yaml) and the Secrets exist. Entra ID is the issuer on
+# Azure; nothing here is for Azure. Written and tested without a cluster, and run
+# on kind once (run KR1, 2026-10-08): the pod was Ready at its first start with
+# the read-only root file system, the realm imported and the route was Accepted.
+# What that run did not show is untried, and listed in infra/kind/README.md, "The
+# sign-in issuer".
+#
+# Four objects: a ServiceAccount (no token is mounted), the Deployment, the Service
+# `keycloak` (port 8080 only; the health port 9000 is not in it) and an HTTPRoute on
+# the edge for the host name id.meridian.localhost, which forwards what the sign-in
+# flow needs and nothing else: under /realms/meridian-staff/ the discovery document
+# (.well-known/), the protocol endpoints (protocol/openid-connect/: the login
+# redirect, the token, the keys, the logout) and the login form's own posts
+# (login-actions/), and /resources/ (the login page's styles and scripts). Not the
+# account console (account/), not the client registration (clients-registrations/),
+# not /admin, not /realms/master: they have no rule, so the edge answers them with
+# its 404; smoke proves it (smoke.d/13-issuer.sh; seen on kind, run KR1: the four
+# prefixes forwarded with their trailing slash, the rest the edge's own 404). That
+# the login page still loads in a browser with these four prefixes is untried.
+#
+# The image is a placeholder word, twice (the init container and the container),
+# and the realm Secret's fingerprint is another, once (a pod annotation, below);
+# the script refuses a file that holds either any other number of times, comments
+# included, and a third `image:` line: it writes KEYCLOAK_IMAGE of pins.env there,
+# by digest, so that no tag or digest lives in this file (Renovate reads pins.env).
+#
+# Arguments (the container run of Y2a, 2026-10-08, with the realm file and this
+# hostname): `start-dev` (development mode, its built-in database, nothing
+# persists: a restart makes new keys and imports the realm again), `--import-realm`
+# (the realm file the Secret `keycloak-realm` mounts at /opt/keycloak/data/import),
+# `--health-enabled=true` (the probes' port 9000), and the two hostname options that
+# keep `iss` the FRONT URL, http://id.meridian.localhost:8088, on every path while
+# the token and key endpoints answer on whatever name they are asked at (the
+# Service's, for the Claims API). There is no administrator account of any kind:
+# nothing in this file, in the environment or in a Secret creates one, and the
+# admin console is not routed.
+#
+# Plain HTTP: the edge reaches this pod over plain HTTP, and so does the Claims API
+# (threat model T-117). Accepted on a disposable development cluster, said in the
+# README, and a backlog row (S094: TLS to the issuer). No `--proxy-headers` is set:
+# a proxy in front was not tried (the issuer was the front URL from inside the
+# cluster too, seen on kind in run KR1).
+#
+# Memory: requests 700Mi, limit 1Gi, no CPU limit. 600 to 700 MiB were observed
+# against a 1 GiB limit in the container run, with no OOM kill; the JVM's heap is 70
+# percent of the limit. On kind (run KR1) the machine's available memory went from
+# 4,984 to 4,472 MB, about 510 MB, with the platform up. Recreate, not a rolling
+# update: two of these would not fit the machine together.
+#
+# The root file system is read-only; seen on kind 2026-10-08, run KR1: the pod was
+# Ready at its first start, with no restart. `start-dev` builds the server again at
+# each start, which writes under /opt/keycloak/lib/quarkus, and the server writes
+# /opt/keycloak/data (its database, its temporary files; the import folder is a
+# Secret mounted inside it) and /tmp. Each is an emptyDir below; the first is filled
+# by the init container, a copy of what the image has (it completed). Should a
+# later image need a path that is not covered, the fallback is the line
+# `readOnlyRootFilesystem: true` in the container's securityContext (and the init
+# container, the `quarkus` volume and its mount can then be taken out).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: keycloak
+  namespace: identity
+  labels:
+    app.kubernetes.io/name: keycloak
+    app.kubernetes.io/part-of: meridian-identity
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: identity
+  labels:
+    app.kubernetes.io/name: keycloak
+    app.kubernetes.io/part-of: meridian-identity
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: keycloak
+        app.kubernetes.io/part-of: meridian-identity
+      annotations:
+        # The SHA-256 of the realm Secret's content (identity.sh writes it, and
+        # prints nothing of the content): a realm that changed rolls the pod on any
+        # run, also after a rotation that was interrupted before the restart.
+        meridian.local/realm-sha256: "REALM-SHA256-PLACEHOLDER"
+    spec:
+      serviceAccountName: keycloak
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 0
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: copy-quarkus
+          image: IMAGE-PLACEHOLDER
+          # -R and nothing that preserves: -a would try to set the mode and times of
+          # /quarkus itself, which belongs to root, and exit 1 as uid 1000.
+          command: [cp, -R, /opt/keycloak/lib/quarkus/., /quarkus/]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: quarkus
+              mountPath: /quarkus
+      containers:
+        - name: keycloak
+          image: IMAGE-PLACEHOLDER
+          args:
+            - start-dev
+            - --import-realm
+            - --health-enabled=true
+            - --hostname=http://id.meridian.localhost:8088
+            - --hostname-backchannel-dynamic=true
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: health
+              containerPort: 9000
+          startupProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 700Mi
+            limits:
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: data
+              mountPath: /opt/keycloak/data
+            - name: realm
+              mountPath: /opt/keycloak/data/import
+              readOnly: true
+            - name: quarkus
+              mountPath: /opt/keycloak/lib/quarkus
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 128Mi
+        - name: data
+          emptyDir:
+            sizeLimit: 256Mi
+        - name: quarkus
+          emptyDir:
+            sizeLimit: 256Mi
+        - name: realm
+          secret:
+            secretName: keycloak-realm
+            defaultMode: 0440
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  namespace: identity
+  labels:
+    app.kubernetes.io/name: keycloak
+    app.kubernetes.io/part-of: meridian-identity
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: keycloak
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: keycloak
+  namespace: identity
+  labels:
+    app.kubernetes.io/name: keycloak
+    app.kubernetes.io/part-of: meridian-identity
+spec:
+  parentRefs:
+    - name: edge
+      namespace: envoy-gateway-system
+  hostnames:
+    - id.meridian.localhost
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /realms/meridian-staff/.well-known/
+        - path:
+            type: PathPrefix
+            value: /realms/meridian-staff/protocol/openid-connect/
+        - path:
+            type: PathPrefix
+            value: /realms/meridian-staff/login-actions/
+        - path:
+            type: PathPrefix
+            value: /resources/
+      backendRefs:
+        - name: keycloak
+          port: 8080

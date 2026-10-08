@@ -133,6 +133,11 @@ def printed(tmp_path_factory: pytest.TempPathFactory) -> dict[str, int]:
         # Five lines since S072 (M3b): the refusals of Loki's gateway, Tempo's
         # receiver and Loki's own port, and the two certificates served.
         "check_telemetry_stores": all_pass(run_telemetry_stores_check(fresh())[0]),
+        # S021 (Y2b): the sign-in issuer is an add-on that is off by default, and
+        # off it prints one SKIP line and no PASS line, so the count after a plain
+        # `make up` and `make deploy` does not move. With MERIDIAN_IDENTITY=keycloak
+        # it prints six PASS lines (test_smoke_issuer.py).
+        "check_issuer": 0,
     }
 
 

@@ -156,9 +156,11 @@ def test_the_reader_finds_what_a_regex_counts_in_todays_whole_script() -> None:
     assert len(found.constants) == len(re.findall(r"^readonly \w+=", region, re.M))
     assert len(found.globals) == len(re.findall(shape, region, re.M))
     assert len(set(found.names())) == len(found.names())
-    # What else stands among the definitions: the three preconditions, and no more.
+    # What else stands among the definitions: the preconditions, and no more (the
+    # switch's check is the second, S021 Y2c: it reads no cluster).
     assert [problem.split(": ", 1)[1] for problem in found.problems] == [
         "not a definition: need_tools docker kubectl curl jq base64 openssl timeout",
+        "not a definition: identity_switch_check",
         "not a definition: require_local_docker",
         "not a definition: need_cluster",
     ]
