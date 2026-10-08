@@ -7,8 +7,15 @@
 <link rel="stylesheet" href="/adjuster/static/adjuster.css">
 </head>
 <body>
+{% if signin is defined and signin %}
+<p class="banner">Synthetic data only.</p>
+{% else %}
 <p class="banner">Synthetic data only. No sign-in yet: anyone who reaches this page can decide (T-69).</p>
+{% endif %}
 <nav><a href="/adjuster/claims">Claims that wait for an adjuster</a></nav>
+{% if sign_out is defined and sign_out %}
+<form method="post" action="/auth/sign-out"><button type="submit">Sign out</button></form>
+{% endif %}
 <main>
 {% block content %}{% endblock %}
 </main>

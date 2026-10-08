@@ -1,7 +1,7 @@
 """The session cookie: a signed value that holds what the pages need and no
-token (S021, T-05). Designed for S021 and wired to no route: nothing in the
-services seals or opens a cookie yet, and the switch that would turn sign-in on
-is off.
+token (S021, T-05). The Claims API seals and opens it for the staff routes and
+pages when ``MERIDIAN_SIGNIN`` is ``staff`` (``staff_signin``), off by default;
+no other service uses it.
 
 When a route uses it, a person who has signed in gets one cookie. It holds the
 population, the issuer, the subject, the roles and the expiry, and nothing else:

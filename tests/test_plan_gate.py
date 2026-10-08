@@ -14,6 +14,7 @@ import re
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -29,6 +30,7 @@ from test_check_plan_files import (  # noqa: E402
 )
 
 PLAN_PATH = "docs/meridian-plan.md"
+REAL_EXCEPTIONS = dict(plan_gate.ROW_EXCEPTIONS)
 CLOSED_PATH = "docs/plan/questions-closed.md"
 GOOD = "| S002 | Two | x | — |\n"
 D_HEAD = "## Part D — Open questions\n\n"
@@ -191,14 +193,21 @@ class RowExceptions(PlanCase):
     FAULTY = "| S021 | Identity | cut on 2026-10-07, ~~old~~ | S020 |\n"
     CLEAN = "| S021 | Identity | Sign-in works | S020 |\n"
 
+    def setUp(self):
+        super().setUp()
+        # The real list is empty since S021's row was rewritten; the mechanism is
+        # tested with an entry of the test's own.
+        patch = mock.patch.dict(plan_gate.ROW_EXCEPTIONS, {"S021": "a test's entry"})
+        patch.start()
+        self.addCleanup(patch.stop)
+
     def plant(self, row):
         self.write(PLAN_PATH, PLAN.replace(GOOD, GOOD + row))
 
-    def test_the_list_holds_only_s021_and_can_only_shrink(self):
-        self.assertLessEqual(set(plan_gate.ROW_EXCEPTIONS), {"S021"})
-        for step, why in plan_gate.ROW_EXCEPTIONS.items():
-            self.assertRegex(step, r"^S\d{3}$")
-            self.assertTrue(why.strip(), step)
+    def test_the_list_is_empty_and_stays_so(self):
+        # It could only shrink, and it has: a row that fails the gate is rewritten,
+        # not excepted. A new entry is the owner's decision, like the ceiling.
+        self.assertEqual(REAL_EXCEPTIONS, {})
 
     def test_a_faulty_row_of_a_step_on_the_list_passes(self):
         self.plant(self.FAULTY)

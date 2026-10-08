@@ -54,6 +54,20 @@ networkPolicy:
         gateway.envoyproxy.io/owning-gateway-name: edge
 
 services:
+  # MERIDIAN_ENVIRONMENT=kind is what lets the Claims API accept the plain-HTTP
+  # addresses of the sign-in (values/signin.yaml) and of its key set; the sign-in
+  # modules refuse them in any other environment. A values list replaces the
+  # chart's and does not merge with it, so the chart's two items are repeated
+  # here (a test holds them equal) and the environment is added after them.
+  claims-api:
+    env:
+      - name: MERIDIAN_RUNTIME_URL
+        serviceUrl: agent-runtime
+      - name: MERIDIAN_SWEEP_DOCUMENTS_DEADLINE_DAYS
+        documentsDeadlineDays: true
+      - name: MERIDIAN_ENVIRONMENT
+        value: kind
+
   # Replay mode only: no provider is wired on kind yet.
   model-gateway:
     # One replica, the chart's default, and no `replicas` here: the laptop's

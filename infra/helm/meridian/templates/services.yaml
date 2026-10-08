@@ -45,8 +45,16 @@ not cover a rolling update, during which Kubernetes runs a second pod for some
 seconds and each allows the full windows. That is left as it is on purpose: the
 alternative, `maxSurge: 0`, takes the gateway down for those seconds. With the
 store the two pods share the windows, so the overlap costs nothing (T-45).
+
+With `signin.mode: staff` (S021, Y4b, _signin.tpl) the Claims API's container,
+and no other, also gets the sign-in and session variables, its pod a
+dnsConfig and the generation as a pod annotation; the credential and the
+cookie's key come from keys of the Secret signin.secret. A values `env` item of
+any service that names a MERIDIAN_SIGNIN or MERIDIAN_SESSION variable is refused.
 */ -}}
 {{- range $name, $service := .Values.services }}
+{{- $signinOn := include "meridian.signinStaffOn" $ }}
+{{- $signinStaff := and (eq $name "claims-api") $signinOn }}
 {{- if and (eq $name "model-gateway") (gt (int $service.replicas) 1) (not $.Values.rateStore.enabled) }}
 {{- fail (printf "services.model-gateway.replicas is %v, but without the rate store the gateway keeps its rate windows in one process, so each replica would allow the full limits (threat model T-45): it runs one replica, or set rateStore.enabled=true (and rateStore.image) to share the windows between replicas" $service.replicas) }}
 {{- end }}
@@ -81,9 +89,16 @@ spec:
     metadata:
       labels:
         {{- include "meridian.labels" $name | nindent 8 }}
+      {{- if $signinStaff }}
+      annotations:
+        meridian.local/signin-generation: {{ include "meridian.signinGeneration" $ | quote }}
+      {{- end }}
     spec:
       serviceAccountName: {{ $name }}
       automountServiceAccountToken: false
+      {{- if $signinStaff }}
+      {{- include "meridian.signinDnsConfig" $ | nindent 6 }}
+      {{- end }}
       securityContext:
         {{- include "meridian.podSecurityContext" $ | nindent 8 }}
       containers:
@@ -110,6 +125,7 @@ spec:
             {{- if eq .name "MERIDIAN_CLAIMS_DOWNLOADS" }}
             {{- fail (printf "services.%s.env sets MERIDIAN_CLAIMS_DOWNLOADS: the switch of the download route comes from route.downloads.enabled and from nowhere else, which also turns on the edge's rule and limit for it and the guard that keeps it local, so no values env item may set it" $name) }}
             {{- end }}
+            {{- include "meridian.signinEnvRefusal" (dict "service" $name "name" .name) }}
             {{- include "meridian.envItem" (dict "root" $ "item" .) | nindent 12 }}
             {{- end }}
             {{- if and (eq $name "claims-api") $.Values.route.uploads.enabled }}
@@ -119,6 +135,9 @@ spec:
             {{- if and (eq $name "claims-api") $.Values.route.downloads.enabled }}
             - name: MERIDIAN_CLAIMS_DOWNLOADS
               value: "on"
+            {{- end }}
+            {{- if $signinStaff }}
+            {{- include "meridian.signinEnv" $ | nindent 12 }}
             {{- end }}
             {{- if include "meridian.usesRateStore" (dict "root" $ "name" $name) }}
             {{- include "meridian.secretEnv" (dict "name" "MERIDIAN_GATEWAY_RATE_STORE_URL" "secret" (include "meridian.rateStore" $ | fromJson).secret) | nindent 12 }}

@@ -34,6 +34,7 @@ with no body never checks the content type, and a cross-site form could reach it
 """
 
 import logging
+import os
 import ssl
 from collections.abc import Callable, Mapping
 from datetime import date
@@ -49,6 +50,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import Tracer
 
 from meridian.platform.common.db import connect
+from meridian.platform.common.env import SettingsError
 from meridian.platform.common.http import (
     SMALL_BODY_LIMIT_BYTES,
     create_service_app,
@@ -108,7 +110,12 @@ from meridian.workloads.claims_triage.moves import (
     triage_again,
     withdraw,
 )
-from meridian.workloads.claims_triage.settings import ClaimsSettings
+from meridian.workloads.claims_triage.settings import SIGNIN_ENV, ClaimsSettings
+from meridian.workloads.claims_triage.staff_signin import (
+    StaffSignin,
+    add_staff_signin,
+    guards_of,
+)
 from meridian.workloads.claims_triage.triaging import (
     HTTP_GATEWAY_TIMEOUT,
     RuntimeCallError,
@@ -322,9 +329,18 @@ def create_app(
     meter_provider: MeterProvider | None = None,
     http_client: httpx.Client | None = None,
     today: Callable[[], date] | None = None,
+    staff_signin: StaffSignin | None = None,
 ) -> FastAPI:
     """Build the app. A ``meter_provider`` is its caller's to shut down; without
-    one the app builds its own, which it shuts down with the app."""
+    one the app builds its own, which it shuts down with the app.
+
+    ``staff_signin`` (S021, Y4) is the staff sign-in, and is given exactly when
+    ``settings.signin`` is ``staff``: the switch and the object that disagree
+    raise ``SettingsError``, so no app is built half open or half closed. Off,
+    every route is as open as before."""
+    if (settings.signin == "staff") != (staff_signin is not None):
+        raise SettingsError(f"{SIGNIN_ENV} and the staff sign-in must agree")
+    guards = guards_of(staff_signin)
     http = http_client or make_runtime_client(settings, verify_of(settings.client_tls))
     dsn, tenant = settings.database_url, settings.tenant
     owns_meter_provider = meter_provider is None
@@ -407,7 +423,9 @@ def create_app(
         tags=["claims"],
         summary="Record an adjuster's decision and resume the claim's paused run.",
         responses=error_responses(404, 409, 413)
-        | error_responses(500, 502, 503, 504, model=ClaimErrorBody),
+        | error_responses(500, 502, 503, 504, model=ClaimErrorBody)
+        | guards.responses,
+        dependencies=list(guards.json),
     )
     def decide_claim(
         claim_id: Annotated[str, Path(pattern=r"^CLM-[0-9]{4}$")], body: ClaimDecision
@@ -422,7 +440,9 @@ def create_app(
         tags=["claims"],
         summary="Triage a claim again: send it back from an adjuster or retry it.",
         responses=error_responses(404, 409, 413)
-        | error_responses(500, 502, 503, 504, model=ClaimErrorBody),
+        | error_responses(500, 502, 503, 504, model=ClaimErrorBody)
+        | guards.responses,
+        dependencies=list(guards.json),
     )
     def triage_claim_again(
         claim_id: ClaimId, body: ClaimMoveRequest
@@ -477,8 +497,18 @@ def create_app(
     if settings.downloads_enabled:
         # The adjuster's download of a stored file (S070 F4b): its own switch, and
         # settings refuse it without the uploads. Off, its path is no route.
-        add_download_route(app, dsn=dsn, tenant=tenant, tracer=tracer)
-    add_brief_routes(app, dsn=dsn, tenant=tenant, http=http, tracer=tracer)
+        add_download_route(
+            app, dsn=dsn, tenant=tenant, tracer=tracer, guards=guards.pages
+        )
+    add_brief_routes(
+        app,
+        dsn=dsn,
+        tenant=tenant,
+        http=http,
+        tracer=tracer,
+        guards=guards.json,
+        guard_responses=guards.responses,
+    )
     add_adjuster_pages(
         app,
         dsn=dsn,
@@ -491,6 +521,9 @@ def create_app(
             dsn, tenant, http, tracer, claim_id, page_run=page_run, meters=meters
         ),
         downloads_enabled=settings.downloads_enabled,
+        page_guards=guards.pages,
+        json_guards=guards.json,
+        issuer_origin=None if staff_signin is None else staff_signin.issuer_origin,
     )
     add_claimant_pages(
         app,
@@ -503,11 +536,24 @@ def create_app(
         meters=meters,
         uploads_enabled=settings.uploads_enabled,
     )
+    if staff_signin is not None:
+        # After the claimant's pages: it wraps their handler of the framework's
+        # errors, and its page answers need the adjuster's layout.
+        add_staff_signin(app, staff_signin)
+        # A fixed line: nothing says the sign-in is on otherwise. No address, no
+        # setting's value; and none at all when it is off.
+        logger.info(
+            "the staff sign-in is on: the adjuster's pages and routes need the "
+            "adjuster role"
+        )
     return app
 
 
 def create_app_from_env() -> FastAPI:
-    """The factory S041 runs under ``uvicorn --factory``."""
+    """The factory S041 runs under ``uvicorn --factory``. The staff sign-in is
+    built from the environment only when ``MERIDIAN_SIGNIN`` is ``staff``."""
     install_log_redaction()
     configure_logging(SERVICE_NAME)
-    return create_app(ClaimsSettings.from_env())
+    settings = ClaimsSettings.from_env()
+    staff = StaffSignin.from_env(os.environ) if settings.signin == "staff" else None
+    return create_app(settings, staff_signin=staff)

@@ -30,11 +30,10 @@ ROW_MAX = 500
 QUESTION_ROW_MAX = 900
 FIXED_TEXT_MAX = 47_600
 FIXED_TEXT_SLACK = 2048
-# Step -> one line why. A step whose row passes the gate is a finding, so it shrinks.
-ROW_EXCEPTIONS: dict[str, str] = {
-    "S021": "another session's step in flight (Y4) edits this row and its file; "
-    "S102 left it",
-}
+# Step -> one line why. A step whose row passes the gate is a finding, so the list
+# can only shrink. It held S021 while that step was in flight in another session;
+# it is empty since, and a new entry is the owner's decision, like the ceiling.
+ROW_EXCEPTIONS: dict[str, str] = {}
 
 STEP_COLUMNS = ["ID", "Step", "Done when", "Depends"]
 QUESTION_COLUMNS = ["#", "Question", "Needed by", "Default if unanswered"]

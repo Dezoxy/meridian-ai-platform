@@ -57,7 +57,7 @@ WORKFLOW = yaml.safe_load(
 CREDENTIAL_KEYS = {"password", "passwd", "uri", "token", "key", "apikey", "secret"}
 # The database roles' Secrets and the rate store's (S066: `rate-store-credentials`,
 # the gateway's address and Redis's ACL file).
-SECRET_NAMES = re.compile(r"[a-z][a-z0-9-]*-(db(-ca)?|credentials)")
+SECRET_NAMES = re.compile(r"[a-z][a-z0-9-]*-(db(-ca)?|credentials|signin)")
 SECRET_KEY_NAMES = {"uri", "ca.crt"}
 CONNECTION_STRING = re.compile(r"postgres(ql)?://", re.IGNORECASE)
 

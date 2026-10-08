@@ -16,8 +16,8 @@ another site made (T-70). The decision and triage forms each carry the claim's
 run as the page saw it (a hidden ``run``, empty for a claim with no run), and
 a post of a page read before the claim moved to another run is a 409 (T-33).
 Nothing here logs or puts on a span anything of the
-claim but its ID (T-03). There is no sign-in yet: anyone who reaches the pages
-can decide (T-69, S021).
+claim but its ID (T-03). Unless ``MERIDIAN_SIGNIN`` is ``staff`` (``staff_signin``,
+S021) there is no sign-in: anyone who reaches the pages can decide (T-69).
 """
 
 import logging
@@ -25,13 +25,23 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path as FilePath
 from typing import Annotated, NamedTuple
 from urllib.parse import urlencode
 from uuid import UUID
 
 import psycopg
-from fastapi import Depends, FastAPI, Form, HTTPException, Path, Query, Request
+from fastapi import (
+    Depends,
+    FastAPI,
+    Form,
+    HTTPException,
+    Path,
+    Query,
+    Request,
+    params,
+)
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
@@ -342,10 +352,13 @@ def render_queue(
     next_page: QueueCursor | None = None,
     *,
     after_cursor: bool = False,
+    signin: bool = False,
 ) -> str:
     """The queue page. ``after_cursor`` is a page asked for with a cursor: it has
     a way back to the first page, and when empty says no claim follows the
-    cursor (the claims before it may still wait)."""
+    cursor (the claims before it may still wait). ``signin``: the sign-in is on,
+    so the page has a sign-out form and not the banner that says there is none;
+    off, the page is what it was."""
     shown = [
         {
             "claim_id": r.claim_id,
@@ -375,14 +388,21 @@ def render_queue(
         limit=QUEUE_LIMIT,
         next_page=None if next_page is None else _next_page_path(next_page),
         first_page=QUEUE_PATH if after_cursor else None,
+        signin=signin,
+        sign_out=signin,
     )
 
 
 def render_claim(
-    view: ClaimView, notice: Notice | None = None, *, downloads: bool = False
+    view: ClaimView,
+    notice: Notice | None = None,
+    *,
+    downloads: bool = False,
+    signin: bool = False,
 ) -> str:
     """The claim's page. ``downloads``: the download is on, so each listed file
-    has a link to it; off, the page is what it was without the download."""
+    has a link to it; off, the page is what it was without the download.
+    ``signin``: as for the queue page."""
     proposal = view.proposal
     payable = _euros(proposal.payable_amount) if proposal else ""
     # The recorded word again, for a run that did not complete; not beside a
@@ -432,6 +452,8 @@ def render_claim(
         run="" if view.run_id is None else str(view.run_id),
         queue_path=QUEUE_PATH,
         downloads=downloads,
+        signin=signin,
+        sign_out=signin,
         # The downloads of the claim's files, counted and not listed, and whether
         # older events than the listed ones exist.
         file_downloads=view.downloads and (view.downloads[0], _when(view.downloads[1])),
@@ -459,17 +481,21 @@ def _may_resend(notice: Notice | None) -> bool:
 
 
 def render_error(
-    status: int, detail: str, *, for_claimant: bool = False
+    status: int, detail: str, *, for_claimant: bool = False, signin: bool = False
 ) -> HTMLResponse:
     """An error page in the layout of the pages it was refused on: the
     adjuster's, with a way back to the queue, or a claimant's, with a way back
-    to the claimant's claims and nothing of the adjuster's."""
+    to the claimant's claims and nothing of the adjuster's. ``signin``: the
+    adjuster's sign-in is on (never for a claimant's page), as for the queue."""
+    staff = signin and not for_claimant
     page = TEMPLATES.get_template("error.html").render(
         status=status,
         detail=detail,
         layout="claimant_base.html" if for_claimant else "base.html",
         back_path=CLAIMANT_PREFIX + "claims" if for_claimant else QUEUE_PATH,
         back_label="Back to your claims" if for_claimant else "Back to the queue",
+        signin=staff,
+        sign_out=staff,
     )
     return HTMLResponse(page, status_code=status)
 
@@ -574,14 +600,27 @@ def add_adjuster_pages(
     decide: DecideFn,
     triage_again: TriageAgainFn,
     downloads_enabled: bool = False,
+    page_guards: Sequence[params.Depends] = (),
+    json_guards: Sequence[params.Depends] = (),
+    issuer_origin: str | None = None,
 ) -> None:
     """Add the queue, the claim, the decision and triage forms and the
     stylesheet to the Claims API. ``decide`` is the API's one decision path and
     ``triage_again`` the one that sends a claim back or tries it again (S048).
     ``downloads_enabled``: the claim page links to each file (the route itself is
-    ``file_download``'s)."""
+    ``file_download``'s).
+
+    The sign-in (S021, Y4) comes in as arguments, so this module imports none of
+    it, and is off by default. ``page_guards`` are the dependencies of every
+    route but the stylesheet and the proposal (the form that answers a refusal
+    with a page); ``json_guards`` those of the proposal (the form that answers it
+    as JSON). ``issuer_origin`` is given when the sign-in is on: the pages then
+    show a sign-out form, and the headers name that origin (see
+    ``SecurityHeadersMiddleware``)."""
     stylesheet = (PACKAGE_DIR / "static" / "adjuster.css").read_bytes()
-    app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware, issuer_origin=issuer_origin)
+    signin = issuer_origin is not None
+    error_page = partial(render_error, signin=signin)
 
     @app.exception_handler(CrossSiteRefused)
     async def refuse_cross_site(request: Request, __: Exception) -> Response:
@@ -592,7 +631,7 @@ def add_adjuster_pages(
         logger.warning("cross-site post refused for claim %s", claim_id)
         # The page of the site the post was aimed at: a claimant's refused post
         # never shows the adjuster's banner or link.
-        return render_error(
+        return error_page(
             HTTP_FORBIDDEN,
             CROSS_SITE_DETAIL,
             for_claimant=request.url.path.startswith(CLAIMANT_PREFIX),
@@ -602,7 +641,12 @@ def add_adjuster_pages(
     def adjuster_stylesheet() -> Response:
         return Response(stylesheet, media_type="text/css")
 
-    @app.get(QUEUE_PATH, include_in_schema=False, response_class=HTMLResponse)
+    @app.get(
+        QUEUE_PATH,
+        include_in_schema=False,
+        response_class=HTMLResponse,
+        dependencies=list(page_guards),
+    )
     def adjuster_queue(
         after_time: Annotated[AwareDatetime | None, Query()] = None,
         after_claim: Annotated[str | None, Query(pattern=CLAIM_ID_PATTERN)] = None,
@@ -632,13 +676,16 @@ def add_adjuster_pages(
                 rows, next_page = load_queue(dsn, tenant, after)
             except psycopg.Error as exc:
                 mark_error(span, exc)
-                return render_error(*database_failure(exc))
+                return error_page(*database_failure(exc))
         return HTMLResponse(
-            render_queue(rows, next_page, after_cursor=after is not None)
+            render_queue(rows, next_page, after_cursor=after is not None, signin=signin)
         )
 
     @app.get(
-        QUEUE_PATH + "/{claim_id}", include_in_schema=False, response_class=HTMLResponse
+        QUEUE_PATH + "/{claim_id}",
+        include_in_schema=False,
+        response_class=HTMLResponse,
+        dependencies=list(page_guards),
     )
     def adjuster_claim(claim_id: ClaimId) -> Response:
         with start_span(tracer, "claims.adjuster.claim") as span:
@@ -649,15 +696,21 @@ def add_adjuster_pages(
                 view = load_claim(dsn, tenant, claim_id)
             except psycopg.Error as exc:
                 mark_error(span, exc)
-                return render_error(*claim_database_failure(exc, claim_id))
+                return error_page(*claim_database_failure(exc, claim_id))
         if view is None:
-            return render_error(HTTP_NOT_FOUND, NO_SUCH_CLAIM_DETAIL)
-        return HTMLResponse(render_claim(view, downloads=downloads_enabled))
+            return error_page(HTTP_NOT_FOUND, NO_SUCH_CLAIM_DETAIL)
+        return HTMLResponse(
+            render_claim(view, downloads=downloads_enabled, signin=signin)
+        )
 
     # The proposal the page above shows, as JSON, for ``meridian eval run``
     # (T-80): the claim's ID, its state and the proposal, and nothing of the
     # claimant. A read: no audit row, as the page writes none (S021).
-    @app.get(QUEUE_PATH + "/{claim_id}/proposal", include_in_schema=False)
+    @app.get(
+        QUEUE_PATH + "/{claim_id}/proposal",
+        include_in_schema=False,
+        dependencies=list(json_guards),
+    )
     def adjuster_proposal(claim_id: ClaimId) -> JSONResponse:
         with start_span(tracer, "claims.adjuster.proposal") as span:
             set_span_attributes(
@@ -683,16 +736,16 @@ def add_adjuster_pages(
 
     def failure_page(failure: DecisionFailure, claim_id: str) -> Response:
         if failure.status not in PAGE_STATUSES:
-            return render_error(failure.status, failure.detail)
+            return error_page(failure.status, failure.detail)
         try:
             view = load_claim(dsn, tenant, claim_id)
         except psycopg.Error as exc:
             claim_database_failure(exc, claim_id)  # logs the claim, class, SQLSTATE
             view = None
         if view is None:
-            return render_error(failure.status, failure.detail)
+            return error_page(failure.status, failure.detail)
         notice = Notice(failure.status, failure.detail)
-        page = render_claim(view, notice, downloads=downloads_enabled)
+        page = render_claim(view, notice, downloads=downloads_enabled, signin=signin)
         return HTMLResponse(page, status_code=failure.status)
 
     def answered(
@@ -721,7 +774,7 @@ def add_adjuster_pages(
     @app.post(
         QUEUE_PATH + "/{claim_id}/decision",
         include_in_schema=False,
-        dependencies=[Depends(require_same_origin)],
+        dependencies=[Depends(require_same_origin), *page_guards],
     )
     def adjuster_decision(
         claim_id: ClaimId,
@@ -736,7 +789,7 @@ def add_adjuster_pages(
     @app.post(
         QUEUE_PATH + "/{claim_id}/triage",
         include_in_schema=False,
-        dependencies=[Depends(require_same_origin)],
+        dependencies=[Depends(require_same_origin), *page_guards],
     )
     def adjuster_triage(
         claim_id: ClaimId,

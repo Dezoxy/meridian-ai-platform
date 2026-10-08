@@ -16,6 +16,9 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 PAGES_PREFIX = "/adjuster/"
 CLAIMANT_PREFIX = "/claimant/"
+# The sign-in's own routes (``staff_signin``); a prefix of the headers only
+# while the sign-in is on.
+AUTH_PREFIX = "/auth/"
 STYLESHEET_PATH = "/adjuster/static/adjuster.css"
 CROSS_SITE_DETAIL = "the request came from another site"
 HTTP_OK = 200
@@ -100,22 +103,46 @@ class SecurityHeadersMiddleware:
     ``/claimant/``: a 404, a 405, a 413 and a 422 as well as a page. They replace
     a header the response set, with one exception: the policy of a response whose
     route marked the request (``OWN_POLICY_SCOPE_KEY``, the download). The JSON
-    routes are not touched."""
+    routes are not touched.
 
-    def __init__(self, app: ASGIApp) -> None:
+    ``issuer_origin`` is given only when the staff sign-in is on (S021, Y4), and
+    changes two things. ``/auth/`` joins the prefixes, with ``Referrer-Policy:
+    no-referrer``: the callback's address holds the code and the state, and no
+    page it leads to may learn it. And the policy of the adjuster's pages and
+    of ``/auth/`` names the issuer's origin in ``form-action`` too, because the
+    sign-out form posts to this app and is redirected to the issuer's
+    end-session address, and Chromium checks a form's redirects against
+    ``form-action``. Without it the headers are exactly ``SECURITY_HEADERS``."""
+
+    def __init__(self, app: ASGIApp, issuer_origin: str | None = None) -> None:
         self.app = app
+        self.prefixes: tuple[str, ...] = (PAGES_PREFIX, CLAIMANT_PREFIX)
+        self.signin_headers: dict[str, str] | None = None
+        if issuer_origin is not None:
+            self.prefixes += (AUTH_PREFIX,)
+            self.signin_headers = SECURITY_HEADERS | {
+                POLICY_HEADER: SECURITY_HEADERS[POLICY_HEADER].replace(
+                    "form-action 'self';", f"form-action 'self' {issuer_origin};"
+                ),
+            }
+
+    def _headers_for(self, path: str) -> dict[str, str]:
+        if self.signin_headers is None or path.startswith(CLAIMANT_PREFIX):
+            return SECURITY_HEADERS
+        if path.startswith(AUTH_PREFIX):
+            return self.signin_headers | {"Referrer-Policy": "no-referrer"}
+        return self.signin_headers
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or not scope["path"].startswith(
-            (PAGES_PREFIX, CLAIMANT_PREFIX)
-        ):
+        if scope["type"] != "http" or not scope["path"].startswith(self.prefixes):
             await self.app(scope, receive, send)
             return
+        wanted = self._headers_for(scope["path"])
 
         async def send_with_headers(message: Message) -> None:
             if message["type"] == "http.response.start":
                 headers = MutableHeaders(scope=message)
-                for name, value in SECURITY_HEADERS.items():
+                for name, value in wanted.items():
                     if name == POLICY_HEADER and scope.get(OWN_POLICY_SCOPE_KEY):
                         continue
                     headers[name] = value

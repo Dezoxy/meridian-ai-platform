@@ -1,10 +1,13 @@
 """The three services describe themselves: tags, summaries, error responses."""
 
+import copy
 from typing import Any
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import FastAPI
 from servicesupport import REGISTRY_DIR
+from staffsigninsupport import StaffRig
 from starlette.applications import Starlette
 from starlette.routing import Route
 from toolsupport import CONTRACTS_DIR
@@ -54,6 +57,16 @@ def apps() -> dict[str, FastAPI]:
                 database_url=DSN,
                 uploads_enabled=True,
             )
+        ),
+        # The Claims API with the staff sign-in on (S021, Y4): the same document
+        # but for the 401 and 403 of the JSON operations it guards.
+        "claims-signin": create_claims(
+            ClaimsSettings(
+                runtime_url="http://runtime.invalid",
+                database_url=DSN,
+                signin="staff",
+            ),
+            staff_signin=StaffRig(rsa.generate_private_key(65537, 2048)).staff(),
         ),
     }
 
@@ -646,3 +659,109 @@ def test_a_stored_file_is_its_identifier_kind_type_size_and_hash_and_nothing_els
     assert stored["properties"]["sha256"]["pattern"] == "^[0-9a-f]{64}$"
     assert stored["properties"]["size_bytes"]["minimum"] == 1
     assert stored["properties"]["size_bytes"]["maximum"] == 1024 * 1024
+
+
+# ── the staff sign-in (S021, Y4): 401 and 403 on the guarded JSON operations ──
+# The sixth guarded JSON route, the adjuster's proposal, is out of every document
+# like the pages; the five below are the guarded operations the document lists.
+GUARDED_JSON_OPERATIONS = [
+    ("post", "/claims/{claim_id}/decision"),
+    ("post", "/claims/{claim_id}/triage"),
+    ("post", "/claims/{claim_id}/brief"),
+    ("post", "/claims/{claim_id}/brief/decision"),
+    ("get", "/claims/{claim_id}/brief"),
+]
+PROPOSAL = "/adjuster/claims/{claim_id}/proposal"
+
+
+@pytest.mark.parametrize(("method", "path"), GUARDED_JSON_OPERATIONS)
+def test_with_the_sign_in_on_a_guarded_operation_declares_401_and_403(
+    method: str, path: str
+) -> None:
+    responses = SPECS["claims-signin"]["paths"][path][method]["responses"]
+
+    assert {"401", "403"} <= set(responses)
+    # Words for a person, not the service-to-service ones of the shared table.
+    assert responses["401"]["description"] == (
+        "No valid bearer token or staff session was presented."
+    )
+    assert responses["403"]["description"] == (
+        "The caller does not hold the adjuster role, or the request carried the "
+        "session cookie from another site."
+    )
+    assert "service" not in responses["401"]["description"]
+    assert "service" not in responses["403"]["description"]
+    assert (
+        "ErrorBody" in responses["401"]["content"]["application/json"]["schema"]["$ref"]
+    )
+
+
+@pytest.mark.parametrize(("method", "path"), GUARDED_JSON_OPERATIONS)
+def test_with_the_sign_in_off_the_same_operation_declares_neither(
+    method: str, path: str
+) -> None:
+    for name in ("claims", "claims-uploads"):
+        responses = SPECS[name]["paths"][path][method]["responses"]
+
+        assert "401" not in responses
+        assert "403" not in responses
+
+
+@pytest.mark.parametrize(("method", "path"), GUARDED_JSON_OPERATIONS)
+def test_with_the_sign_in_on_the_503_of_a_guarded_operation_has_the_guards_body(
+    method: str, path: str
+) -> None:
+    on = SPECS["claims-signin"]["paths"][path][method]["responses"]["503"]
+
+    # The guard answers {"detail": "request refused"} when the issuer's keys
+    # cannot be had: no claim ID, so the looser body.
+    assert on["content"]["application/json"]["schema"]["$ref"].endswith("/ErrorBody")
+    assert on["description"] == (
+        "The database or the audit log is unavailable, or the sign-in issuer's "
+        "keys could not be fetched."
+    )
+
+
+@pytest.mark.parametrize(("method", "path"), GUARDED_JSON_OPERATIONS)
+def test_with_the_sign_in_off_the_503_of_the_same_operation_is_todays(
+    method: str, path: str
+) -> None:
+    for name in ("claims", "claims-uploads"):
+        off = SPECS[name]["paths"][path][method]["responses"]["503"]
+
+        assert off["content"]["application/json"]["schema"]["$ref"].endswith(
+            "/ClaimErrorBody"
+        )
+        assert off["description"] == "The database or the audit log is unavailable."
+
+
+def test_the_sign_in_adds_nothing_to_the_document_but_those_responses() -> None:
+    on = copy.deepcopy(SPECS["claims-signin"])
+    for method, path in GUARDED_JSON_OPERATIONS:
+        responses = on["paths"][path][method]["responses"]
+        for status in ("401", "403"):
+            del responses[status]
+        # the 503 is the one response it changes, and is asserted above
+        assert (
+            responses["503"]
+            != SPECS["claims"]["paths"][path][method]["responses"]["503"]
+        )
+        responses["503"] = SPECS["claims"]["paths"][path][method]["responses"]["503"]
+
+    assert on == SPECS["claims"]
+
+
+def test_the_operations_the_sign_in_does_not_guard_declare_no_401_or_403() -> None:
+    guarded = set(GUARDED_JSON_OPERATIONS)
+
+    for path, methods in SPECS["claims-signin"]["paths"].items():
+        for method, operation in methods.items():
+            if (method, path) not in guarded:
+                assert "401" not in operation["responses"], (method, path)
+                assert "403" not in operation["responses"], (method, path)
+
+
+def test_the_proposal_and_the_auth_routes_are_in_no_document() -> None:
+    for spec in SPECS.values():
+        assert PROPOSAL not in spec["paths"]
+        assert not [p for p in spec["paths"] if p.startswith("/auth")]

@@ -1,0 +1,42 @@
+# The staff sign-in of the Claims API on kind (S021, Y4b): added to the release by
+# deploy.sh only when MERIDIAN_SIGNIN=staff, and with it MERIDIAN_IDENTITY=keycloak
+# and the Secret below, which `MERIDIAN_IDENTITY=keycloak MERIDIAN_SIGNIN=staff
+# make up` makes (identity.sh). Without the switch this file is not read, and the
+# release is what it was: that also turns the sign-in off on a cluster that had it.
+# No secret belongs here: the pages client's credential and the cookie's key are
+# keys of the Secret, and the chart reads them through secretKeyRef.
+#
+# The values are those the runs settled (the plan's step file S021, "D2, as the
+# runs settled it" and "What a live token of the pinned Keycloak holds"):
+#   - the issuer, the authorization address and the end-session address are on the
+#     front URL, the name the browser reaches the issuer by, and the issuer is the
+#     front URL in every token, whichever name asked for it;
+#   - the token address and the key address are on the Service's name and port, the
+#     back channel, which only a pod uses (the Service's port is 8080, and the
+#     policy identity-claims-api-egress lets the Claims API's pods reach it);
+#   - the audience is a string, different from both client ids; the access token's
+#     type is Bearer and its authorised party is the pages client or the scripts
+#     client (comma separated, the separator signin.py reads), which is what
+#     refuses an ID token or a refresh token as a bearer;
+#   - the redirect address is exactly the one identity.sh gives the realm's
+#     client (a test ties the two) and the app's origin is the Claims API's host
+#     on the edge's port; the edge speaks plain HTTP to the browser on kind, so
+#     the cookie is not Secure (the app accepts that only in the kind
+#     environment, which values/meridian.yaml sets).
+signin:
+  mode: staff
+  secret: claims-api-signin
+  edgePlainHttp: true
+  staff:
+    issuer: http://id.meridian.localhost:8088/realms/meridian-staff
+    audience: meridian-claims-api
+    keysUrl: http://keycloak.identity.svc:8080/realms/meridian-staff/protocol/openid-connect/certs
+    clientId: meridian-claims-web
+    authorizationUrl: http://id.meridian.localhost:8088/realms/meridian-staff/protocol/openid-connect/auth
+    tokenUrl: http://keycloak.identity.svc:8080/realms/meridian-staff/protocol/openid-connect/token
+    endSessionUrl: http://id.meridian.localhost:8088/realms/meridian-staff/protocol/openid-connect/logout
+    appOrigin: http://claims.meridian.localhost:8088
+    redirectUri: http://claims.meridian.localhost:8088/auth/callback
+    postLogoutRedirectUri: http://claims.meridian.localhost:8088/adjuster/claims
+    requiredTyp: Bearer
+    allowedAzp: meridian-claims-web,meridian-scripts

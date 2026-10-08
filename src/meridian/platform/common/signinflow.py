@@ -1,7 +1,8 @@
 """The pages' sign-in: the authorization-code flow with PKCE, run by the app
-(S021, Y3, T-05). Wired to no route: nothing in the services calls it, and the
-switch that would turn sign-in on is off. The reasons, the transaction cookie,
-the return path and PKCE are in ``signinstate``.
+(S021, Y3, T-05). The Claims API runs it for the staff pages when
+``MERIDIAN_SIGNIN`` is ``staff`` (``staff_signin``), off by default; no other
+service does. The reasons, the transaction cookie, the return path and PKCE are
+in ``signinstate``.
 
 ``SigninFlow.start`` builds the redirect to the issuer's FRONT authorization
 address (the one the browser reaches) with ``response_type=code``, a ``state``,
@@ -362,6 +363,16 @@ class _ExchangeDeadline(Exception):
     """The exchange was not finished ``EXCHANGE_DEADLINE_SECONDS`` after it began."""
 
 
+class _ExchangeFailure:
+    """Where ``_exchange`` leaves the class of the exception behind an
+    ``exchange-failed`` for the one log line: a class name and nothing else."""
+
+    __slots__ = ("class_name",)
+
+    def __init__(self) -> None:
+        self.class_name = ""
+
+
 def _id_token_of(body: bytes) -> str | FlowReason:
     """The ``id_token`` of a token response, and nothing else of it."""
     try:
@@ -505,7 +516,10 @@ class SigninFlow:
             "secure": self._sessions.secure,
         }
 
-    def _clear_transaction(self, response: Response) -> None:
+    def clear_transaction(self, response: Response) -> None:
+        """Ask the browser to forget the transaction cookie, with the attributes
+        it was set with. For a caller that answers a callback itself after
+        ``finish`` (``SigninOutcome.apply_to`` does it for the outcome)."""
         response.delete_cookie(
             transaction_cookie_name(self.settings.population),
             **self._transaction_attributes(),
@@ -522,22 +536,27 @@ class SigninFlow:
         in a thread that runs an event loop, before anything is read; that is
         the caller's mistake and is not a refusal."""
         refuse_an_event_loop()
-        outcome = self._principal_or_reason(query, cookie, now)
+        failure = _ExchangeFailure()
+        outcome = self._principal_or_reason(query, cookie, now, failure)
         if isinstance(outcome, FlowReason):
-            self._say(outcome)
+            self._say(outcome, failure.class_name)
             return SigninOutcome(
-                outcome, self.settings.default_return_path, self._clear_transaction
+                outcome, self.settings.default_return_path, self.clear_transaction
             )
         principal, return_to = outcome
 
         def apply(response: Response) -> None:
             set_session_cookie(response, principal, self._sessions, now)
-            self._clear_transaction(response)
+            self.clear_transaction(response)
 
         return SigninOutcome(None, return_to, apply)
 
     def _principal_or_reason(
-        self, query: QueryParams, cookie: str | None, now: float
+        self,
+        query: QueryParams,
+        cookie: str | None,
+        now: float,
+        failure: _ExchangeFailure,
     ) -> tuple[Principal, str] | FlowReason:
         settings = self.settings
         if cookie is None:
@@ -550,7 +569,7 @@ class SigninFlow:
         problem = self._callback_problem(query, transaction)
         if problem is not None:
             return problem
-        id_token = self._exchange(query["code"], transaction.verifier)
+        id_token = self._exchange(query["code"], transaction.verifier, failure)
         if isinstance(id_token, FlowReason):
             return id_token
         principal = self._id_token.principal_or_reason(id_token, transaction.nonce, now)
@@ -591,9 +610,14 @@ class SigninFlow:
         return None
 
     # ── the code exchange ───────────────────────────────────────────────────
-    def _exchange(self, code: str, verifier: str) -> str | FlowReason:
+    def _exchange(
+        self, code: str, verifier: str, cause: _ExchangeFailure
+    ) -> str | FlowReason:
         """The ID token the issuer gives for the code, or why not. The failure is
-        a reason and not an exception, and the exception is not chained."""
+        a reason and not an exception, and the exception is not chained. For
+        ``exchange-failed`` the exception's class (never its text) goes to
+        ``cause``: the one word covers a certificate error, a refused connection
+        and a bad answer, and the log line tells them apart by it."""
         failure: FlowReason | None = None
         body = b""
         try:
@@ -602,8 +626,9 @@ class SigninFlow:
             failure = FlowReason.EXCHANGE_TOO_LARGE
         except (_ExchangeDeadline, httpx.TimeoutException):
             failure = FlowReason.EXCHANGE_DEADLINE
-        except Exception:  # any other failure of the exchange
+        except Exception as error:  # any other failure of the exchange
             failure = FlowReason.EXCHANGE_FAILED
+            cause.class_name = type(error).__name__
         return failure if failure is not None else _id_token_of(body)
 
     async def _exchange_within_deadline(self, code: str, verifier: str) -> bytes:
@@ -666,13 +691,16 @@ class SigninFlow:
             return FlowReason.ID_EXPIRED
         return None
 
-    def _say(self, reason: FlowReason) -> None:
-        """One line per reason per window, with the count the window held back."""
+    def _say(self, reason: FlowReason, class_name: str = "") -> None:
+        """One line per reason per window, with the count the window held back.
+        ``class_name`` is an exception's class, when there is one: never its
+        text."""
         carried = self._throttle.due(None, reason.value)
         if carried is None:
             return
         extra = f" (and {carried} more since the last line)" if carried else ""
-        logger.warning("sign-in callback refused: %s" + extra, reason.value)
+        word = f"{reason.value} ({class_name})" if class_name else reason.value
+        logger.warning("sign-in callback refused: %s" + extra, word)
 
     # ── sign out ────────────────────────────────────────────────────────────
     def sign_out(self) -> RedirectResponse:
@@ -694,5 +722,5 @@ class SigninFlow:
             headers={"Cache-Control": "no-store"},
         )
         clear_session_cookie(response, settings.population, self._sessions)
-        self._clear_transaction(response)
+        self.clear_transaction(response)
         return response

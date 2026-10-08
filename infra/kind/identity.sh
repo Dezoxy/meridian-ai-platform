@@ -69,6 +69,12 @@
 #     session (new keys, new passwords and secrets), so MERIDIAN_IDENTITY_ROTATE=1 is
 #     asked for by name. A pair that is not of one generation (a run stopped between
 #     the two, or made before generations were recorded) is made anew, both
+#   - only with MERIDIAN_SIGNIN=staff (S021, Y4b), right after them: the Secret
+#     claims-api-signin in `meridian`, which the Claims API reads (the pages client's
+#     secret copied from keycloak-credentials, and a cookie key of 32 random bytes as
+#     base64). It carries the generation of keycloak-credentials and is KEPT when it
+#     has that one, made anew when not, so a rotation refreshes it and a plain run
+#     keeps the key. Without the switch nothing of it is read or made
 #   - the two policies that open the other ends (identity-peers-networkpolicy.yaml)
 #   - the Deployment, Service and route (identity.yaml), the image from KEYCLOAK_IMAGE
 #     of pins.env (by digest; no tag lives anywhere else), and a pod annotation that
@@ -87,6 +93,7 @@ set -euo pipefail
 # shellcheck source=gateways.sh
 . "${KIND_DIR}/gateways.sh" # fill_placeholder
 identity_switch_check
+signin_switch_check
 
 readonly IDENTITY_NAMESPACE=identity
 readonly IDENTITY_REALM_SECRET=keycloak-realm
@@ -113,6 +120,21 @@ readonly IDENTITY_FRONT_URL="http://${IDENTITY_ROUTE_HOST}:8088"
 # the page flow's, Y3, and an exact URL: a different path is a new realm).
 readonly IDENTITY_CLAIMS_ORIGIN=http://claims.meridian.localhost:8088
 readonly IDENTITY_REDIRECT_URI="${IDENTITY_CLAIMS_ORIGIN}/auth/callback"
+# Where the issuer may send a person back to after sign-out (S021, Y4b): the realm's
+# pages client lists this one address (its post.logout.redirect.uris), and the app
+# asks to return to it (values/signin.yaml's postLogoutRedirectUri; a test ties the
+# two). An exact URL, as the redirect address is: a different one is a new realm, so
+# a cluster made before this was set needs MERIDIAN_IDENTITY_ROTATE=1 once.
+readonly IDENTITY_POST_LOGOUT_URI="${IDENTITY_CLAIMS_ORIGIN}/adjuster/claims"
+# The Secret of the staff sign-in (S021, Y4b): SIGNIN_SECRET (common.sh) in the
+# Claims API's namespace, made only with MERIDIAN_SIGNIN=staff. Its credential is
+# this key of keycloak-credentials, the generator's name for the client
+# meridian-claims-web of the realm meridian-staff (identity-realm.sh secret_key; a
+# test holds the two equal).
+readonly SIGNIN_NAMESPACE=meridian
+readonly SIGNIN_CREDENTIAL_SOURCE=MERIDIAN_STAFF_CLIENT_MERIDIAN_CLAIMS_WEB_SECRET
+readonly SIGNIN_CREDENTIAL_KEY=client-credential
+readonly SIGNIN_SESSION_KEY=session-key
 readonly IDENTITY_MIN_AVAILABLE_MB=2500
 readonly IDENTITY_MEMINFO_FILE="${MERIDIAN_MEMINFO_FILE:-/proc/meminfo}"
 readonly IDENTITY_ROLLOUT_TIMEOUT=5m
@@ -295,7 +317,7 @@ ensure_secrets() {
   work="$(mktemp -d "${cache}/realm.XXXXXX")" ||
     die "could not make a folder under ${cache} for the realm"
   identity_work="${work}"
-  "${KIND_DIR}/identity-realm.sh" "${work}" "${IDENTITY_REDIRECT_URI}" "${IDENTITY_CLAIMS_ORIGIN}" ||
+  "${KIND_DIR}/identity-realm.sh" "${work}" "${IDENTITY_REDIRECT_URI}" "${IDENTITY_CLAIMS_ORIGIN}" "${IDENTITY_POST_LOGOUT_URI}" ||
     die "the realm generator failed (its message is above); nothing was loaded"
   [[ -s "${work}/${IDENTITY_REALM_KEY}" && -s "${work}/secrets.env" ]] ||
     die "the realm generator left no realm file or no secrets file in ${work}"
@@ -303,6 +325,67 @@ ensure_secrets() {
   publish_secret "${IDENTITY_CREDENTIALS_SECRET}" "--from-env-file=${work}/secrets.env" "${generation}"
   cleanup_work
   log "identity: the Secrets ${IDENTITY_REALM_SECRET} and ${IDENTITY_CREDENTIALS_SECRET} are made in ${IDENTITY_NAMESPACE}, generation ${generation} (nothing of them is printed; the folder they came from is removed)"
+}
+
+# publish_signin_secret GENERATION: make or replace the Secret SIGNIN_SECRET in
+# SIGNIN_NAMESPACE. Its `client-credential` is the pages client's secret as
+# keycloak-credentials holds it (the base64 text copied from the source Secret's
+# data, never decoded here) and its `session-key` is `openssl rand -base64 32`, 32
+# random bytes as base64, which the app reads as MERIDIAN_SESSION_KEY. It carries
+# GENERATION in the annotation IDENTITY_GENERATION_KEY, the generation of
+# keycloak-credentials, so a rotation refreshes it. The values go from kubectl through
+# jq to kubectl on pipes, and the key from openssl to jq on a descriptor (a process
+# substitution, no file): no value is on a command line, in a variable, in a file or in
+# any output. jq's own errors are dropped (they can quote a value) and a fixed
+# sentence is said instead.
+publish_signin_secret() {
+  { set +x; } 2>/dev/null
+  # shellcheck disable=SC2016 # the $names in the program are jq's
+  kctl -n "${IDENTITY_NAMESPACE}" get secret "${IDENTITY_CREDENTIALS_SECRET}" -o json |
+    jq --rawfile session <(openssl rand -base64 32) \
+      --arg source "${SIGNIN_CREDENTIAL_SOURCE}" --arg name "${SIGNIN_SECRET}" \
+      --arg namespace "${SIGNIN_NAMESPACE}" --arg credential_key "${SIGNIN_CREDENTIAL_KEY}" \
+      --arg session_key "${SIGNIN_SESSION_KEY}" --arg generation_key "${IDENTITY_GENERATION_KEY}" \
+      --arg generation "$1" \
+      '($session | rtrimstr("\n")) as $key
+      | if ($key | length) < 40 then error("no cookie key") else . end
+      | (.data[$source] // error("no credential")) as $credential
+      | {apiVersion: "v1", kind: "Secret", type: "Opaque",
+         metadata: {name: $name, namespace: $namespace,
+                    labels: {"app.kubernetes.io/part-of": "meridian-identity"},
+                    annotations: {($generation_key): $generation}},
+         data: {($credential_key): $credential, ($session_key): ($key | @base64)}}' \
+      2>/dev/null |
+    kctl -n "${SIGNIN_NAMESPACE}" apply --server-side --force-conflicts -f - >/dev/null ||
+    die "could not make the Secret ${SIGNIN_SECRET} in ${SIGNIN_NAMESPACE}: ${IDENTITY_CREDENTIALS_SECRET} could not be read or holds no key ${SIGNIN_CREDENTIAL_SOURCE} for the pages client, or no cookie key could be made, or the apply failed (kubectl's error, if any, is above; no value is printed)"
+}
+
+# ensure_signin_secret: with MERIDIAN_SIGNIN=staff, the Secret SIGNIN_SECRET exists
+# in SIGNIN_NAMESPACE and is of the generation of keycloak-credentials. It is KEPT
+# when it exists and carries that generation, so a plain run keeps the cookie key and
+# the sessions made with it; it is made anew when it is absent, carries another
+# generation or none (a rotation made new credentials, or it was made before). The
+# generation is read from the annotations alone, never from the data.
+ensure_signin_secret() {
+  { set +x; } 2>/dev/null
+  local generation found have
+  generation="$(secret_generation "${IDENTITY_CREDENTIALS_SECRET}")" || exit 1
+  [[ -n "${generation}" ]] ||
+    die "the Secret ${IDENTITY_CREDENTIALS_SECRET} carries no generation, so the Secret ${SIGNIN_SECRET} cannot follow it; run MERIDIAN_IDENTITY_ROTATE=1 MERIDIAN_IDENTITY=keycloak MERIDIAN_SIGNIN=staff make up"
+  found="$(kctl -n "${SIGNIN_NAMESPACE}" get secret "${SIGNIN_SECRET}" -o name --ignore-not-found)" ||
+    die "could not read whether the Secret ${SIGNIN_SECRET} exists in ${SIGNIN_NAMESPACE} (kubectl's error is above)"
+  if [[ -n "${found}" ]]; then
+    have="$(kctl -n "${SIGNIN_NAMESPACE}" get secret "${SIGNIN_SECRET}" \
+      -o "jsonpath={.metadata.annotations.${IDENTITY_GENERATION_KEY//./\\.}}")" ||
+      die "could not read the generation of the Secret ${SIGNIN_SECRET} (kubectl's error is above)"
+    if [[ "${have}" == "${generation}" ]]; then
+      log "identity: the Secret ${SIGNIN_SECRET} in ${SIGNIN_NAMESPACE} carries generation ${generation} of ${IDENTITY_CREDENTIALS_SECRET} and is kept (its cookie key stays, so a plain run ends no session)"
+      return 0
+    fi
+    log "identity: the Secret ${SIGNIN_SECRET} carries another generation or none, so it is made anew (a new cookie key ends every session)"
+  fi
+  publish_signin_secret "${generation}"
+  log "identity: the Secret ${SIGNIN_SECRET} is made in ${SIGNIN_NAMESPACE}, generation ${generation} (the pages client's credential and a cookie key; nothing of it is printed): MERIDIAN_SIGNIN=staff make deploy puts it to use"
 }
 
 # realm_fingerprint: the SHA-256 (hex) of the realm Secret's content as the cluster
@@ -367,6 +450,9 @@ install_addon() {
   log "identity: the namespace ${IDENTITY_NAMESPACE} and its NetworkPolicies (denied both ways, DNS and the edge and the Claims API on 8080 admitted)"
   kctl apply --server-side --force-conflicts -f "${IDENTITY_NAMESPACE_FILE}" >/dev/null
   ensure_secrets
+  if signin_on; then
+    ensure_signin_secret
+  fi
   log "identity: the policies that let the edge's proxy pods and the Claims API's pods send to Keycloak"
   kctl apply --server-side --force-conflicts -f "${IDENTITY_PEERS_FILE}" >/dev/null
   realm_sha="$(realm_fingerprint)" || exit 1
@@ -427,6 +513,13 @@ status() {
       log "identity: Secret ${text}: absent"
     fi
   done
+  found="$(kctl -n "${SIGNIN_NAMESPACE}" get secret "${SIGNIN_SECRET}" -o name --ignore-not-found)" ||
+    die "could not read whether the Secret ${SIGNIN_SECRET} exists in ${SIGNIN_NAMESPACE} (kubectl's error is above)"
+  if [[ -n "${found}" ]]; then
+    log "identity: Secret ${SIGNIN_SECRET} (in ${SIGNIN_NAMESPACE}, for the staff sign-in of the Claims API): present (its contents are never read here)"
+  else
+    log "identity: Secret ${SIGNIN_SECRET} (in ${SIGNIN_NAMESPACE}, for the staff sign-in of the Claims API): absent"
+  fi
   log "identity: $(available_mb) MB of memory available"
 }
 
@@ -551,6 +644,9 @@ passwords() {
 # said and does not stop make up, which has done everything else by now.
 note_when_off() {
   local found
+  if signin_on; then
+    log "identity: MERIDIAN_SIGNIN is staff but MERIDIAN_IDENTITY is off, so the Secret ${SIGNIN_SECRET} was not made and make deploy would refuse the switch (MERIDIAN_IDENTITY=keycloak MERIDIAN_SIGNIN=staff make up makes it)"
+  fi
   if ! found="$(kctl get namespace "${IDENTITY_NAMESPACE}" -o name --ignore-not-found)"; then
     log "identity: could not read whether the namespace ${IDENTITY_NAMESPACE} exists (kubectl's error is above); the sign-in issuer add-on is off"
     return 0

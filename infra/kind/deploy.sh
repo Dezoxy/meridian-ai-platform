@@ -22,7 +22,11 @@
 #      cluster made before S056 does not know the policy kind: the same refusal;
 #      and the Secret `rate-store-credentials` (S066), with its two keys, the
 #      gateway's address in the rate store and the store's ACL file, which
-#      `make up` makes once: a pod that cannot read it would not start
+#      `make up` makes once: a pod that cannot read it would not start; and,
+#      only with MERIDIAN_SIGNIN=staff (S021, Y4b), MERIDIAN_IDENTITY=keycloak and
+#      the Secret `claims-api-signin` with a generation, read by name
+#      (require_signin, which runs first of these reads; the release then also gets
+#      values/signin.yaml)
 #      Then, the first change (S073): Meridian's alert rules, the one
 #      PrometheusRule `make up` applies too (apply_alert_rules, common.sh), so a
 #      rule changed in the tree is on the cluster after a deploy. They come after
@@ -76,6 +80,11 @@ set -euo pipefail
 
 # shellcheck source=common.sh
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+# A mistyped MERIDIAN_SIGNIN stops here, before anything is built, run or read
+# (S021, Y4b, common.sh): it must not read as "off". Off, the release is the one
+# this script has always made, which also turns the sign-in off on a cluster that
+# had it on.
+signin_switch_check
 
 readonly TAG_LENGTH=12
 readonly NAMESPACE=meridian
@@ -327,6 +336,59 @@ require_approval() {
   die "nothing would approve the chart's Certificates (cert-manager's own approver is off), so none would be issued, and the Jobs would already have run by then: the Deployment ${APPROVER_DEPLOYMENT} in ${APPROVER_NAMESPACE} was not available for ${APPROVER_WAIT_SECONDS}s${said}. A cluster that predates S056 does not have it: run 'make up' first. A cluster that has it and shows it restarting or not ready needs a look at the pod instead (kubectl -n ${APPROVER_NAMESPACE} get pods; logs deploy/${APPROVER_DEPLOYMENT}); run 'make deploy' again when it is Running"
 }
 
+# The staff sign-in of the Claims API (S021, Y4b), only with MERIDIAN_SIGNIN=staff.
+# The release then gets values/signin.yaml and, as signin.generation, the
+# generation of the Secret SIGNIN_SECRET (common.sh), so that a Secret made anew
+# rolls the Claims API's pod. The Secret is made by
+# `MERIDIAN_IDENTITY=keycloak MERIDIAN_SIGNIN=staff make up` (identity.sh), and the
+# generation is the one annotation of keycloak-credentials that it carries
+# (IDENTITY_GENERATION_KEY of identity.sh; a test holds the two names equal).
+# This only READS, by name: it stops before the first change unless the issuer
+# add-on's switch is on too and the Secret exists with a generation, because a pod
+# that cannot read its Secret would not start after the Jobs had run. The value of
+# the Secret is never read, only its name and that annotation. A deploy without the
+# switch does none of this and passes nothing: the release is today's.
+readonly SIGNIN_VALUES_FILE="${KIND_DIR}/values/signin.yaml"
+readonly SIGNIN_GENERATION_KEY=meridian.local/identity-generation
+# The issuer's credentials, whose generation the Secret must carry (identity.sh's
+# IDENTITY_CREDENTIALS_SECRET and IDENTITY_NAMESPACE; a test holds them equal).
+readonly SIGNIN_ISSUER_NAMESPACE=identity
+readonly SIGNIN_ISSUER_SECRET=keycloak-credentials
+signin_generation=""
+
+require_signin() {
+  local found issuer_generation
+  if ! signin_on; then
+    log "the staff sign-in is OFF for this release, so the adjuster's pages are open to whoever reaches them; MERIDIAN_IDENTITY=keycloak MERIDIAN_SIGNIN=staff make deploy turns it on"
+    return 0
+  fi
+  # Only the value keycloak counts, so a mistyped switch is refused here too, with
+  # this sentence (the issuer switch's own check belongs to up, smoke and identity).
+  identity_on ||
+    die "MERIDIAN_SIGNIN=staff needs MERIDIAN_IDENTITY=keycloak (exactly that word): the sign-in is the issuer add-on's, and its Secret ${SIGNIN_SECRET} is made by 'MERIDIAN_IDENTITY=keycloak MERIDIAN_SIGNIN=staff make up'; nothing was changed"
+  found="$(kctl -n "${NAMESPACE}" get secret "${SIGNIN_SECRET}" -o name --ignore-not-found)" ||
+    die "could not read whether the Secret ${SIGNIN_SECRET} exists in ${NAMESPACE} (kubectl's error is above); nothing was changed"
+  [[ -n "${found}" ]] ||
+    die "the Secret ${SIGNIN_SECRET} is not in ${NAMESPACE}, and the Claims API's pod could not start without it: run 'MERIDIAN_IDENTITY=keycloak MERIDIAN_SIGNIN=staff make up' first (it makes the Secret from the issuer's credentials); nothing was changed"
+  signin_generation="$(kctl -n "${NAMESPACE}" get secret "${SIGNIN_SECRET}" \
+    -o "jsonpath={.metadata.annotations.${SIGNIN_GENERATION_KEY//./\\.}}")" ||
+    die "could not read the generation of the Secret ${SIGNIN_SECRET} (kubectl's error is above); nothing was changed"
+  [[ -n "${signin_generation}" ]] ||
+    die "the Secret ${SIGNIN_SECRET} carries no generation, so a new one could not roll the pod: run 'MERIDIAN_IDENTITY=keycloak MERIDIAN_SIGNIN=staff make up' to make it again; nothing was changed"
+  # The Secret must be of the generation the issuer's credentials carry NOW. A
+  # rotation without the switch (MERIDIAN_IDENTITY_ROTATE=1 ... make up) made new
+  # credentials and left this Secret with the old client's secret, so every
+  # sign-in would fail with a pod that looks healthy. The annotation alone.
+  issuer_generation="$(kctl -n "${SIGNIN_ISSUER_NAMESPACE}" get secret "${SIGNIN_ISSUER_SECRET}" \
+    -o "jsonpath={.metadata.annotations.${SIGNIN_GENERATION_KEY//./\\.}}")" ||
+    die "could not read the generation of ${SIGNIN_ISSUER_SECRET} in ${SIGNIN_ISSUER_NAMESPACE} (kubectl's error is above): is the issuer add-on on this cluster? 'MERIDIAN_IDENTITY=keycloak MERIDIAN_SIGNIN=staff make up' makes it; nothing was changed"
+  [[ -n "${issuer_generation}" ]] ||
+    die "${SIGNIN_ISSUER_SECRET} carries no generation, so the Secret ${SIGNIN_SECRET} cannot be compared with it: run 'MERIDIAN_IDENTITY=keycloak MERIDIAN_SIGNIN=staff make up' to make both again; nothing was changed"
+  [[ "${issuer_generation}" == "${signin_generation}" ]] ||
+    die "the Secret ${SIGNIN_SECRET} is of generation ${signin_generation} but ${SIGNIN_ISSUER_SECRET} of generation ${issuer_generation}: the issuer's credentials were made anew (a rotation) since, and the Secret still holds the old client's secret, so every sign-in would fail. Run 'MERIDIAN_IDENTITY=keycloak MERIDIAN_SIGNIN=staff make up' to make the Secret anew, then this deploy again; nothing was changed"
+  log "the staff sign-in is on: values/signin.yaml, and the Secret ${SIGNIN_SECRET} of generation ${signin_generation} (the issuer's credentials carry the same)"
+}
+
 # Build the image and tag it by content. Sets ${image} and ${tag}. Docker's
 # output is shown only when the build fails.
 build_image() {
@@ -394,8 +456,12 @@ run_job() {
 # field manager that made them. It does not wait: the rollouts below do, and it
 # does not create the namespace: make up did.
 install_release() {
+  local signin=()
+  if signin_on; then
+    signin=(-f "${SIGNIN_VALUES_FILE}" --set-string "signin.generation=${signin_generation}")
+  fi
   log "installing release ${RELEASE}"
-  helm_chart upgrade --install --take-ownership --server-side=true --force-conflicts --timeout "${HELM_UPGRADE_TIMEOUT}" >/dev/null ||
+  helm_chart upgrade --install --take-ownership --server-side=true --force-conflicts --timeout "${HELM_UPGRADE_TIMEOUT}" ${signin[@]+"${signin[@]}"} >/dev/null ||
     die "helm could not install release ${RELEASE} (its error is above; to see why: helm --kubeconfig ${KUBECONFIG_FILE} --kube-context ${KUBE_CONTEXT} -n ${NAMESPACE} status ${RELEASE}, or history ${RELEASE})"
 }
 
@@ -479,8 +545,12 @@ wait_for_certificates() {
 }
 
 wait_for_deployment() {
+  local serving=""
+  if signin_on; then
+    serving=". This deploy turns the staff sign-in on: until the Claims API rolls out, the previous pod, without the sign-in, may still be serving the adjuster's pages"
+  fi
   kctl -n "${NAMESPACE}" rollout status "deployment/$1" --timeout="${ROLLOUT_TIMEOUT}" >/dev/null ||
-    die "deployment $1 did not roll out (kubectl -n ${NAMESPACE} logs deploy/$1)"
+    die "deployment $1 did not roll out (kubectl -n ${NAMESPACE} logs deploy/$1)${serving}"
   log "deployment $1 is ready"
 }
 
@@ -517,6 +587,7 @@ wait_for_token_window() {
   sleep "${remaining}"
 }
 
+require_signin
 require_database
 require_issuer
 require_approval

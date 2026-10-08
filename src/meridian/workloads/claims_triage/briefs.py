@@ -51,13 +51,13 @@ fixed text.
 """
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Annotated, Any, Literal, NamedTuple
 from uuid import UUID, uuid4
 
 import httpx
 import psycopg
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, params
 from fastapi.responses import JSONResponse
 from opentelemetry.trace import Span, Tracer
 from pydantic import (
@@ -717,9 +717,20 @@ def read_brief(dsn: str, tenant: str, claim_id: str) -> BriefView:
 
 
 def add_brief_routes(
-    app: FastAPI, *, dsn: str, tenant: str, http: httpx.Client, tracer: Tracer
+    app: FastAPI,
+    *,
+    dsn: str,
+    tenant: str,
+    http: httpx.Client,
+    tracer: Tracer,
+    guards: Sequence[params.Depends] = (),
+    guard_responses: Mapping[int | str, dict[str, Any]] | None = None,
 ) -> None:
-    """Add the three routes of the claim brief to the Claims API."""
+    """Add the three routes of the claim brief to the Claims API. ``guards`` are
+    the dependencies of all three and ``guard_responses`` the answers they add to
+    the OpenAPI document (S021, Y4: the sign-in comes in as arguments, so this
+    module imports none of it; both are empty by default)."""
+    extra = dict(guard_responses or {})
 
     @app.post(
         "/claims/{claim_id}/brief",
@@ -728,7 +739,9 @@ def add_brief_routes(
         tags=["claims"],
         summary="Start a brief of a claim: a run drafts it and pauses for a decision.",
         responses=error_responses(404, 409, 413)
-        | error_responses(500, 502, 503, 504, model=ClaimErrorBody),
+        | error_responses(500, 502, 503, 504, model=ClaimErrorBody)
+        | extra,
+        dependencies=list(guards),
     )
     def start_claim_brief(
         claim_id: ClaimId, body: ClaimMoveRequest
@@ -741,7 +754,9 @@ def add_brief_routes(
         tags=["claims"],
         summary="Record the decision on a claim's brief and resume its paused run.",
         responses=error_responses(404, 409, 413)
-        | error_responses(500, 502, 503, 504, model=ClaimErrorBody),
+        | error_responses(500, 502, 503, 504, model=ClaimErrorBody)
+        | extra,
+        dependencies=list(guards),
     )
     def decide_claim_brief(
         claim_id: ClaimId, body: BriefDecision
@@ -754,7 +769,9 @@ def add_brief_routes(
         tags=["claims"],
         summary="Read the latest brief of a claim.",
         responses=error_responses(404)
-        | error_responses(500, 503, model=ClaimErrorBody),
+        | error_responses(500, 503, model=ClaimErrorBody)
+        | extra,
+        dependencies=list(guards),
     )
     def read_claim_brief(claim_id: ClaimId) -> BriefView | JSONResponse:
         try:
