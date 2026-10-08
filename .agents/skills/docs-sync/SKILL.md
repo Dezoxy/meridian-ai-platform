@@ -48,7 +48,7 @@ of those goes stale silently when something is added or renamed.
    | `docs/architecture/model/*.dsl` | elements, relationships, deployment, views — the model must tell the same story as the prose |
    | `docs/architecture/<concern>/` | requirements, security, data, integration, deployment, reliability, observability, risks, roadmap — each owns its facts and IDs |
    | `docs/architecture/decisions/` | ADRs — history; a changed decision gets a new ADR, not an edit |
-   | `docs/meridian-plan.md` | the **status line**, each step's status and "done when", the open questions — a closed step's section and the changelog are history |
+   | `docs/meridian-plan.md` | the **status line**, each step's status and "done when", the open questions, Part C's index of the step files — a closed step's file in `docs/plan/steps/` and the entries in `docs/plan/changelog/` are history |
    | `<dir>/README.md` | a README beside the thing it describes — a module, service or package: what it is, how it is used, and what is on the other end of its inputs and outputs |
    | `Makefile` `##` comments | these ARE `make help` output |
    | `AGENTS.md` + `CLAUDE.md` | conventions and hard rules — **twins, byte-identical** |

@@ -5,7 +5,7 @@
 ## Plan step
 
 <!-- The step in docs/meridian-plan.md, e.g. S002. Update its status and
-Part C section in this PR. -->
+file under docs/plan/steps/ in this PR. -->
 
 ## Verification
 
