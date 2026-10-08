@@ -15,6 +15,8 @@ from itertools import pairwise
 from certpolicysupport import KIND_DIR, POLICY_NAMES
 
 UP_SH = (KIND_DIR / "up.sh").read_text(encoding="utf-8")
+# The functions of Prometheus's gateway are in the file up.sh sources for them.
+GATEWAYS_SH = (KIND_DIR / "gateways.sh").read_text(encoding="utf-8")
 
 
 def script_lines() -> list[str]:
@@ -208,6 +210,15 @@ def test_up_s_comment_does_not_promise_that_a_request_made_in_between_is_quick()
 
 def up_function(name: str) -> str:
     match = re.search(rf"^{name}\(\) \{{\n.*?^\}}\n", UP_SH, re.MULTILINE | re.DOTALL)
+    assert match, f"no function {name}"
+    return match.group(0)
+
+
+def gateways_function(name: str) -> str:
+    """A function of gateways.sh, as ``up_function`` finds one of up.sh."""
+    match = re.search(
+        rf"^{name}\(\) \{{\n.*?^\}}\n", GATEWAYS_SH, re.MULTILINE | re.DOTALL
+    )
     assert match, f"no function {name}"
     return match.group(0)
 

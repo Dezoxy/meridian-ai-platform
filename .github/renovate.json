@@ -249,6 +249,7 @@
         "quay.io/prometheus/prometheus",
         "registry.k8s.io/kube-state-metrics/kube-state-metrics",
         "docker.io/grafana/*",
+        "docker.io/nginxinc/nginx-unprivileged",
         "quay.io/kiwigrid/k8s-sidecar"
       ],
       "matchUpdateTypes": [

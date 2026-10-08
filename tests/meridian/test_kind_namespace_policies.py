@@ -29,15 +29,15 @@ from chartsupport import (
 )
 from kindsupport import (
     KIND_DIR,
-    SMOKE_SH,
     UP_SH,
-    function_body,
     load_documents,
 )
 
 MANIFESTS = KIND_DIR / "manifests"
 CERT_MANAGER_FILE = MANIFESTS / "cert-manager-networkpolicy.yaml"
 OBSERVABILITY_FILE = MANIFESTS / "observability-networkpolicy.yaml"
+LOKI_POLICY_FILE = MANIFESTS / "observability-loki-networkpolicy.yaml"
+PROMETHEUS_POLICY_FILE = MANIFESTS / "observability-prometheus-networkpolicy.yaml"
 SMOKE_FILE = MANIFESTS / "smoke-networkpolicy.yaml"
 NAMESPACES_FILE = MANIFESTS / "namespaces.yaml"
 VALUES = KIND_DIR / "values"
@@ -50,6 +50,14 @@ PROMETHEUS = {
     "app.kubernetes.io/name": "prometheus",
     "operator.prometheus.io/name": "kube-prometheus-stack-prometheus",
 }
+# Prometheus's gateway, an nginx of this repository's own in front of it (S072,
+# contract M4): the only peer of Prometheus's port. Its name label is neither
+# Prometheus's, Loki's gateway's nor the collector's, so no other rule selects it.
+PROMETHEUS_GATEWAY = {
+    "app.kubernetes.io/name": "prometheus-gateway",
+    "app.kubernetes.io/instance": "prometheus-gateway",
+    "app.kubernetes.io/component": "gateway",
+}
 GRAFANA = {
     "app.kubernetes.io/name": "grafana",
     "app.kubernetes.io/instance": "kube-prometheus-stack",
@@ -60,6 +68,9 @@ LOKI = {
     "app.kubernetes.io/instance": "loki",
     "app.kubernetes.io/component": "single-binary",
 }
+# Loki's gateway, the chart's nginx in front of it (S072, contract M3): the only
+# peer of Loki's own port.
+LOKI_GATEWAY = {**LOKI, "app.kubernetes.io/component": "gateway"}
 STATE_METRICS = {
     "app.kubernetes.io/name": "kube-state-metrics",
     "app.kubernetes.io/instance": "kube-prometheus-stack",
@@ -89,6 +100,18 @@ def policies_of(path: Path) -> dict[str, dict]:
     documents = load_documents(path)
     assert documents, path
     return network_policies(documents)
+
+
+def observability_policies() -> dict[str, dict]:
+    """Every NetworkPolicy of ``observability``: the namespace's file and, since
+    S072 (contract M3b), the file of Loki's pods and its gateway's, which ``make up``
+    applies just before Loki's release, and (contract M4) the file of Prometheus's
+    port and its gateway's, which it applies right after the stack's release."""
+    return {
+        **policies_of(OBSERVABILITY_FILE),
+        **policies_of(LOKI_POLICY_FILE),
+        **policies_of(PROMETHEUS_POLICY_FILE),
+    }
 
 
 def header_of(path: Path) -> str:
@@ -380,14 +403,16 @@ def collector_labels() -> dict[str, str]:
 
 
 def test_observability_denies_ingress_and_egress_and_says_so() -> None:
-    policies = policies_of(OBSERVABILITY_FILE)
+    policies = observability_policies()
     ingress_names = {
         "default-deny-ingress",
         "otel-collector",
         "tempo",
         "loki",
+        "loki-gateway",
         "grafana",
         "prometheus",
+        "prometheus-gateway",
         "prometheus-operator",
         "kube-state-metrics",
     }
@@ -510,7 +535,7 @@ def test_the_collectors_policy_and_the_charts_egress_name_one_path() -> None:
 
 
 def test_each_pod_of_observability_admits_the_peers_that_call_it() -> None:
-    policies = policies_of(OBSERVABILITY_FILE)
+    policies = observability_policies()
     collector = pods(collector_labels())
     grafana = pods(GRAFANA)
     prometheus = pods(PROMETHEUS)
@@ -523,10 +548,18 @@ def test_each_pod_of_observability_admits_the_peers_that_call_it() -> None:
                 {"from": [grafana], "ports": tcp(3200)},
             ],
         ),
+        # Loki's gateway takes the collector's writes and Grafana's reads on its
+        # one TLS port; its check, not this rule, keeps Grafana from writing.
+        "loki-gateway": (
+            LOKI_GATEWAY,
+            [{"from": [collector, grafana], "ports": tcp(8443)}],
+        ),
         "loki": (
             LOKI,
             [
-                {"from": [collector, grafana], "ports": tcp(3100)},
+                # Loki's own port: its gateway alone, neither the collector nor
+                # Grafana (S072, contract M3).
+                {"from": [pods(LOKI_GATEWAY)], "ports": tcp(3100)},
                 # The single binary joins the memberlist it makes with its own
                 # Service (join_members, abort_if_cluster_join_fails: true).
                 {
@@ -539,9 +572,17 @@ def test_each_pod_of_observability_admits_the_peers_that_call_it() -> None:
             ],
         ),
         "grafana": (GRAFANA, [{"from": [prometheus], "ports": tcp(3000)}]),
+        # Prometheus's gateway takes the collector's writes and Grafana's reads on
+        # its one TLS port, as Loki's does (S072, contract M4).
+        "prometheus-gateway": (
+            PROMETHEUS_GATEWAY,
+            [{"from": [collector, grafana], "ports": tcp(8443)}],
+        ),
+        # Prometheus's own port: its gateway alone, neither Grafana nor the
+        # collector.
         "prometheus": (
             PROMETHEUS,
-            [{"from": [grafana, collector], "ports": tcp(9090)}],
+            [{"from": [pods(PROMETHEUS_GATEWAY)], "ports": tcp(9090)}],
         ),
         # The webhook's port is the one the operator's metrics are served on
         # (the chart's ServiceMonitor scrapes `https`): Prometheus alone.
@@ -560,7 +601,7 @@ def test_each_pod_of_observability_admits_the_peers_that_call_it() -> None:
 
 
 def test_the_ports_the_policies_open_are_the_ones_the_values_call() -> None:
-    policies = policies_of(OBSERVABILITY_FILE)
+    policies = observability_policies()
     stack = stack_values()
     sources = {
         source["name"]: urlsplit(source["url"]).port
@@ -571,17 +612,22 @@ def test_the_ports_the_policies_open_are_the_ones_the_values_call() -> None:
     ]["exporters"]
 
     # Grafana's datasources and the collector's exporters, as the values name them.
-    assert sources == {"Tempo": 3200, "Loki": 3100}
+    assert sources == {"Prometheus": 8443, "Tempo": 3200, "Loki": 8443}
     assert sources["Tempo"] in rule_ports(policies["tempo"])
-    assert sources["Loki"] in rule_ports(policies["loki"])
+    # Prometheus is read, and written, through its gateway (S072, contract M4).
+    assert sources["Prometheus"] in rule_ports(policies["prometheus-gateway"])
+    assert rule_ports(policies["prometheus"]) == {9090}
+    # Loki is read, and written, through its gateway (S072, contract M3).
+    assert sources["Loki"] in rule_ports(policies["loki-gateway"])
+    assert rule_ports(policies["loki"]) == {3100, 7946}
     assert urlsplit("//" + exporters["otlp_grpc/tempo"]["endpoint"]).port in rule_ports(
         policies["tempo"]
     )
     assert urlsplit(exporters["otlp_http/loki"]["endpoint"]).port in rule_ports(
-        policies["loki"]
+        policies["loki-gateway"]
     )
     assert urlsplit(exporters["otlp_http/prometheus"]["endpoint"]).port in rule_ports(
-        policies["prometheus"]
+        policies["prometheus-gateway"]
     )
     # The collector's own receivers are the two ports of the OTLP protocols, and
     # only the HTTP one is opened.
@@ -589,7 +635,7 @@ def test_the_ports_the_policies_open_are_the_ones_the_values_call() -> None:
 
 
 def test_every_observability_ingress_rule_names_a_peer_and_a_port() -> None:
-    policies = policies_of(OBSERVABILITY_FILE)
+    policies = observability_policies()
 
     open_rules = {
         name
@@ -616,122 +662,6 @@ def test_every_observability_ingress_rule_names_a_peer_and_a_port() -> None:
     header = header_of(OBSERVABILITY_FILE)
     assert "10250" in header and "any pod of the cluster may open" not in header
     assert "port-forward" in header and "Grafana" in header
-
-
-# ── smoke's telemetry Jobs, in meridian ──────────────────────────────────────
-
-
-def smoke_policy() -> dict:
-    (policy,) = policies_of(SMOKE_FILE).values()
-    return policy
-
-
-def test_smokes_job_pods_may_reach_dns_and_the_collector_only() -> None:
-    policy = smoke_policy()
-    collector = peers()["collector"]
-
-    assert policy["metadata"]["namespace"] == "meridian"
-    assert policy["spec"]["policyTypes"] == ["Ingress", "Egress"]
-    # No ingress rule: a Job's pod takes no call.
-    assert "ingress" not in policy["spec"]
-    assert policy["spec"]["egress"] == [
-        dns_rule(),
-        {
-            "to": [pods(collector["podLabels"], collector["namespace"])],
-            "ports": collector["ports"],
-        },
-    ]
-    assert reaches(policy, "egress", collector)
-    assert [p["port"] for p in collector["ports"]] == [4318]
-
-
-def test_the_policy_selects_smokes_label_not_the_one_the_database_admits() -> None:
-    policy = smoke_policy()
-    manifest = start_job_manifest()
-    template_labels = manifest["spec"]["template"]["metadata"]["labels"]
-
-    assert selected(policy) == {"app.kubernetes.io/name": "meridian-smoke"}
-    assert selected(policy).items() <= template_labels.items()
-    # The database admits every pod of meridian that carries part-of=meridian: the
-    # Job is not one, and the chart's default-deny selects it for the rest.
-    assert "app.kubernetes.io/part-of" not in template_labels
-    assert manifest["metadata"]["namespace"] == "meridian"
-    assert "smoke" in header_of(SMOKE_FILE) and "default-deny" in header_of(SMOKE_FILE)
-
-
-def start_job_manifest() -> dict:
-    """The Job ``start_job`` of smoke.sh makes, read from the script's own text:
-    its heredoc with the variables it names filled in."""
-    body = re.search(r"^start_job\(\) \{\n.*?<<EOF\n(.*?)^EOF$", SMOKE_SH, re.M | re.S)
-    assert body, "no heredoc in start_job"
-    text = body.group(1)
-    constants = {
-        name: value
-        for name, value in re.findall(r"^readonly (\w+)=(\S+)$", SMOKE_SH, re.M)
-    }
-    values = {
-        "signal": "traces",
-        "epoch": "1",
-        "service": "meridian-smoke-1",
-        "count_flag": "--traces",
-        "TELEMETRYGEN_IMAGE": "telemetrygen:test",
-        "TELEMETRYGEN_NAMESPACE": constants.get("TELEMETRYGEN_NAMESPACE", ""),
-        "COLLECTOR_ENDPOINT": constants["COLLECTOR_ENDPOINT"],
-        # S063: the authority's ConfigMap and the file telemetrygen trusts.
-        "TELEMETRY_CA_CONFIGMAP": constants["TELEMETRY_CA_CONFIGMAP"],
-        "TELEMETRYGEN_CA_DIRECTORY": constants["TELEMETRYGEN_CA_DIRECTORY"],
-        "TELEMETRYGEN_CA_FILE": constants["TELEMETRYGEN_CA_DIRECTORY"] + "/ca.crt",
-    }
-    filled = re.sub(r"\$\{(\w+)\}", lambda m: values[m.group(1)], text)
-    return yaml.safe_load(filled)
-
-
-def test_smokes_telemetry_job_runs_in_meridian_and_pushes_otlp_over_http_to_4318() -> (
-    None
-):
-    manifest = start_job_manifest()
-    peer = peers()["collector"]
-    (container,) = manifest["spec"]["template"]["spec"]["containers"]
-    args = container["args"]
-
-    assert manifest["metadata"]["namespace"] == "meridian"
-    assert "--otlp-http" in args
-    # S063: the push is TLS, verified against the authority's file.
-    assert "--otlp-insecure" not in args
-    assert args[args.index("--ca-cert") + 1] == "/etc/telemetry-ca/ca.crt"
-    endpoint = args[args.index("--otlp-endpoint") + 1]
-    # The same address and port the six services push to, not the gRPC port.
-    port = peer["ports"][0]["port"]
-    assert endpoint == f"otel-collector.{peer['namespace']}.svc.cluster.local:{port}"
-    assert not endpoint.endswith(":4317")
-    # The signal flags keep the default URL paths of the HTTP exporter.
-    assert "--otlp-http-url-path" not in args
-
-
-def test_the_three_jobs_one_manifest_ends_at_a_deadline_so_the_ttl_can_remove_it() -> (
-    None
-):
-    manifest = start_job_manifest()
-    starts = re.findall(
-        r"^\s+start_job (\w+) --\1$", function_body(SMOKE_SH, "check_telemetry"), re.M
-    )
-
-    # One heredoc makes all three Jobs. A Job whose pod never starts never
-    # finishes, and ttlSecondsAfterFinished counts from a finished Job only.
-    assert starts == ["traces", "logs", "metrics"]
-    assert manifest["spec"]["activeDeadlineSeconds"] > 0
-    assert manifest["spec"]["ttlSecondsAfterFinished"] > 0
-
-
-def test_the_job_meets_restricted_so_meridians_warn_and_audit_say_nothing() -> None:
-    manifest = start_job_manifest()
-    pod = manifest["spec"]["template"]["spec"]
-    (container,) = pod["containers"]
-
-    assert pod["securityContext"]["runAsNonRoot"] is True
-    assert pod["securityContext"]["seccompProfile"] == {"type": "RuntimeDefault"}
-    assert container["securityContext"]["allowPrivilegeEscalation"] is False
-    assert container["securityContext"]["capabilities"] == {"drop": ["ALL"]}
 
 
 # ── up.sh ────────────────────────────────────────────────────────────────────

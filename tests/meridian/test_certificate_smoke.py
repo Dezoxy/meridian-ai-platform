@@ -476,8 +476,11 @@ def test_the_policy_check_fails_for_a_policy_that_is_not_ready_or_not_there(
     assert verdicts(lines) == ["FAIL", "PASS", "PASS"]
     assert policy in lines[0]
     assert "make up" in lines[0]
+    # Whole names: `otel-collector` is the first part of `otel-collector-client`
+    # (S072), so a plain substring test would find one policy in the other's name.
+    named = re.findall(r"[\w-]+", lines[0])
     for other in set(POLICIES) - {policy}:
-        assert other not in lines[0].replace("meridian-services-ca", "")
+        assert other not in named, other
 
 
 @pytest.mark.parametrize("available", ["", "0", "MISSING"])
@@ -574,7 +577,8 @@ def test_the_policy_check_is_the_tenth_and_is_documented() -> None:
     # The alert rules check (S062, test_smoke_alert_rules.py) runs after it.
     assert calls[8:10] == ["check_service_identity", "check_certificate_policy"]
     assert calls[10] == "check_alert_rules"
-    assert calls[11].startswith("if ((failures")
+    assert calls[11] == "check_telemetry_stores"  # S072, contract M3b
+    assert calls[12].startswith("if ((failures")
     # Four lines since S062: the three above and the request that must be
     # refused (test_certificate_refused_request.py); five since S073, K5: the
     # database's own certificates (test_smoke_database_certificates.py).
@@ -634,7 +638,7 @@ def test_the_comments_say_what_two_lines_of_the_identity_check_do_not_prove() ->
         line.removeprefix("#").strip()
         for line in DEPLOY_SH.split("set -euo pipefail")[0].splitlines()
     )
-    assert "five CertificateRequestPolicies" in deploy_header
+    assert "nine CertificateRequestPolicies" in deploy_header
     assert "approver-policy running" in deploy_header
 
 

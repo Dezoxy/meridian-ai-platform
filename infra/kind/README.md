@@ -28,9 +28,17 @@ adjuster; the rules decide every other claim.
 | PostgreSQL 17 with pgvector (`platform-db`) | `cluster` | 0.8.1 | `meridian` |
 | Prometheus, Grafana, kube-state-metrics (node-exporter is off, see below) | `kube-prometheus-stack` | 91.8.2 (Grafana chart 13.2.7) | `observability` |
 | Tempo (traces) | `tempo` | 3.1.0 | `observability` |
-| Loki (logs) | `loki` | 18.13.7 | `observability` |
+| Loki (logs), with the chart's own nginx gateway in front of it (S072) | `loki` | 18.13.7 | `observability` |
+| Prometheus's gateway: an nginx of this repository's own in front of Prometheus's port (S072, contract M4; no chart: [`manifests/observability-prometheus-gateway.yaml`](manifests/observability-prometheus-gateway.yaml), applied by `up.sh` right after the stack's release) | none | none | `observability` |
 | OpenTelemetry Collector | `opentelemetry-collector` | 0.174.0 (collector 0.162.0) | `observability` |
 | Log agent: a second release of the collector's chart, the contrib build, as a DaemonSet that ships the services' output to Loki (S064) | `opentelemetry-collector` | 0.174.0 (collector 0.162.0, contrib) | `logging` |
+
+`up.sh` sources [`gateways.sh`](gateways.sh) after `common.sh`: the names and the
+functions that fill in and apply Prometheus's gateway (`fill_placeholder`,
+`prometheus_service_address`, `prometheus_gateway_manifest` and
+`apply_prometheus_gateway`) live there, to keep `up.sh` under the size ceiling;
+the call to `apply_prometheus_gateway` is still in `up.sh`, right after the
+stack's release.
 
 The CloudNativePG operator runs in `meridian`, beside the database it manages,
 and has no namespace of its own (S072, contract C). The release is made with
@@ -186,6 +194,7 @@ digests were read from the registries on 2026-10-06 (each is an index with
 | kube-prometheus-stack | `quay.io/prometheus/node-exporter:v1.12.1-distroless` | `prometheus-node-exporter.image.digest` | not pinned: switched off on kind (S063); on again, it needs a pin |
 | tempo | `docker.io/grafana/tempo:3.1.0` | `tempo.tag` as `tag@digest` | yes, through the tag key |
 | loki | `docker.io/grafana/loki:3.7.8` | `loki.image.tag`, `.digest` | yes |
+| loki | `docker.io/nginxinc/nginx-unprivileged:1.31-alpine` | `gateway.image.tag`, `.digest`: the chart's gateway in front of Loki (S072); the same pin, `NGINX_GATEWAY_IMAGE_*`, is also the image of Prometheus's gateway, which `up.sh` writes into that Deployment | yes |
 | otel-collector | `ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector:0.162.0` | `image.repository`, `.tag`, `.digest` (before S063) | yes |
 | log-agent | `ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.162.0` | `image.repository`, `.tag`, `.digest`: the contrib build of the collector's release, which has the receiver that reads files (S064; digest read 2026-10-06) | yes |
 
@@ -252,9 +261,13 @@ How telemetry flows: an application sends OTLP over HTTP with TLS to
 `otel-collector.observability:4318` (S063: the gRPC port, 4317, is closed, and
 the collector's certificate comes from an authority of its own, below). The
 collector forwards traces to Tempo, metrics to Prometheus's OTLP receiver and
-logs to Loki's OTLP endpoint, and those three hops stay clear text: they are
-inside `observability`, and the threat model names the hop to the collector.
-Grafana has three datasources with fixed uids:
+logs to Loki's OTLP endpoint, and since S072 those three hops are TLS with the
+collector's client certificate: Tempo's receiver asks for it on its own port,
+and Prometheus and Loki are reached through a gateway each (an nginx, below)
+that asks for it on the one write path (the OTLP path) and serves the reads to
+a client that has none. The threat model's T-90 has the decision and its dated
+reversal. Grafana reads Prometheus and Loki through the same gateways, over
+TLS, with no certificate; it has three datasources with fixed uids:
 `prometheus`, `tempo` and `loki`. Retention is 24 hours everywhere.
 
 The services' logs reach Loki another way (S064): they write to their output,
@@ -579,7 +592,7 @@ node image, Kubernetes components and the platform).
 | `make cluster-holder` | Print who holds the cluster: the holder, its commit, the time its last `make up` or `make deploy` started or ended and the state, `ok` or `changing` with a sentence that says to look at what failed (S075); or that there is no record, or no cluster. It changes nothing on the cluster and refreshes the gitignored credentials file as `make up` does. A cluster that does not answer is an error. See "Who holds the cluster" below. |
 | `make down` | Delete the `meridian` cluster and its credentials file. Destructive; refuses any other cluster name. Since S075 it reads the record of who holds the cluster first and stops when another holder has it, unless `TAKE_CLUSTER=1` is in front of it; a cluster that does not answer stops it too (who holds it cannot be told, and another step's `make up` may be restarting the node), and `TAKE_CLUSTER=1 make down` deletes a broken cluster all the same. The record goes with the cluster. |
 
-`make smoke` checks eleven things:
+`make smoke` checks twelve things:
 
 1. **Edge.** `curl http://127.0.0.1:8088/` returns 404, and Envoy's own
    request counter went up. That covers laptop, kind port mapping, NodePort
@@ -1154,7 +1167,8 @@ node image, Kubernetes components and the platform).
     lifetime is one day), and a renewal by the operator. It tells
     nothing between two runs of smoke: no alert rule watches these dates (see
     [the certificate expiry runbook](../../docs/operations/runbooks/certificate-expiry.md)).
-11. **Alert rules and health dashboard.** Four lines, read-only, run last.
+11. **Alert rules and health dashboard.** Four lines, read-only, run after the
+    first ten (check 12 follows it).
     The first three read Prometheus' `/api/v1/rules` through Grafana's
     datasource proxy, for the `PrometheusRule` `meridian` that `make up`
     applies. The five groups of `alerts/meridian.yaml` are loaded and every
@@ -1218,10 +1232,36 @@ node image, Kubernetes components and the platform).
     renewal watch's short certificates were in place and the alert fired; a
     firing alert is a FAIL of the third line, so it would have failed (see
     "How long a certificate lasts" below).
+12. **Telemetry stores.** Ten lines (S072, contracts M3b, M4 and M4b), run after
+    the other eleven, from one probe Pod in `observability` (the Claims API's
+    image, the collector's name label and smoke's own; a label impersonation,
+    said, not solved: T-84): a push to Loki's gateway with no client certificate
+    is 403 and a read is 200; Tempo's receiver ends a connection with none in
+    the TLS alert "certificate required"; Loki's own port times out for the Pod
+    (kind's policy `smoke-telemetry-probe` lets it send there, so the timeout is
+    Loki's ingress rule) and the same Pod with the gateway's labels reaches it;
+    and the gateway and Tempo's receiver each serve the certificate that is in
+    their Secret, which finds a pod that was not rolled after a renewal. The
+    three of contract M4: Prometheus's gateway answers 403 to the OTLP
+    receiver's path, remote write and `/-/reload` with no client certificate and
+    200 to a query; Prometheus's own port times out for the Pod (the policy
+    `smoke-telemetry-probe-prometheus` is the same arrangement) and is reached
+    by the Pod with the gateway's labels; and the gateway serves the certificate
+    that is in its Secret. The two of contract M4b: the same read written with a
+    doubled slash, a per-cent-encoded letter and a dot segment is 403 each beside
+    the plain read's 200 (the one live check of the gateway's comparison of the
+    raw and the normalised path), and a POST of a form body `query=1` is answered
+    `200 success` (the gateway forwards the body).
+    Skipped, one line, while no Meridian Deployment exists. Tested with
+    stand-ins, and the probes' Python run against nginx of the pinned image in
+    a container; run on the cluster on 2026-10-07: the first five lines in run
+    R16b (51 PASS) and all ten in run R17 (56 PASS). The paragraph of the script
+    (`smoke.d/12-telemetry-stores.sh`) says what the lines do not prove.
 
 `make smoke` creates three Jobs in `observability`. Kubernetes removes each one
 15 minutes after it finishes. It creates one Pod in `meridian` for the network
-check (line 8) and one `CertificateRequest` in `default` for the certificate
+check (line 8), one Pod in `observability` for the telemetry stores (line 12)
+and one `CertificateRequest` in `default` for the certificate
 policy check (line 10), and deletes each as soon as its check is done and again
 when the script ends. The tool check leaves at most one refused `tool.call` row
 per server in the audit log per throttle window, and the identity check one
@@ -1802,7 +1842,7 @@ first `make up` and `make smoke` after it have run on one.
 | File | Namespace | What it says |
 |---|---|---|
 | [`manifests/cert-manager-networkpolicy.yaml`](manifests/cert-manager-networkpolicy.yaml) | `cert-manager` | Ingress denied, except 9402 to the controller's metrics from Prometheus; the two webhooks' port (10250, `failurePolicy: Fail`) is admitted from no pod, and the API server, which calls from the node, needs no rule (see below). Egress: DNS and TCP 6443 to the API server's address alone (`make up` reads it from the `kubernetes` EndpointSlice and fills it in, as it does the database's; `make deploy` and `make smoke` do not compare this policy with the endpoint) |
-| [`manifests/observability-networkpolicy.yaml`](manifests/observability-networkpolicy.yaml) | `observability` | Ingress denied, except one rule per peer: the collector from the namespace `meridian` and from the log agent's pods in `logging` (namespace and pod label) on 4318; Tempo from the collector (4317) and Grafana (3200); Loki from the collector and Grafana (3100) and from its own pods (7946, its memberlist); Grafana from Prometheus (3000); Prometheus from Grafana and the collector (9090); kube-state-metrics from Prometheus (8080); and 10250 to the Prometheus operator from Prometheus alone (its webhook and its metrics share the port). Egress denied for every pod and admitted by one policy per pod: DNS for all; the node (the API server and the kubelet: one address on kind, 6443 and 10250, filled in by `make up` as in cert-manager's) for Prometheus, the operator and its hook Jobs, kube-state-metrics and Grafana; Prometheus to its targets (Grafana, kube-state-metrics, the operator, cert-manager's controller 9402, the DNS pods 9153); Grafana to its three datasources; the collector to its three exporters; Loki to its own pods (7946); Tempo to nothing |
+| [`manifests/observability-networkpolicy.yaml`](manifests/observability-networkpolicy.yaml) | `observability` | Ingress denied, except one rule per peer: the collector from the namespace `meridian` and from the log agent's pods in `logging` (namespace and pod label) on 4318; Tempo from the collector (4317) and Grafana (3200); Loki's gateway and Prometheus's gateway from the collector and Grafana (8443, the one TLS port of each); Grafana from Prometheus (3000); kube-state-metrics from Prometheus (8080); and 10250 to the Prometheus operator from Prometheus alone (its webhook and its metrics share the port). Egress denied for every pod and admitted by one policy per pod: DNS for all; the node (the API server and the kubelet: one address on kind, 6443 and 10250, filled in by `make up` as in cert-manager's) for Prometheus, the operator and its hook Jobs, kube-state-metrics and Grafana; Prometheus to its targets (Grafana, kube-state-metrics, the operator, cert-manager's controller 9402, the DNS pods 9153); Grafana to Tempo (3200) and the two gateways (8443); the collector to Tempo (4317) and the two gateways (8443); Loki's own pods (7946, its memberlist); Tempo to nothing. Two more files hold the rest, each applied by `make up` just before what it is about: [`manifests/observability-loki-networkpolicy.yaml`](manifests/observability-loki-networkpolicy.yaml) (Loki's port 3100 from its gateway's pods ALONE, not the collector and not Grafana; the gateway's egress to Loki; the probe pod's of `make smoke`) and [`manifests/observability-prometheus-networkpolicy.yaml`](manifests/observability-prometheus-networkpolicy.yaml) (Prometheus's port 9090 from its gateway's pods ALONE, not Grafana and not the collector; the gateway's egress to Prometheus; the probe pod's). These two ports have no TLS and no certificate check: network policy alone closes them, so a pod that can reach one of them, by a label it should not carry (T-84) or by a gap in the plugin, writes without a certificate |
 | [`manifests/cnpg-operator-networkpolicy.yaml`](manifests/cnpg-operator-networkpolicy.yaml) | `meridian` | The CloudNativePG operator's pod (S072, contract C): ingress denied, so no pod reaches its webhook port (9443) or its metrics port (8080), and the API server, which calls from the node, needs no rule (as for the other webhooks, below). Egress: DNS, TCP 6443 to the API server's address alone (filled in by `make up` as in the others), and TCP 8000 to the pods of the Cluster `platform-db`, the one port the database's policy admits the operator on; not 5432, and nothing towards the collector. Implemented in files and tested without a cluster; not seen on kind |
 | [`manifests/envoy-gateway-networkpolicy.yaml`](manifests/envoy-gateway-networkpolicy.yaml) | `envoy-gateway-system` | Ingress and egress denied for every pod; five policies, applied together before the release (S072, contract N). The controller receives xDS (18000) from the proxy pods alone; the proxy pods receive the listener's port 10080 from any address, which is the public entry and the one rule of the file without a peer, and may send to the controller (18000) and to the Claims API's pods (8000); every pod may reach DNS; the controller and its hook Job reach TCP 6443 at the node's address (filled in by `make up`, as in the others). The webhook's port 9443, the metrics and the probes have no rule: the API server and the kubelet call from the node. The proxy Service sets no `externalTrafficPolicy`, so the controller's default, `Local`, keeps the request's source; which address a request from the laptop has when the proxy sees it only a run shows, and the rule is right whichever it is. Implemented in files and tested without a cluster; not seen on kind |
 | [`manifests/smoke-networkpolicy.yaml`](manifests/smoke-networkpolicy.yaml) | `meridian` | The pods of smoke's telemetrygen Jobs may reach DNS and the collector's 4318, and nothing reaches them |
@@ -2312,8 +2352,10 @@ renewal, the DNS names `otel-collector.observability.svc` and
   Secret `otel-collector-tls`, mounted read-only as a directory, and reads the
   files again at a handshake every five minutes at most (`reload_interval`),
   so a renewed certificate needs no restart. The gRPC port, `:4317`, is closed.
-  Its own hops to Tempo, Prometheus and Loki stay clear text, inside
-  `observability`.
+  Its own hops to Tempo, Prometheus and Loki are TLS with its client
+  certificate since S072 (the second Secret, `otel-collector-client-tls`): Tempo's
+  receiver, and the two gateways in front of Prometheus and Loki, which admit a
+  write from the one subject `CN=otel-collector-client`.
 - **What goes stale.** The authority's certificate lasts a year and keeps its
   key when it is renewed (about eight months in), but the ConfigMap holds the
   old certificate until the next `make up`; a service that mounts a stale
@@ -2357,8 +2399,10 @@ is readable by the operators that hold a cluster-wide read of Secrets
 (cert-manager, cainjector; the CloudNativePG operator no longer does, since
 S072), though by no Meridian pod; and the telemetry from the services to the
 collector is TLS only by the second authority above (S063, tested without a
-cluster), while the collector's own hops to Tempo, Prometheus and Loki are
-still plain.
+cluster), and the collector's own hops to Tempo, Prometheus and Loki are TLS
+with its client certificate since S072 (implemented and tested, and seen on
+kind in runs R14 to R17 of 2026-10-07; the threat model's T-90 says what it
+does not stop).
 
 A cluster whose services were first applied as raw manifests (before S019)
 keeps them: Helm adopted the objects in place (`--take-ownership`) and no
@@ -2808,7 +2852,15 @@ sets were 54 to 115 MB (the runtime the largest, the tool servers 72 to
 87 MB), and `docker stats` showed 4.9 GiB for the node container.
 
 The rate store (S066) adds a limit of 64 MiB, a request of 32 MiB, to those
-limits (about 4.5 GiB in all). It was not measured on the cluster: outside one,
+limits (about 4.5 GiB in all). The two gateways of S072 (Loki's, and the nginx
+in front of Prometheus) add a limit of 64 MiB and a request of 32 MiB each, so
+128 MiB of limits and 64 MiB of requests more, still about 4.6 GiB in all; the
+Prometheus one held 4.3 MiB in a container of the pinned image, run as the pod
+runs it. On the cluster, read once from Prometheus after run R17 (2026-10-07),
+its working set was 4.3 MiB with a peak of 9.6 MiB in its first minutes, and
+Loki's gateway peaked at 19.8 MiB in 30 minutes; neither was read under load.
+The rate
+store was not measured on the cluster: outside one,
 on the pinned image without its modules, over TLS, read-only and as user 999, it
 held 12 MB when idle and a peak of 17 MB after 12,000 admissions from 40
 connections on 3 tenants (2026-10-06), and its own ceiling, `maxmemory`, is
