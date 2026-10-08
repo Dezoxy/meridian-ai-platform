@@ -1,0 +1,279 @@
+{
+  "format": 1,
+  "instructions": "Read each entry's rationale together with the claim and the clauses shown, as the judge did. Set person_grounded to true when every statement of the rationale is supported by the claim and the clauses shown, and to false otherwise. Leave a note in person_note where the call was close, and do not open the baseline or the recording until every entry is labelled.",
+  "entries": [
+    {
+      "claim_id": "CLM-0008",
+      "peril": "collision",
+      "description": "On 11 August 2026 in Graz a van reversed into my Opel Astra while I was waiting at a junction. The front bumper and one wing are damaged, but the car can still be driven.",
+      "assessment": "none_applies",
+      "rationale": "The description indicates a collision caused by a reversing van, and there are no listed exclusions that align with this scenario.",
+      "clauses": [
+        {
+          "clause": "3.1",
+          "title": "Racing",
+          "text": "We do not cover loss or liability that arises while the insured vehicle takes\npart in a race, rally, speed test, timed session or track day, or while it is\nprepared for one, on or off a public road. This applies even if the event is\nmeant for amateurs or for driver training.\n\nThis exclusion applies to claims for collision."
+        },
+        {
+          "clause": "3.2",
+          "title": "Driving under the influence",
+          "text": "We do not cover loss that occurs while the driver is under the influence of\nalcohol, drugs or medicines that impair driving, or is above the legal limit of\nthe place where the loss happens. This also applies if the driver refuses a test\nthat the police ask for.\n\nThis exclusion applies to claims for collision."
+        },
+        {
+          "clause": "3.3",
+          "title": "Unlicensed driver",
+          "text": "We do not cover loss that occurs while the insured vehicle is driven by a person\nwho does not hold a valid driving licence for that category of vehicle, or who\nis banned from driving. This also applies if you knew that and let the person\ndrive.\n\nThis exclusion applies to claims for collision."
+        }
+      ],
+      "person_grounded": null,
+      "person_note": ""
+    },
+    {
+      "claim_id": "CLM-0007",
+      "peril": "third_party_liability",
+      "description": "On 18 July 2026 near Maribor I drove into the back of another car while driving my Škoda Octavia. The other party has sent me a written claim through a lawyer.",
+      "assessment": "none_applies",
+      "rationale": "The description does not mention any involvement in racing, rallies, or similar activities excluded by the specified clause.",
+      "clauses": [
+        {
+          "clause": "3.2",
+          "title": "Racing",
+          "text": "We do not cover loss or liability that arises while the insured vehicle takes\npart in a race, rally, speed test, timed session or track day, or while it is\nprepared for one, on or off a public road. This applies even if the event is\nmeant for amateurs or for driver training.\n\nThis exclusion applies to claims for third-party liability."
+        }
+      ],
+      "person_grounded": null,
+      "person_note": ""
+    },
+    {
+      "claim_id": "CLM-0037",
+      "peril": "third_party_liability",
+      "description": "On 10 August 2026 at the racing circuit near Bratislava I misjudged a corner in my Volkswagen Passat and hit another car. The other driver has asked me to pay for the repair of his car. It happened during a track day, in a timed session for amateur drivers.",
+      "assessment": "applies",
+      "rationale": "The description states that the incident occurred during a timed session on a track day, which falls explicitly under the exclusion in clause 3.2 for liability arising in these contexts.",
+      "clauses": [
+        {
+          "clause": "3.2",
+          "title": "Racing",
+          "text": "We do not cover loss or liability that arises while the insured vehicle takes\npart in a race, rally, speed test, timed session or track day, or while it is\nprepared for one, on or off a public road. This applies even if the event is\nmeant for amateurs or for driver training.\n\nThis exclusion applies to claims for third-party liability."
+        }
+      ],
+      "person_grounded": null,
+      "person_note": ""
+    },
+    {
+      "claim_id": "CLM-0031",
+      "peril": "burst_pipe",
+      "description": "On 17 June 2026 the plumber opened a bathroom wall of my apartment in Split and found a pipe that was dripping. The flooring is swollen and the skirting boards are ruined. The leak had been going on for months before I noticed it; the wall was wet through by then.",
+      "assessment": "applies",
+      "rationale": "The description mentions a pipe that had been dripping and causing damage over months, which matches the exclusion for gradual leaks in clause 3.4.",
+      "clauses": [
+        {
+          "clause": "3.3",
+          "title": "Wear and tear",
+          "text": "We do not pay for damage that results from gradual deterioration, rot,\ncorrosion, age or lack of maintenance. If a storm or a burst pipe only exposes a\npart that was already worn out, we do not pay for that part. Damage that a part\nin good condition would have withstood is treated as wear and tear.\n\nThis exclusion applies to claims for storm and burst pipe."
+        },
+        {
+          "clause": "3.4",
+          "title": "Gradual leaks",
+          "text": "We do not cover damage caused by water that escapes slowly or again and again\nover a period of time, such as a dripping pipe, a seeping joint or a leak behind\na wall that goes on for weeks or months. Only a sudden escape of water is\ncovered.\n\nThis exclusion applies to claims for burst pipe."
+        }
+      ],
+      "person_grounded": null,
+      "person_note": ""
+    },
+    {
+      "claim_id": "CLM-0001",
+      "peril": "storm",
+      "description": "On 13 July 2026 a severe storm hit Linz and part of the roof of my house gave way. Water ran down the walls, and part of the ceiling has come down. The roof tiles were old and rotten before the storm and had not been repaired for years.",
+      "assessment": "applies",
+      "rationale": "The description indicates that the roof tiles were old and rotten prior to the storm and had not been maintained. According to clause 3.1, damage resulting from lack of maintenance or affecting parts already worn out is excluded.",
+      "clauses": [
+        {
+          "clause": "3.1",
+          "title": "Wear and tear",
+          "text": "We do not pay for damage that results from gradual deterioration, rot,\ncorrosion, age or lack of maintenance. If a storm or a burst pipe only exposes a\npart that was already worn out, we do not pay for that part. Damage that a part\nin good condition would have withstood is treated as wear and tear.\n\nThis exclusion applies to claims for storm and burst pipe."
+        }
+      ],
+      "person_grounded": null,
+      "person_note": ""
+    },
+    {
+      "claim_id": "CLM-0011",
+      "peril": "third_party_liability",
+      "description": "On 7 May 2026 near Linz I drove into the back of another car while driving my Peugeot 308. The other driver has asked me to pay for the repair of the car.",
+      "assessment": "none_applies",
+      "rationale": "The description does not indicate any participation in a race or similar activity as per clause 3.2. The incident appears to involve a regular driving situation.",
+      "clauses": [
+        {
+          "clause": "3.2",
+          "title": "Racing",
+          "text": "We do not cover loss or liability that arises while the insured vehicle takes\npart in a race, rally, speed test, timed session or track day, or while it is\nprepared for one, on or off a public road. This applies even if the event is\nmeant for amateurs or for driver training.\n\nThis exclusion applies to claims for third-party liability."
+        }
+      ],
+      "person_grounded": null,
+      "person_note": ""
+    },
+    {
+      "claim_id": "CLM-0035",
+      "peril": "third_party_liability",
+      "description": "On 11 May 2026 near Bratislava I drove into the back of another car while driving my Dacia Duster. The other driver has asked me to pay for the repair of the car.",
+      "assessment": "none_applies",
+      "rationale": "The description lacks any indication that the incident was related to a race or similar activity specified in clause 3.2, so no exclusion applies.",
+      "clauses": [
+        {
+          "clause": "3.2",
+          "title": "Racing",
+          "text": "We do not cover loss or liability that arises while the insured vehicle takes\npart in a race, rally, speed test, timed session or track day, or while it is\nprepared for one, on or off a public road. This applies even if the event is\nmeant for amateurs or for driver training.\n\nThis exclusion applies to claims for third-party liability."
+        }
+      ],
+      "person_grounded": null,
+      "person_note": ""
+    },
+    {
+      "claim_id": "CLM-0026",
+      "peril": "collision",
+      "description": "On 12 May 2026 my Opel Astra hit a lamp post in Maribor. The bumper and one wing are crushed, and nobody else was involved. A friend without a driving licence was at the wheel, because I had let him borrow the car.",
+      "assessment": "applies",
+      "rationale": "The description states that the car was driven by a friend without a driving licence, which aligns with the exclusion in clause 3.3 regarding unlicensed drivers.",
+      "clauses": [
+        {
+          "clause": "3.1",
+          "title": "Racing",
+          "text": "We do not cover loss or liability that arises while the insured vehicle takes\npart in a race, rally, speed test, timed session or track day, or while it is\nprepared for one, on or off a public road. This applies even if the event is\nmeant for amateurs or for driver training.\n\nThis exclusion applies to claims for collision."
+        },
+        {
+          "clause": "3.2",
+          "title": "Driving under the influence",
+          "text": "We do not cover loss that occurs while the driver is under the influence of\nalcohol, drugs or medicines that impair driving, or is above the legal limit of\nthe place where the loss happens. This also applies if the driver refuses a test\nthat the police ask for.\n\nThis exclusion applies to claims for collision."
+        },
+        {
+          "clause": "3.3",
+          "title": "Unlicensed driver",
+          "text": "We do not cover loss that occurs while the insured vehicle is driven by a person\nwho does not hold a valid driving licence for that category of vehicle, or who\nis banned from driving. This also applies if you knew that and let the person\ndrive.\n\nThis exclusion applies to claims for collision."
+        }
+      ],
+      "person_grounded": null,
+      "person_note": ""
+    },
+    {
+      "claim_id": "CLM-0038",
+      "peril": "collision",
+      "description": "On 9 July 2026 shortly before midnight I lost control of my Renault Clio in Linz and drove into a fence. The front of the car is badly damaged, and nobody else was involved. Earlier that evening I had drinks with colleagues, and then I drove myself home.",
+      "assessment": "applies",
+      "rationale": "The claimant described consuming alcohol before driving the vehicle, which aligns with the exclusion for losses occurring under the influence of alcohol as outlined in clause 3.2.",
+      "clauses": [
+        {
+          "clause": "3.1",
+          "title": "Racing",
+          "text": "We do not cover loss or liability that arises while the insured vehicle takes\npart in a race, rally, speed test, timed session or track day, or while it is\nprepared for one, on or off a public road. This applies even if the event is\nmeant for amateurs or for driver training.\n\nThis exclusion applies to claims for collision."
+        },
+        {
+          "clause": "3.2",
+          "title": "Driving under the influence",
+          "text": "We do not cover loss that occurs while the driver is under the influence of\nalcohol, drugs or medicines that impair driving, or is above the legal limit of\nthe place where the loss happens. This also applies if the driver refuses a test\nthat the police ask for.\n\nThis exclusion applies to claims for collision."
+        },
+        {
+          "clause": "3.3",
+          "title": "Unlicensed driver",
+          "text": "We do not cover loss that occurs while the insured vehicle is driven by a person\nwho does not hold a valid driving licence for that category of vehicle, or who\nis banned from driving. This also applies if you knew that and let the person\ndrive.\n\nThis exclusion applies to claims for collision."
+        }
+      ],
+      "person_grounded": null,
+      "person_note": ""
+    },
+    {
+      "claim_id": "CLM-0015",
+      "peril": "collision",
+      "description": "On 19 August 2026 my Škoda Octavia was hit by another car in a car park in Linz. The other driver gave me his details and nobody was hurt.",
+      "assessment": "none_applies",
+      "rationale": "The description does not mention facts that trigger any exclusions in the listed clauses, such as participation in a prohibited event, intoxication, or unlicensed driving.",
+      "clauses": [
+        {
+          "clause": "3.1",
+          "title": "Racing",
+          "text": "We do not cover loss or liability that arises while the insured vehicle takes\npart in a race, rally, speed test, timed session or track day, or while it is\nprepared for one, on or off a public road. This applies even if the event is\nmeant for amateurs or for driver training.\n\nThis exclusion applies to claims for collision."
+        },
+        {
+          "clause": "3.2",
+          "title": "Driving under the influence",
+          "text": "We do not cover loss that occurs while the driver is under the influence of\nalcohol, drugs or medicines that impair driving, or is above the legal limit of\nthe place where the loss happens. This also applies if the driver refuses a test\nthat the police ask for.\n\nThis exclusion applies to claims for collision."
+        },
+        {
+          "clause": "3.3",
+          "title": "Unlicensed driver",
+          "text": "We do not cover loss that occurs while the insured vehicle is driven by a person\nwho does not hold a valid driving licence for that category of vehicle, or who\nis banned from driving. This also applies if you knew that and let the person\ndrive.\n\nThis exclusion applies to claims for collision."
+        }
+      ],
+      "person_grounded": null,
+      "person_note": ""
+    },
+    {
+      "claim_id": "CLM-0023",
+      "peril": "burst_pipe",
+      "description": "On 29 May 2026 a pipe burst in the wall of my house in Ljubljana and water poured into the room. The plumber shut off the water, and the floor and the walls are wet.",
+      "assessment": "none_applies",
+      "rationale": "The description indicates a sudden burst of a pipe, resulting in immediate water damage. None of the clauses explicitly apply to this scenario, as it is neither due to gradual leaks nor wear and tear as described.",
+      "clauses": [
+        {
+          "clause": "3.3",
+          "title": "Wear and tear",
+          "text": "We do not pay for damage that results from gradual deterioration, rot,\ncorrosion, age or lack of maintenance. If a storm or a burst pipe only exposes a\npart that was already worn out, we do not pay for that part. Damage that a part\nin good condition would have withstood is treated as wear and tear.\n\nThis exclusion applies to claims for storm and burst pipe."
+        },
+        {
+          "clause": "3.4",
+          "title": "Gradual leaks",
+          "text": "We do not cover damage caused by water that escapes slowly or again and again\nover a period of time, such as a dripping pipe, a seeping joint or a leak behind\na wall that goes on for weeks or months. Only a sudden escape of water is\ncovered.\n\nThis exclusion applies to claims for burst pipe."
+        }
+      ],
+      "person_grounded": null,
+      "person_note": ""
+    },
+    {
+      "claim_id": "CLM-0003",
+      "peril": "burst_pipe",
+      "description": "On 26 July 2026 a pipe under the kitchen sink of my apartment in Zagreb burst and water spread across the floor. The flooring is swollen and the walls are damp in two rooms.",
+      "assessment": "none_applies",
+      "rationale": "The description states a sudden burst of a pipe and water causing damage. No exclusion clause directly applies based on the provided information.",
+      "clauses": [
+        {
+          "clause": "3.1",
+          "title": "Wear and tear",
+          "text": "We do not pay for damage that results from gradual deterioration, rot,\ncorrosion, age or lack of maintenance. If a storm or a burst pipe only exposes a\npart that was already worn out, we do not pay for that part. Damage that a part\nin good condition would have withstood is treated as wear and tear.\n\nThis exclusion applies to claims for storm and burst pipe."
+        },
+        {
+          "clause": "3.2",
+          "title": "Gradual leaks",
+          "text": "We do not cover damage caused by water that escapes slowly or again and again\nover a period of time, such as a dripping pipe, a seeping joint or a leak behind\na wall that goes on for weeks or months. Only a sudden escape of water is\ncovered.\n\nThis exclusion applies to claims for burst pipe."
+        }
+      ],
+      "person_grounded": null,
+      "person_note": ""
+    },
+    {
+      "claim_id": "CLM-0009",
+      "peril": "collision",
+      "description": "On 16 May 2026 in Ljubljana a van reversed into my Dacia Duster while I was waiting at a junction. The front bumper and one wing are damaged, but the car can still be driven.",
+      "assessment": "none_applies",
+      "rationale": "The description does not indicate any of the exclusions apply, as there is no mention of racing, intoxication, or unlicensed driving.",
+      "clauses": [
+        {
+          "clause": "3.1",
+          "title": "Racing",
+          "text": "We do not cover loss or liability that arises while the insured vehicle takes\npart in a race, rally, speed test, timed session or track day, or while it is\nprepared for one, on or off a public road. This applies even if the event is\nmeant for amateurs or for driver training.\n\nThis exclusion applies to claims for collision."
+        },
+        {
+          "clause": "3.2",
+          "title": "Driving under the influence",
+          "text": "We do not cover loss that occurs while the driver is under the influence of\nalcohol, drugs or medicines that impair driving, or is above the legal limit of\nthe place where the loss happens. This also applies if the driver refuses a test\nthat the police ask for.\n\nThis exclusion applies to claims for collision."
+        },
+        {
+          "clause": "3.3",
+          "title": "Unlicensed driver",
+          "text": "We do not cover loss that occurs while the insured vehicle is driven by a person\nwho does not hold a valid driving licence for that category of vehicle, or who\nis banned from driving. This also applies if you knew that and let the person\ndrive.\n\nThis exclusion applies to claims for collision."
+        }
+      ],
+      "person_grounded": null,
+      "person_note": ""
+    }
+  ]
+}

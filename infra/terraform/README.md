@@ -247,14 +247,25 @@ same strict reader as any. The test prints the status and the clause
 number, never the rationale. One synthetic question does not measure the
 model: `make eval-record` answers the golden set with it.
 
-`make eval-record` (S050) records the evaluation: about 60 chat calls
-through a gateway in live mode on this laptop (the 14 golden claims that
-ask the model and the judge's question for each answer, for the committed
-prompt and for a variant), and the files under `data/evaluation/` are
-rewritten. The embeddings stay simulated in that run. A sixth test asks
-for the output cap: 1,024 tokens came back in 10.1 s on 2026-10-03, half
-the 20 s read limit (T-45). The whole run was measured at EUR 0.12, and
-its output goes through the same filters as `make gateway-live`.
+`make eval-record` (S050) records the evaluation: 55 chat calls through a
+gateway in live mode on this laptop (27 for the committed prompt and 27
+for a variant: the model's question for each of the 14 golden claims that
+ask it and the judge's question for each answer it could judge, and one
+probe of the output cap), and the files under `data/evaluation/` are
+rewritten. The embeddings stay simulated in that run. The probe asks for
+the output cap: 1,024 tokens came back in 10.1 s on 2026-10-03, half the
+20 s read limit (T-45). The whole run was measured at EUR 0.12, and its
+output goes through the same filters as `make gateway-live`. Since S071
+the run's gateway holds a ceiling of its own, a monthly budget of EUR 0.50
+for each of the two tenants the run charges (so EUR 1.00 at most, which is
+not the committed registry's), and the run refuses to start without it.
+
+`make eval-injection-record` (S071) answers the injection cases the
+committed baseline says reach the model, through the same door: 52 chat
+calls on 2026-10-07 (40 attacks and 12 benign cases), about EUR 0.12
+expected, with a ceiling of EUR 0.50 on the one tenant it charges. It is
+built and tested with a fake provider and has not been run: it spends
+money, and the owner's yes to a stated cost comes first.
 
 The gateway on kind stays in replay mode: a pod there has no Azure identity.
 Workload identity for a pod in AKS is written as code in
@@ -285,10 +296,13 @@ owner runs it by hand from `infra/terraform/foundation` after
   never applied) adds private endpoints for the vault and the account and an
   audit-log setting on the vault, but it closes nothing: the three stay
   reachable from the internet, protected by Entra ID and RBAC only, and the
-  vault would receive the database administrator's password. A firewall is an
-  open decision of the owner's, to be made before any apply (see the module's
-  README and T-104). The laptop's IP changes, which is why an allow list is
-  not used.
+  vault would receive the database administrator's password. A firewall was
+  decided by the owner on 2026-10-08 (default deny, the operator's address
+  allowed, private endpoints for the cluster); it is designed and not written,
+  and the foundation as applied has none (see the module's README and T-104).
+  The laptop's IP changes, which was why an allow list was not used: a changed
+  address will lock the operator out, once it is written, until the variable
+  is corrected.
 - Terraform in CI and GitHub OIDC federation: S022. Nothing here stores a
   credential.
 - The ephemeral platform environment (virtual network, AKS, ACR, PostgreSQL
