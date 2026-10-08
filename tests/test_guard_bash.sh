@@ -168,6 +168,10 @@ trap 'rm -f "$big_input"' EXIT
 # regression guards. A ratio against a baseline shape was the other form and
 # is not used: its baseline is itself a measurement of the loaded machine.
 cpu_bound=3
+# Read the bound with the hosted runner in mind: on 2026-10-08 the same shapes took
+# 1.8 to 2.3 times as long in CI as on the development machine, so a shape must
+# stay under about 1.4 s there to pass here (S020's worst shape took 1.8 s locally
+# and 3.3 s in CI before its tokeniser was made linear).
 # The command is nine thousand segments, not a heredoc: a heredoc written to a
 # file is stripped before any pattern, and cheap to read even without the bound.
 jq -nc --arg c "$(for _ in $(seq 9000); do printf 'echo a; '; done)" \
@@ -1051,6 +1055,18 @@ cpu_shape "every trigger word of both passes and the new gates, 3750 escaped quo
 ask_for "that shape followed by a denied part of the new rules is denied" deny \
   "git aws rest record azure- credential MERIDIAN_ python3 make aws- azure-platform-apply azure.sh -S env terraform local.env-azure azure.tfplan azure/.terraform .azure az storage blob login $(repeat "$esc_quote" 3750)$(repeat '&' 100); az storage blob upload --container-name tfstate"
 
+# S020: the hook defines s071_prose_blank a second time once the added blocks hold
+# the blanked copy (it hands that copy out for the command and runs the first
+# definition's line for any other text). The line is repeated there by hand, so it
+# is held against the first definition here: the two must be the same text.
+first_body="$(awk '/^s071_prose_blank\(\) \{/ { getline; print; exit }' "$hook" | sed 's/^[[:space:]]*//')"
+second_body="$(awk '/^  s071_prose_blank\(\) \{/ { f = 1 } f && /^    else$/ { getline; print; exit }' "$hook" | sed 's/^[[:space:]]*//')"
+if [ -n "$first_body" ] && [ "$first_body" = "$second_body" ]; then
+  echo "ok   the second definition of the prose pass repeats the first one's line"
+else
+  echo "FAIL the second definition of the prose pass differs from the first: '${first_body}' against '${second_body}'"
+  fail=1
+fi
 # S020 (GA3): the security review's fixes. The removal behind a runner word is denied
 # and the apply and the plan behind one are asked (the rows hold the shapes; the
 # reasons and the settings are pinned here); the scanner that did not run is asked,

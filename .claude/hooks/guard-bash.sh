@@ -1253,8 +1253,48 @@ BODY = re.compile(
     re.I,
 )
 RANK = {"plan": 1, "apply": 2, "destroy": 3}
+# The quoted pieces of a text, as PIECE.finditer gives them, in linear time. PIECE
+# itself is quadratic on a run of escaped quotes with no closing quote (each quote
+# is tried as an opening and read to the end): 0.12 s for 3,850 of them, twice a
+# scan. An opening that finds no closing fails for every opening up to where its
+# reading stopped (the end of the text, or a backslash before a newline): a
+# reading that starts at a quote inside that stretch stops at the same place.
+QUOTE = re.compile(r"[\x27\"]")
+DQ_RUN = re.compile(r"\"(?:[^\"\\]|\\.)*")
+def pieces_of(text):
+    out = []
+    pos = 0
+    dq_dead = -1
+    sq_dead = False
+    while True:
+        m = QUOTE.search(text, pos)
+        if m is None:
+            return out
+        i = m.start()
+        pos = i + 1
+        if text[i] == "\x27":
+            if sq_dead:
+                continue
+        elif i < dq_dead:
+            continue
+        piece = PIECE.match(text, i)
+        if piece is not None:
+            out.append(piece)
+            pos = piece.end()
+        elif text[i] == "\x27":
+            sq_dead = True
+        else:
+            dq_dead = DQ_RUN.match(text, i).end()
 def scan(text, depth, bad, cfg):
-    masked = PIECE.sub(lambda m: m.group(0)[0] + "x" * (len(m.group(0)) - 2) + m.group(0)[-1], text)
+    pieces = pieces_of(text)
+    parts = []
+    last = 0
+    for m in pieces:
+        parts.append(text[last:m.start()])
+        parts.append(m.group(0)[0] + "x" * (len(m.group(0)) - 2) + m.group(0)[-1])
+        last = m.end()
+    parts.append(text[last:])
+    masked = "".join(parts)
     # A segment is cut at ; & | a newline ( a backtick and at a brace that opens a
     # group ({ followed by a blank). A brace glued to a word (xargs -I{} make, ${MAKE})
     # cuts nothing: the copy cut there and lost the command word of xargs -I{} make.
@@ -1302,7 +1342,7 @@ def scan(text, depth, bad, cfg):
     flag_bad = bad and (names or azure_hit)
     flag_cfg = cfg and (names or azure_hit)
     if depth < 3:
-        for piece in PIECE.finditer(text):
+        for piece in pieces:
             if BODY.search(text, max(0, piece.start() - 80), piece.start()):
                 seg = cuts[bisect.bisect_right(cuts, piece.start()) - 1] + 1
                 if NOEXEC.match(masked, seg):
@@ -1336,6 +1376,31 @@ s020_verb=""
 s020_bad=""
 s020_cfg=""
 s020_noscan=""
+# One prose-blanked copy for all the blocks S020 adds: the pass is a python3 start
+# and a scan of the whole text (0.14 s of CPU on the worst 8 KB shape), and up to
+# four added blocks read it. It is made at the first block that needs it.
+# The S071 block further down asks s071_prose_blank for the same copy of the same
+# text once more. From the moment this copy exists, that function is defined again
+# here: for "$cmd" (which is not assigned after this point) it hands the copy out,
+# and for any other text it runs the one line the function has above ("the quoted
+# values of the message options emptied"), repeated here word for word. So the
+# pass runs once a command, as on main, and the S071 block reads the same text
+# it would have made. The test script holds the two bodies against each other.
+s020_blank=""
+s020_blank_done=""
+s020_blank_once() {
+  [ -n "$s020_blank_done" ] && return 0
+  # shellcheck disable=SC2218  # the first definition, far above; the second follows
+  s020_blank="$(s071_prose_blank "$cmd")"
+  s020_blank_done=1
+  s071_prose_blank() {
+    if [[ "$1" == "$cmd" ]]; then
+      printf '%s' "$s020_blank"
+    else
+      printf '%s' "$1" | python3 -I -c "$s071_prose_py" 2>/dev/null || printf '%s' "$1"
+    fi
+  }
+}
 if [[ "$cmd" == *azure-platform* || "$cmd" == *azure.sh* || ( "$cmd" == *aws-* && "$cmd" == *make* && "$cmd" == *-S* ) ]]; then
   s020_found="$(s020_scan "$cmd")"
   # A normal scan never prints nothing (it prints "- - 0 0"). Nothing back for a
@@ -1350,7 +1415,8 @@ if [[ "$cmd" == *azure-platform* || "$cmd" == *azure.sh* || ( "$cmd" == *aws-* &
   fi
   [[ "$s020_bad" == 1 ]] && decide deny "$s020_assign_deny"
   if [[ "$cmd" == *azure-platform* || "$cmd" == *azure.sh* ]]; then
-    s020_text="$(s071_prose_blank "$cmd")"
+    s020_blank_once
+    s020_text="$s020_blank"
     if [[ "$s020_text" =~ $s020_names_re ]]; then
       [[ "$s020_text" =~ $aws_pty_re ]] && decide deny "$s020_pty_deny"
       [[ "$s020_text" =~ $aws_trace_re ]] && decide deny "$s020_trace_deny"
@@ -1437,7 +1503,8 @@ if [[ ( ( "$cmd" == *terraform* || "$cmd" == *tofu* ) && ( "$cmd" == *azure* || 
       || "$cmd" == *local.env-azure* || "$cmd" == *azure.tfplan* || "$cmd" == *azure/.terraform* \
       || "$cmd" == *.azure* || ( "$cmd" == *.terraform* && ( -n "$ga2_in_module" || "$cmd" == *azure* ) ) \
       || ( "$cmd" == *storage* && "$cmd" == *blob* ) ]]; then
-  ga2_text="$(s071_prose_blank "$cmd")"
+  s020_blank_once
+  ga2_text="$s020_blank"
   if [[ "$cmd" == *terraform* || "$cmd" == *tofu* ]] \
      && [[ "$ga2_text" =~ $ga2_dir_re || -n "$ga2_in_module" ]]; then
     ga2_tf_module=1
@@ -1518,7 +1585,8 @@ ga3_text=""
 ga3_runner=""
 if [[ "$cmd" == *azure-platform-destroy* || "$cmd" == *azure-platform-apply* \
       || "$cmd" == *azure-platform-plan* || "$cmd" == *azure.sh* ]]; then
-  ga3_text="$(s071_prose_blank "$cmd")"
+  s020_blank_once
+  ga3_text="$s020_blank"
   if [[ "$ga3_text" =~ $ga3_runner_re ]]; then
     ga3_runner=1
     [[ "$ga3_text" =~ $ga3_destroy_re ]] && decide deny "$s020_removal_deny If this is a search or a message that only names the removal: run it without a substitution, find -exec, a pipe into a shell or a runner word (ssh, tmux, source, watch and the like) in the same command, or give the text in a file."
@@ -1614,7 +1682,8 @@ identity_gh_re="^[[:space:]]*${ga2_assign}((sudo|time|nohup|command|exec)[[:spac
 identity_ask="This prints the test users' passwords of the local sign-in issuer into the transcript; confirm, or run it in a terminal of your own."
 identity_text="$cmd"
 if [[ "$cmd" == *identity* ]]; then
-  identity_text="$(s071_prose_blank "$cmd")"
+  s020_blank_once
+  identity_text="$s020_blank"
   if [[ "$identity_text" =~ $identity_make_re ]] || [[ "$identity_text" =~ $identity_script_re ]]; then
     decide ask "$identity_ask"
   fi
@@ -2318,7 +2387,7 @@ ga2_az_ask_msg="That changes what the Azure platform wrapper relies on or hands 
 if [[ ( "$cmd" == *"az "* || "$cmd" == *kubelogin* ) \
       && ( "$cmd" == *login* || "$cmd" == *logout* || "$cmd" == *provider* || "$cmd" == *aks* \
            || "$cmd" == *acr* || "$cmd" == *postgres* || "$cmd" == *account* ) ]]; then
-  [ -n "$ga2_text" ] || ga2_text="$(s071_prose_blank "$cmd")"
+  [ -n "$ga2_text" ] || { s020_blank_once; ga2_text="$s020_blank"; }
   while IFS= read -r seg; do
     if [[ "$seg" =~ $ga2_printer_re && "$seg" != *\$\(* && "$seg" != *'`'* && "$seg" != *'<('* ]]; then
       continue
