@@ -19317,8 +19317,30 @@ session's record, 2026-10-08):
   is `main`'s log agent (S064); this branch does not change its values.
 - **A mistake, said:** the session first took the spinning process for the
   collector's and deleted the collector's pod once (03:01 UTC); its
-  Deployment made another, which is calm, as the first was. Nothing else on
-  the cluster was changed by hand.
+  Deployment made another, which is calm, as the first was.
+- **A second freeze, and the owner's reboot** (2026-10-08 03:28 to 03:44
+  UTC). The session started this branch's suite again, alone this time, on
+  a check of `available` memory (4.2 GB) while swap was full from the
+  evening. The machine froze within a minute, the kernel's out-of-memory
+  killer fired twice, and the owner rebooted it. Measured afterwards: the
+  cluster's node container holds about 5 GB of the machine's 11.4 and has no
+  memory limit; the sessions and their tools about 2.5 GB; and the whole
+  suite with coverage needs about 5.5 GB at its peak, so the two never fit
+  together and every earlier suite had pushed gigabytes into swap. The owner
+  decided the same hour ("Stop cluster during suite"): a whole suite runs
+  with the cluster's node container stopped, inside a memory-capped scope
+  with a watchdog, and the cluster is started again after. The suite in the
+  change log's entry ran that way (lowest available memory 2.8 GB, the
+  cluster back with every pod Ready 90 seconds after its start). The stop
+  is not clean yet: `docker stop` waited its full 90 seconds for the node.
+- **The log agent's disk load** (the backlog row, home S073, has it): after
+  the reboot all memory pressure on the machine was in the log agent's pod,
+  which sat at its memory limit and read about 2 GB a second, 97 % of the
+  cluster's reads, re-reading 20 MB of log files. It is PAUSED on the local
+  cluster by hand since 03:56 UTC (a node selector no node has; no log
+  reaches Loki meanwhile and smoke's log-agent lines would fail) until its
+  fix is in. Disk reads fell to a few MB a second.
+- Nothing else on the cluster was changed by hand.
 
 **What is left of the third part:** the whole suite, the secret scan and the
 pull request (the run on the tip with M5 in is R18, under "Not seen" above);
@@ -22224,7 +22246,7 @@ baselines are the moment to read the grants from a catalog.
   from the migration files' statements and agree with ADR 10's table. One
   backlog row is new, homed at S085: S084 to S087 change these arrows, and
   S087 reads the grants from a catalog.
-- **PLAN-VERSION, 2026-10-07:** S072 `doing`, the third part, the writers'
+- **v0.91, 2026-10-08:** S072 `doing`, the third part, the writers'
   client certificates (the owner's "Build client certificates", about 13:20
   UTC, and for Prometheus "Gateway in front, as for Loki", about 15:42, which
   reverse the first part's "the three hops stay clear text"): the collector
@@ -22246,6 +22268,11 @@ baselines are the moment to read the grants from a catalog.
   closed path presented with the collector's certificate. The kind README,
   the operations README, two runbooks, T-68, T-84 and T-90, the data
   classification (one row) and the root README brought to it; no threat row
-  is added, so the header's counts stand. Eight backlog rows are new, each
-  with a home, and one is S080's (the download's permit). The whole suite:
-  FINAL-SUITE-RESULT.
+  is added, so the header's counts stand. Ten backlog rows are new, each
+  with a home (the last two: the log agent that spins and reads the disk,
+  found after R18, and the final check's lows), and one more is S080's (the
+  download's permit). The development machine froze twice while this part
+  was closed, both times through the session's own doing (the section says
+  how and what changed). The whole suite, run alone on 2026-10-08 with the
+  cluster's node container stopped for its length: `22437 passed, 9 skipped,
+  8 warnings in 226.49s (0:03:46)`, coverage 99.14 %.
