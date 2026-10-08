@@ -89,7 +89,7 @@ to go on.
   yours: check its holder first (`make cluster-holder`), run its commands from
   the checkout the row names, and say when you delete or recreate it. With "no
   cluster", no `kubectl`, `helm` or `make up`, `deploy`, `smoke`, `demo`,
-  `down`.
+  `demo-seed`, `down`.
 - The locked targets are `make pytest`, `make pytest-db` and `make alerts`
   (`make eval` through `pytest-db`); pass `PYTEST_WORKERS=4` and the paths in
   `PYTEST_ARGS`. One test FILE by hand (`uv run pytest <file> -n 4`) is fine

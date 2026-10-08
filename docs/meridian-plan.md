@@ -342,7 +342,7 @@ most one running step may hold each:
 
 | Lane | A step is in it when it | Why only one |
 |---|---|---|
-| Cluster | runs `make up`, `make deploy`, `make smoke` or `make demo`, or changes what they deploy or check | One kind cluster; a second step's deploy changes what the first is verifying |
+| Cluster | runs `make up`, `make deploy`, `make smoke`, `make demo` or `make demo-seed`, or changes what they deploy or check | One kind cluster; a second step's deploy changes what the first is verifying |
 | Database | adds a migration | One sequence of numbers; a test database is built from every packaged file |
 | Evaluation | changes a prompt, the triage graph, a tool's contract, a guardrail screen, the golden set or an injection case | One set of recorded answers and baselines |
 
@@ -369,10 +369,10 @@ sessions; the brief of each step, or of each session, says:
 
 - **What is shared, and who owns it.** There is one kind cluster and one
   Azure environment: one session owns them, and the others run no
-  `make deploy`, `make demo`, `make down`, `make azure-state` or
-  `make azure-apply`. There is one set of recorded model answers: only one
-  session at a time changes a prompt or the triage graph, since that needs
-  `make eval-record`.
+  `make deploy`, `make demo`, `make demo-seed`, `make down`,
+  `make azure-state` or `make azure-apply`. There is one set of recorded
+  model answers: only one session at a time changes a prompt or the triage
+  graph, since that needs `make eval-record`.
 - **Who holds the cluster is recorded** (S075). One step holds the kind
   cluster at a time. The cluster records its holder and the state of its
   last run (`make cluster-holder` prints them): a run of `make up` or

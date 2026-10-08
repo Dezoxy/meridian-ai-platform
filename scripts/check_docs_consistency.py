@@ -211,7 +211,7 @@ def check_docs_index(f: Failures) -> None:
     indexes = {DOCS_INDEX: read(DOCS_INDEX), ARCH_INDEX: read(ARCH_INDEX)}
     for doc in sorted((REPO / "docs").rglob("*.md")):
         parts = doc.relative_to(REPO).parts
-        if doc in indexes or SKIP_DIRS & {*parts} or {"decisions", "plan"} & {*parts}:
+        if doc in indexes or {*SKIP_DIRS, "decisions"} & {*parts} or parts[1] == "plan":
             continue
         linked = any(
             (index.parent / link.split("#")[0]).resolve() == doc.resolve()

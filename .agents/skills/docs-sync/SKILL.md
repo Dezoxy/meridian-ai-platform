@@ -115,7 +115,7 @@ of those goes stale silently when something is added or renamed.
    - Do NOT restyle prose, reorganize docs, or "improve" things that are merely
      imperfect.
    - **Historical text describes what WAS true.** ADRs, the plan's closed
-     step sections, the plan changelog and dated compliance memos record their
+     step files, its closed backlog rows and dated compliance memos record their
      moment. Supersede with a new ADR, append a dated note, strike through in
      the plan — never rewrite history to match the present.
 
