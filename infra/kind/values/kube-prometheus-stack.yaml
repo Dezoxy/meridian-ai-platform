@@ -118,6 +118,21 @@ grafana:
       check_for_updates: false
   testFramework:
     enabled: false
+  # The telemetry authority's public certificate, for the Loki datasource below
+  # (S072, contract M3) and the Prometheus one (contract M4): one environment
+  # variable for each, both from the ConfigMap telemetry-ca in this namespace (key
+  # ca.crt), which up.sh publishes before this release. Two names for one
+  # certificate, so that neither datasource reads a variable that names the other
+  # store's gateway.
+  envValueFrom:
+    LOKI_GATEWAY_CA:
+      configMapKeyRef:
+        name: telemetry-ca
+        key: ca.crt
+    PROMETHEUS_GATEWAY_CA:
+      configMapKeyRef:
+        name: telemetry-ca
+        key: ca.crt
   # Grafana 13 peaks at start while it migrates its database and provisions
   # the chart's dashboards; 320Mi was OOM-killed once on a clean `make up`.
   resources:
@@ -153,13 +168,40 @@ grafana:
     datasources:
       searchNamespace: observability
       resource: configmap
-      # Prometheus keeps the chart's default datasource, uid "prometheus".
-      # Alertmanager is off, so its datasource would point nowhere.
+      # The chart's default datasource for Prometheus is off (S072, contract M4):
+      # its template (templates/grafana/configmaps-datasources.yaml) has no field
+      # for secureJsonData, so it cannot hold the certificate of the authority
+      # that the gateway's TLS needs, and the Prometheus datasource is declared in
+      # additionalDataSources below with the chart's own uid, name, default flag,
+      # method and interval. Alertmanager is off, so its datasource would point
+      # nowhere.
+      defaultDatasourceEnabled: false
       alertmanager:
         enabled: false
   # Provisioned datasources with fixed uids; smoke.sh and future dashboards
   # refer to them by uid. In Grafana provisioning "$$" writes a literal "$".
   additionalDataSources:
+    # Prometheus is read through its gateway (S072, contract M4), over TLS and with
+    # NO client certificate, as Loki is below: the gateway serves the reads to a
+    # client that presents none and answers 403 on the OTLP path, so Grafana holds
+    # nothing that writes. What the chart's own datasource had, kept because smoke
+    # (checks 5, 7 and 11 read `uid/prometheus` through Grafana's proxy) and the
+    # chart's dashboards bind to them: the name, the uid `prometheus`, the default
+    # flag (the only one), POST for the queries (so the gateway decides by path,
+    # never by method) and the interval of the chart's default (30s, the scrape
+    # interval of the Prometheus resource, which this file leaves unset).
+    - name: Prometheus
+      uid: prometheus
+      type: prometheus
+      access: proxy
+      isDefault: true
+      url: https://prometheus-gateway.observability.svc.cluster.local:8443
+      secureJsonData:
+        tlsCACert: $PROMETHEUS_GATEWAY_CA
+      jsonData:
+        httpMethod: POST
+        timeInterval: 30s
+        tlsAuthWithCACert: true
     - name: Tempo
       uid: tempo
       type: tempo
@@ -174,12 +216,26 @@ grafana:
           filterBySpanID: false
           customQuery: true
           query: '{service_name=~".+"} | trace_id="$${__span.traceId}"'
+    # Loki is read through its gateway (S072, contract M3), over TLS and with NO
+    # client certificate: the gateway serves the reads to a client that presents
+    # none and answers 403 on the paths that write, so Grafana holds nothing that
+    # writes. Grafana trusts the telemetry authority for this datasource only, by
+    # `tlsAuthWithCACert` and the authority's public certificate in `tlsCACert`;
+    # provisioning expands `$LOKI_GATEWAY_CA` from the environment (the same
+    # expansion that makes "$$" a literal "$" above), and the environment gets it
+    # from the ConfigMap telemetry-ca that up.sh publishes in observability
+    # (grafana.envValueFrom): a public certificate, never the gateway's or the
+    # collector's Secret. That the expansion applies to this secure field is seen
+    # only on the cluster.
     - name: Loki
       uid: loki
       type: loki
       access: proxy
-      url: http://loki.observability.svc.cluster.local:3100
+      url: https://loki-gateway.observability.svc.cluster.local:8443
+      secureJsonData:
+        tlsCACert: $LOKI_GATEWAY_CA
       jsonData:
+        tlsAuthWithCACert: true
         derivedFields:
           - name: trace_id
             matcherType: label

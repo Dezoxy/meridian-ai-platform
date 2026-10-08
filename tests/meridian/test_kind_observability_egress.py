@@ -41,15 +41,18 @@ from test_kind_namespace_policies import (
     CERT_MANAGER_FILE,
     GRAFANA,
     LOKI,
+    LOKI_GATEWAY,
     MANIFESTS,
     OBSERVABILITY_FILE,
     OPERATOR,
     PROMETHEUS,
+    PROMETHEUS_GATEWAY,
     STATE_METRICS,
     TEMPO,
     VALUES,
     dns_rule,
     header_of,
+    observability_policies,
     pods,
     policies_of,
     selected,
@@ -90,13 +93,27 @@ RENDERED_MONITORS = {
 }
 # What the whole policy file may name as a port: a port that is not in this set
 # was added by someone and is a reason to read what it is for.
-EXPECTED_PORTS = {53, 3000, 3100, 3200, 4317, 6443, 7946, 8080, 9090, 9153, 9402, 10250}
+EXPECTED_PORTS = {
+    53,
+    3000,
+    3100,
+    3200,
+    4317,
+    6443,
+    7946,
+    8080,
+    8443,
+    9090,
+    9153,
+    9402,
+    10250,
+}
 
 
 def egress_policies() -> dict[str, dict]:
     return {
         name: policy
-        for name, policy in policies_of(OBSERVABILITY_FILE).items()
+        for name, policy in observability_policies().items()
         if "Egress" in policy["spec"]["policyTypes"]
     }
 
@@ -141,7 +158,7 @@ def test_egress_is_denied_for_every_pod_of_the_namespace_by_default() -> None:
 
 
 def test_each_policy_of_the_file_has_one_direction_and_the_set_is_known() -> None:
-    policies = policies_of(OBSERVABILITY_FILE)
+    policies = observability_policies()
 
     assert set(egress_policies()) == {
         "default-deny-egress",
@@ -150,7 +167,11 @@ def test_each_policy_of_the_file_has_one_direction_and_the_set_is_known() -> Non
         "egress-prometheus",
         "egress-grafana",
         "egress-otel-collector",
+        "egress-loki-gateway",
         "egress-loki",
+        "egress-prometheus-gateway",
+        "smoke-telemetry-probe",
+        "smoke-telemetry-probe-prometheus",
     }
     for name, policy in policies.items():
         assert policy["metadata"]["namespace"] == "observability", name
@@ -264,7 +285,7 @@ def prometheus_rule_to(namespace: str | None, labels: dict[str, str]) -> list[di
 
 
 def test_prometheus_may_reach_each_pod_that_its_ingress_rule_lets_it_scrape() -> None:
-    policies = policies_of(OBSERVABILITY_FILE)
+    policies = observability_policies()
     prometheus = egress_policies()["egress-prometheus"]
     assert selected(prometheus) == PROMETHEUS
 
@@ -422,10 +443,14 @@ def test_the_collector_may_reach_the_three_stores_its_exporters_name() -> None:
     }
 
     assert selected(policy) == collector_labels
-    assert ports == {"tempo": 4317, "prometheus": 9090, "loki": 3100}
+    # Logs go to Loki's gateway, not to Loki's own port (S072, contract M3), and
+    # metrics to Prometheus's gateway, not to Prometheus's (contract M4).
+    assert ports == {"tempo": 4317, "prometheus": 8443, "loki": 8443}
     assert reaches_pods(policy, TEMPO, ports["tempo"])
-    assert reaches_pods(policy, PROMETHEUS, ports["prometheus"])
-    assert reaches_pods(policy, LOKI, ports["loki"])
+    assert reaches_pods(policy, PROMETHEUS_GATEWAY, ports["prometheus"])
+    assert reaches_pods(policy, LOKI_GATEWAY, ports["loki"])
+    assert not reaches_pods(policy, LOKI, 3100)
+    assert not reaches_pods(policy, PROMETHEUS, 9090)
     # Those three and nothing else.
     assert {p for rule in rules(policy, "egress") for p in ports_of(rule)} == set(
         ports.values()
@@ -442,16 +467,41 @@ def test_grafana_may_reach_prometheus_tempo_and_loki_on_the_datasources_ports() 
     policy = egress_policies()["egress-grafana"]
 
     assert selected(policy) == GRAFANA
-    assert sources == {"Tempo": 3200, "Loki": 3100}
+    assert sources == {"Prometheus": 8443, "Tempo": 3200, "Loki": 8443}
     assert reaches_pods(policy, TEMPO, sources["Tempo"])
-    assert reaches_pods(policy, LOKI, sources["Loki"])
-    # The chart's own datasource for Prometheus is port 9090 (the render).
-    assert reaches_pods(policy, PROMETHEUS, 9090)
+    # Grafana reads Loki through its gateway, never on Loki's own port.
+    assert reaches_pods(policy, LOKI_GATEWAY, sources["Loki"])
+    assert not reaches_pods(policy, LOKI, 3100)
+    # And Prometheus through its gateway, never on Prometheus's own port (the
+    # chart's own datasource, 9090, is off: contract M4).
+    assert reaches_pods(policy, PROMETHEUS_GATEWAY, sources["Prometheus"])
+    assert not reaches_pods(policy, PROMETHEUS, 9090)
     assert {p for rule in rules(policy, "egress") for p in ports_of(rule)} == {
-        9090,
-        3100,
+        8443,
         3200,
     }
+    assert len(rules(policy, "egress")) == 3
+
+
+def test_loki_s_gateway_may_reach_loki_and_nothing_else() -> None:
+    policy = egress_policies()["egress-loki-gateway"]
+
+    assert selected(policy) == LOKI_GATEWAY
+    # One rule: Loki's own pods on 3100. DNS is `egress-dns`'s, for every pod.
+    assert rules(policy, "egress") == [
+        {"to": [pods(LOKI)], "ports": [{"port": 3100, "protocol": "TCP"}]}
+    ]
+
+
+def test_prometheus_s_gateway_may_reach_prometheus_and_nothing_else() -> None:
+    policy = egress_policies()["egress-prometheus-gateway"]
+
+    assert selected(policy) == PROMETHEUS_GATEWAY
+    # One rule: Prometheus's own pods on 9090. DNS is `egress-dns`'s, for every pod
+    # (the upstream is static: nginx resolves its name once, when it starts).
+    assert rules(policy, "egress") == [
+        {"to": [pods(PROMETHEUS)], "ports": [{"port": 9090, "protocol": "TCP"}]}
+    ]
 
 
 def test_loki_may_reach_its_own_pods_on_the_memberlist_port_it_joins_through() -> None:
@@ -470,7 +520,7 @@ def test_loki_may_reach_its_own_pods_on_the_memberlist_port_it_joins_through() -
 
 
 def test_each_egress_rule_to_a_pod_of_the_namespace_meets_an_ingress_rule() -> None:
-    policies = policies_of(OBSERVABILITY_FILE)
+    policies = observability_policies()
     ingress = {
         name: policy
         for name, policy in policies.items()
@@ -478,6 +528,13 @@ def test_each_egress_rule_to_a_pod_of_the_namespace_meets_an_ingress_rule() -> N
     }
     checked = 0
     for name, policy in egress_policies().items():
+        if name in ("smoke-telemetry-probe", "smoke-telemetry-probe-prometheus"):
+            # The egress rules that have NO ingress half, on purpose: they give
+            # smoke's probe Pod a path to Loki's own port and to Prometheus's so
+            # that the refusal it sees is the store's ingress rule, not the sender's
+            # egress (the rate-store line's lesson). Their tests are in
+            # test_telemetry_loki_gateway.py and test_telemetry_prometheus_gateway.py.
+            continue
         source = policy["spec"]["podSelector"].get("matchLabels")
         for rule in rules(policy, "egress"):
             for entry in entries_of(rule):
@@ -499,8 +556,9 @@ def test_each_egress_rule_to_a_pod_of_the_namespace_meets_an_ingress_rule() -> N
                     )
                     assert admitted, f"{name}: {destination} {port} is not admitted"
                     checked += 1
-    # Prometheus 3, the collector 3, Grafana 3, Loki 2: every rule has its other half.
-    assert checked == 3 + 3 + 3 + 2 + 0
+    # Prometheus 3, the collector 3, Grafana 3, Loki 2, Loki's gateway 1 and
+    # Prometheus's gateway 1: every rule has its other half.
+    assert checked == 3 + 3 + 3 + 2 + 1 + 1
 
 
 # ── up.sh fills the placeholder, as it does the other two files' ─────────────

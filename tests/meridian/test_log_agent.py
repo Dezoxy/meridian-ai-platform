@@ -190,13 +190,13 @@ def test_up_applies_the_agents_policy_before_the_first_release_and_the_agent() -
     assert POLICY_FILE.is_file()
 
 
-def test_the_authority_is_published_to_meridian_and_to_logging_by_one_function() -> (
-    None
-):
+def test_the_authority_is_published_to_its_namespaces_by_one_function() -> None:
     body = up_function("publish_telemetry_ca")
     lines = script_lines()
 
-    assert re.search(r"for namespace in meridian logging; do", body)
+    # `meridian` for the services, `logging` for the log agent, and (S072,
+    # contract M3) `observability` for Grafana's environment.
+    assert re.search(r"for namespace in meridian logging observability; do", body)
     assert lines.count("publish_telemetry_ca") == 1
     assert "-n meridian" not in body and "-n logging" not in body
     assert "configmap telemetry-ca" in body

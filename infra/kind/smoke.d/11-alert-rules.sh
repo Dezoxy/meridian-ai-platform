@@ -1,6 +1,7 @@
 # shellcheck shell=bash
 #  11. alert rules and health dashboard: four lines, read-only (S062), run
-#                 last. Three lines read Prometheus' /api/v1/rules through
+#                 after the first ten (check 12 follows it, S072). Three
+#                 lines read Prometheus' /api/v1/rules through
 #                 Grafana's datasource proxy (the port-forward of check 4) for
 #                 the PrometheusRule `meridian` that `make up` applies. The
 #                 five groups of infra/kind/alerts/meridian.yaml are loaded and

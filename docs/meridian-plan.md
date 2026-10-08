@@ -566,7 +566,7 @@ both readings the same hour ("yes both are right, go on").
 | S069 | Runtime and gateway edges | Without a change to a prompt or a rule: a validation error in the triage's two answers logs the field; the tool-call limits can differ by agent, or the plan says why not; a failed resumed leg does not leave the first leg's value to be read as the answer; `drafted_by` is right for a completion the filter withheld and the provider billed; the runtime's client of the gateway is bounded per call; a resumed leg that outlived its lease cannot write over the leg that took the run; `service_url_problem` refuses what the HTTP client refuses; a shed tool call's audit row names its run where that can be checked; the refusal flood's count covers the caller check and the throttles; an embedding input is bounded in tokens; the health check watches the certificate the server loaded; the ingestion's data class has a tenant of its own (T-60, the owner's decision when the step opens). Cut in two on 2026-10-06 (the design in Part C): a first half with no lane, and a second half on the cluster, the server's certificate and the health check (R11) and the ingestion's tenant (R12, which the owner decides at S020). Built as, first half (2026-10-07; implemented and tested, none of it run on a cluster, no real provider called): the Claims API logs the failed fields of the runtime's answer, of the triage proposal and of the brief's output, and counts a stored proposal as stored; a leg ends its run only over the `updated_at` its own start or claim wrote, with no new column, and a late leg answers the stored status with no output; a resume that carries a value is refused with a 422; the runtime's call to the gateway has a deadline of 30 s as a whole, a timeout per phase, a reply cap of 1 MiB and `Accept-Encoding: identity`; a refused prompt and a withheld completion are told apart on the wire (`X-Meridian-Completion: withheld` and three headers naming the deployment) and the withheld one has its drafter on record; `service_url_problem` also asks the HTTP client; a shed tool call's row names its run where the run's own row can be read; every service writes the summary of a refusal flood's last window through one writer; a module that exits at import is a failed load; the access log's path is unquoted to a fixed point and loses a userinfo part; the scaffold names the host; the tool span names its step. Not built, each as a decision with its reason in the section: limits per agent (R2), an embedding bound in tokens (R10), a ceiling on the rate limits (B13), a breaker shared between processes (B14), one word for the two limits (B18), a holder column and the second host's scaffold. Built as, second half (2026-10-07; implemented and tested, and seen on kind in two runs, K1 and K2): the five services that serve TLS start through `python -m meridian.platform.common.tlsstart`, which reads the certificate once, for uvicorn's own context and for the health check, so `/healthz` watches the certificate the server loaded (R11); the module refuses a start that would not ask for a client certificate and ends a start it cannot make with one `tlsstart:` line and exit status 3; K1 saw the 422 for a resume that carries a value, one `suppressed` row from each of the five services that keep a throttle and the access log's path for an address encoded twice, and K2 saw the deploy, the served certificates of four of the five equal to the issued ones, a renewal and a restart, and smoke's 46 lines twice | doing: both halves are built and seen on kind (2026-10-07); left: R12 for the owner's decision at S020, what no kind run could show (the withheld completion's four headers, which S071 measures; a shed call's row, a takeover past the lease and `not-started`; the module's refusal line, the race itself and a renewal that splits OpenSSL's two opens), smoke's line for the sweep's findings, and the new rows of the second half | S064, S037 |
 | S070 | Claims intake and what the adjuster is told | Uploads (T-38: the largest item here) are a step of their own, S080, split off when the owner chose on 2026-10-07 to build them ("Build now"); this step no longer holds them; a report dated as a recent loss is seen for what it is, or T-66 says why it cannot be; the adjuster's page marks a recommendation that rests on the model's answer, so a steered model's `approve` does not read as the rules'. Built as, first half (2026-10-07; implemented and tested against PostgreSQL and in the pages' own tests, none of it run on a cluster, nothing paid, no fingerprint moved): the adjuster's claim page says beside a recommendation whether it rests on a model's reading of the exclusion clauses or on the rules alone, and the queue marks it in a column, from one function over the stored fields (no new field, no migration); it reaches the 6 steered recommendations that wait for an adjuster and not the 28 automatic approvals, which no page lists; the page labels the loss date and the report date as not checked and shows two gaps in days, with no rule or bound, and T-66 says why; the claimant's name pattern is built from a read before the claim's row is locked and only for a request the claim can go on with, so a refused request pays no compile (a stale page and a documents post past the cap still do); the redaction is split into six modules by a proven move; the differential test classifies every lost run, its generator writes the forms it lacked and both date guards are pinned from both sides; the e-mail pass reads its placeholder from the mapping; and an international Hungarian phone number is cut at a space before a second number, in a form narrowed after a review (R3b) and narrowed again after a second (R3c, 951b72c), so that it turns the plain shape and not every text the row quoted. Not built here, each with its reason in the section: uploads (S080's: the owner decided to build them), a bound on what a name may replace, a reorder of the assessor's checks, the wider cut of a dotted number with a `06` group and a third date guard (the owner's questions), and the fix of three known leaks of the phone matcher | doing: the first half is done (R3c and its review stand; the whole suite is the main session's); four questions of the owner's are open (a fifth, uploads, was answered on 2026-10-07 and S080 holds them), and the second half holds what the owner decides; so far it has built, with no word of the owner's, the property test's missing forms, the queue's judgment of a stored proposal by the claim page's function with a received time refused when it has no zone, and one shaped 500 for an answer that cannot be built after the proposal is stored (the section), and it did not build `drafted_by`, which waits for the owner | S067 |
 | S071 | Measurements that need a live model | Costs money (about fifty chat calls and some embedding calls; the owner says yes before any, and the amount is stated first): a real model's answers to the injection cases the screen lets through, recorded beside the golden recording; a model's refusal of a structured request seen from a real provider; retrieval measured with a real embedding, in the evaluation and in S038's one failing check; the judge compared with labels a person wrote for a sample; a held-out set for the injection screen, and a decision on what a false alarm may cost; CLM-0034's `unsure` settled by a prompt or recorded as the right answer; retrieval over a graph measured again only if the synthetic data gains something relational to find | todo | S067 |
-| S072 | The cluster outside `meridian`, second round | On kind: the Prometheus and CloudNativePG operators' reach into Secrets and ConfigMaps of every namespace is narrowed or recorded as accepted with its reason; DNS and the collector cannot carry data out unseen (T-84), or the residual is stated; writes to Prometheus and Loki pass a policy, and the three hops behind the collector are encrypted or the plan says why not; egress from `observability` and the admission webhooks' port are bounded; `cnpg-system` and `envoy-gateway-system` have Pod Security labels and a policy; the owner decides whether node-exporter stays off; Tempo mounts no API token | doing: the first part is on `main` (2026-10-07; implemented and tested, and seen on a warm cluster by run R8 in the limits the section gives: both pods run with no token, the labels applied, smoke's 46 lines and the 21 rules passed, the Certificates Ready but issued before under the old policy; the cold run R9 then approved all eight under the exact lists from nothing): Tempo's and Loki's pods mount no service-account token (three keys); the namespaces of the CloudNativePG operator and of Envoy Gateway warn and audit at Pod Security `restricted` from a render (the gateway's namespace confirmed by the API server's dry run with its proxy pod running, R9; the operator's namespace is gone); the certificate policy for the services names the eight URIs and six DNS names the chart renders, not a wildcard; an alert on the rate store's restart loop. The documents record the four accounts that read Secrets in every namespace (not two), the accepted reaches, the residuals and the one measurement (seen on kind: the API server's calls arrive from the node's address on the pod network and pass a default-deny ingress). The cluster batch is written in files, tested without a cluster and seen on kind by the cold run R9 (2026-10-07, 11:08 to 11:17 UTC, from the batch's commit; five contracts, W, E, C, N and S, and the fix contract F2; not seen: the guard, the fall-backs, a webhook failing closed, Loki's usage report refused, the four other pods of the node rule on the kubelet's port): no pod reaches the webhooks' port 10250 but Prometheus, on the operator's; egress from `observability` is denied by default and admitted by rule; the CloudNativePG operator is released into `meridian` under `config.clusterWide=false` and a policy of its own (`cnpg-system` is gone); `envoy-gateway-system` is denied by default and admitted by rule, and `make deploy` refuses a cluster without the operator's policy; smoke compares a Deployment's name as text. The infrastructure review of the batch is in (nothing critical or high; four medium findings answered by F2); left: the merge of `main`, the whole suite and the pull request, and the rows (the cluster on this machine is the one made from the batch's commit: no `make up` from `main` on it until the batch is merged); the owner decides the writes clause and node-exporter (stays off) | S064, S066 |
+| S072 | The cluster outside `meridian`, second round | On kind: the Prometheus and CloudNativePG operators' reach into Secrets and ConfigMaps of every namespace is narrowed or recorded as accepted with its reason; DNS and the collector cannot carry data out unseen (T-84), or the residual is stated; writes to Prometheus and Loki pass a policy, and the three hops behind the collector are encrypted or the plan says why not; egress from `observability` and the admission webhooks' port are bounded; `cnpg-system` and `envoy-gateway-system` have Pod Security labels and a policy; the owner decides whether node-exporter stays off; Tempo mounts no API token | doing: the first part is on `main` (2026-10-07; implemented and tested, and seen on a warm cluster by run R8 in the limits the section gives: both pods run with no token, the labels applied, smoke's 46 lines and the 21 rules passed, the Certificates Ready but issued before under the old policy; the cold run R9 then approved all eight under the exact lists from nothing): Tempo's and Loki's pods mount no service-account token (three keys); the namespaces of the CloudNativePG operator and of Envoy Gateway warn and audit at Pod Security `restricted` from a render (the gateway's namespace confirmed by the API server's dry run with its proxy pod running, R9; the operator's namespace is gone); the certificate policy for the services names the eight URIs and six DNS names the chart renders, not a wildcard; an alert on the rate store's restart loop. The documents record the four accounts that read Secrets in every namespace (not two), the accepted reaches, the residuals and the one measurement (seen on kind: the API server's calls arrive from the node's address on the pod network and pass a default-deny ingress). The cluster batch is written in files, tested without a cluster and seen on kind by the cold run R9 (2026-10-07, 11:08 to 11:17 UTC, from the batch's commit; five contracts, W, E, C, N and S, and the fix contract F2; not seen: the guard, the fall-backs, a webhook failing closed, Loki's usage report refused, the four other pods of the node rule on the kubelet's port): no pod reaches the webhooks' port 10250 but Prometheus, on the operator's; egress from `observability` is denied by default and admitted by rule; the CloudNativePG operator is released into `meridian` under `config.clusterWide=false` and a policy of its own (`cnpg-system` is gone); `envoy-gateway-system` is denied by default and admitted by rule, and `make deploy` refuses a cluster without the operator's policy; smoke compares a Deployment's name as text. The infrastructure review of the batch is in (nothing critical or high; four medium findings answered by F2); left: the merge of `main`, the whole suite and the pull request, and the rows (the cluster on this machine is the one made from the batch's commit: no `make up` from `main` on it until the batch is merged); the owner decides the writes clause and node-exporter (stays off). S072, 2026-10-07, third part (the owner's "Build client certificates" and "Gateway in front, as for Loki", which reverse the first part's "the three hops stay clear text"; the batch above was merged as pull request 120, so its "left" is history): the collector has a client certificate of the telemetry authority (the common name `otel-collector-client`, one policy that allows only it) and its three hops are TLS 1.3 with it: Tempo's receiver demands it at the handshake, Loki and Prometheus are each behind an nginx that is the only way in (reads need no certificate, one write path needs the collector's subject, everything else answers 403 whatever the certificate), and Loki's and Prometheus's own ports admit the gateways alone; nine certificate policies, smoke's check 12 of ten lines, 56 lines in all after a deploy. Implemented and tested, and seen on kind by R14 (Tempo), R15 and R16b (Loki) and R17 (Prometheus and the whole: `make up` warm in 51 s, smoke 56 of 56, ten writes accepted under the collector's name), in the limits the section's third part gives; not seen: a renewal of any of these certificates, a cold `make up` of the branch, Grafana's pages in a browser, a closed path presented with the collector's certificate. The step stays `doing`: this part is on the branch `s072-writers-mtls` with no pull request yet, the owner has not answered on node-exporter, and the rows homed here that gate nothing wait for the closing record, which re-homes them | S064, S066 |
 | S073 | Renewals, upgrades and what smoke cannot see | On kind: a renewal is seen for the collector's certificate and the database's, and something alerts before the database's end; the services do not all restart in the same minute at a renewal; approver-policy is restarted when it hangs, and a repaired policy does not wait an hour for cert-manager's retry; a first install that fails has a way back that was tried; the chart bounds its rollback history and `make images` says what to remove; the scripts' `kubectl` calls have a request timeout; a manual sweep Job does not hide a stopped schedule; the failure paths of smoke's newer lines are seen once on a cluster with something broken on purpose; the line that reads approver-policy's wording says so when it fails; probes that time out under load have a recorded answer for the machine the cluster runs on now | doing: the first half is done (2026-10-07: the builds and the runs R0 to R4e, with the answer for the machine recorded); the second half is under way (runs R5a, R5b, R7, R8, R9a, R9, R10 and R11 of 2026-10-07: the one-hour watch run again saw the restarts spread across the six services, the node paused ended every call at the clients' own timeout, with the history limit holding at three ReplicaSets, the cold run gave its timings, and the ingestion's word `rate-store-unavailable` was seen on a real 503); approver-policy is restarted when it hangs: seen for a frozen process on 2026-10-07 (run R13: a liveness probe on `/readyz`, applied by `make up`; the kubelet restarted the container 140 seconds after the process was stopped), and the alert for a stuck one (`MeridianCertificateRenewalOverdue`) loaded and quiet and not seen firing; still open: the ingestion's other three words, a call that a bound of the wrapper ends, a first install made to fail, a policy narrowed before the first deploy and a rotation of the rate store's password (the owner's to run or to accept as not seen) | S064, S066 |
 | S074 | Test suite and file sizes | Without the cluster: `infra/kind/smoke.sh`, `test_kind_manifests.py` and the four test files over 800 lines are split along the lines their own tests already cut; the six functions over 50 lines are under it (counted by signature plus body without the docstring, as the section says: by the whole count the row used, four of the six, `assess`, `build_report`, `build_injection_report` and `summarise`, are still over); the template-database fixture survives a test that patches the runner's file list; the tests that failed once under load (a lost connection in a parallel run, a tool server's timeout, the gateway's fallback test) are run repeatedly on the machine the suite runs on now and either hold by construction or are closed as not reproduced, with the numbers; ~~the slowest test of the job is under ten seconds~~ (not met, and not what the step did: the gates' measurement of 2026-10-07 found the slowest test at 45.0 s without coverage, with seven of the ten slowest over ten seconds; the step gives every test a limit of 600 s instead); one CPU-time helper; `unused_port()` on macOS has its answer written down; ~~the owner decides whether CI gates on coverage~~ (answered 2026-10-07: yes, with a file size check and a per-test timeout; built) | doing: the first half is done (2026-10-07; tested, none of it run on a cluster): the two upkeep test files, `test_toolserver_meters.py`, `test_claims_graph.py` and `test_kind_manifests.py` are split by moves a script proves, the template database's builder passes the list it read at import, the stack and demo tests that failed under load no longer rest on the machine's speed (argued; the measurement run, 25 loops of each beside a whole suite, has not run), the counting test takes 0.03 s alone where CI saw 47 s, and one CPU-time helper serves nine files; three questions wait for the owner (coverage in CI, a size check, a pytest-level timeout); the second half is built except what waits (2026-10-07; implemented and tested, none of it run on a cluster): S076's leftovers are closed or accepted row by row (the registry `schemas` link and `--check` line, the services edit's small ends, the scaffold's undo, the import walker's limits pinned, the golden set's workload tied to `Report` by its own validator, the claimant's closed tables read-only and three stale sentences), `run_command`, `build_report` and `render_summary` are under 50 lines by signature plus body (37, 47 and 29) with `--help`, every report and the committed summary byte for byte the same, and two of the half's own commits carried a defect that the review reproduced and a contract fixed; the third part (2026-10-07; moves a script proves, tested; seen on kind once: `make smoke` from the split as it stands printed 46 PASS, 0 FAIL, 0 SKIP, the same lines as the unsplit script's, the trace ID apart): `infra/kind/smoke.sh` is an entry of 1,185 lines and ten files under `infra/kind/smoke.d/` (`shared.sh` and nine checks, 36 to 644 lines), and checks 8 and 10 are still in the entry; the leftovers are done (2026-10-07; tested, none of it run on a cluster): the five loaders of the name-masked cases are one helper, `servicesupport.injection_case_claim`, whose missing case fails by name, and `test_redaction_hungarian.py` (858 lines) is three files and `hungariansupport.py`, the largest 368 lines, by a move a script proves with the collected count unchanged; the last cut (2026-10-07; moves a script proves, tested; seen on kind once, run R12: `make smoke` from the cut printed 46 PASS, 0 FAIL, 0 SKIP, the same lines as the run before it): checks 8 and 10 are `smoke.d/08-network-policy.sh` and `10-certificate-policy.sh`, the entry is 88 lines and every file of the script, twelve parts and the entry, is under 800 lines (the largest 647); the three gates (2026-10-07; the owner answered all three questions; implemented and tested, the numbers measured on the development machine and none of it yet run by the hosted runner: see "The three gates"): `make lint` runs a size check of 800 lines with 51 files listed as a ratchet, every test stops after 600 s, and CI's suite step measures line coverage and fails under 98 (99.11 % measured, 2.0 % of the suite's time), with the job's limit at 30 minutes (coverage's first run on the hosted runner, the `python` job of pull request 128, took 14 minutes 0 seconds, inside the 10 min 1 s to 14 min 29 s measured without coverage the same day); what waits: the rows the section's last table keeps, the backlog rows with home S074 (among them two of the three new ones: the 46 splits no row homed and the ten least covered files; the third, coverage's cost on the hosted runner, is read and closed) and the measurement run of the load-sensitive tests beside a whole suite (not run) | S064, S066, S037 |
 | S075 | Harness, guard and Renovate | `make docs` notices a blank line that splits a table; the command guard's known gaps to a Secret's values and to superuser SQL are closed or listed where a session reads them, and a hook that times out has a known outcome; a rule for an implementer that edits through the shell, and a guard or a rule for `make up` and `make down` from an old checkout (both the owner's); the workflow linter knows the runner label; Renovate's week of waiting is a required check or the plan says why not (the owner's decision), an image is not proposed before the chart that installs it, and the two pgvector versions are one | done (not built: the two pgvector versions are not one, because the newest CloudNativePG image still holds 0.8.6; the owner chose package-manager holds over a required check, and uv's `exclude-newer` cannot go in before 2026-10-10; N4, the guard's own files, is the owner's open question 6; the shell-edit hook is inert until the owner sets `bashEditDiffEnabled`) | — |
@@ -909,7 +909,7 @@ that day; the rest stand as their step recorded them.
 | A tool server deployed before its runtime refuses every call of an agent with workers (`worker-missing`). One image runs all six services on kind, so it cannot happen there; a rollout order (the runtime first) is needed where the services are deployed apart | S031 (security review) | open | S020 |
 | One workload declares workers; the scaffold for a new agent writes one without them, and nothing has built a second graph of subgraphs | S031 | closed by S076 as a decision, not built: a second supervisor-and-subgraph example written by the scaffold would be a second graph to keep true with no workload asking for it, and since S037 a new workload may be on either host; the scaffold's output and `config/registry/README.md` say that workers are an edit a person makes in `agents.yaml` | S076 |
 | The Prometheus operator and the CloudNativePG operator read and write Secrets and ConfigMaps in every namespace, so either can read the two authorities' keys, overwrite them, or change the ConfigMap `telemetry-ca` that says what the services trust for telemetry (they read it at each new connection: no restart, no alert) | S063 (security review) | open in part; S072's documents (2026-10-07) say, from a render, that FOUR accounts read Secrets in every namespace and that two more read ConfigMaps (T-68, T-88). Accepted, with the reason in the section: the Prometheus operator (no key narrows it), cert-manager's controller (reads and writes Secrets, needs both) and Envoy Gateway's controller (reads). Built by the cluster batch (contract C, `5e95705`; implemented and tested without a cluster, and seen on kind by the cold run R9: the operator Ready in `meridian`, the database healthy under it and after the chart's default deny): the CloudNativePG operator is released into `meridian` with `config.clusterWide=false` under a NetworkPolicy of its own, so its rules are a Role in `meridian` and its ClusterRole holds only nodes, webhook configurations and image catalogs (the chart also renders two ClusterRoles, `cnpg-cloudnative-pg-view` and `-edit`, that nothing binds or aggregates: a row below); `cnpg-system` is gone. The residual, stated: that Role still holds `pods/exec` and writes on Secrets and ConfigMaps over all of `meridian`, so the operator's account can still read and overwrite the six services' TLS keys and the ConfigMap `telemetry-ca` there; what stands against it is who can reach the account. The other three accounts stay accepted. The written fall-back (the change taken out and the reach recorded as accepted with "tried, and what failed") was not needed: the cold `make up` brought the database up under the confinement | S072 |
-| Prometheus's OTLP receiver and Loki's push API take writes from Grafana and from the collector directly, past the collector's policy and TLS; the three hops from the collector to Tempo, Loki and Prometheus are clear text inside `observability`; the collector asks a sender for no certificate, so each of the six services can push under another's name (T-68) | S063 (security review) | closed in part by S072's documents (2026-10-07): the three hops stay clear text, as a decision with its reason (T-90). Open: the writes to Prometheus and Loki, which wait for the owner's word (the row of S072 gives no "or" for them; the session recommends amending it to "or the residual is stated"); and the third part, a client certificate at the collector, which is outside the step's row and does not gate its close | S072 |
+| Prometheus's OTLP receiver and Loki's push API take writes from Grafana and from the collector directly, past the collector's policy and TLS; the three hops from the collector to Tempo, Loki and Prometheus are clear text inside `observability`; the collector asks a sender for no certificate, so each of the six services can push under another's name (T-68) | S063 (security review) | closed in part by S072's documents (2026-10-07): the three hops stay clear text, as a decision with its reason (T-90). Open: the writes to Prometheus and Loki, which wait for the owner's word (the row of S072 gives no "or" for them; the session recommends amending it to "or the residual is stated"); and the third part, a client certificate at the collector, which is outside the step's row and does not gate its close. S072, 2026-10-07, later (the owner's "Build client certificates" and "Gateway in front, as for Loki"; the third part of S072's section): the decision above is REVERSED and built. The collector has a client certificate; its hops to Tempo, Loki and Prometheus are TLS 1.3 with it; Tempo's receiver demands it, and Loki and Prometheus are behind a gateway each that admits a write only from the collector's subject, answers 403 to every path off its read list, and is the only pod their own ports admit. Implemented and tested, and seen on kind (R14 for Tempo, R15 and R16b for Loki, R17 for Prometheus; not seen: any renewal, a cold `make up`, Grafana's pages in a browser). Still open, as stated residuals (T-90's dated note): the stores' own ports are closed by policy alone, Tempo checks the authority and no name, there is no revocation, and the collector still asks its senders (the six services, the log agent, smoke's generator) for no certificate, which is the original row's third part and which no step takes yet; the rows are in Part B and the closing record re-homes this one | S072 |
 | Egress from `observability` is open (Prometheus scrapes the kubelet and the API server at the node's address), and port 10250 of the three admission webhooks admits any pod: a forged review changes nothing, a flood against the two that fail closed can stall the issuing of certificates | S063 | open in part; S072 measured the address once (seen on kind, 2026-10-07: the API server's calls arrive from the node's address on the pod network and pass a default-deny ingress), and the cluster batch bounds both (implemented and tested without a cluster, and seen on kind by the cold run R9: the three webhooks reached with no pod admitted, a pod in `default` timed out on each 10250, a pod in `observability` that no egress rule names timed out on the node's 10250 and 6443 where a pod in `default` was open, and Prometheus's 12 targets are up). Contract W (`67b6ef2`): cert-manager's webhook and approver-policy's, the two that fail closed, lose their peerless rule on 10250, so no pod reaches them (the API server comes in from the node); the Prometheus operator's rule is kept with Prometheus as its one peer, because its webhook and its metrics share the port. Contract E (`cd1d3b9`): `observability` denies egress by default and admits the resolver, the node's published address on 6443 and 10250 through the one placeholder the scripts fill, and each pod's named peers. Residuals, stated: one placeholder serves both ports, so the pods of the three workloads that need only the API server (the operator with its two hook Jobs, kube-state-metrics, Grafana) can open the kubelet's port too; the kubelet asks for a credential and their accounts hold no right on the node (not read on this cluster), and whether a pod's egress straight to the node on a port no rule names is refused has not been tried (the cold run tries it from Tempo's pod); the node passes every policy, so a policy here bounds pods and not the node (T-84). Not seen: the four other pods the node rule selects trying the kubelet's port, which the rule admits; a target found down is added once from what a run shows (none was found) | S072 |
 | `cnpg-system` and `envoy-gateway-system` have neither Pod Security labels nor a NetworkPolicy; Pod Security on the three labelled namespaces warns and audits and enforces nothing, and `audit` records nothing on kind (no audit policy) | S063 (security review) | closed in part by S072, implemented and tested without a cluster and seen on kind (the labels warm, R8; the batch's parts cold, R9, 2026-10-07). Labels, contract L (`80d26c9`): the two namespaces carried `warn` and `audit` at `restricted`, from a render of both charts' pods; the API server accepted them when `make up` applied them on the warm cluster (no warning was looked for then), and on the cold cluster a server-side dry run of `enforce=restricted` on `envoy-gateway-system`, with the controller and the proxy pod running, answered "labeled (server dry run)" with no warning, so the proxy pod made at run time is included (R9). Since contract C (`5e95705`) `cnpg-system` is gone (the operator is released into `meridian`, which is labelled), so L's labels for it were overtaken an hour after they landed and the labels stay on `envoy-gateway-system` alone. Policies: contract N (`faf3044`) gives `envoy-gateway-system` default-deny in both directions with five policies, and the operator has one of its own in `meridian` (contract C); the gateway's controller, Job and proxy came up under its default deny and the Gateway is programmed (R9). Open: the second half (enforce is not set anywhere, R9 only dry-ran it on one namespace; `audit` needs a new cluster with an audit policy), which is outside the step's row | S072 |
 | node-exporter is off on kind, so a node's CPU, memory and disk are not observed; it alone would hold `observability` at Pod Security `privileged` | S063 | open; the owner's to overturn; the session's decision of 2026-10-07 (S072, decision 7) is that it stays off, because no rule or dashboard reads its series and it alone would make `observability` privileged; asked in a status | S072 |
@@ -1111,6 +1111,17 @@ that day; the rest stand as their step recorded them.
 | `make mermaid-render` and `make pdf` fail under rootless Docker, which the virtual machine runs: `scripts/render-mermaid.sh` starts the container with the caller's user and group, which rootless Docker maps to another user than the folder's owner, and every PNG ends in "EACCES: permission denied" (five of five, then the PDF's four of four, on 2026-10-07). The same script on a copy of the folder made world-writable rendered all five. CI's Docker is not rootless and renders. The script's canonical copy is development-base's, so the fix goes there first and is copied here. With it, from the review of S089's workflow step (low): the render container needs no network and could run with none, in this job and in the PDF's; and the script passes when it finds no block, which a count in the Makefile's target would catch | S089 (the first local render; the infra review) | done (S092, 2026-10-08: the container starts as its root under rootless Docker; no network; the Makefile's target fails on an empty extraction) | S092 |
 | The import layering page (`docs/architecture/code/import-layering.md`: its diagram, its table of contracts and its counts) and the `RuntimeComponents` view were read from the code of 2026-10-07. S082 moves the workloads' graphs and the sweep's SQL and adds a contract per service, S083 makes a package per service and S086 cuts the sweep in two: each brings the page, `model/components.dsl` and the view's register row to the code it leaves | S089, S090 | open | S082 |
 | The `DataOwnership` and `AuditTrail` views (`docs/architecture/model/data.dsl`) draw the grants of 2026-10-07, read from the migration files' GRANT and REVOKE statements and not from a catalog. S084 takes the tool servers' reads of runs and claims away, S085 replaces the one audit table by a table per service and a relay, S086 cuts the sweep's reach into the runtime's schema, and S087 makes five databases: each brings the model's arrows, the two views and their register rows to what it leaves, and S087's baselines are where the grants are read from a migrated database's catalog and compared with the views | S091 | open | S085 |
+| Grafana's pages were not exercised in a browser against the Prometheus gateway's read list, and the two gateways' memory was not read under load or on a large answer: smoke's calls through Grafana's datasource (queries and rules, R17) are all that went through it, so the metrics browser's label drop-downs, Explore and the Alerting page, and with them `series`, `labels`, `metadata`, `query_exemplars` and `format_query`, were not seen used, and a path Grafana needs that the list lacks would not have shown (it would answer 403, class `x` in the gateway's log). The gateways' working sets were read once after R17: 4.3 MiB (peak 9.6 MiB) against 64 MiB for Prometheus's, 19.8 MiB at its peak for Loki's | S072 (third part, R17: P7, P10) | open; a hand check in a browser, then the gateway's log searched for `class=x`; the lines that are Grafana's are added to the list once each | S073 |
+| The log agent spins at more than one core, silently, minutes after it starts: measured from `/proc` on the development machine on 2026-10-08 (1.14 to 1.33 cores over 10 and 30 seconds, on an instance 6.4 hours old and on a fresh pod at 190 and 370 seconds of age, with load 2 to 3; 0.01 cores at 70 seconds), with an idle network and an ordinary log whose one error, between the calm and the spinning reading, is `fileconsumer/file.go:280 Failed to open file ... no such file or directory` for the log file of a finished sweep pod the cluster had just removed (stanza's file consumer, v0.162.0). Its values (`infra/kind/values/log-agent.yaml`, S064; not changed by S072) request 25m of CPU and set no CPU limit, so nothing bounds it; smoke, the alerts and Prometheus's own CPU series for the pod (0.001 cores at the same minute) saw none of it. Why the instance of 2026-10-07 11:13 to 18:33 averaged 8.7 % of a core is not known | S072 (third part: found after R18, when the machine was read after an overload) | open; a CPU limit so that a spin is bounded, the cause looked up and fixed or worked around (the poll interval, an exclusion for finished pods), and something that sees it (an alert on the container's CPU from a source that shows it, or a smoke line) | S073 |
+| What the final infrastructure check before S072's third pull request left, all low (`s072` handoff, the check of 2026-10-07): T-90's cell keeps its superseded sentences ahead of the dated note that reverses them; four `die` sentences inside `make up`'s warm window (the database's steps and the roles' wait) carry no note that telemetry is refused until a re-run; the streaming of a chunked request body through Prometheus's gateway is recalled from nginx's documentation and was not seen; the placeholder check is a word match and a test could count the four tokens instead; the Service address check would pass `...` or `:` (the value is only an annotation); no test holds that the gateway image's pin has a registry segment, which the split for Loki's chart needs; and `scratch_repo` in `test_kind_cluster_holder.py` copies `up.sh` without `gateways.sh`, harmless until a test runs `up.sh` from that tree | S072 (third part, the final check: LOW-1 to LOW-7) | open | S073 |
+| A closed path presented with the collector's own client certificate (remote write, `/-/reload`, `/-/quit`, the admin API on Prometheus's gateway) was seen refused only in a container of the pinned image, never on the cluster: smoke has no key, because it never reads `tls.key`. The only live test mounts the collector's client Secret read-only into a throwaway pod that carries the collector's label, or issues a second short-lived Certificate under the same policy, and either puts a private key in a pod and must be removed afterwards | S072 (third part, R17: P9) | open; the owner's call (it handles a private key); not run | S073 |
+| What no run saw of a renewal and a roll in the new hops: a renewal of a gateway's certificate or of the telemetry authority (the gateways read their certificate at each handshake in a container and their client CA at start; the authority's roll by the pods' annotations is tested, not seen); a Prometheus Service made again (the annotation's roll); a broken gateway configuration stopping `make up` with the new sentence (the run saw only the new pod Ready); and Tempo's receiver, which reads its certificate at start only, so a renewal at day 60 is taken up by the next `make up` and, if none runs before day 90, the receiver serves an expired certificate and the collector's traces are refused, with no alert (`MeridianCertificateNotRenewed` reads the Certificate, which was renewed; only smoke's check 12 sees it). A kind cluster rarely lives 60 days; on Azure it would | S072 (third part: T-90's note, the second review's H1 and M-2) | open; a short-lived Certificate for each; on Azure S020 decides whether Tempo gets a reload | S073 |
+| The extended-key-usage gap and the session tickets of the telemetry authority's client certificates: the policies cap a certificate's usages and cannot require one, so a certificate of the authority with NO extended key usage and the right common name is accepted as the collector's by both gateways (seen in a container) and any certificate of the authority is a writer at Tempo's receiver, which checks the chain and no name; a TLS 1.3 session ticket carries the earlier client-certificate state for its lifetime (five minutes by default, recalled) and `ssl_session_tickets` is not off. The boundary is who may create a Certificate in `observability`. A second authority for writers is the answer when a second writer class exists (the services and the log agent, whom the collector still asks for no certificate), and on Azure the question is who holds that right | S072 (third part: M4 of the review, L-4 of the second) | open; stated in T-90's dated note | S020 |
+| A cold `make up` of the writers' branch has not been run: R14 to R17 were all warm `make up` on the cluster made at 11:08 UTC that day, so the order of a first install (the policies applied before the first pod, the three certificates before the releases that mount them, the ConfigMap `telemetry-ca` published into `observability` before Grafana starts, a gateway Ready before Loki and Prometheus answer) is read and pinned by tests and not seen; the warm run's window of refused telemetry (R16: about five minutes of logs lost after a change of the client certificate's subject; R17: at most 80 s of metrics) is not a cold install's | S072 (third part: R15 to R17) | open; the next time the cluster is made again | S073 |
+| The collector asks its senders for no client certificate: the six services, the log agent and smoke's generator reach it on 4318, and each can push under another's name (T-68's third part, M5 of the design). Out of the owner's two decisions, which were about the writes into the stores | S072 (third part: the design's M5, T-68, T-90) | open; not scheduled; a client certificate for the senders is the same mechanism as the collector's own, and needs the authority to sign more than one client, which brings the writers' authority of the extended-key-usage row | S072, closing record |
+| The second infrastructure review's low findings that M4b left, and the first review's L4: a label name with a dot or a colon on the label-values path gets 403 (`translation_strategy` set to a no-escaping value would break it); nginx opens `ssl_certificate` and `ssl_certificate_key` separately, so a handshake between the kubelet's two symlink flips could see a mismatched pair (one failed handshake at worst); no `constraints.privateKey` on the new policies, no CPU limit on the gateways, the chart's access log writes the PromQL of a GET query, and a 127-character comment line in `certificate-policy.yaml`; and the Renovate rule that keeps the nginx tag with the Loki chart now also covers an image a hand-written manifest runs | S072 (third part: second review L-3, L-5, L-8, L-9; first review L4) | open; none blocks | S073 |
+| The test of Loki's rendered location list (`MERIDIAN_LOKI_RENDER=<render file>`, in `test_telemetry_loki_gateway.py`) is skipped in every run, so a chart bump that adds a location without the gateway's check is caught by nobody until a render is read; the evaluator that models the two nginx maps is Python and was compared with a real nginx only in the implementers' containers and by smoke's check 12 on the cluster (R17: lines 9 and 10 for Prometheus's gateway, none for the Loki gateway's odd forms) | S072 (third part: M3b's report, the first review) | open; a test that renders the pinned chart in CI, in the manner of the policy tests' row above | S074 |
+| The download's permit is released when the handler returns, before the body is sent, so the four permits bound the read and the audit write and not the memory a slow reader holds (one answer is up to 1 MiB); a 404 for an unknown id and a 503 from the permit check each use a rate token, so thirty well-shaped requests a minute lock everyone out of downloads; the count of a claim's download rows is unbounded while the audit table is never pruned. Local only, behind a switch that is off | S080 (the short security check of the last fixes, before pull request 130) | open | S080 |
 
 ## Part C — Step details
 
@@ -18022,6 +18033,10 @@ reading, below, changed the second and the fourth):
    owner below. **The three hops stay clear text inside `observability`**,
    as a decision: they are inside one namespace with ingress denied by
    default, and the same reason that decides the writes decides them.
+   **Reversed, 2026-10-07 (the third part, "The writers' client
+   certificates", below):** the owner chose client certificates for the
+   writes, so the three hops are TLS with the collector's certificate; this
+   decision stays as it was written.
 5. **Egress from `observability` and the webhooks' port: measured, then
    bounded.** The measurement is made (above); the policies and the
    placeholder's use are the cluster batch's, each seen by a cold `make up`
@@ -18249,9 +18264,10 @@ charts' render (S074).
   certificates for Prometheus's and Loki's ports, or amend the row of S072
   to "or the residual is stated" (the session recommends the amendment: the
   writers today are two pods of one namespace with ingress denied by
-  default); (2) node-exporter: it stays off unless overturned (no node CPU,
-  memory or disk is observed on kind). On AKS (S020) the operators' reach
-  comes back with real stakes.
+  default) (answered later on 2026-10-07: "Build client certificates"; see
+  the third part below); (2) node-exporter: it stays off unless overturned
+  (no node CPU, memory or disk is observed on kind). On AKS (S020) the
+  operators' reach comes back with real stakes.
 
 **The cluster batch (second part of this record, 2026-10-07).** Five
 contracts of files and tests, each in a worktree of its own and carried to
@@ -18820,6 +18836,515 @@ each with its home: Loki's usage report (S072), the one policy
 CloudNativePG chart's `view` and `edit` ClusterRoles (S020), the operator
 being down seen by no alert (S073) and the policy tests that never meet the
 charts' render (S074).
+
+**The writers' client certificates (third part of this record, 2026-10-07).**
+The first part is on `main` (pull request 117, plan v0.75) and so is the
+cluster batch (pull request 120, plan v0.78). This part is on the step's
+branch `s072-writers-mtls`, written in seven contracts (M1, M2, M3, M3b, M4,
+M4b and M5, below) and in no pull request yet. Its documents are the
+contract D3's: this record, the backlog rows, and the corrections the
+audit found in the threat model, the data classification, the operations
+README, two runbooks, the kind README and the root README. Every capability
+below is labelled **implemented and tested** (in files and tests; where a
+report says so, also run in a container of the pinned image), **seen on kind**
+(by the run named, R14 to R17, in the limits that run's entry gives) or
+**not seen**; a run that "saw" something is named each time, and what a
+report says it saw only in a container is "seen in a container".
+
+**The owner's two decisions** (the question tool; they REVERSE the first
+part's "the three hops stay clear text"):
+
+1. **About 13:20 UTC.** The writes clause of the row. The answers file holds
+   only the answer; what was offered, as far as the record shows, is the first
+   part's own "For the owner (1)": build TLS with client certificates for
+   Prometheus's and Loki's ports, or amend the row to "or the residual is
+   stated" (the session recommended the amendment). The option as the design
+   records it read "mTLS for writes into Prometheus, Loki and Tempo on kind".
+   The owner's words: "Build client certificates".
+2. **About 15:42 UTC.** Prometheus. After run R15 showed the gateway pattern
+   working for Loki, the owner was asked with a table of four options: a
+   gateway in front as for Loki; no write path and a scrape; certificates on
+   Prometheus's own port; leave as is and amend the row. The owner's words:
+   "Gateway in front, as for Loki (Recommended)". As recorded with the answer:
+   a small nginx in front of Prometheus, TLS for all, a client certificate
+   required on the write paths only, Prometheus's own port open to the gateway
+   alone, and no metric name changes.
+
+What this reverses stands, unrewritten, in the first part's decision 4 ("The
+three hops stay clear text inside `observability`", with the session's
+recommendation to amend the row), in the Part B row of 2026-10-07 that
+carried it, and in T-90, which had the decision. Each has a dated pointer
+now. The design had proposed, for Prometheus, to switch the OTLP receiver off
+and have it scrape the collector (M4 of the design); the advisor stopped that
+as a change of scope that the owner had not chosen (below), it was never
+built, and the owner then chose the gateway.
+
+**What is built, one paragraph per hop** (all of it implemented and tested;
+where a run saw it, the run is named):
+
+- **The collector's client certificate (M1, `e3e7c10`; M3b added the name).**
+  The Certificate `otel-collector-client` in `observability`, issued by the
+  telemetry authority's Issuer: ECDSA P-256, 90 days, renewed at day 60 with a
+  new key, usages `digital signature` and `client auth`, the common name
+  `otel-collector-client` and one DNS name that resolves nowhere
+  (`otel-collector.client.observability.meridian`). Its CertificateRequestPolicy
+  allows that common name, that name and no other, with `client auth` as a
+  ceiling (a policy cannot require a usage: approver-policy's field is "a
+  subset", which the file now says); a client-auth request under any other
+  shape is denied, tested for 17 shapes. It has its own Role and RoleBinding,
+  and the collector mounts the Secret read-only beside its server
+  certificate. The three exporters take the pair, TLS 1.3 at the least, and
+  re-read it at a handshake every five minutes at most.
+- **Tempo (M2, `b00473e`).** The receiver has one listener left, OTLP gRPC on
+  4317, with a server certificate (`tempo-receiver`, the two Service names), the
+  telemetry authority as the client CA, and TLS 1.3 at the least: a client
+  with no certificate is ended at the handshake with the alert "certificate
+  required". The other receivers (OTLP HTTP, Jaeger) are switched off; the
+  chart still renders an empty `jaeger: protocols: {}` and lists the Service
+  ports 9411, 55680 and 55681 with nothing behind them (the chart hard-codes
+  them). Tempo's reads on 3200 and its probes are untouched. Seen on kind:
+  R14 (the handshake from the node, TLS 1.3, alert 116, and a trace read
+  back); R16b (check 12's line for the same alert).
+- **Loki (M3, `b77090d`; M3b, `9ae8cf3`, after the first review).** The chart's
+  own nginx gateway, one replica of one container from the pinned image, on
+  8443 with TLS 1.3 only. Its decision is by path and its default is closed:
+  two maps classify the raw request URI and the decoded one, and a request is
+  a read or a write only if both views agree on an anchored list, otherwise
+  it is class `x`. Reads (`/`, the query paths Grafana and smoke use, the label
+  and series paths) need no certificate. The three push paths (`/otlp/v1/logs`,
+  `/loki/api/v1/push`, `/api/prom/push`) need a client certificate that
+  verified and whose subject is exactly `CN=otel-collector-client`. Class `x`
+  (delete, rules, flush, the ingester, every ring page, memberlist, `/config`,
+  the UI and every unlisted path) answers 403 whatever the certificate. The
+  client certificate is optional at the handshake, so a reader holds nothing
+  a writer needs. Loki's own port 3100 admits the gateway's pods alone (a
+  NetworkPolicy file of its own, applied just before Loki's release), and the
+  collector and Grafana reach the gateway on 8443, not Loki. Grafana's
+  datasource goes to the gateway over TLS with the authority's certificate,
+  given by an environment variable from the ConfigMap `telemetry-ca`, which
+  `make up` now publishes into `observability` too. Seen on kind: R15 (a push,
+  `/otlp/v1/logs` and a delete without a certificate answer 403, a read 200,
+  TLS 1.2 refused with alert 70, and the CA in the datasource's secure field
+  expanded, so Grafana reads through the gateway), R16b (the same through
+  check 12's lines, and Loki's own port timing out for a pod that is not the
+  gateway and reached by the same pod with the gateway's labels).
+- **Prometheus (M4, `a171b8e`; M4b, `6e5d360`, after the second review).** A
+  gateway of this repository's own, because Prometheus's chart has none: a
+  manifest of a ServiceAccount, a ConfigMap with `nginx.conf`, a Deployment of
+  one replica and a Service on 8443, from the image of Loki's gateway (one
+  pin, renamed `NGINX_GATEWAY_IMAGE_*`), at `restricted` Pod Security. It has
+  two views of the path as Loki's does (raw and decoded, which must agree),
+  three classes, a default of 403, GET and POST only, and a static upstream.
+  The read list: `/` (nginx answers it), `query`, `query_range`,
+  `query_exemplars`, `format_query`, `parse_query`, `series`, `labels`,
+  `label/<name>/values`, `metadata`, `targets`, `rules`, `alerts` and
+  `status/buildinfo`. M4b took `status/config`, `status/flags`,
+  `status/runtimeinfo` and `status/tsdb` OFF it (the second review: no caller
+  used them, and the first prints the scrape configuration). The one write
+  path is `/api/v1/otlp/v1/metrics`, with the collector's subject. Closed
+  whatever the certificate: remote write and read, the admin API, `/-/reload`,
+  `/-/quit`, the health paths, `/federate`, `/metrics`, `/debug/*`, the UI and
+  everything unlisted, whether or not Prometheus enables the path today. The
+  policies: Prometheus's 9090 admits the gateway's pods alone (the pod to its
+  own address, which the self-scrape and the reloader use, is not filtered by
+  any policy); the collector and Grafana reach 8443, not 9090; the gateway
+  reaches 9090 and the resolver. Grafana's default Prometheus datasource is
+  switched off and re-declared with the same uid `prometheus`, default,
+  `POST`, 30 s and the CA from an environment variable, so the dashboards and
+  smoke's checks 5, 7 and 11 are unchanged. No metric name or label changed.
+  Seen on kind: R17 (below).
+- **Rolls and renewals.** The collector re-reads its client pair itself. Both
+  gateways read their certificate through a variable, so a pair replaced under
+  the mount is served at the next handshake (seen in a container; M3b and M4);
+  their client CA, Tempo's certificate and CA and Grafana's CA are read at
+  start only. So `make up` puts fingerprints into pod annotations: Tempo's
+  pod gets its certificate's and the CA's, each gateway's the CA's
+  (Prometheus's also the digest of its own manifest and the Service's cluster
+  address), Grafana's the authority's, and since M4 the collector's its client
+  certificate's and the CA's, so a change rolls the pod and no restart by hand
+  is needed. `make up`
+  waits on a roll: Helm's `--wait` for the releases, and `rollout status` for
+  Prometheus's gateway, which is no release (M4b: the Deployment's Available
+  condition stays true while the old pod serves). Tempo's receiver is not
+  re-read between two `make up`; the runbook says so.
+- **Counts that moved.** Nine CertificateRequestPolicies, from five (six at
+  M1, seven at M2, eight at M3, nine at M4), in the four places a test holds
+  equal; smoke's check 12 of ten lines (five at M3b, three at M4, two at M4b)
+  and 56 lines after a deploy (46 before; 34 after `make up` alone, counted
+  from the script and not seen); the kind README, the operations README,
+  `docs/demo.md` and the root README say so.
+
+**Work log of the third part** (hashes are on the step's branch; every report
+is in the session's handoff folder and is a claim, not the main session's
+run):
+
+- **Design and mapping.** `mapping-mtls.md` read the three write paths (one
+  writer, the collector; two of the stores' write paths on the same port as
+  their reads and probes) and the design `design-mtls.md` followed: each store
+  gets the mechanism its ports allow.
+- **M1, `e3e7c10`:** the collector's client certificate, its policy and
+  binding, mounted and not used; 2,069 tests passed in the files named; two
+  mutations seen red. **M2, `b00473e`:** Tempo's receiver and the exporter's
+  `tls` block; one deviation reported and accepted (the empty `jaeger` key
+  stays in the render, because the chart's template fails without it), which
+  R14 showed harmless: Tempo started; 2,154 passed. **M3, `b77090d`:** Loki's
+  gateway, the first version with the push paths denied by a regular
+  expression; its digest was a placeholder when the report was written and a
+  README test was red until the documents' row came. **M3b, `9ae8cf3`:** the
+  first review's findings (below): the allowlist, the administrator's class,
+  the pinned common name, the variable certificate, fingerprint annotations,
+  both probes and bounds, the policies in a file applied just before Loki's
+  release, check 12's first five lines; 2,744 passed, 1 skipped. M3b's report
+  says it rewrote four tracked test files with `python3` heredocs and one
+  smoke part with `sed -i`, against the contract's rule; the diffs are plain
+  replacements, and this record notes it as a deviation. **M4, `a171b8e`:**
+  Prometheus's gateway, the ninth policy, the collector's two annotations (R16's
+  lesson), check 12's three lines; 3,399 passed, 1 skipped; the apply order
+  inside `apply_prometheus_gateway` (the Secret read and the manifest built and
+  checked before any policy is applied) was taken on the advisor's advice, a
+  third consultation that the implementer records. **M4b, `6e5d360`:** the
+  second review's fixes (below) and check 12's last two lines; 3,407 passed, 1
+  skipped. **M5, `cbcbf08`:** the seven files the file size check named on this
+  branch split along their sections, by moving text: six test files into
+  eighteen with two support modules, and the Prometheus gateway's four
+  functions out of `up.sh` (850 lines, now 750) into `gateways.sh`; no
+  behaviour and no assertion changed (the collected tests are the same 1,297
+  ids, and a line proof holds for the script); 2,951 passed, 1 skipped. The
+  merge of `main` (the uploads, plan v0.87) is `406e968`.
+- The implementers ran `make lint` (six contracts kept), `make test` and `make
+  docs` on each contract, `shellcheck` on the scripts, and no whole suite and no
+  `make pytest`; none touched the cluster. **The main session's runs on the
+  tip, the whole suite and the pull request are left** (the change log's entry
+  carries the suite's line when they have run).
+
+**The runs on kind** (the main session's, from the cluster checkout, on the
+local cluster made at 11:08 UTC that day; each was free and deleted nothing):
+
+- **R14** (14:45 to 14:49 UTC, from `ac4fa09`: M1, M2 and `main`): `make up`
+  warm, exit 0 in 82 s; four Certificates Ready in `observability`
+  (`otel-collector`, `otel-collector-client`, `telemetry-ca`, `tempo-receiver`),
+  seven policies Ready, a new Tempo pod and a new collector pod at 1/1 with no
+  restart, the six services untouched. From the node, a connection to Tempo's
+  4317 with no certificate reached TLS 1.3, got the receiver's certificate with
+  its two names, and was ended with "tlsv13 alert certificate required"
+  (alert 116); TLS 1.2 was refused ("protocol version"). Smoke: 46 PASS, 0
+  FAIL, 0 SKIP, with a trace sent through the collector and read back from
+  Tempo. **Not seen:** the collector's own log (the script asked for a wrong
+  name), so that the collector PRESENTED its certificate is inferred from the
+  trace arriving at a receiver that refuses a connection without one; a
+  certificate of another authority or another name; a renewal; the minute
+  of refused traces between Tempo's release and the collector's (25 s lay
+  between the two pods); a cold install.
+- **R15** (15:35 to 15:38 UTC, from `b77090d`: M3): `make up` warm, exit 0 in
+  68 s, the six services' pods unchanged; five Certificates and eight
+  policies Ready; the gateway pod Running 1/1 within 29 s from the pinned
+  digest. From the node, without a certificate: `POST /loki/api/v1/push`,
+  `POST /otlp/v1/logs` and `POST /loki/api/v1/delete` each 403, `GET
+  /loki/api/v1/labels` and `GET /` each 200; TLS 1.2 refused (alert 70). Smoke:
+  exit 0, 46 PASS, 0 FAIL, 0 SKIP: the collector's log arrived through the
+  gateway, the log agent's line for the Claims API arrived, and Grafana
+  trusted the gateway's certificate, so the CA given as an environment
+  variable IS expanded in the datasource's secure field (the first shape
+  stands, the second was not needed). **Not seen:** a push with a certificate
+  of the authority and another subject, or with the Tempo or gateway server
+  certificate as a client; Loki's own port refusing a pod; the gateway's
+  memory; a renewal; a cold `make up`.
+- **R16** (16:59 to 17:08 UTC, from `9ae8cf3`: M3b): `make up` warm, exit 0 in
+  118 s (Grafana, Tempo and the gateway rolled by their fingerprint
+  annotations; Loki and the collector did not). From the node: push, OTLP and
+  delete 403, a read 200, `/` 200, TLS 1.2 refused. **Smoke: exit 2, 48 PASS,
+  2 FAIL, 1 SKIP.** The two failing lines: "no line for meridian-smoke-... in
+  Loki after 120s" and "Loki has no line of claims-api whose path is
+  /smoke-...". **Cause, read in the gateway's log:** the collector's
+  `POST /otlp/v1/logs` was answered 403 five times and 204 from 17:07:37. M3b
+  had given the client certificate a common name and made the gateway require
+  it; cert-manager re-issued the certificate during `make up`; the collector's
+  pod was not rolled, and it re-reads its pair every five minutes, so for
+  about five minutes it presented the old certificate (no common name), was
+  refused, and DROPPED those logs (a 403 is not retried). A window after any
+  change of the client certificate's subject, not a fault of the steady state.
+  The new check 12 passed in the lines that ran (a pod with the collector's
+  label: 403 for a push, 200 for a read; Loki's own port timing out for a pod
+  that is not the gateway and reached by the same pod with its labels; the
+  gateway serving the certificate in its Secret). M4 answered it with the
+  collector's two annotations, and the runbook says what a changed subject
+  does.
+- **R16b** (17:09 to 17:11 UTC, same cluster, smoke alone): exit 0, **51 PASS,
+  0 FAIL, 0 SKIP.** Logs through the gateway, Grafana reading Loki through the
+  read allowlist (smoke's queries are `query_range`), and all five lines of
+  check 12, among them Tempo's alert "certificate required" and "Tempo's
+  receiver serves the certificate that is in the Secret". **Not seen:** a
+  certificate of the same authority with another subject or with no extended
+  key usage (seen only in the implementer's container); a real renewal; a
+  cold `make up`; Grafana's calls beyond `query_range` and `labels` (a
+  dashboard's label values, Explore).
+- **R17** (18:38:39 to 18:42:02 UTC, from `406e968`: M4b merged with `main`;
+  six agents were running, load 2 to 3.5): **`make up` warm, exit 0 in 51
+  s.** Rolled: Grafana, the collector and the new `prometheus-gateway`
+  (Ready, no restart); not rolled: Loki, Loki's gateway, Tempo, Prometheus.
+  Six Certificates and nine policies Ready; no pod not Ready. The gateway's
+  pod: the pinned digest, its three annotations filled, the Service address
+  annotation equal to the Service's cluster address, so the static upstream
+  resolved at start and the pod is admitted under `restricted`. **From the
+  node, without a certificate:** `query`, `status/buildinfo` and
+  `label/job/values` 200 each; a POSTed form body `query=1` answered
+  `success` (the body arrived); `//api/v1/query`, `/api/v1/quer%79` and
+  `/api/v1/x/../query` 403 each; an absolute-form target 200 (both views
+  agree); `status/config`, `status/flags`, `status/runtimeinfo` and
+  `status/tsdb` 403 each; the OTLP metrics path, `/api/v1/write`, `/-/reload`
+  and the admin snapshot 403 each; `DELETE /api/v1/series` and `OPTIONS` 403;
+  TLS 1.2 refused (alert 70); the server certificate has an empty subject and
+  the two Service names. **The self-scrape:** read through the gateway, 12
+  targets, all up, Prometheus's own two (9090 and the reloader's 8080) among
+  them, so the ingress rule that admits the gateway alone does not stop a
+  pod's scrape of itself. **The write path:** in the gateway's log, 10 writes
+  answered 200 with `verify=SUCCESS subject="CN=otel-collector-client"`, all
+  from the collector's pod, and 2 answered 403 with `verify=NONE` (the run's
+  own probe and smoke's); the collector logged no refusal, no error and no
+  dropped data since `make up` began. **Smoke: exit 0, 56 PASS, 0 FAIL, 0
+  SKIP**; check 12's ten lines passed, among them the odd forms of a read 403
+  beside the plain form's 200 (the first live sight of the two-view guard
+  through a Service), a posted form body answered, Prometheus's own port timing
+  out for a pod that is not the gateway and answering the same pod with its
+  labels, and the dashboard check's 15 queries through Grafana's datasource,
+  now on the gateway. **The gateway's log after smoke:** 117 lines, 86 reads,
+  12 writes, 16 refused as class `x`; every `x` line is one of the run's or
+  smoke's deliberate probes, and nothing Grafana asked for was refused.
+  **Memory, read after the run through the gateway:** the gateway's working
+  set 4.3 MiB then and 9.6 MiB at its peak in the first minutes, against a
+  limit of 64 MiB; Loki's gateway 19.8 MiB at its peak in the same 30 minutes.
+  **The window:** `make up` ran 18:38:39 to 18:39:30 and the first metric write
+  the gateway accepted was at 18:39:59, so metrics were refused or not sent for
+  80 s at the most (an upper bound: the log does not say when the old
+  collector's last write to Prometheus's own port was).
+
+**The two infrastructure reviews** (`infra-reviewer`; the verdicts and the
+findings are in the handoff folder):
+
+- **First, on M1 to M3 (`b77090d`):** approve with fixes; 0 critical, 1 high,
+  7 medium, 5 low. The high: neither Tempo's receiver nor Loki's gateway
+  re-read a renewed certificate and no alert or document said so. The mediums:
+  the ring pages were classed as reads; the collector's certificate was also an
+  administrator's (delete, rules, flush); the classification was a denylist
+  that rested on two parsers agreeing; nothing checked which certificate the
+  authority signed beyond chain and purpose (a server-only certificate fails
+  the purpose check, one with no extended key usage passes); a renewal of the
+  authority was not carried to the three static readers of its certificate;
+  the documents said the opposite of the configuration; a warm `make up`
+  dropped telemetry from the first policy apply to the collector's release.
+  **Answered by M3b:** the allowlist with three classes and a closed default,
+  the administrator's class, the pinned common name, the variable certificate
+  and the fingerprint annotations, probes and bounds, the policies in a file
+  applied late, check 12's first five lines, tests that cannot be vacuous
+  (the three the review named); the documents were left to M4b. Left open:
+  revocation (L3), `constraints.privateKey` (L4).
+- **Second, on M4 (`a171b8e`):** approve with fixes; 0 critical, 0 high, 5
+  medium, 9 low; "nothing here should stop the cluster run". The mediums: the
+  documents (the gate on the pull request: its M-1); `wait --for=condition=
+  Available` does not gate a warm rolling update (M-2); the read list held
+  paths no caller used (M-3); the warm-run window opened at the early policy
+  apply and had no failure note (M-4); a recreated Prometheus Service would
+  leave the gateway with a stale address (M-5). **Answered by M4b:** the
+  rollout wait, the four `status` paths off the list, the failure note set
+  right after the early apply, the Service address as an annotation, `limit_
+  except`, the keep-alive lines gone, the repository passed to Loki's chart,
+  smoke's two lines, a refusal of a manifest with a placeholder left, the
+  alternation extracted from the manifest and compared with the test's list,
+  and the documents it could reach (the kind README, `telemetry-ca.yaml`, the
+  policy file's header, T-90's dated note, the runbook). **Left open:** L-3
+  (a label name with a dot or a colon on the label-values path gets 403),
+  L-4 (session tickets: said in T-90, not switched off), L-5 (nginx reads the
+  certificate and the key separately), L-8 (no CPU limit, no
+  `constraints.privateKey`, the chart's access log writes the PromQL of GET
+  queries) and L-9 (the Renovate rule's reason is no longer the whole story).
+- The folder holds no third review: M4b's fixes were read by R17 and by
+  containers of the pinned image, not by a reviewer.
+
+**The advisor** (the plan's Part A; `design-mtls.md` records two
+consultations, and the implementer of M4 a third):
+
+- **About 13:55 UTC, at the design, before the first contract.** It changed
+  four things: Tempo is in scope (the owner's option named it); M3's pattern,
+  one TLS listener with the client certificate OPTIONAL at the handshake and
+  the push locations answering 403 unless it verified, so that Grafana reads
+  with no certificate and holds nothing a writer needs; M4 as a scrape is a
+  change of scope that must not start, not even its measurement, before the
+  owner is asked (and one fact first: whether Prometheus's reloader could
+  present a certificate); and T-90's decision is reversed by a dated note and
+  not rewritten, with the test that pinned the clear-text hops changed on
+  purpose. M1 went out then.
+- **About 16:20 UTC, on M4 as the owner chose it.** G1 to G5 held; three facts
+  went into the contract: the datasource keeps the uid `prometheus` and stays
+  the default (smoke's checks 7 and 11 read it), smoke's rules check goes
+  through Grafana and so is no peer of 9090, and the five write and lifecycle
+  paths are refused whether or not Prometheus enables them today.
+- **The implementer of M4 took one on the apply order** (the manifest built
+  and checked before any policy is applied, so a broken file closes nothing);
+  its report says "on advisor advice" and not what it changed beyond that.
+- **No consultation is recorded for M1, M2, M3, M3b, M4b or M5.** M3b and
+  M4b rest on the two reviews, which is the plan's "reviewers and gates are
+  the check".
+
+**Not seen** (R17's list, whole, then what the earlier runs left that no later
+run closed):
+
+- **P7 as the review asked it:** no browser opened Grafana. Only smoke's calls
+  went through Grafana's datasource (queries and rules). The metrics browser's
+  label drop-downs, Explore and the Alerting page were not exercised, so
+  `series`, `labels`, `metadata`, `query_exemplars` and `format_query` were
+  not seen used, and a path Grafana needs that is missing from the list would
+  not have shown.
+- **P9:** a closed path WITH the collector's certificate (needs a private key
+  in a throwaway pod: the owner's call; seen only in a container).
+- The gateway's memory under load or a large query answer (P10 was read after
+  the run at 4.3 MiB with a peak of 9.6 MiB; Loki's gateway peaked at 19.8 MiB).
+- The rollout wait's own line is not in the run's `make up` log; what is seen
+  is that the gateway's new pod was Ready when `make up` ended. A broken
+  configuration stopping `make up` with the new sentence was not tried.
+- A renewal of the gateway's certificate or of the authority; a Service made
+  again (the annotation's roll); a cold `make up` with this branch.
+- The move of `up.sh`'s functions (contract M5) came after R17 and was then
+  seen: run R18 (2026-10-07, 19:09 to 19:12 UTC, from `675b102`, the branch's
+  tip with M5 and these documents) ran `make up` with the split script, rc 0
+  in 36 s; its log has the two lines for Prometheus's policies and gateway, in
+  their place after the stack's release; no pod was rolled (nothing in the
+  manifests had changed since R17, so the rollout wait had nothing to wait
+  for); nine policies Ready; smoke 56 PASS, 0 FAIL, 0 SKIP.
+- From the earlier runs, still open: a certificate of the authority with
+  another subject or with no extended key usage presented to a gateway or to
+  Tempo (seen only in the implementer's container); that the collector
+  PRESENTED its certificate to Tempo (R14 inferred it from a trace reaching
+  a receiver that refuses a connection without one; only Prometheus's
+  gateway logged the subject it saw, in R17); a real renewal of any of the
+  new certificates.
+
+**Accepted** (each with its reason; the owner may overturn any):
+
+- **The two store ports are closed by policy alone.** Prometheus's 9090 and
+  Loki's 3100 have no TLS and no certificate check; what stands is the
+  NetworkPolicy that admits the gateway's pods. Kind's engine enforces it
+  (seen on kind: check 12, R16 and R17: a pod that is not the gateway times
+  out, and the same pod with the gateway's labels connects), but a node passes
+  every policy (the measurement of the first part), and a pod created in
+  `observability` can carry the gateway's labels (T-84), so such a pod writes
+  without a certificate. The reason: a certificate on those ports means a
+  client certificate for the kubelet's probes, the reloader, the self-scrape
+  and Grafana, the last of which would then hold a certificate that can write.
+- **Tempo's receiver checks the authority and no name.** Its chart takes a
+  client CA and no subject check, so any certificate the telemetry authority
+  signed for client use writes there. Today the policies let the authority
+  sign exactly one, and the real boundary is who may create a Certificate in
+  `observability`, which is namespace administration. The same boundary holds
+  for the gap in the gateways' subject check: a certificate with NO extended
+  key usage and the right common name passes (seen in a container, M3b), and a
+  policy can cap usages and cannot require one.
+- **No revocation.** A leaked client key is good for up to 90 days, and the
+  authority's `rotationPolicy: Never` makes replacing it disruptive.
+- **Reads need no certificate.** Any pod that reaches a gateway's 8443 reads
+  its store: the namespace's policy admits the collector and Grafana, and
+  that Grafana holds no key is the design's best property. A TLS 1.3
+  session ticket carries the earlier client-certificate state for its
+  lifetime (five minutes by default, recalled), and nothing here relies on
+  a certificate being judged again per connection.
+- **Outside, as the design said (M5 of the design):** the collector still
+  asks its senders (the six services, the log agent, smoke's generator) for
+  no certificate, so each can push under another's name (T-68's third part).
+
+**Decisions of the third part** (the session's; the owner may overturn any):
+
+1. **Prometheus is behind a gateway of this repository's own**, because the
+   stack has none, and not behind a second chart; the cost is a hand-written
+   `nginx.conf` with a static upstream, which a recreated Service breaks until
+   `make up` rolls the pod (the Service address is an annotation since M4b).
+2. **The pin is shared and renamed** (`NGINX_GATEWAY_IMAGE_*`), because a
+   second name with the same digest fails a test; Renovate's rule is
+   unchanged.
+3. **A reader needs no certificate; a writer needs the collector's subject,**
+   so a certificate of the authority that is not the collector's is not a
+   writer at either gateway (M3b), and Tempo is the exception (above).
+4. **R14 is cited** although the contract named R15 to R17 as the sources:
+   it is the only run that saw M1 and M2 directly. It is in the handoff
+   folder (`r14.md`).
+
+**Backlog rows of the third part** (Part B's follow-up backlog; each has a
+home). The Part B row on the writes and the first part's table keep their
+text, with the dated pointers above:
+
+| Row (its first words) | Home |
+|---|---|
+| Grafana's pages were not exercised in a browser, and the gateways' memory under load or a large answer was not read | S073 |
+| A closed path presented with the collector's client certificate (P9) | S073, the owner's call |
+| A renewal of a gateway's certificate or of the authority, a Service made again, a broken configuration stopping `make up`, Tempo's receiver taking a renewal only at the next `make up` | S073 (and S020, where it has real stakes) |
+| The extended-key-usage gap, session tickets, and a writers' authority once a second writer class exists | S020 |
+| A cold `make up` of this branch | S073 |
+| The collector asks its senders for no certificate (T-68's third part) | S072, the closing record re-homes it or the owner decides |
+| The second review's low findings left (L-3, L-5, L-8, L-9) and the first's L4 | S073 |
+| The optional render test of Loki's location list is skipped in every run | S074 |
+| The log agent spins at more than one core, silently, minutes after it starts (found after R18; main's, not this branch's) | S073 |
+| What the final infrastructure check left, all low (LOW-1 to LOW-7) | S073 |
+| One row that is not this step's: the download's permit | S080 |
+
+**A final check, and what happened to the machine after R18** (the main
+session's record, 2026-10-08):
+
+- **A short infrastructure check of what no reviewer had seen** (M4b, M5 and
+  the two count pins; read-only, on `c442591`): MERGE; no critical, high or
+  medium finding. All five medium findings of the second review are closed
+  and the four lows it took; M5 is a pure move (the four functions and the
+  `readonly` block compared by the reviewer against the script before the
+  move: identical; 377 test names before and after); the pins are right
+  against the manifests (nine policies, six Certificates). Its seven lows
+  are one backlog row (home S073). Its two first rows for the backlog are
+  already there: a cold `make up` of this branch and the failing branch of
+  the rollout wait, which only test stubs have run.
+- **An overload, the session's own.** At 19:13 UTC on 2026-10-07 the session
+  started this branch's whole suite while five agents were working, three of
+  them heavy (a container rig, a review that ran a hook hundreds of times, a
+  review that ran tests). By 19:52 the load was 167 and swap was full; the
+  suite was failing at 66 % and was stopped at its time limit, unfinished,
+  so it says nothing about the code and was run again alone (the result is
+  in the change log's entry). On the cluster every pod of `observability`
+  restarted 4 to 24 times, and so did the API server (8), the controller
+  manager and the scheduler, cert-manager's four pods, Envoy Gateway and its
+  proxy, the CloudNativePG operator (22) and `platform-db-1` (9); no pod was
+  not Ready at 03:14 UTC. R17 and R18 are from BEFORE this and stand as this
+  part's evidence; what the cluster is after it is S073's to say, and smoke
+  was not run again for this record.
+- **The log agent spins** (a backlog row, home S073): read from `/proc` after
+  the overload, more than one core with an idle network and an ordinary log,
+  and a fresh pod on a quiet machine does the same within three minutes. It
+  is `main`'s log agent (S064); this branch does not change its values.
+- **A mistake, said:** the session first took the spinning process for the
+  collector's and deleted the collector's pod once (03:01 UTC); its
+  Deployment made another, which is calm, as the first was.
+- **A second freeze, and the owner's reboot** (2026-10-08 03:28 to 03:44
+  UTC). The session started this branch's suite again, alone this time, on
+  a check of `available` memory (4.2 GB) while swap was full from the
+  evening. The machine froze within a minute, the kernel's out-of-memory
+  killer fired twice, and the owner rebooted it. Measured afterwards: the
+  cluster's node container holds about 5 GB of the machine's 11.4 and has no
+  memory limit; the sessions and their tools about 2.5 GB; and the whole
+  suite with coverage needs about 5.5 GB at its peak, so the two never fit
+  together and every earlier suite had pushed gigabytes into swap. The owner
+  decided the same hour ("Stop cluster during suite"): a whole suite runs
+  with the cluster's node container stopped, inside a memory-capped scope
+  with a watchdog, and the cluster is started again after. The suite in the
+  change log's entry ran that way (lowest available memory 2.8 GB, the
+  cluster back with every pod Ready 90 seconds after its start). The stop
+  is not clean yet: `docker stop` waited its full 90 seconds for the node.
+- **The log agent's disk load** (the backlog row, home S073, has it): after
+  the reboot all memory pressure on the machine was in the log agent's pod,
+  which sat at its memory limit and read about 2 GB a second, 97 % of the
+  cluster's reads, re-reading 20 MB of log files. It is PAUSED on the local
+  cluster by hand since 03:56 UTC (a node selector no node has; no log
+  reaches Loki meanwhile and smoke's log-agent lines would fail) until its
+  fix is in. Disk reads fell to a few MB a second.
+- Nothing else on the cluster was changed by hand.
+
+**What is left of the third part:** the whole suite, the secret scan and the
+pull request (the run on the tip with M5 in is R18, under "Not seen" above);
+the contract D3's documents are these. The step stays
+`doing` (the row says why).
 
 ### S079 — Self-managed Kubernetes: applied once on AWS, a scaffold on Google Cloud
 **Status:** doing · **Started:** 2026-10-06 · **Finished:** —
@@ -21834,3 +22359,33 @@ compared, and one line in the Makefile.
   S090's and S091's pages (377 pages). Part A's cost rule and the
   architecture README no longer say the targets fail there; S089's backlog
   row is closed.
+- **v0.92, 2026-10-08:** S072 `doing`, the third part, the writers'
+  client certificates (the owner's "Build client certificates", about 13:20
+  UTC, and for Prometheus "Gateway in front, as for Loki", about 15:42, which
+  reverse the first part's "the three hops stay clear text"): the collector
+  has a client certificate of the telemetry authority, with the fixed common
+  name `otel-collector-client` and a policy that allows only it; Tempo's
+  receiver demands it at the handshake (TLS 1.3); Loki and Prometheus are each
+  behind an nginx that is the only way in (reads need no certificate, one
+  write path needs the collector's subject, everything else answers 403
+  whatever the certificate) and their own ports admit the gateways alone;
+  nine certificate policies, smoke's check 12 of ten lines, 56 lines after a
+  deploy. Seven contracts (M1 to M4b, and M5 which moved text) and two
+  infrastructure reviews (0 critical, 1 high, 7 medium, 5 low; then 0, 0, 5
+  medium, 9 low), answered by M3b and M4b. Implemented and tested, and seen on
+  kind by R14 (Tempo), R15 and R16b (Loki) and R17 (Prometheus and the whole:
+  `make up` warm in 51 s, smoke 56 of 56, ten writes accepted under the
+  collector's name); R16 lost about five minutes of logs after a change of the
+  client certificate's subject, which M4's annotations answer. Not seen: any
+  renewal, a cold `make up` of the branch, Grafana's pages in a browser, a
+  closed path presented with the collector's certificate. The kind README,
+  the operations README, two runbooks, T-68, T-84 and T-90, the data
+  classification (one row) and the root README brought to it; no threat row
+  is added, so the header's counts stand. Ten backlog rows are new, each
+  with a home (the last two: the log agent that spins and reads the disk,
+  found after R18, and the final check's lows), and one more is S080's (the
+  download's permit). The development machine froze twice while this part
+  was closed, both times through the session's own doing (the section says
+  how and what changed). The whole suite, run alone on 2026-10-08 with the
+  cluster's node container stopped for its length: `22437 passed, 9 skipped,
+  8 warnings in 226.49s (0:03:46)`, coverage 99.14 %.
