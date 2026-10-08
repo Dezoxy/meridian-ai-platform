@@ -654,7 +654,7 @@ which another branch adds.
 | ID | Step | Done when | Status | Depends |
 |---|---|---|---|---|
 | S081 | The decision record for the move toward services | [ADR 10](architecture/decisions/0010-split-the-platform-into-services-with-a-database-each-and-their-own-releases.md) is accepted and indexed: it says what the owner decided (five databases on one server, six images with independent versions, the tool servers trusting the authenticated caller with the lost double check accepted as a risk, the audit trail as an outbox per service, a fresh baseline per database, the building after the steps in flight) apart from the session's own design, lists the ten couplings with the step that replaces each, what stays shared, the consequences and the two checkpoints; this table exists and Part D's questions 7 and 8 are answered; `make docs`, `make check` and `make test` pass. Nothing is built. `doing` until the pull request is merged, then `done` | doing | — |
-| S082 | Code in the wrong place moves; import contracts per service | With no change in behaviour and no assertion of an existing test changed: the claims tool server leaves the claims workload's package, the Claims API no longer imports the runtime's models or its sweep's constants (the models both sides use sit in a module of their own), the sweep's runtime SQL sits with the runtime, and the workloads' graphs sit in a package of their own; an import contract keeps each service's package from importing another service's; `make lint`, `make pytest` and `make smoke` pass. Designed | doing: the sweep's lock statement and the run's shared models and constants are moved (the first two moves, 2026-10-07; implemented and tested against PostgreSQL, **not deployed**: no chart, image or manifest changed and `make smoke` was not run) on the step's branch `s082-code-moves`, and its pull request is held until S071's free half and S072's client certificates are on `main`; the claims tool server's move (Move A, 2026-10-08: it now sits in `meridian.platform.claims_mcp`) is built and tested, **NOT yet run on the cluster**; the graphs' move, whose shape the owner chose on 2026-10-08 (the triage graph moves to a sibling package: the section), for S071's free half and S021's routes contract, and the per-service import contract comes last | S081, and the four steps that were in flight on 2026-10-07 merged (S071's free half, S072's client certificates, S080 and S020's code half): the session's reading of the owner's words, see the section |
+| S082 | Code in the wrong place moves; import contracts per service | With no change in behaviour and no assertion of an existing test changed: the claims tool server leaves the claims workload's package, the Claims API no longer imports the runtime's models or its sweep's constants (the models both sides use sit in a module of their own), the sweep's runtime SQL sits with the runtime, and the workloads' graphs sit in a package of their own; an import contract keeps each service's package from importing another service's; `make lint`, `make pytest` and `make smoke` pass. Designed | doing: the sweep's lock statement and the run's shared models and constants are moved (the first two moves, 2026-10-07; implemented and tested against PostgreSQL, **not deployed**: no chart, image or manifest changed and `make smoke` was not run) and are on `main` since pull request 140; the claims tool server's move (Move A, 2026-10-08: it now sits in `meridian.platform.claims_mcp`) is built, tested and **seen on the local kind cluster** (run MR1: the pod starts by the new path, smoke 56 of 56); the graphs' move, whose shape the owner chose on 2026-10-08 (the triage graph moves to a sibling package: the section), for S071's free half and S021's routes contract, and the per-service import contract comes last | S081, and the four steps that were in flight on 2026-10-07 merged (S071's free half, S072's client certificates, S080 and S020's code half): the session's reading of the owner's words, see the section |
 | S083 | Six packages, six images, a tag per service | A `uv` workspace holds a common library (`common`, `registry` and `guardrails`), the tool-server library and one package per service, each with its own dependencies and version; the runtime's image installs the graphs' package; the jobs ship with the service that owns their data; one build file makes six images; the chart takes a tag per service and `make deploy` builds and loads all six; `make demo` and `make smoke` pass on kind with six images on one database. First checkpoint: the images half of the owner's choice. Designed | todo | S082 |
 | S084 | The tool servers take the binding from the caller; two reads become calls | A tool server takes a call's run, agent, tenant and claim from the Agent Runtime's authenticated call and reads neither `runtime.runs` nor `claims.claims`; a call without a binding is refused; the knowledge server asks the policy server for a policy's wording version and the policy server asks the claims tool server for a policy's other claims, each over mutual TLS under a registry entry, a chart value and a NetworkPolicy; ADR 4's one-caller rule is changed for the two paths and the change recorded; T-22 is rewritten with the accepted risk, stating what the double check caught and what is left. Designed | todo | S082 |
 | S085 | The audit outbox, the relay and the central trail | Each service writes its audit row into an audit table of its own in the transaction of its business write, with the insert-only and stamp triggers; a relay copies the rows into a central audit table that owns retention and serves the adjuster's trail by claim; a relay that lags or stops is seen by an alert, and the services keep writing; the gateway's audit row is settled in the design and said (in the ledger's transaction, or kept apart); built inside the one database, as a table per schema (the owner's decision, Part D's question 7). Designed | todo | S082 |
@@ -1176,6 +1176,8 @@ that day; the rest stand as their step recorded them.
 | A quoted word after `env -S` (an empty string, a comment, an assignment or another prefix) hides the build tool behind it from the added AWS removal rule: `env -S '' make -m "aws-destroy"`, `env -S '# c' make …`, `env -S 'A=b' make …`, `env -S 'nice -n 5' make …`, `env -S 'sudo' make …`. The fifth round denied these forms and the sixth gives none, which is what main gives; the sixth round's check calls it a medium that is not weaker than main, and judges that a session almost certainly would not type it. Its suggested fix: add to the alternatives for `env` a `-S` followed by a quoted word (already masked to `'xxx'`) so that make after it stays the command word, at the cost of a deny on `env -S 'sh' make` (the stronger direction), reverse-checked against row 2841 so that `env -S x make` stays none. The check asked for it before the paid run; the session reads that as the next change of the hook and not as S071's paid model run, because the rule is the AWS removal rule and not one of the paid-model rules | S071 (the sixth round's check, 2026-10-08) | open; left open by the session's decision | S020 (the guard's rules for the Azure wrapper: the next change of the hook, with a security review of its own) |
 | Prometheus's CPU series for the log agent's pod showed 0.001 cores in the same minute that the process used more than one (1.14 to 1.33 cores from `/proc`, 2026-10-08). Why is not known and nobody looked: the query, its source and the cluster's scrape of the containers' metrics were not read, and the reproduction had no such scrape (LA1). Until it is known, no alert or dashboard on container CPU is evidence that this fault is absent, and the telemetry runbook says to read the process on the node instead. Run LR1's CPU figures are from `/proc` too | S073 (the spin of 2026-10-08; LA1's report; run LR1) | open | S073 |
 | The trigger of the log agent's thrash on the cluster is not identified. LA1 reproduced a mechanism in a container (a burst of a few hundred lines at 192Mi, the page cache giving up the binary's pages and the process reading them back); it did not reproduce the event that started it on the cluster. The "Failed to open file ... no such file or directory" line seen before the first spin is consistent with a coincidence: a removed file, a removed directory and a checkpoint naming a gone file did nothing in the reproduction. Why the instance of 2026-10-07 from 11:13 to 18:33 averaged 8.7 % of a core is not known. At 384Mi run LR1 saw the agent calm for twelve minutes (0.01 cores, no reads, 0 to 43 refaults a second) through smoke's burst; the case the limit does not cure (140,000 lines at once with the exporter failing: 270 MiB of anonymous memory, reads of 0.3 to 2.9 GB a second) was not run on the cluster | S073 (the spin of 2026-10-08; LA1's report; run LR1) | open | S073 |
+| The two evaluation tests run twice on every pull request: once in a shard, whichever the hash gives them, and once in the `evaluation` job, which exists because no shard is sure to hold both tests that write the reports. Together about 85 s of runner time. Not changed: the job is not the slowest, and a way to run them once (a shard that deselects them, or the gate reading a shard's reports) would make the gate depend on the split | S074 (CI speed, 2026-10-08) | open; low | S074 |
+| What the shards' reports do not prove, from the short re-check of the rework (L-2 to L-4): skips are not counted (the report holds the tests kept, not the tests that passed, so a test that skips silently in CI still counts; `MERIDIAN_REQUIRE_DB` covers the database and Redis tests); the report is written when collection finishes, about four minutes before a shard ends, in the workspace the shard's tests then run in, and no test overwrites it that anyone found; and nothing pins the expected suite but the coverage floor: equal digests prove only that the shards agree with each other, so a module dropped by `--ignore` or a `collect_ignore` entry gives equal digests and a smaller total. Fixes, if wanted: the skipped count at `pytest_sessionfinish`, and a total or digest committed to the repository | S074 (CI speed; the short re-check, 2026-10-08) | open; low; the last is accepted residual risk | S074 |
 
 ## Part C — Step details
 
@@ -15573,6 +15575,110 @@ a cluster.
   The three owner questions no longer wait. The step could not close: those
   rows are open, and the main session decides what to do with them.
 
+**CI speed (2026-10-08): the suite in four shards, the documents fast path
+built and removed, and the proof that the shards are the whole suite.**
+Branch `s074-ci-speed`, in two contracts: CI1 built the shards and the fast
+path, CI2 (this record) removed the fast path and wrote the fixes of the
+infrastructure review. Where a figure is from a run on GitHub it says so;
+nothing here was run on the cluster, no model was called, no migration and no
+fingerprint moved. The whole suite was not run locally, by the owner's decision
+of 2026-10-08 ("Affected tests, CI runs all"): the pull request's own run is the
+result.
+
+- **The owner's choice,** quoted: "Split suite + docs fast path
+  (Recommended)". Two parts: the suite in shards, and a smaller group of tests
+  for a pull request that changes documents alone. The second part is the one
+  removed below.
+- **What CI1 built.** The one job `python` became `classify`, `static`,
+  `tests` (a matrix of four shards), `evaluation`, `docs-tests` and a last job
+  `python`, the required check, which succeeds only on a closed truth table of
+  the others' results and on the combined coverage of the shards (the floor of
+  `pyproject.toml`, applied once). A test belongs to the shard its node id
+  hashes to (`tests/conftest.py`, `zlib.crc32`): by count, not by time. The
+  fast path was `classify` (a script that said whether every changed file was
+  on a closed allowlist of documents), `docs-tests` (the test files that name a
+  document, `tests/documents-group.txt`, which a test held complete) and the
+  verdict's second winning row.
+- **The numbers, measured on GitHub in pull request 139's own run
+  (2026-10-08).**
+
+| | Before | With four shards |
+|---|---|---|
+| The tests | 14 min 41 s in one job | 3 min 52 s to 4 min 50 s a shard (5,606 to 5,652 passed each) |
+| A job | 15 min 36 s | 4 min 26 s to 5 min 26 s |
+| Pull request to a green `python` | about 16 min | about 6 min |
+
+  `classify` took 7 s, `static` 30 s, `evaluation` 1 min 17 s and `python`
+  15 s; the combined coverage was 99.14 % from four files. The shard that held
+  the slowest job was shard 1, which held CI1's own partition test, a test that
+  collected the suite five times.
+- **The fast path is removed, whole.** The documents group is 207 files and 44 %
+  of the suite's tests in one job, pro rata about seven minutes, so the fast
+  path would have been slower than the four shards it replaces. It was also the
+  only part of the change that could skip a test, and its list was kept by hand
+  (two tests of `test_documents_group.py` failed on CI1's tip because `main`
+  had gained test files that name a document). The session decided this after
+  the advisor, with these numbers; the owner is told with this record, and may
+  ask for a sharded documents path (about three minutes), at the price of a
+  hand-kept list that can miss a test. Removed: the `classify` and `docs-tests`
+  jobs, `scripts/ci_classify.py` and its test, `tests/documents-group.txt` and
+  its test, the Makefile's `pytest-documents`, and every sentence about
+  documents-only pull requests.
+- **What CI2 built instead.** The matrix is the literal list `[1, 2, 3, 4]`
+  and `TEST_SHARD_COUNT` the one variable the shards and `python` read; raising
+  the count is two edits in one file, and a test fails on one without the
+  other. `python` needs `static`, `tests` and `evaluation` and succeeds on
+  exactly one combination, all three `success`; the unit test walks every
+  combination of the results GitHub can give. Each shard writes, when
+  `MERIDIAN_TEST_SHARD_REPORT` names a file, a report (the shard, the count,
+  the tests collected before the selection, the tests kept and the SHA-256 of
+  the sorted list of node ids) and uploads it with its coverage data; the kept
+  count is taken after every deselection, so an option that drops tests fails
+  the check; `python` refuses unless there is one report for each shard, every
+  digest and every total is the same and the kept counts add up to the total,
+  and it prints the total and the four counts. The partition test that
+  collected the suite five times is replaced by a test of the selection
+  function on 6,000 synthetic ids (disjoint and complete for counts 1 to 8, no
+  shard of four empty), the tests that run pytest on a small file, and one that
+  the report holds what is written above; no test in the suite collects the
+  whole suite now.
+- **The review.** An infrastructure review of CI1 (2026-10-08): verdict "merge
+  with fixes", no critical and no high finding, three medium and four low. M1
+  (the coverage steps ran only on an output of an earlier step, which a missing
+  `$GITHUB_OUTPUT` would have left unset, so they would have been skipped and
+  `python` green): closed, the steps are unconditional and the output is gone.
+  M2 (nothing proved on GitHub that the shards are the whole suite): closed by
+  the reports. M3 (a re-run might meet its own earlier artifact): closed,
+  `overwrite: true` with a comment. L3 (a whitespace change in the Makefile's
+  `## alerts` help line): closed, that line is `main`'s bytes. L1, L2 and L4
+  were about the classifier and fell away with it. A short re-check of the
+  rework said merge with fixes: one medium and four lows. The medium (the
+  report was written before pytest's own `-k`, `-m`, `--deselect` and `--lf`
+  removed tests, so those options kept `python` green) is closed: the report is
+  written when collection has finished, with the tests the run will run as the
+  kept count. Its L-1 (the script accepted a total of 0 and kept counts below 0
+  or above the total) is closed: it refuses them. L-2 to L-4 are one backlog
+  row (home S074).
+- **The advisor was consulted twice:** before CI1's contract, and after the
+  first run on GitHub. The second consultation changed the fast path's fate
+  (removed), the partition test (replaced by the selection test and the
+  reports) and the matrix (a literal list).
+- **Seen on GitHub, 2026-10-08, after this part was written.** The pull
+  request's second run (run 37735763598, this change as it merges): the
+  shards' jobs took 3 min 33 s to 5 min 52 s, `python` printed `22659 tests
+  collected, kept by the shards as 5704 + 5647 + 5658 + 5650 = 22659`,
+  `Combined 4 files` and a total of 99.02 %, and was green about six minutes
+  after the push. A throwaway pull request (142, closed, its branch deleted,
+  never merged) added one failing test: shard 1 ended `1 failed, 5700 passed`
+  and failed, the other three shards passed, and `python` printed `tests is
+  'failure', not 'success'` and was red (run 37735780189).
+- **Not seen.** A cancelled run, a re-run of a single failed shard, and a
+  shard whose report differs from the others (the unit tests of the script
+  hold that refusal; no run on GitHub has produced one).
+- **One backlog row**, home S074: the two evaluation tests run twice, once in a
+  shard and once in `evaluation`, about 85 s of runner time.
+- **Plan version of this part:** v0.97
+
 ### S068 — Database upkeep and retention
 **Status:** done · **Started:** 2026-10-06 · **Finished:** 2026-10-07
 **Goal:** rows of the platform's insert-only audit table and of the Model
@@ -21930,17 +22036,17 @@ model no longer do.
 
 ### S082 — Code in the wrong place moves; import contracts per service
 **Status:** doing · **Started:** 2026-10-07 · **Finished:** —
-**Left before it is done:** the pull request of the first two moves, held until
-S071's free half and S072's client certificates are on `main`; Move A (the
-claims tool server) is built and waits for its image and `make smoke` on the
-cluster; Move D (the graphs); the per-service import contract. Plan
+**Left before it is done:** Move D (the graphs); the per-service import
+contract. Moves C and B are on `main` (pull request 140) and Move A ran on the
+local kind cluster on 2026-10-08 (run MR1, below). Plan
 version of this part: the changelog's entry for S082.
 
 **Goal:** the code that sits in the wrong place for a split into services moves,
 with no change in behaviour and no assertion of an existing test changed, and
 an import contract keeps each service's package from importing another's.
 Labels: Moves C and B below are **implemented and tested, not deployed**; Move
-A is **implemented and tested, NOT yet run on the cluster** (2026-10-08); Move
+A is **implemented, tested and seen on the local kind cluster** (run MR1,
+2026-10-08; kind only); Move
 D and the per-service contract are **designed**.
 
 **What the map found** (a read-only map of `main` at ae94424; nothing was run;
@@ -22118,9 +22224,27 @@ Evidence (the implementer's runs, in the worktree of its contract):
   ends in "Designed" and stays; the status cell says what is implemented, what
   is tested and that nothing is deployed.
 
-**Move A, the claims tool server, 2026-10-08 (built and tested; NOT yet run on
-the cluster).** On the step's branch `s082-move-a`, from the implementer's
-contract MA1:
+**Move A, the claims tool server, 2026-10-08 (built, tested and run on the
+local kind cluster).** On the step's branch `s082-move-a`, from the
+implementer's contract MA1:
+
+- **Run MR1 on the local kind cluster** (2026-10-08, 06:31 to 06:35 UTC, from
+  the branch at 8bc4ee8; nothing deleted). `make up` on the warm cluster ended
+  0 in 33 seconds and `make deploy` ended 0 in 97 seconds (a new image,
+  `meridian:9995af4e21e0`, the migrations, the release). Before, the tool
+  server's Deployment started
+  `meridian.workloads.claims_triage.mcp_server.app:create_app_from_env`; after,
+  its command holds `--factory
+  meridian.platform.claims_mcp.app:create_app_from_env`, one pod Ready, no
+  restart, and its log is five lines: four of the server starting and one
+  `POST /mcp HTTP/1.1 200`. `make smoke`: 56 passed, 0 failed, 0 skipped, among
+  them "each server (policy-mcp, knowledge-mcp, claims-mcp) answered
+  unknown-run through the runtime's client, over TLS with its certificate".
+  **Not seen:** a claim triaged end to end through the moved server (`make
+  demo` was not run), and the move on anything but kind. One pod of the
+  namespace was in `Error` during the run: a sweep job of 2026-10-07 at about
+  19:20 UTC, the evening of the machine's overload, older than this run and
+  not looked into here.
 
 - **Destination: `meridian.platform.claims_mcp`.** ADR 10 names none. The
   session chose it, after the advisor, by the precedent of the two tool servers
@@ -23981,8 +24105,28 @@ row.
   the state on the cluster, anything past twelve minutes, and the heaviest
   burst. Two backlog rows are new, each homed at S073. The kind README and the
   telemetry runbook no longer say that a calm agent has no refaults.
+- **v0.97, 2026-10-08:** S074, CI speed (still `doing`): the owner chose
+  "Split suite + docs fast path (Recommended)"; the suite runs in four shards
+  by a hash of the test id and the required check `python` combines their
+  coverage and applies the floor once. Measured on GitHub in pull request 139:
+  the tests 14 min 41 s in one job against 3 min 52 s to 4 min 50 s a shard, a
+  pull request to a green `python` about 16 min against about 6. The documents
+  fast path was built and then removed, because the documents group is 44 % of
+  the suite's tests, about seven minutes in one job, slower than the shards,
+  and its hand-kept list could miss a test; the owner may ask for a sharded
+  documents path (about three minutes) at that price. `python` now needs
+  `static`, `tests` and `evaluation` and succeeds on exactly one combination;
+  each shard writes a report (counts and a digest of the full list of test ids)
+  and `python` refuses unless the four agree and add up to the whole suite. The
+  infrastructure review's three medium findings are closed (unconditional
+  coverage steps, the reports, `overwrite: true` on the upload) and the
+  partition test that collected the suite five times is replaced by a test of
+  the selection on 6,000 synthetic ids. Not seen on GitHub: `python` red from a
+  failing test, a cancelled run, a re-run of one shard. One backlog row (the
+  evaluation tests run twice, about 85 s). The whole suite was not run locally.
 - **v0.98, 2026-10-08:** S082 Move A, the claims tool server, built and
-  tested on `s082-move-a`; **not yet run on the cluster**. The three files of
+  tested on `s082-move-a`, and **run on the local kind cluster** (run MR1:
+  the pod starts by the new path, smoke 56 of 56). The three files of
   `workloads/claims_triage/mcp_server/` moved with `git mv` to
   `platform/claims_mcp/`, the destination the session chose after the advisor
   by the precedent of `policy_mcp` and `knowledge_mcp` (ADR 10 names none and

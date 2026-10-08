@@ -557,3 +557,57 @@ what a person at the keyboard needs.
   on this machine (257.63 s against 252.52 s at six workers, 2026-10-07; see
   "What things cost"). The data files a run leaves, `.coverage` and
   `.coverage.*`, are ignored by git.
+
+### How CI runs the suite
+
+CI is the only place that runs every test (the owner, 2026-10-08), so its job
+is built to fail closed. Every pull request and every push to main runs the
+same four jobs of `.github/workflows/python.yml`, side by side:
+
+- `static`: lint, the chart, the alert rules and the registry.
+- `tests`: the suite in four shards, each with a PostgreSQL and a Redis
+  service container. A test belongs to the shard its node id hashes to
+  (`tests/conftest.py`; `MERIDIAN_TEST_SHARD` out of `MERIDIAN_TEST_SHARDS`,
+  both unset on a developer's machine, which runs everything). The split is by
+  a hash of the id, so by count and not by time: the shards hold about a quarter
+  of the tests each and not a quarter of the seconds. The count is
+  `TEST_SHARD_COUNT` at the top of the workflow and the matrix is the list
+  `[1, 2, 3, 4]` written out beside it; raising the count is those two edits in
+  that file, and a test fails on one without the other. Each shard measures
+  coverage, applies no floor and uploads its coverage data and a small report.
+- `evaluation`: the two tests that write the evaluation reports, and the gate
+  that compares them with the baselines.
+- `python`, the required check, last. It succeeds only when `static`, `tests`
+  and `evaluation` all succeeded: a failed, cancelled or skipped job fails it
+  (`scripts/ci_python_verdict.py`, with a unit test over every combination of
+  results GitHub can give, of which one succeeds). It then downloads the four
+  artifacts, checks that each shard left its coverage file and its report,
+  combines the coverage and applies the 98 % floor of `pyproject.toml` once.
+
+The reports are how CI proves that the shards are the whole suite. A shard
+writes, when `MERIDIAN_TEST_SHARD_REPORT` names a file, the shard and the count,
+the number of tests collected before the selection, the number it kept and the
+SHA-256 of the sorted list of all the node ids. The kept count is taken after
+every deselection, so an option that drops tests (`-k`, `-m`, `--deselect`,
+`--lf`) fails the check. `python` refuses unless there is one report for each
+shard, every digest and every total is the same and the kept counts add up to
+the total; it prints the total and the four kept counts.
+
+There is no shortcut for a pull request that changes only documents: it runs
+the whole suite too. A fast path for such pull requests was built (S074) and
+removed again: the test files that name a document are 207 files and 44 % of
+the suite's tests, which in one job is about seven minutes, longer than the four
+shards take side by side, and a hand-kept list of them could miss a test.
+
+What it costs, measured on GitHub in pull request 139 (2026-10-08):
+
+| | One job | Four shards |
+|---|---|---|
+| The tests | 14 min 41 s | 3 min 52 s to 4 min 50 s a shard (5,606 to 5,652 passed each) |
+| A job | 15 min 36 s | 4 min 26 s to 5 min 26 s |
+| Pull request to a green `python` | about 16 min | about 6 min |
+
+`static` took 30 s, `evaluation` 1 min 17 s and `python` 15 s; the combined
+coverage was 99.14 % from the four files. The two evaluation tests run twice,
+once in a shard and once in `evaluation`, about 85 s of runner time (a backlog
+row, S074).
