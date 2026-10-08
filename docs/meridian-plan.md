@@ -15651,11 +15651,18 @@ result.
   first run on GitHub. The second consultation changed the fast path's fate
   (removed), the partition test (replaced by the selection test and the
   reports) and the matrix (a literal list).
-- **Not seen.** `python` red on GitHub from a failing test (the main session
-  shows it on a throwaway branch before the merge), a cancelled run, and a
-  re-run of a single failed shard. The reports were seen only in tests on a
-  small file and in the unit tests of the script; a run on GitHub is their
-  first real result.
+- **Seen on GitHub, 2026-10-08, after this part was written.** The pull
+  request's second run (run 37735763598, this change as it merges): the
+  shards' jobs took 3 min 33 s to 5 min 52 s, `python` printed `22659 tests
+  collected, kept by the shards as 5704 + 5647 + 5658 + 5650 = 22659`,
+  `Combined 4 files` and a total of 99.02 %, and was green about six minutes
+  after the push. A throwaway pull request (142, closed, its branch deleted,
+  never merged) added one failing test: shard 1 ended `1 failed, 5700 passed`
+  and failed, the other three shards passed, and `python` printed `tests is
+  'failure', not 'success'` and was red (run 37735780189).
+- **Not seen.** A cancelled run, a re-run of a single failed shard, and a
+  shard whose report differs from the others (the unit tests of the script
+  hold that refusal; no run on GitHub has produced one).
 - **One backlog row**, home S074: the two evaluation tests run twice, once in a
   shard and once in `evaluation`, about 85 s of runner time.
 - **Plan version of this part:** v0.97
