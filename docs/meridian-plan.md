@@ -1289,87 +1289,87 @@ also go into Part B's follow-up backlog.
 
 | Step | Title | File |
 |---|---|---|
-| S000 | Plan, harness and architecture bootstrap | [S000.md](plan/steps/S000.md) |
-| S001 | Commit and publish | [S001.md](plan/steps/S001.md) |
-| S002 | Python workspace and CI gates | [S002.md](plan/steps/S002.md) |
-| S003 | Synthetic data and golden set | [S003.md](plan/steps/S003.md) |
-| S004 | Security and quality registers | [S004.md](plan/steps/S004.md) |
-| S005 | Agent framework spike | [S005.md](plan/steps/S005.md) |
-| S006 | Local platform on kind | [S006.md](plan/steps/S006.md) |
-| S007 | Azure foundation | [S007.md](plan/steps/S007.md) |
-| S008 | Platform registry | [S008.md](plan/steps/S008.md) |
-| S040 | Harness refresh | [S040.md](plan/steps/S040.md) |
-| S009 | Walking skeleton | [S009.md](plan/steps/S009.md) |
-| S041 | Walking skeleton on kind | [S041.md](plan/steps/S041.md) |
-| S010 | Gateway routing | [S010.md](plan/steps/S010.md) |
-| S042 | Gateway resilience | [S042.md](plan/steps/S042.md) |
-| S011 | Gateway budgets and cost | [S011.md](plan/steps/S011.md) |
-| S013 | Policy and claims MCP servers | [S013.md](plan/steps/S013.md) |
-| S045 | Gateway embeddings | [S045.md](plan/steps/S045.md) |
-| S012 | Knowledge and retrieval | [S012.md](plan/steps/S012.md) |
-| S046 | Knowledge MCP server | [S046.md](plan/steps/S046.md) |
-| S014 | Triage graph | [S014.md](plan/steps/S014.md) |
-| S044 | Tool servers on kind | [S044.md](plan/steps/S044.md) |
-| S043 | Gateway cost panel | [S043.md](plan/steps/S043.md) |
-| S015 | Human approval | [S015.md](plan/steps/S015.md) |
-| S016 | Adjuster UI | [S016.md](plan/steps/S016.md) |
-| S017 | Evaluation harness | [S017.md](plan/steps/S017.md) |
-| S047 | Guardrails | [S047.md](plan/steps/S047.md) |
-| S048 | Claim lifecycle, the rest | [S048.md](plan/steps/S048.md) |
-| S049 | Claimant pages | [S049.md](plan/steps/S049.md) |
-| S054 | Parallel tests | [S054.md](plan/steps/S054.md) |
-| S051 | Structured outputs | [S051.md](plan/steps/S051.md) |
-| S052 | Scheduled sweep | [S052.md](plan/steps/S052.md) |
-| S053 | The claimant's word checked | [S053.md](plan/steps/S053.md) |
-| S050 | Live evaluation | [S050.md](plan/steps/S050.md) |
-| S018 | M1 exit | [S018.md](plan/steps/S018.md) |
-| S032 | Injection evaluation suite | [S032.md](plan/steps/S032.md) |
-| S039 | Workload scaffold | [S039.md](plan/steps/S039.md) |
-| S019 | Hardened Helm charts | [S019.md](plan/steps/S019.md) |
-| S024 | Operations baseline | [S024.md](plan/steps/S024.md) |
-| S055 | Service-to-service identity | [S055.md](plan/steps/S055.md) |
-| S056 | Certificate lifecycle | [S056.md](plan/steps/S056.md) |
-| S057 | Test and tooling hygiene | [S057.md](plan/steps/S057.md) |
-| S058 | Gateway loose ends | [S058.md](plan/steps/S058.md) |
-| S060 | Claims pages and API loose ends | [S060.md](plan/steps/S060.md) |
-| S059 | Runtime and tool server loose ends | [S059.md](plan/steps/S059.md) |
-| S061 | Scaffold, registry and evaluation plumbing | [S061.md](plan/steps/S061.md) |
-| S034 | Governance documents | [S034.md](plan/steps/S034.md) |
-| S065 | Database and migrations | [S065.md](plan/steps/S065.md) |
-| S038 | GraphRAG spike | [S038.md](plan/steps/S038.md) |
-| S062 | Smoke and deploy loose ends | [S062.md](plan/steps/S062.md) |
-| S066 | Gateway ledger upkeep | [S066.md](plan/steps/S066.md) |
-| S031 | Supervisor and workers | [S031.md](plan/steps/S031.md) |
-| S063 | The cluster outside `meridian` | [S063.md](plan/steps/S063.md) |
-| S064 | Metrics and logs | [S064.md](plan/steps/S064.md) |
-| S025 | AWS mapping | [S025.md](plan/steps/S025.md) |
-| S077 | GCP mapping | [S077.md](plan/steps/S077.md) |
-| S037 | Second-framework workload | [S037.md](plan/steps/S037.md) |
-| S076 | CLI, scaffold and loader small ends | [S076.md](plan/steps/S076.md) |
-| S075 | Harness, guard and Renovate | [S075.md](plan/steps/S075.md) |
-| S067 | Triage rules and screening | [S067.md](plan/steps/S067.md) |
-| S069 | Runtime and gateway edges | [S069.md](plan/steps/S069.md) |
-| S036 | AWS Terraform | [S036.md](plan/steps/S036.md) |
-| S074 | Test suite and file sizes | [S074.md](plan/steps/S074.md) |
-| S068 | Database upkeep and retention | [S068.md](plan/steps/S068.md) |
-| S078 | GCP Terraform, a scaffold | [S078.md](plan/steps/S078.md) |
-| S073 | Renewals, upgrades and what smoke cannot see | [S073.md](plan/steps/S073.md) |
-| S070 | Claims intake and what the adjuster is told | [S070.md](plan/steps/S070.md) |
-| S071 | Measurements that need a live model | [S071.md](plan/steps/S071.md) |
-| S072 | The cluster outside `meridian`, second round | [S072.md](plan/steps/S072.md) |
-| S079 | Self-managed Kubernetes: applied once on AWS, a scaffold on Google Cloud | [S079.md](plan/steps/S079.md) |
-| S080 | File uploads for a claim, before sign-in | [S080.md](plan/steps/S080.md) |
-| S081 | The decision record for the move toward services | [S081.md](plan/steps/S081.md) |
-| S020 | Azure platform | [S020.md](plan/steps/S020.md) |
-| S082 | Code in the wrong place moves; import contracts per service | [S082.md](plan/steps/S082.md) |
-| S089 | Import layering page; Mermaid rendered in CI | [S089.md](plan/steps/S089.md) |
-| S090 | Component view of the Agent Runtime | [S090.md](plan/steps/S090.md) |
-| S091 | Data ownership views | [S091.md](plan/steps/S091.md) |
-| S092 | Mermaid and PDF render under rootless Docker | [S092.md](plan/steps/S092.md) |
-| S095 | Retention and erasure of uploaded files | [S095.md](plan/steps/S095.md) |
-| S097 | The plan in files | [S097.md](plan/steps/S097.md) |
-| S096 | The PDF: no row lost, and a brief edition | [S096.md](plan/steps/S096.md) |
-| S099 | A dispatcher and workers: the test lock and the two briefs | [S099.md](plan/steps/S099.md) |
+| S000 | Plan, harness and architecture bootstrap | [S000.md](plan/steps/S000-S019/S000.md) |
+| S001 | Commit and publish | [S001.md](plan/steps/S000-S019/S001.md) |
+| S002 | Python workspace and CI gates | [S002.md](plan/steps/S000-S019/S002.md) |
+| S003 | Synthetic data and golden set | [S003.md](plan/steps/S000-S019/S003.md) |
+| S004 | Security and quality registers | [S004.md](plan/steps/S000-S019/S004.md) |
+| S005 | Agent framework spike | [S005.md](plan/steps/S000-S019/S005.md) |
+| S006 | Local platform on kind | [S006.md](plan/steps/S000-S019/S006.md) |
+| S007 | Azure foundation | [S007.md](plan/steps/S000-S019/S007.md) |
+| S008 | Platform registry | [S008.md](plan/steps/S000-S019/S008.md) |
+| S040 | Harness refresh | [S040.md](plan/steps/S040-S059/S040.md) |
+| S009 | Walking skeleton | [S009.md](plan/steps/S000-S019/S009.md) |
+| S041 | Walking skeleton on kind | [S041.md](plan/steps/S040-S059/S041.md) |
+| S010 | Gateway routing | [S010.md](plan/steps/S000-S019/S010.md) |
+| S042 | Gateway resilience | [S042.md](plan/steps/S040-S059/S042.md) |
+| S011 | Gateway budgets and cost | [S011.md](plan/steps/S000-S019/S011.md) |
+| S013 | Policy and claims MCP servers | [S013.md](plan/steps/S000-S019/S013.md) |
+| S045 | Gateway embeddings | [S045.md](plan/steps/S040-S059/S045.md) |
+| S012 | Knowledge and retrieval | [S012.md](plan/steps/S000-S019/S012.md) |
+| S046 | Knowledge MCP server | [S046.md](plan/steps/S040-S059/S046.md) |
+| S014 | Triage graph | [S014.md](plan/steps/S000-S019/S014.md) |
+| S044 | Tool servers on kind | [S044.md](plan/steps/S040-S059/S044.md) |
+| S043 | Gateway cost panel | [S043.md](plan/steps/S040-S059/S043.md) |
+| S015 | Human approval | [S015.md](plan/steps/S000-S019/S015.md) |
+| S016 | Adjuster UI | [S016.md](plan/steps/S000-S019/S016.md) |
+| S017 | Evaluation harness | [S017.md](plan/steps/S000-S019/S017.md) |
+| S047 | Guardrails | [S047.md](plan/steps/S040-S059/S047.md) |
+| S048 | Claim lifecycle, the rest | [S048.md](plan/steps/S040-S059/S048.md) |
+| S049 | Claimant pages | [S049.md](plan/steps/S040-S059/S049.md) |
+| S054 | Parallel tests | [S054.md](plan/steps/S040-S059/S054.md) |
+| S051 | Structured outputs | [S051.md](plan/steps/S040-S059/S051.md) |
+| S052 | Scheduled sweep | [S052.md](plan/steps/S040-S059/S052.md) |
+| S053 | The claimant's word checked | [S053.md](plan/steps/S040-S059/S053.md) |
+| S050 | Live evaluation | [S050.md](plan/steps/S040-S059/S050.md) |
+| S018 | M1 exit | [S018.md](plan/steps/S000-S019/S018.md) |
+| S032 | Injection evaluation suite | [S032.md](plan/steps/S020-S039/S032.md) |
+| S039 | Workload scaffold | [S039.md](plan/steps/S020-S039/S039.md) |
+| S019 | Hardened Helm charts | [S019.md](plan/steps/S000-S019/S019.md) |
+| S024 | Operations baseline | [S024.md](plan/steps/S020-S039/S024.md) |
+| S055 | Service-to-service identity | [S055.md](plan/steps/S040-S059/S055.md) |
+| S056 | Certificate lifecycle | [S056.md](plan/steps/S040-S059/S056.md) |
+| S057 | Test and tooling hygiene | [S057.md](plan/steps/S040-S059/S057.md) |
+| S058 | Gateway loose ends | [S058.md](plan/steps/S040-S059/S058.md) |
+| S060 | Claims pages and API loose ends | [S060.md](plan/steps/S060-S079/S060.md) |
+| S059 | Runtime and tool server loose ends | [S059.md](plan/steps/S040-S059/S059.md) |
+| S061 | Scaffold, registry and evaluation plumbing | [S061.md](plan/steps/S060-S079/S061.md) |
+| S034 | Governance documents | [S034.md](plan/steps/S020-S039/S034.md) |
+| S065 | Database and migrations | [S065.md](plan/steps/S060-S079/S065.md) |
+| S038 | GraphRAG spike | [S038.md](plan/steps/S020-S039/S038.md) |
+| S062 | Smoke and deploy loose ends | [S062.md](plan/steps/S060-S079/S062.md) |
+| S066 | Gateway ledger upkeep | [S066.md](plan/steps/S060-S079/S066.md) |
+| S031 | Supervisor and workers | [S031.md](plan/steps/S020-S039/S031.md) |
+| S063 | The cluster outside `meridian` | [S063.md](plan/steps/S060-S079/S063.md) |
+| S064 | Metrics and logs | [S064.md](plan/steps/S060-S079/S064.md) |
+| S025 | AWS mapping | [S025.md](plan/steps/S020-S039/S025.md) |
+| S077 | GCP mapping | [S077.md](plan/steps/S060-S079/S077.md) |
+| S037 | Second-framework workload | [S037.md](plan/steps/S020-S039/S037.md) |
+| S076 | CLI, scaffold and loader small ends | [S076.md](plan/steps/S060-S079/S076.md) |
+| S075 | Harness, guard and Renovate | [S075.md](plan/steps/S060-S079/S075.md) |
+| S067 | Triage rules and screening | [S067.md](plan/steps/S060-S079/S067.md) |
+| S069 | Runtime and gateway edges | [S069.md](plan/steps/S060-S079/S069.md) |
+| S036 | AWS Terraform | [S036.md](plan/steps/S020-S039/S036.md) |
+| S074 | Test suite and file sizes | [S074.md](plan/steps/S060-S079/S074.md) |
+| S068 | Database upkeep and retention | [S068.md](plan/steps/S060-S079/S068.md) |
+| S078 | GCP Terraform, a scaffold | [S078.md](plan/steps/S060-S079/S078.md) |
+| S073 | Renewals, upgrades and what smoke cannot see | [S073.md](plan/steps/S060-S079/S073.md) |
+| S070 | Claims intake and what the adjuster is told | [S070.md](plan/steps/S060-S079/S070.md) |
+| S071 | Measurements that need a live model | [S071.md](plan/steps/S060-S079/S071.md) |
+| S072 | The cluster outside `meridian`, second round | [S072.md](plan/steps/S060-S079/S072.md) |
+| S079 | Self-managed Kubernetes: applied once on AWS, a scaffold on Google Cloud | [S079.md](plan/steps/S060-S079/S079.md) |
+| S080 | File uploads for a claim, before sign-in | [S080.md](plan/steps/S080-S099/S080.md) |
+| S081 | The decision record for the move toward services | [S081.md](plan/steps/S080-S099/S081.md) |
+| S020 | Azure platform | [S020.md](plan/steps/S020-S039/S020.md) |
+| S082 | Code in the wrong place moves; import contracts per service | [S082.md](plan/steps/S080-S099/S082.md) |
+| S089 | Import layering page; Mermaid rendered in CI | [S089.md](plan/steps/S080-S099/S089.md) |
+| S090 | Component view of the Agent Runtime | [S090.md](plan/steps/S080-S099/S090.md) |
+| S091 | Data ownership views | [S091.md](plan/steps/S080-S099/S091.md) |
+| S092 | Mermaid and PDF render under rootless Docker | [S092.md](plan/steps/S080-S099/S092.md) |
+| S095 | Retention and erasure of uploaded files | [S095.md](plan/steps/S080-S099/S095.md) |
+| S097 | The plan in files | [S097.md](plan/steps/S080-S099/S097.md) |
+| S096 | The PDF: no row lost, and a brief edition | [S096.md](plan/steps/S080-S099/S096.md) |
+| S099 | A dispatcher and workers: the test lock and the two briefs | [S099.md](plan/steps/S080-S099/S099.md) |
 
 ## Part D — Open questions
 
