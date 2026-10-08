@@ -7,6 +7,11 @@
 # Pandoc and the Eisvogel template. The PDF lands beside the exports, named
 # <project>-architecture-<date>-<edition>.pdf.
 #
+# With BRIEF=1 it writes the brief instead, the edition to hand to someone who
+# will not read a register: without the documents <arch-dir>/pdf-brief.txt
+# lists and with the decisions as an index, named
+# <project>-architecture-brief-<date>-<edition>.pdf. One run writes one PDF.
+#
 # Mermaid diagrams (fences in the text, or the links Structurizr's Mermaid
 # plugin leaves in ADRs) become images too: the builder saves each one's source
 # to <arch-dir>/generated/mermaid-pdf/, render-mermaid.sh renders them with
@@ -26,6 +31,8 @@
 #   MERMAID_IMAGE      optional: default minlag/mermaid-cli:12.0.1, the
 #                      Mermaid CLI that renders the diagrams (~630 MB). Keep
 #                      it identical to the Makefile's pin.
+#   BRIEF              optional: 1 writes the brief; anything else, or
+#                      nothing, the full edition
 set -euo pipefail
 
 : "${STRUCTURIZR_IMAGE:?Set STRUCTURIZR_IMAGE to your pinned Structurizr image}"
@@ -45,8 +52,20 @@ docker run --rm -v "${arch}:/w:ro" -v "${generated}:/out" "${STRUCTURIZR_IMAGE}"
 docker run --rm -v "${arch}:/w:ro" -v "${generated}:/out" "${STRUCTURIZR_IMAGE}-playwright" \
   export -workspace /w/workspace.dsl -format png -output /out
 
+# The two editions keep their sources apart, so one run never overwrites what
+# the other left for reading.
+source="architecture.md"
+# An empty array under `set -u` is an error before bash 4.4, hence the
+# ${name[@]+...} form below.
+builder_args=()
+if [ "${BRIEF:-}" = "1" ]; then
+  source="architecture-brief.md"
+  builder_args=(--brief)
+fi
+
 pdf="$(python3 "${SCRIPT_DIR}/build_architecture_pdf_source.py" \
-  "${arch}" "${generated}" "${generated}/architecture.md")"
+  "${arch}" "${generated}" "${generated}/${source}" \
+  ${builder_args[@]+"${builder_args[@]}"})"
 
 if compgen -G "${generated}/mermaid-pdf/*.mmd" >/dev/null; then
   MERMAID_IMAGE="${MERMAID_IMAGE}" \
@@ -61,7 +80,7 @@ if docker info --format '{{.SecurityOptions}}' 2>/dev/null | grep -q 'name=rootl
 fi
 docker run --rm --cap-drop ALL --security-opt no-new-privileges \
   -u "${container_user}" -e HOME=/tmp -v "${arch}:/data" -w /data \
-  "${PANDOC_IMAGE}" generated/architecture.md -o "generated/${pdf}" \
+  "${PANDOC_IMAGE}" "generated/${source}" -o "generated/${pdf}" \
   --template eisvogel --pdf-engine=xelatex --resource-path=/data
 
 echo "wrote ${ARCH_DIR}/generated/${pdf}"
