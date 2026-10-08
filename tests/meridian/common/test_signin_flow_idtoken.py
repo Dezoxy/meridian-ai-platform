@@ -199,7 +199,12 @@ def test_a_token_without_the_nonce_is_refused(flow_kit: FlowKit) -> None:
     assert_refused(flow_kit, run(flow_kit, drop=("nonce",)), FlowReason.ID_NONCE)
 
 
-@pytest.mark.parametrize("nonce", ["wrong", "", None, 42, ["x"], "a" * 500, "É" * 43])
+@pytest.mark.parametrize(
+    "nonce",
+    # The last is a lone surrogate, which JSON can carry and UTF-8 cannot
+    # encode: a refusal, not an exception (the security review of Y3).
+    ["wrong", "", None, 42, ["x"], "a" * 500, "É" * 43, "\ud800abc"],
+)
 def test_a_wrong_nonce_is_refused(flow_kit: FlowKit, nonce: object) -> None:
     assert_refused(flow_kit, run(flow_kit, nonce=nonce), FlowReason.ID_NONCE)
 

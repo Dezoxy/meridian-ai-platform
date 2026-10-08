@@ -214,8 +214,12 @@ class IdTokenCheck:
         if "azp" in claims and claims["azp"] != self._client_id:
             return FlowReason.ID_AUTHORIZED_PARTY
         given = claims.get("nonce")
-        if not isinstance(given, str) or not hmac.compare_digest(
-            given.encode(), nonce.encode()
+        # The transaction's nonce is ASCII; a claim that is not (a lone
+        # surrogate cannot even be encoded) is refused before the compare.
+        if (
+            not isinstance(given, str)
+            or not given.isascii()
+            or not hmac.compare_digest(given.encode(), nonce.encode())
         ):
             return FlowReason.ID_NONCE
         subject = claims.get(self._subject_claim)

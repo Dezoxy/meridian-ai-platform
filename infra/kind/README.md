@@ -3024,7 +3024,25 @@ else but the edge's own empty 404. Smoke with the switch off passed 56 lines
 and skipped one. The fallback, should a later image need a path that is not
 covered, is `readOnlyRootFilesystem: false` in `manifests/identity.yaml`.
 
-**Untried: what KR1 did not show.** Each is a thing to tick off, in this
+**Seen on kind, runs KR2 and KR3 (2026-10-08).** KR2, a second `make up` with
+the switch on, kept both Secrets (the line that says so) and the same pod, with
+no restart; smoke passed 62 lines with the switch on. KR3 was the rotation, on
+a cluster that still held the four `test-<role>` users (`identity.sh users`
+listed them, each with a role of its own and no group):
+`MERIDIAN_IDENTITY_ROTATE=1 MERIDIAN_IDENTITY=keycloak make up` ended 0 in 50
+seconds, made both Secrets anew, and the pod rolled through its annotation: a
+new pod, Ready with no restart, "Realm 'meridian-staff' imported", started in
+8.1 seconds, no ERROR line. `identity.sh users` then listed the cast of seven
+as the table above has it: six people in the four groups, each with the role
+of the group, and one in no group with no role. Smoke passed 62 lines with the
+switch on and none failed; with it off 56 passed and one was skipped. The
+machine had 4,080 MB available before the run and 4,820 MB after it, with 2.2
+to 2.9 GB of its 4 GB of swap in use throughout. **Not seen in KR3:** a person
+of the cast signing in on the cluster, or any token issued there (the sign-ins
+are the rig's, in a container); the passwords command (it is for the owner's
+terminal); what the old pod's tokens are worth after the roll.
+
+**Untried: what the runs did not show.** Each is a thing to tick off, in this
 order:
 
 1. A token by client credentials from inside the cluster (the `iss` it carries
@@ -3046,9 +3064,8 @@ order:
 5. The switch turned off and on again with `make up` (the Gateway narrows and
    widens, the one line appears); only smoke with the switch off was run, with
    the add-on left up.
-6. `MERIDIAN_IDENTITY_ROTATE=1` (the pod rolls through the annotation), and a
-   rotation interrupted on purpose before the Deployment is applied, then a
-   plain run (the pod rolls then).
+6. A rotation interrupted on purpose, between the two Secrets and before the
+   Deployment is applied, then a plain run (a whole rotation was seen in KR3).
 7. A whole suite starting with the add-on up (the suite's room check wants
    3,500 MB; 4,452 MB were available after the run).
 8. Not on the list of the run but still not seen: the image pull on a node that
