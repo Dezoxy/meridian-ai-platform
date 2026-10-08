@@ -119,8 +119,10 @@ k() { kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meri
    (`infra/kind/manifests/observability-networkpolicy.yaml`). Since S072 that
    file also denies egress from `observability` by default (tested without a
    cluster and seen on kind in the cold run of 2026-10-07): the collector may
-   reach the resolver, Tempo, Prometheus and Loki on their ports and nothing
-   else, so a collector that cannot write to one of them may be refused by
+   reach the resolver, Tempo's receiver on 4317 and the gateways in front of
+   Prometheus and Loki on 8443 and nothing else (since S072's third part
+   Loki's and Prometheus's own ports admit the gateways alone), so a
+   collector that cannot write to one of them may be refused by
    `egress-otel-collector`, not by the store. It verifies the
    collector's certificate against the authority in the ConfigMap
    `telemetry-ca`:
@@ -133,10 +135,25 @@ k() { kubectl --kubeconfig infra/kind/kubeconfig --context kind-meridian -n meri
 
    A missing ConfigMap or a Certificate that is not Ready is
    [certificate expiry](certificate-expiry.md).
-5. **Prometheus's receiver.** The metrics arrive through Prometheus's OTLP
-   receiver, which `values/kube-prometheus-stack.yaml` switches on. If the
-   collector's output shows it cannot write there, or Prometheus restarted,
-   look at its own pod in `observability`.
+5. **Prometheus's receiver, behind its gateway.** The metrics arrive through
+   Prometheus's OTLP receiver, which `values/kube-prometheus-stack.yaml`
+   switches on, and since S072's third part only through the gateway in front
+   of it (the Deployment `prometheus-gateway`, an nginx that admits the
+   write from a client certificate whose subject is `CN=otel-collector-client`
+   and nothing else). If the collector's output shows it cannot write there,
+   or Prometheus restarted, look at the gateway's log first, which prints
+   `verify=`, `subject=` and `class=` for each request: `class=w verify=NONE`
+   answered 403 is a collector that presented no certificate (it keeps the
+   old one for up to five minutes after the client certificate's subject
+   changed, and drops what it sent then, unless `make up` rolled it first, as
+   the certificate-expiry runbook says: run R16 on kind lost about five
+   minutes of logs the same way at Loki's gateway), a 400 from nginx itself
+   is a certificate that failed verification (the wrong authority or the
+   wrong purpose), and `class=x` is a path the gateway does not serve. Then
+   look at the pod of Prometheus itself in `observability`. The logs go
+   through Loki's gateway (`loki-gateway`) the same way; its log shows each
+   request's status (run R16 read the collector's 403s there) and sets no
+   `verify=` field of its own.
 6. **The sweep.** The sweep sends its six gauges once, just before it exits,
    and a failed send is never the pass's failure: the Job succeeds and the
    alert is the only signal. The evidence is in the output of the last Jobs,

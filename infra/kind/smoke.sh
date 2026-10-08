@@ -17,7 +17,8 @@
 # A check in smoke.d/ has its paragraph, constants and functions there.
 # The checks, in order: 01 edge, 02 database, 03 tools, 04 telemetry, 05 cost
 # panel, 06 adjuster pages, 07 sweep, 08 network policy, 09 service identity, 10
-# certificate policy, 11 alert rules.
+# certificate policy, 11 alert rules, 12 telemetry stores (one more short-lived Pod
+# in observability, unique name, deleted when the check ends and by the EXIT trap).
 # Prints one PASS, FAIL or SKIP line per check and exits non-zero on any FAIL.
 set -euo pipefail
 
@@ -47,6 +48,8 @@ set -euo pipefail
 . "${KIND_DIR}/smoke.d/10-certificate-policy.sh"
 # shellcheck source=smoke.d/11-alert-rules.sh
 . "${KIND_DIR}/smoke.d/11-alert-rules.sh"
+# shellcheck source=smoke.d/12-telemetry-stores.sh
+. "${KIND_DIR}/smoke.d/12-telemetry-stores.sh"
 
 need_tools docker kubectl curl jq base64 openssl timeout
 require_local_docker
@@ -71,6 +74,7 @@ check_network_policy
 check_service_identity
 check_certificate_policy
 check_alert_rules
+check_telemetry_stores
 
 if ((failures > 0)); then
   printf '\n%s check(s) FAILED\n' "${failures}"

@@ -1,0 +1,139 @@
+# The NetworkPolicies of Prometheus's port and its gateway's (S072, contract M4), in
+# a file of their own, as Loki's are (observability-loki-networkpolicy.yaml):
+# `make up` applies them right after the kube-prometheus-stack release, just before
+# the gateway's Deployment (observability-prometheus-gateway.yaml), so Prometheus's
+# port is not closed at the start of a run that takes minutes. The default denies
+# of observability-networkpolicy.yaml (ingress and egress) cover these pods too.
+#
+#   prometheus       9090 from the gateway's pods alone. Until contract M4 it
+#                    admitted Grafana (queries) and the collector (the native OTLP
+#                    receiver, /api/v1/otlp); neither reaches it now, so what
+#                    reads and what writes is decided at the gateway, which asks
+#                    for the collector's client certificate. Nothing else needs
+#                    this port from outside the pod: the kubelet's probes are not
+#                    filtered by a policy (and name the container's port), the
+#                    reloader reloads at localhost:9090 in the same pod, and
+#                    Prometheus scrapes itself from its own address: a connection
+#                    from a pod to itself stays inside the pod's network namespace
+#                    (the header of observability-networkpolicy.yaml)
+#   prometheus-gateway  8443 from the collector (OTLP, with its client certificate)
+#                    and from Grafana (reads, with none): the one TLS listener of
+#                    the gateway (observability-prometheus-gateway.yaml)
+#   egress-prometheus-gateway  Prometheus 9090: the gateway's one upstream. The
+#                    upstream is static (nginx resolves its name once, at start,
+#                    through `egress-dns`'s rule for every pod); no resolver runs
+#                    at request time
+#   smoke-telemetry-probe-prometheus  egress to Prometheus's 9090 for the Pod that
+#                    `make smoke` (check 12) starts and for nothing else
+#
+# The collector's and Grafana's egress rules towards the gateway (8443) are in
+# observability-networkpolicy.yaml, with their other rules; they no longer have one
+# for Prometheus's own port.
+#
+# A rule here is by pod label, as in the files beside it: a pod created in this
+# namespace with the gateway's three labels reaches Prometheus's port (T-84, said
+# and not solved). The smoke check (smoke.d/12-telemetry-stores.sh) makes a pod with
+# the collector's label and relabels it with the gateway's, and says so.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: prometheus
+  namespace: observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
+      operator.prometheus.io/name: kube-prometheus-stack-prometheus
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus-gateway
+              app.kubernetes.io/instance: prometheus-gateway
+              app.kubernetes.io/component: gateway
+      ports:
+        - port: 9090
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: prometheus-gateway
+  namespace: observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus-gateway
+      app.kubernetes.io/instance: prometheus-gateway
+      app.kubernetes.io/component: gateway
+  policyTypes: [Ingress]
+  ingress:
+    # The write path's client and the read path's, one port (the gateway has one
+    # TLS listener): the collector, which writes with its client certificate, and
+    # Grafana, which reads with none. The gateway's own check, not this rule, is
+    # what keeps Grafana from writing.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: opentelemetry-collector
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: grafana
+              app.kubernetes.io/instance: kube-prometheus-stack
+      ports:
+        - port: 8443
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-prometheus-gateway
+  namespace: observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus-gateway
+      app.kubernetes.io/instance: prometheus-gateway
+      app.kubernetes.io/component: gateway
+  policyTypes: [Egress]
+  egress:
+    # Prometheus, on its own port, the gateway's one upstream (and DNS, which
+    # `egress-dns` gives every pod): nothing else.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+              operator.prometheus.io/name: kube-prometheus-stack-prometheus
+      ports:
+        - port: 9090
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: smoke-telemetry-probe-prometheus
+  namespace: observability
+spec:
+  # For `make smoke` (check 12) and nothing else, as `smoke-telemetry-probe` is for
+  # Loki's port: the probe Pod carries this label and the collector's name label.
+  # It lets the Pod SEND to Prometheus's own port, and Prometheus's ingress rule
+  # above does not admit it, so a connection that times out is Prometheus's rule
+  # and not the sender's egress (the collector's own rule for 9090 is gone, so
+  # without this one the Pod would time out whatever Prometheus said). The Pod is
+  # relabelled with the gateway's labels as its control, and must then reach the
+  # port. No Service, Deployment or other policy selects the label, and the policy
+  # adds no ingress.
+  podSelector:
+    matchLabels:
+      meridian-smoke: telemetry-probe
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+              operator.prometheus.io/name: kube-prometheus-stack-prometheus
+      ports:
+        - port: 9090
+          protocol: TCP

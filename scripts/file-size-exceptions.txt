@@ -47,11 +47,7 @@ tests/meridian/test_helm_chart.py 823 over the ceiling before the check existed;
 tests/meridian/test_helm_identity.py 1086 over the ceiling before the check existed; a row of S074 homes its split
 tests/meridian/test_kind_cluster_holder.py 1199 over the ceiling before the check existed; a row of S074 homes its split
 tests/meridian/test_kind_kubectl_bounds.py 992 over the ceiling before the check existed; a row of S074 homes its split
-tests/meridian/test_kind_namespace_policies.py 847 over the ceiling before the check existed; a row of S074 homes its split
 tests/meridian/test_kind_upkeep_script.py 845 over the ceiling before the check existed; a row of S074 homes its split
-tests/meridian/test_smoke_alert_rules.py 826 over the ceiling before the check existed; a row of S074 homes its split
-tests/meridian/test_smoke_network_policy.py 864 over the ceiling before the check existed; a row of S074 homes its split
-tests/meridian/test_telemetry_ca.py 821 over the ceiling before the check existed; a row of S074 homes its split
 tests/meridian/test_triage_stack.py 852 over the ceiling before the check existed; a row of S074 homes its split
 tests/meridian/toolserver/test_tool_server.py 2433 over the ceiling before the check existed; a row of S074 homes its split
 tests/meridian/workloads/claims_triage/test_adjuster_pages.py 3105 over the ceiling before the check existed; a row of S074 homes its split

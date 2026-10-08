@@ -26,6 +26,7 @@ grafana_url=""     # set by open_grafana
 grafana_failed=0   # open_grafana failed once: later calls fail quietly
 network_pod=""     # the probe Pod of check 8 while it may exist
 network_outsider="" # the probe Pod of check 8's collector line, in NETWORK_OUTSIDER_NAMESPACE
+telemetry_probe_pod="" # the probe Pod of check 12 (telemetry stores) while it may exist
 refused_request="" # the CertificateRequest of check 10 while it may exist
 refused_err_file="" # the messages of check 10's commands, while it runs
 poll_error=""      # what the last failed poll attempt saw
@@ -130,6 +131,11 @@ cleanup() {
   # On stderr, not stdout: the lines a reader counts do not change.
   network_delete_pod || echo "smoke: could not delete the probe pod ${network_pod} in meridian; delete it by hand: kubectl -n meridian delete pod ${network_pod}" >&2
   network_outsider_delete || echo "smoke: could not delete the probe pod ${network_outsider} in ${NETWORK_OUTSIDER_NAMESPACE}; delete it by hand: kubectl -n ${NETWORK_OUTSIDER_NAMESPACE} delete pod ${network_outsider}" >&2
+  # Check 12's probe Pod (smoke.d/12-telemetry-stores.sh). The function exists in
+  # the script; the guard is for the harnesses that run `cleanup` without that part.
+  if declare -F telemetry_stores_delete_pod >/dev/null; then
+    telemetry_stores_delete_pod || echo "smoke: could not delete the probe pod ${telemetry_probe_pod} in observability; delete it by hand: kubectl -n observability delete pod ${telemetry_probe_pod}" >&2
+  fi
   refused_delete_request || true
   if [[ -n "${refused_err_file}" ]]; then rm -f "${refused_err_file}"; fi
   if [[ -n "${pf_pid:-}" ]]; then

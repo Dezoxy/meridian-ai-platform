@@ -1,0 +1,177 @@
+# The NetworkPolicies of Loki's pods and its gateway's (S072, contracts M3 and
+# M3b), in a file of their own: `make up` applies them just before Loki's
+# release, after the namespace's other policies (observability-networkpolicy.yaml,
+# applied at the start of the run with the node's address), so that the policies
+# of the Loki pods are in place when the pods are, and Loki's port is not closed
+# at the start of a run that takes minutes. The default denies of that file
+# (ingress and egress) cover these pods too.
+#
+#   loki-gateway     8443 from the collector (OTLP, with its client certificate)
+#                    and from Grafana (reads, with none): the one TLS listener
+#                    of the chart's nginx in front of Loki (values/loki.yaml)
+#   loki             3100 from the gateway's pods alone: neither the collector
+#                    nor Grafana reaches it. 7946 TCP and UDP from its own pods:
+#                    the single binary joins the memberlist it makes through
+#                    its own Service (join_members, with abort_if_cluster_join_
+#                    fails: true)
+#   egress-loki-gateway  Loki 3100: the gateway's one upstream. DNS is
+#                    `egress-dns`'s (every pod), because nginx resolves the
+#                    upstream's name at each request
+#   egress-loki      its own pods, 7946 TCP and UDP: the memberlist
+#   smoke-telemetry-probe  egress to Loki's 3100 for the Pod that `make smoke`
+#                    (check 12) starts and for nothing else
+#
+# The collector's and Grafana's egress rules towards the gateway (8443) are in
+# observability-networkpolicy.yaml, with their other rules.
+#
+# A rule here is by pod label, as in the file beside it: a pod created in this
+# namespace with the gateway's three labels reaches Loki's port (T-84). The
+# smoke check for it (smoke.d/12-telemetry-stores.sh) makes a pod with the
+# collector's label and relabels it with the gateway's, and says so.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: loki
+  namespace: observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: loki
+      app.kubernetes.io/instance: loki
+      app.kubernetes.io/component: single-binary
+  policyTypes: [Ingress]
+  ingress:
+    # Loki's own port takes connections from its gateway alone: neither the
+    # collector nor Grafana reaches it, so what reads and what writes is decided
+    # at the gateway, which asks for the collector's client certificate.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: loki
+              app.kubernetes.io/instance: loki
+              app.kubernetes.io/component: gateway
+      ports:
+        - port: 3100
+          protocol: TCP
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: loki
+              app.kubernetes.io/instance: loki
+              app.kubernetes.io/component: single-binary
+      ports:
+        - port: 7946
+          protocol: TCP
+        - port: 7946
+          protocol: UDP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: loki-gateway
+  namespace: observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: loki
+      app.kubernetes.io/instance: loki
+      app.kubernetes.io/component: gateway
+  policyTypes: [Ingress]
+  ingress:
+    # The write path's client and the read path's, one port (the gateway has one
+    # TLS listener, values/loki.yaml): the collector, which writes with its client
+    # certificate, and Grafana, which reads with none. The gateway's own check,
+    # not this rule, is what keeps Grafana from writing.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: opentelemetry-collector
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: grafana
+              app.kubernetes.io/instance: kube-prometheus-stack
+      ports:
+        - port: 8443
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-loki-gateway
+  namespace: observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: loki
+      app.kubernetes.io/instance: loki
+      app.kubernetes.io/component: gateway
+  policyTypes: [Egress]
+  egress:
+    # Loki, on its own port, the gateway's one upstream (and DNS, which
+    # `egress-dns` gives every pod, because nginx resolves the upstream's name at
+    # each request): nothing else.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: loki
+              app.kubernetes.io/instance: loki
+              app.kubernetes.io/component: single-binary
+      ports:
+        - port: 3100
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: smoke-telemetry-probe
+  namespace: observability
+spec:
+  # For `make smoke` (check 12) and nothing else: the probe Pod carries this label
+  # and the collector's name label. It lets the Pod SEND to Loki's own port, and
+  # Loki's ingress rule above does not admit it, so a connection that times out is
+  # Loki's rule and not the sender's egress (a Pod with no egress rule to Loki
+  # would time out whatever Loki said: the rate-store line of check 8 learned
+  # that). The Pod is relabelled with the gateway's labels as its control, and
+  # must then reach the port. No Service, Deployment or other policy selects the
+  # label, and the policy adds no ingress. It gives its Pod an egress path that
+  # only the Pod's own labels select, as every rule of this file does (T-84).
+  podSelector:
+    matchLabels:
+      meridian-smoke: telemetry-probe
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: loki
+              app.kubernetes.io/instance: loki
+              app.kubernetes.io/component: single-binary
+      ports:
+        - port: 3100
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-loki
+  namespace: observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: loki
+      app.kubernetes.io/instance: loki
+      app.kubernetes.io/component: single-binary
+  policyTypes: [Egress]
+  egress:
+    # The memberlist, through its own Service (the ingress rule's other half).
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: loki
+              app.kubernetes.io/instance: loki
+              app.kubernetes.io/component: single-binary
+      ports:
+        - port: 7946
+          protocol: TCP
+        - port: 7946
+          protocol: UDP
