@@ -308,7 +308,9 @@ request's body says so:
   and `gcp-kubeadm-scan`), since CI does not run them and a newer image carries
   newer checks that can turn them red.
 - `tooling`: the result of `Docs / Architecture PDF`, the one job that
-  runs Pandoc and Mermaid. It is not a required check.
+  runs Pandoc. It is not a required check. Since S089 the required
+  `derived diagrams` job renders every Mermaid block with the Mermaid
+  image, so that pin is proven on the pull request itself.
 - `agent framework`: never merged on green checks alone. Read the note on
   the pull request, run the three tests it names, and merge and release it
   only when `claims.briefs` holds no waiting brief (T-97, T-98).
@@ -334,6 +336,13 @@ Cost rules:
 
 - Docker-heavy targets (`make pdf`, `make mermaid-render`) run when their
   inputs changed, not on every step.
+  CI renders every Mermaid block on every pull request (S089). Under
+  rootless Docker, which the virtual machine runs, neither target can
+  write its PNGs, so there the pull request's job is the proof for a
+  diagram. `Docs / Architecture PDF` refuses a start on a branch other
+  than `main` and runs on a pull request only when the scripts, the
+  `Makefile` or the workflow changed, so a PDF of a branch is built by
+  hand there: S089's section has the order of the commands.
 - Broad searches go to an Explore subagent, which returns conclusions instead
   of file dumps.
 - The Azure environment exists only on demo days (C-04).
@@ -566,6 +575,10 @@ both readings the same hour ("yes both are right, go on").
 | S075 | Harness, guard and Renovate | `make docs` notices a blank line that splits a table; the command guard's known gaps to a Secret's values and to superuser SQL are closed or listed where a session reads them, and a hook that times out has a known outcome; a rule for an implementer that edits through the shell, and a guard or a rule for `make up` and `make down` from an old checkout (both the owner's); the workflow linter knows the runner label; Renovate's week of waiting is a required check or the plan says why not (the owner's decision), an image is not proposed before the chart that installs it, and the two pgvector versions are one | done (not built: the two pgvector versions are not one, because the newest CloudNativePG image still holds 0.8.6; the owner chose package-manager holds over a required check, and uv's `exclude-newer` cannot go in before 2026-10-10; N4, the guard's own files, is the owner's open question 6; the shell-edit hook is inert until the owner sets `bashEditDiffEnabled`) | — |
 | S076 | CLI, scaffold and loader small ends | No registry entry lets the runtime name an agent that no tenant lists without a check saying so (T-81); `services_edit` refuses an alias or a merge key by itself; the scaffold says which write failed and names the line it refuses in every case; the two entry-point loaders answer a bad entry in the same fixed words; the screen's fingerprint covers what it claims to; the workload's report builders refuse another workload's manifest; `meridian registry schemas` answers an unwritable directory with a message; the scaffold can write an agent with workers, or the plan says why a second graph of subgraphs is not built. Built as: `meridian registry validate` prints one NOTE, exit code unchanged, for each graph agent the runtime may name and no tenant lists, and `load_registry` refuses nothing new, so the owner's S061 decision stands; `services_edit` itself refuses an anchor, an alias or a merge key, naming the line; a refusal about a line of the person's file names the parser's line where the parser gives one; a failed or interrupted write names its kind and the error's class, the undo puts back every file that still holds the command's own bytes and names every path it did not restore (the scaffold's write and undo are in `scaffold_writes.py`); the two loaders word a refusal in one table of fixed sentences that quote no distribution's name and no import error's text, with the registry's agent ID in front for the graphs; the screen's digest is unchanged and the documents say what it covers and does not; both report builders compare the manifest's workload with their own; `meridian registry schemas` answers a directory it cannot update with one line; a second graph of subgraphs is not built, as a decision (the section says why). Implemented and tested, not run on a cluster | done | S037 |
 | S080 | File uploads for a claim, before sign-in | A claimant uploads one PDF, JPEG or PNG of at most 1 MiB to a claim, five and 3 MiB to a claim, through the JSON route or the status page's form; the file is told by its first bytes and never by its declared type or name, and its name is not stored; an upload is not a document arrival and starts no triage; the adjuster lists a claim's files with "not scanned" beside each and, behind a second switch, downloads them as an attachment under a sandbox policy, with an audit row before the first byte; both switches are off by default, and the chart allows either only for a route host name that ends in `.localhost`; the app has brakes of its own besides the edge's second route, buffer and rate limit; nothing scans a file (designed, not built) and nothing deletes one. Built as (2026-10-07; implemented and tested against PostgreSQL and **run once on kind on 2026-10-07 with both switches on for that run only** (run RU1: by script, through the edge, not in a browser), nothing paid, no evaluation fingerprint moved, the owner's "Build now" of the same day for the uploads and "Build now, local-only switch" for the download): migration 0032 (`claims.claim_files`, `claims_api` may insert and select), the route and the form, the ceilings under advisory locks, the edge route and policies in the chart, the adjuster's list and download with brakes of their own, synthetic sample files from the seeded generator, and five reviews (database, security twice, FastAPI, platform boundary). Not built: a scanner, a delete or a retention period, a sign-in, a second host name for downloads | doing: built, reviewed and run twice on kind (RU1, RU2); the pull request is left | S070 |
+| S089 | Import layering page; Mermaid rendered in CI | A page in the Documentation tab and the PDF says which Python package may import which, as the six import-linter contracts enforce it, with one Mermaid diagram of the layers and the output of a run; the `derived diagrams` job renders every Mermaid block on every pull request and fails on one that does not parse. Built as (2026-10-07, the owner's "okay do it and open pr"): `docs/architecture/code/import-layering.md`, symlinked into `overview/` as `40-import-layering.md`, and one step in `.github/workflows/docs.yml`. Implemented as a document and a gate; it is not a component view, which is S090 | done | — |
+| S090 | Component view of the Agent Runtime | A component view in the Structurizr model answers which responsibilities sit inside the Agent Runtime and which of them is the only way out to a model, a tool and the database: components by responsibility and not one per file, with a register row and a PNG read at full size, and no other view changed. Built as (2026-10-07, the owner's "Component view (Recommended)", which drew it from today's code and took away the wait for S083): `RuntimeComponents`, six components (Run API, Run Records, LangGraph Host, Agent Framework Host, Model Client, Tool Client) in `docs/architecture/model/components.dsl`, 12 boxes and 15 arrows, embedded in the import layering page. Implemented as a view read from the code; nothing was run for it. The render under rootless Docker went to S092, and S082 brings the page and the view to the code it moves (a backlog row). The Model Gateway gets a view only when a question needs one | done | — |
+| S091 | Data ownership views | Who reads and writes which schema of the Platform Database, as views of the model: the six schemas (`audit`, `claims`, `gateway`, `knowledge`, `policy`, `runtime`) as components of the database, each service with its own schema and the reads that cross a schema in one view, and the audit trail in a second if one view does not read; every arrow checked against the grants the migrations leave and compared with ADR 10's table, a difference recorded and not smoothed; register rows and PNGs read at full size. No ER diagram: S085 and S087 rewrite the tables. The owner, 2026-10-07: "should we add db view too?", then "okay" to this. Built as (2026-10-07): `DataOwnership` (11 boxes, 13 arrows, the seven grants on another service's schema drawn thicker) and `AuditTrail` (9 and 8), in `docs/architecture/model/data.dsl`, embedded in the data classification's inventory. The grants were read from the migration files' statements, not from a database's catalog; they agree with ADR 10's table. Implemented as views; nothing was run for them | done | S090 |
+| S092 | Mermaid and PDF render under rootless Docker | `make mermaid-render` and `make pdf` finish on a machine whose Docker is rootless, as the virtual machine's is, and still finish in CI; the fix is made in development-base's copy of `scripts/render-mermaid.sh` first and copied here unchanged; with it, the two notes of S089's review (the render container needs no network; the script passes when it finds no block). Until then the documents say the two targets fail there. Designed | todo | — |
 
 ### Toward services: a database each and six images
 
@@ -1098,6 +1111,9 @@ that day; the rest stand as their step recorded them.
 | The multipart parser leans on Starlette internals that are not documented API: the class attribute `spool_max_size`, `UploadFile._max_mem_size` and `_rolled`. Starlette arrives through FastAPI, so a lock refresh can rename one and a part of 1.0 to 1.1 MiB would spill to `/tmp`, which the pod does not have room for. A test with no database feeds a 1,100,000-byte part and fails if the part rolls to disk, and the class's docstring names the coupling; nothing pins the version | S080 (the FastAPI review, L2; F4c) | open; guarded by a test, not pinned | S080, later half |
 | Envoy's handling of an encoded path on the upload route. Run RU1 showed that Envoy normalises the path before the app sees it (`POST /claims/CLM-0001/%66iles` was served as an upload, 201; a GET with the first character of the file identifier encoded was 200; `POST //claims/CLM-0001/files` reached the route, 409), so behind this edge the app's refusal of a raw path with a `%` never fires. What is still not known is whether the normalised request is matched by the uploads route, with its buffer and rate limit, or by the first route: the bodies were under 64 KiB, which either route passes. Run RU2 sent 100 KiB bodies to an encoded and to a double-slashed path: both reached the app, which the first route's 64 KiB would not have let through, and the seventh of seven uploads to the encoded path got the edge's own 429: the uploads route serves the normalised path and its six a minute count it. Not probed: an escaped slash. The app's own brakes do not depend on the answer | S080 (the security review, M-1; F2b; runs RU1 and RU2) | closed for this edge by RU2 (an escaped slash not probed) | S080 |
 | Small ends of S080, none of which changes behaviour: `test_claim_uploads_limits.py::test_the_upload_route_alone_takes_more_than_64_kib` says "alone" and now covers the JSON route only; the shared privilege snapshot (`tests/meridian/sweepmigrationsupport.py`) does not list `MAINTAIN`, which the migration's own test checks for ten roles; the Makefile's help line for `synthetic` does not mention the upload samples; one `UnsupportedFieldAttributeWarning` ('alias' for `claim_id`) appeared once in a directory run of the claims tests, in a test that touches no upload code | S080 (F1, F1b, F4a, F4c, F5 reports) | open | S080, later half |
+| `make mermaid-render` and `make pdf` fail under rootless Docker, which the virtual machine runs: `scripts/render-mermaid.sh` starts the container with the caller's user and group, which rootless Docker maps to another user than the folder's owner, and every PNG ends in "EACCES: permission denied" (five of five, then the PDF's four of four, on 2026-10-07). The same script on a copy of the folder made world-writable rendered all five. CI's Docker is not rootless and renders. The script's canonical copy is development-base's, so the fix goes there first and is copied here. With it, from the review of S089's workflow step (low): the render container needs no network and could run with none, in this job and in the PDF's; and the script passes when it finds no block, which a count in the Makefile's target would catch | S089 (the first local render; the infra review) | open; CI renders, the virtual machine does not | S092 |
+| The import layering page (`docs/architecture/code/import-layering.md`: its diagram, its table of contracts and its counts) and the `RuntimeComponents` view were read from the code of 2026-10-07. S082 moves the workloads' graphs and the sweep's SQL and adds a contract per service, S083 makes a package per service and S086 cuts the sweep in two: each brings the page, `model/components.dsl` and the view's register row to the code it leaves | S089, S090 | open | S082 |
+| The `DataOwnership` and `AuditTrail` views (`docs/architecture/model/data.dsl`) draw the grants of 2026-10-07, read from the migration files' GRANT and REVOKE statements and not from a catalog. S084 takes the tool servers' reads of runs and claims away, S085 replaces the one audit table by a table per service and a relay, S086 cuts the sweep's reach into the runtime's schema, and S087 makes five databases: each brings the model's arrows, the two views and their register rows to what it leaves, and S087's baselines are where the grants are read from a migrated database's catalog and compared with the views | S091 | open | S085 |
 
 ## Part C — Step details
 
@@ -20394,6 +20410,314 @@ items); the Ingress row of `docs/architecture/overview/01-meridian-ai-platform.m
 still names Application Gateway WAF in the Azure design, which ADR 11 and the
 model no longer do.
 
+### S089 — Import layering page; Mermaid rendered in CI
+**Status:** done · **Started:** 2026-10-07 · **Finished:** 2026-10-07
+**Goal:** say in the architecture documents which Python package may import
+which, as the import-linter contracts enforce it, with one Mermaid diagram
+that reaches the Documentation tab and the PDF; and make CI render every
+Mermaid block, so that one that does not parse fails a required check.
+
+**Decisions:**
+
+- **The owner, 2026-10-07:** asked what "app layering docs … like at the
+  structurizr c4 diagrams" is called and for a plan, then how Mermaid is
+  used like Structurizr and how it reaches the generated PDF, then: "okay do
+  it and open pr". The plan put to the owner had five points: the layering
+  diagram in a page the PDF reads, `pdf-sections.txt` left empty, a render of
+  every Mermaid block in the `diagrams` job, no PDF build on every documents
+  change, and the gates. The component view was in the first plan with a
+  recommendation to wait for S083; the owner did not answer that question, so
+  it is a row (S090) and not built.
+- **The session's own (the owner may overturn any):**
+  - Two things are called layering and they get two tools. What is inside
+    one container is a C4 component view and belongs to the Structurizr
+    model. Which package may import which is a rule about source code that
+    no view shows, and the skill gives dependencies to Mermaid. The page
+    draws packages by their import paths, never containers.
+  - The diagram is written by hand from the contracts and the imports
+    counted on the day. A generator from `pyproject.toml` was rejected: seven
+    boxes and eight arrows, and S082 rewrites the contracts anyway. The page
+    says its update trigger.
+  - The page is a real file in a new folder, `docs/architecture/code/`,
+    symlinked into `overview/` as `40-import-layering.md`, as the registers
+    are. `pdf-sections.txt` would have put it in the PDF and not in the tab.
+  - The render step goes into the existing `derived diagrams` job, not a
+    new job: no new required check to add to the ruleset, and the job
+    already pulls an image. The cost is the Mermaid image, about 630 MB, on
+    every pull request.
+  - The PDF workflow's triggers stay as they are. A build of the PDF on every
+    change under `docs/architecture/` was rejected as slow for what the
+    render step already proves.
+  - `scripts/render-mermaid.sh` is not changed, although it fails under
+    rootless Docker (below): its canonical copy is development-base's.
+
+**Advisor:** one consultation, 2026-10-07, at the design, before the first
+plan went to the owner. It changed three things: the answer names two
+things and not one (the component view, and the import rule that Mermaid
+draws); the component view waits for S082 and S083, which move the modules
+it would draw; and one view, of the Agent Runtime, not one per container.
+Not consulted before the pull request: the workflow step was read by the
+`infra-reviewer`, and the rest is documents.
+
+**Work log:** 2026-10-07, branch `s089-import-layering` off
+`main` at ae94424. Read: the six contracts in `pyproject.toml`, the Mermaid
+and PDF scripts, the two workflows, the skill's "Model or Mermaid". Counted
+the imports the diagram draws (files that import the target: workloads to
+runtime 12, workloads to platform 28, runtime to platform 17, gateway to the
+other platform packages 18, gateway modules to the adapter's package 8;
+runtime to workloads 0, platform to runtime or workloads 0, and no file
+outside the gateway imports it). Wrote the page and its symlink, the row and
+the notes in the architecture README, one step in `docs.yml`, and Part A's
+two lines about which job runs Mermaid.
+
+**Result / verification:**
+
+- `uv run lint-imports`: "Analyzed 237 files, 1446 dependencies",
+  "Contracts: 6 kept, 0 broken".
+- `make docs`: "docs consistency: 14 checks passed", exit 0.
+- `make test`: "Ran 405 tests", "OK", exit 0.
+- `make check`: exit 0, no ERROR line.
+- `make mermaid-views`: "8 views", "0 derived blocks rewritten in 0 files".
+- `make mermaid-render` on the virtual machine: **failed**, five of five,
+  each with "EACCES: permission denied, open '/data/<hash>.png'". Not this
+  change: Docker there is rootless, and the script's `-u` makes the
+  container's user another than the folder's owner. The same script on a
+  copy of the five files in a world-writable scratch folder: "rendered 5
+  Mermaid diagram(s)", exit 0. The new diagram's PNG was read at full size:
+  seven boxes, eight arrows, every label legible, one arrow crossing
+  another (the runtime's arrow to the frameworks over the workloads' arrow
+  to the platform).
+- `make pdf` on the virtual machine: **failed** at the same place, four of
+  four. Its source was written first and holds the page ("Code layering and
+  import rules", its two sections and the diagram's image line), with "4
+  Mermaid diagrams to render".
+- The PDF, by hand, because `make pdf` stops at the render: the folder
+  `generated/mermaid-pdf` made world-writable, `scripts/render-mermaid.sh`
+  on it ("rendered 4 Mermaid diagram(s)"), then the Pandoc command of
+  `scripts/architecture-pdf.sh` (exit 0). 350 pages; the page is chapter 9
+  on pages 167 to 170, the diagram is embedded on page 168 at 1310 by 1872
+  pixels and the table's text is on page 169. Read as extracted text and
+  an extracted image: the machine has no tool that draws a PDF page, so
+  the table's layout on paper was not seen.
+- `Docs / Architecture PDF` started on the branch: **failed**, as it is
+  built to ("Architecture PDFs are published from main only"). The
+  session had expected a build that publishes nothing and had written
+  that into Part A and the pull request without reading the workflow's
+  first step; both were corrected before the merge.
+- Seen in CI: the pull request's `derived diagrams` job, the first run of
+  the new step, passed in 2 min 2 s on the first commit.
+- The `infra-reviewer` read the workflow's diff and the script: no
+  critical, high or medium finding and one low (the render container has
+  the network, which a render does not need; a pull request from a fork
+  is rendered with a read-only token, no secret and only the render folder
+  mounted). It found the folders the new step writes owned by the
+  runner's user, no pin or action added, and the 15 minutes enough. It
+  noted that the script passes when no block is found; four tracked files
+  hold one today.
+- Not seen: the page in the Documentation tab in a browser; the PDF's pages
+  drawn; a pull request with a broken fence failing the new step in CI
+  (locally the script exits 1 on a failed render, as the five failures
+  above show).
+
+**Follow-ups:** the component view of the Agent Runtime is S090 (`todo`,
+after S083). The render under rootless Docker is in the follow-up backlog,
+homed at S090.
+
+### S090 — Component view of the Agent Runtime
+**Status:** done · **Started:** 2026-10-07 · **Finished:** 2026-10-07
+**Goal:** one C4 component view in the Structurizr model that answers which
+responsibilities sit inside the Agent Runtime and which of them is the only
+way out to a model, a tool and the database.
+
+**Decisions:**
+
+- **The owner, 2026-10-07:** after S089's pull request, "when it merged, write
+  the code". Asked which code, with three options, the owner answered
+  "Component view (Recommended)" ("(Recommended)" is the question tool's mark
+  on the option the session recommended, copied as the answer holds it). That
+  option said the view is drawn from today's code and skips the wait for
+  S083, so this row no longer depends on S083. The same day the owner asked
+  "should we add db view too?" and answered the session's proposal (one view
+  of who reads and writes which schema, in Structurizr, as a step of its own;
+  no ER diagram yet) with "okay": that is S091.
+- **The session's own (the owner may overturn any):**
+  - Six components, by responsibility and not by file: Run API (`app.py`,
+    `host_wiring.py`, `graphs.py`, `settling.py`), Run Records (`runs.py`),
+    LangGraph Host (`langgraph_host.py`, `checkpoints.py`, `tracing.py`),
+    Agent Framework Host (`agent_framework_host.py`,
+    `workflow_checkpoints.py`), Model Client (`model_client.py`) and Tool
+    Client (`tool_client.py`, `tool_transport.py`). The cut is the code's own:
+    `hosts.py` speaks of the runtime's neutral code and of hosts. A seventh
+    component for the choice of a host was rejected: three more arrows for
+    something that happens once, at startup.
+  - A component is a part of the running service. `sweep.py` is in the
+    package and runs in the Claims Triage App's scheduled sweep, so it is
+    not drawn; `toolprobe.py` is a command; the meters, the failure words and
+    the settings are not responsibilities a reader looks for. The register
+    names each.
+  - The workload's graph runs inside a host, loaded by entry point, while
+    the Containers view says the Claims Triage App owns that package. Both
+    are true and the register says so; no element was added for the graph.
+  - The neighbours drawn are the caller and what a component reaches: the
+    Model Gateway, the three tool servers and the database. The registry is
+    in the model and out of the view, as in the Containers view. The arrows
+    between neighbours are excluded one by one.
+  - 12 boxes and 15 arrows, over the skill's 10 and 12, kept on the evidence
+    of the render. The view without the tool servers (9 and 12) was not
+    taken: the Tool Client would point at nothing.
+  - The components live in `model/components.dsl`, added to the Agent
+    Runtime with `!element`, so `containers.dsl` is not changed. The file is
+    included after the deployment files: included before them it moved the
+    numbers of every deployment element in the Mermaid exports.
+  - No style for a component was added: the components take their
+    container's layer colour, and the shared style file is the base's.
+  - The view is embedded in the import layering page, which gets a section
+    in place of "What this page is not".
+  - S090's row lost two parts the owner did not choose: the render under
+    rootless Docker is S092, and bringing the page and the view to S082's
+    contracts is a backlog row homed at S082.
+
+**Advisor:** one consultation, 2026-10-07, at the design, before any file was
+written. It changed four things: the registry was counted among the
+neighbours and its omission registered; the three places where today's code
+differs from a clean service (the sweep's module, the graphs loaded into the
+runtime's process, the probe command) are each named in the register and not
+silently left out; the update trigger names S082, S083 and S086, not S083
+alone; and S090's row was narrowed to what the owner chose. Not consulted
+before the pull request: documents and the model alone, with no code.
+
+**Work log:** 2026-10-07, branch `s090-runtime-components` off `main` at
+c3ea202, after pull request 131 was merged and its content read on `main`.
+The model was first tried in a copy of the architecture folder outside the
+repository, while that pull request waited for its checks. Read: each
+module's docstring and imports under `src/meridian/runtime/` (20 files, 5,189
+lines), `app.py`'s routes and its calls of a host, `runs.py`'s writes. Three
+renders: with every arrow of `include *`, 12 boxes and 21 arrows, not
+readable; with the neighbours' arrows excluded, 12 and 15; the same from the
+repository's tree.
+
+**Result / verification:**
+
+- `make check`: exit 0, no ERROR line; `inspect` printed two IGNORE lines,
+  the two it printed before.
+- `make export`: "exported 52 files". The Mermaid exports of the eight other
+  views are byte for byte the ones made before the change.
+- The PNG of RuntimeComponents (4440 by 3892 pixels) was read at full size:
+  every label legible, no arrow through a box. Two flaws: the LangGraph
+  Host's arrow to the Tool Client crosses the Agent Framework Host's arrow to
+  the Model Client, and the Agent Framework Host's arrow to the database
+  passes close under the LangGraph Host and crosses its arrow to the Model
+  Client. The key was read: a component's entry reads "Layer Services" alone.
+- `make mermaid-views`, `make docs`, `make test` and `make secret-scan`: the
+  results are in the pull request.
+- Not seen: the view in Structurizr's own page in a browser; the embedded
+  view in the Documentation tab; the PDF with it (S092: the machine cannot
+  build one by `make pdf`).
+
+**Follow-ups:** S091, the data ownership views. S092, the render under
+rootless Docker. A backlog row homed at S082: the import layering page and
+this view follow the code S082 moves.
+
+### S091 — Data ownership views
+**Status:** done · **Started:** 2026-10-07 · **Finished:** 2026-10-08
+**Goal:** two views of the model that answer which service owns which
+schema of the Platform Database, which reads and writes cross into another
+service's schema, and who writes and reads the audit trail.
+
+**Decisions:**
+
+- **The owner, 2026-10-07:** "should we add db view too?" The session
+  proposed one kind of view (who reads and writes which schema, in
+  Structurizr, as a step of its own) and no ER diagram yet, because S085 and
+  S087 rewrite the tables; the owner answered "okay". After S090's pull
+  request: "Merge it when and start the next".
+- **The session's own (the owner may overturn any):**
+  - The six schemas are components of the Platform Database, in
+    `model/data.dsl`, added with `!element`. An arrow starts at the container
+    whose service or job holds the grant, and its technology names the role.
+  - Two views, as expected. `DataOwnership` has each service's own schema
+    and the seven grants that reach another service's schema, drawn thicker
+    by a new style, `Crosses a schema`: those are the reads and writes ADR
+    10 means to cut. `AuditTrail` has the six services' inserts, the Claims
+    Triage App's read of the trail and the two joins of the trail's view.
+  - Each view picks its arrows by a tag without a style (`SchemaGrant`,
+    `AuditTrail`); listing the excluded arrows one by one, as S090 does,
+    would have been thirty lines.
+  - `AuditTrail` asks who writes the trail and what reads it, not what
+    removes its rows. The gateway schema's expiry functions delete old audit
+    events, and the model has that arrow; with that schema in the view the
+    layout put the services beside the database and their arrows through one
+    another, in both directions tried. `DataOwnership` shows the gateway's
+    upkeep job running those functions.
+  - The rank separation is 1,600 in `DataOwnership` and 600 in `AuditTrail`,
+    where the other views have 300: at 300, and left to right, arrows passed
+    through neighbouring services.
+  - Not drawn, and named in the register: the migrate and seed jobs (no
+    container holds them; `policy_seed` is the only role that writes the
+    policy schema), the Evaluation Harness (it reads CI's own instance), and
+    tables, keys and columns.
+  - The views are embedded in the data classification's inventory, the
+    page of the Documentation tab that already says where each kind of data
+    is stored. ADR 10 is not changed.
+
+**Advisor:** one consultation, 2026-10-07, when the two views rendered and
+before the register and this record were written (the design's point, late:
+the model was already on the branch). It changed three things: `AuditTrail`
+kept its title's "what removes its rows" while the view no longer drew it,
+so the gateway schema was tried again under the final layout and, when
+arrows again crossed boxes, the question was cut to what the view shows;
+the comparison with ADR 10 is written down as a result, with the parser's
+limits; and the views are embedded in the data classification page, where
+before they would have reached only the PDF's appendix.
+
+**Work log:** 2026-10-07, branch `s091-data-ownership` off `main` at
+befa668, after pull request 132 was merged and its content read on `main`.
+A script outside the repository read every GRANT and REVOKE statement of
+the 32 migration files, in file order, and printed what each of ten roles
+holds per schema. The first `make check` and `make export` did not finish:
+the machine was swapping (load average 167, swap full) under another
+workspace's test suite, and the session stopped its own command and went on
+when the machine answered again. Eight exports: both views top to bottom
+with every arrow (19 and 25 arrows), then with their own arrows; left to
+right; top to bottom with more height, three times; the audit view with
+and without the gateway schema.
+
+**Result / verification:**
+
+- **The grants against ADR 10's table** ("Who may read which database",
+  the column "Today"): every service's row agrees. One thing the table does
+  not say: `policy_mcp` holds no write on the policy schema and
+  `knowledge_mcp` none on the knowledge schema; the seed job (`policy_seed`)
+  and the ingestion job (`knowledge_ingest`) write them. Nothing in the ADR
+  is false by it.
+- **The limits of that reading:** statements only, not the catalog of a
+  migrated database (none was started beside the other workspace's suite).
+  The files hold no `ALTER DEFAULT PRIVILEGES` and no grant of one role to
+  another. Column lists were dropped, so an arrow says a schema, not a
+  column. A function's caller reaches more than its grants: `gateway_upkeep`
+  holds EXECUTE on five functions and no table, and one of them
+  (`gateway.expire_audit_events`, SECURITY DEFINER, migration 0028) deletes
+  audit events. `audit.claim_trail` (migration 0011) was read: it joins
+  `claims.claims`, `runtime.runs` and `audit.events`.
+- `make check`: exit 0, no ERROR line, the same two IGNORE lines.
+- `make export`: "exported 62 files". The Mermaid exports of the nine other
+  views are byte for byte the ones made before the change.
+- `DataOwnership` (5445 by 3889 pixels), read at full size: 11 boxes and 13
+  arrows, every label legible, no arrow through a box. The seven thick
+  arrows cross one another and the thin ones in the upper half, about a
+  dozen crossings; each can be followed by its colour and thickness.
+- `AuditTrail` (3700 by 3285), read at full size: 9 boxes and 8 arrows, no
+  crossing, no arrow through a box.
+- The key of `DataOwnership` was read: it shows the thick arrow as "Crosses
+  a schema" in both layer colours.
+- `make mermaid-views`: "11 views", "0 derived blocks rewritten in 0 files".
+- `make docs`, `make test` and `make secret-scan`: in the pull request.
+- Not seen: the views in a browser; the two embeds in the Documentation
+  tab; the PDF (S092).
+
+**Follow-ups:** a backlog row homed at S085: S085 (the audit outbox) and
+S087 (five databases) change every arrow of these views, and S087's
+baselines are the moment to read the grants from a catalog.
 ### S021 — Identity
 **Status:** doing · **Started:** 2026-10-07 · **Finished:** — · designed in
 plan PLAN-VERSION; nothing is built
@@ -21654,6 +21978,33 @@ its home, S070.
   pull request 128 (14 min 0 s). Eleven backlog rows are new or narrowed, each
   with a home, and the row "Uploads (T-38)" is closed and homed at S080. Size
   check: two listed test files set to their counts, two listed.
+- **v0.88, 2026-10-07:** S089, the import layering page and Mermaid rendered
+  in CI (new, `done`; the owner's "okay do it and open pr"): a page in the
+  Documentation tab and the PDF, `docs/architecture/code/import-layering.md`,
+  says which Python package may import which, as the six import-linter
+  contracts enforce it, with one Mermaid diagram; the `derived diagrams` job
+  renders every Mermaid block on every pull request. Part A's lines about the
+  job that runs Mermaid follow. S090 is new (`todo`, after S083): a component
+  view of the Agent Runtime. One backlog row is new, homed at S090:
+  `make mermaid-render` and `make pdf` fail under rootless Docker, which the
+  virtual machine runs.
+- **v0.89, 2026-10-07:** S090, a component view of the Agent Runtime (`done`;
+  the owner's "Component view (Recommended)", which took away the wait for
+  S083): `RuntimeComponents`, six components in `model/components.dsl`, 12
+  boxes and 15 arrows, read from the code and not run, embedded in the import
+  layering page; the eight other views' exports unchanged. S091 is new
+  (`todo`, the owner's "okay"): data ownership views of the database's six
+  schemas. S092 is new (`todo`): the Mermaid and PDF render under rootless
+  Docker, which takes S089's backlog row. One backlog row is new, homed at
+  S082: the page and the view follow the code that step moves.
+- **v0.90, 2026-10-08:** S091, data ownership views (`done`; the owner's
+  "okay"): `DataOwnership` and `AuditTrail`, the database's six schemas as
+  its components in `model/data.dsl`, the seven grants on another service's
+  schema drawn thicker, both embedded in the data classification's
+  inventory; the nine other views' exports unchanged. The grants were read
+  from the migration files' statements and agree with ADR 10's table. One
+  backlog row is new, homed at S085: S084 to S087 change these arrows, and
+  S087 reads the grants from a catalog.
 - **PLAN-VERSION, 2026-10-07:** S021 `doing`, designed and not built: the
   step is cut to the staff half (Keycloak on kind, four roles, the app layer
   first behind a switch that is off by default, the tenant from the token, the
