@@ -565,7 +565,7 @@ both readings the same hour ("yes both are right, go on").
 | S068 | Database upkeep and retention | The owner names the retention periods for `audit.events` and `gateway.usage` first (open since S011; without them the step builds the mechanism and schedules nothing); an insert-only audit table has a way to expire rows; migration 0017's rewrite of a large audit table has a way through that is written down and tested; the static check on migrations says what it cannot see or sees it; `expire_ledger` works in batches; a holder of the upkeep credential cannot stall the gateway with an open transaction; a login that is a member of `claims_sweep` is confined or refused where the database is made; no role creates temporary tables it does not need. Built as (2026-10-07; implemented and tested against PostgreSQL, none of it run on a cluster; no number of days and no schedule is set anywhere): audit rows expire through one function of the owner's that only a session logged in as the upkeep role reaches, `meridian gateway expire-audit` with a dry run that counts, in batches of at most 10,000, each with an audit row, and the rows the upkeep role wrote itself are never removed by it (migrations 0027, 0028); the ledger expires in batches of 100 to 10,000 usage rows on one connection, with a closing call for the counters and credits (0029, 0030); 0017's way through is written down in the migrations' README as needed by no database that exists, a test shows that it fails closed at its first heavy statement and the two ways out are designed, not built; the static check on migrations sees more statements and the README lists what it does not see, each entry pinned by a test; a database default ends a transaction left idle after 60 s (0031), which stops a forgotten transaction and not a deliberate one, so a holder of the upkeep credential can still stall a counter for the statement timeout; a member of `claims_sweep`, or of `gateway_upkeep`, is refused at every `meridian db migrate` after the files are applied, which detects at the next deploy and does not prevent; `pg_temp` is last in the path of every trigger and definer function, with a test over the whole catalog, and the right to make temporary tables stays with PUBLIC (decided, not built). Not built: the periods and a schedule (the owner's, four questions in the section), the briefs' expiry (waits for the owner), a parser for the static check | done (the periods are the owner's and are not set, nothing is scheduled; not built: the briefs' expiry and the removal of PUBLIC's right to make temporary tables, see the Done-when cell and the section) | S066 |
 | S069 | Runtime and gateway edges | Without a change to a prompt or a rule: a validation error in the triage's two answers logs the field; the tool-call limits can differ by agent, or the plan says why not; a failed resumed leg does not leave the first leg's value to be read as the answer; `drafted_by` is right for a completion the filter withheld and the provider billed; the runtime's client of the gateway is bounded per call; a resumed leg that outlived its lease cannot write over the leg that took the run; `service_url_problem` refuses what the HTTP client refuses; a shed tool call's audit row names its run where that can be checked; the refusal flood's count covers the caller check and the throttles; an embedding input is bounded in tokens; the health check watches the certificate the server loaded; the ingestion's data class has a tenant of its own (T-60, the owner's decision when the step opens). Cut in two on 2026-10-06 (the design in Part C): a first half with no lane, and a second half on the cluster, the server's certificate and the health check (R11) and the ingestion's tenant (R12, which the owner decides at S020). Built as, first half (2026-10-07; implemented and tested, none of it run on a cluster, no real provider called): the Claims API logs the failed fields of the runtime's answer, of the triage proposal and of the brief's output, and counts a stored proposal as stored; a leg ends its run only over the `updated_at` its own start or claim wrote, with no new column, and a late leg answers the stored status with no output; a resume that carries a value is refused with a 422; the runtime's call to the gateway has a deadline of 30 s as a whole, a timeout per phase, a reply cap of 1 MiB and `Accept-Encoding: identity`; a refused prompt and a withheld completion are told apart on the wire (`X-Meridian-Completion: withheld` and three headers naming the deployment) and the withheld one has its drafter on record; `service_url_problem` also asks the HTTP client; a shed tool call's row names its run where the run's own row can be read; every service writes the summary of a refusal flood's last window through one writer; a module that exits at import is a failed load; the access log's path is unquoted to a fixed point and loses a userinfo part; the scaffold names the host; the tool span names its step. Not built, each as a decision with its reason in the section: limits per agent (R2), an embedding bound in tokens (R10), a ceiling on the rate limits (B13), a breaker shared between processes (B14), one word for the two limits (B18), a holder column and the second host's scaffold. Built as, second half (2026-10-07; implemented and tested, and seen on kind in two runs, K1 and K2): the five services that serve TLS start through `python -m meridian.platform.common.tlsstart`, which reads the certificate once, for uvicorn's own context and for the health check, so `/healthz` watches the certificate the server loaded (R11); the module refuses a start that would not ask for a client certificate and ends a start it cannot make with one `tlsstart:` line and exit status 3; K1 saw the 422 for a resume that carries a value, one `suppressed` row from each of the five services that keep a throttle and the access log's path for an address encoded twice, and K2 saw the deploy, the served certificates of four of the five equal to the issued ones, a renewal and a restart, and smoke's 46 lines twice | doing: both halves are built and seen on kind (2026-10-07); left: R12 for the owner's decision at S020, what no kind run could show (the withheld completion's four headers, which S071 measures; a shed call's row, a takeover past the lease and `not-started`; the module's refusal line, the race itself and a renewal that splits OpenSSL's two opens), smoke's line for the sweep's findings, and the new rows of the second half | S064, S037 |
 | S070 | Claims intake and what the adjuster is told | Uploads (T-38: the largest item here) are a step of their own, S080, split off when the owner chose on 2026-10-07 to build them ("Build now"); this step no longer holds them; a report dated as a recent loss is seen for what it is, or T-66 says why it cannot be; the adjuster's page marks a recommendation that rests on the model's answer, so a steered model's `approve` does not read as the rules'. Built as, first half (2026-10-07; implemented and tested against PostgreSQL and in the pages' own tests, none of it run on a cluster, nothing paid, no fingerprint moved): the adjuster's claim page says beside a recommendation whether it rests on a model's reading of the exclusion clauses or on the rules alone, and the queue marks it in a column, from one function over the stored fields (no new field, no migration); it reaches the 6 steered recommendations that wait for an adjuster and not the 28 automatic approvals, which no page lists; the page labels the loss date and the report date as not checked and shows two gaps in days, with no rule or bound, and T-66 says why; the claimant's name pattern is built from a read before the claim's row is locked and only for a request the claim can go on with, so a refused request pays no compile (a stale page and a documents post past the cap still do); the redaction is split into six modules by a proven move; the differential test classifies every lost run, its generator writes the forms it lacked and both date guards are pinned from both sides; the e-mail pass reads its placeholder from the mapping; and an international Hungarian phone number is cut at a space before a second number, in a form narrowed after a review (R3b) and narrowed again after a second (R3c, 951b72c), so that it turns the plain shape and not every text the row quoted. Not built here, each with its reason in the section: uploads (S080's: the owner decided to build them), a bound on what a name may replace, a reorder of the assessor's checks, the wider cut of a dotted number with a `06` group and a third date guard (the owner's questions), and the fix of three known leaks of the phone matcher | doing: the first half is done (R3c and its review stand; the whole suite is the main session's); four questions of the owner's are open (a fifth, uploads, was answered on 2026-10-07 and S080 holds them), and the second half holds what the owner decides; so far it has built, with no word of the owner's, the property test's missing forms, the queue's judgment of a stored proposal by the claim page's function with a received time refused when it has no zone, and one shaped 500 for an answer that cannot be built after the proposal is stored (the section), and it did not build `drafted_by`, which waits for the owner | S067 |
-| S071 | Measurements that need a live model | Costs money (52 chat calls for the injection cases, 40 attacks and 12 benign, about EUR 0.12 expected, where the golden recording's 55 chat calls cost EUR 0.12 as measured, and some embedding calls; the owner says yes before any, and the amount is stated first): a real model's answers to the injection cases the screen lets through, recorded beside the golden recording; a model's refusal of a structured request seen from a real provider; retrieval measured with a real embedding, in the evaluation and in S038's one failing check; the judge compared with labels a person wrote for a sample; a held-out set for the injection screen, and a decision on what a false alarm may cost; CLM-0034's `unsure` settled by a prompt or recorded as the right answer; retrieval over a graph measured again only if the synthetic data gains something relational to find | doing: the free half is done (2026-10-07; implemented and tested, no paid call made, no fingerprint of the evaluation changed): the label worksheet and its comparison, the run's own ceiling that the gateway holds and that a paid run refuses to start without, the live run of the injection cases with its refusal of an incomplete run and of what it would write, the held-out set (the screen stopped 6 of 48 blind attacks and flagged 0 of 24 look-alikes), and the command guard's ask before a paid target and its second round; the paid half is open and waits for the owner's yes to a stated cost: every paid run (none has been made), the live embedding (E9), the owner's labels and the owner's reading of CLM-0034 | S067 |
+| S071 | Measurements that need a live model | Costs money (52 chat calls for the injection cases, 40 attacks and 12 benign, about EUR 0.12 expected, where the golden recording's 55 chat calls cost EUR 0.12 as measured, and some embedding calls; the owner says yes before any, and the amount is stated first): a real model's answers to the injection cases the screen lets through, recorded beside the golden recording; a model's refusal of a structured request seen from a real provider; retrieval measured with a real embedding, in the evaluation and in S038's one failing check; the judge compared with labels a person wrote for a sample; a held-out set for the injection screen, and a decision on what a false alarm may cost; CLM-0034's `unsure` settled by a prompt or recorded as the right answer; retrieval over a graph measured again only if the synthetic data gains something relational to find | doing: the free half is done (2026-10-07; implemented and tested, no paid call made, no fingerprint of the evaluation changed): the label worksheet and its comparison, the run's own ceiling that the gateway holds and that a paid run refuses to start without, the live run of the injection cases with its refusal of an incomplete run and of what it would write, the held-out set (the screen stopped 6 of 48 blind attacks and flagged 0 of 24 look-alikes), and the command guard's ask before a paid target, rebuilt in six rounds and six security reviews (two blocked; it is a guard for habits and not a boundary, and its gaps are backlog rows); the paid half is open and waits for the owner's yes to a stated cost: every paid run (none has been made), the live embedding (E9), the owner's labels and the owner's reading of CLM-0034 | S067 |
 | S072 | The cluster outside `meridian`, second round | On kind: the Prometheus and CloudNativePG operators' reach into Secrets and ConfigMaps of every namespace is narrowed or recorded as accepted with its reason; DNS and the collector cannot carry data out unseen (T-84), or the residual is stated; writes to Prometheus and Loki pass a policy, and the three hops behind the collector are encrypted or the plan says why not; egress from `observability` and the admission webhooks' port are bounded; `cnpg-system` and `envoy-gateway-system` have Pod Security labels and a policy; the owner decides whether node-exporter stays off; Tempo mounts no API token | doing: the first part is on `main` (2026-10-07; implemented and tested, and seen on a warm cluster by run R8 in the limits the section gives: both pods run with no token, the labels applied, smoke's 46 lines and the 21 rules passed, the Certificates Ready but issued before under the old policy; the cold run R9 then approved all eight under the exact lists from nothing): Tempo's and Loki's pods mount no service-account token (three keys); the namespaces of the CloudNativePG operator and of Envoy Gateway warn and audit at Pod Security `restricted` from a render (the gateway's namespace confirmed by the API server's dry run with its proxy pod running, R9; the operator's namespace is gone); the certificate policy for the services names the eight URIs and six DNS names the chart renders, not a wildcard; an alert on the rate store's restart loop. The documents record the four accounts that read Secrets in every namespace (not two), the accepted reaches, the residuals and the one measurement (seen on kind: the API server's calls arrive from the node's address on the pod network and pass a default-deny ingress). The cluster batch is written in files, tested without a cluster and seen on kind by the cold run R9 (2026-10-07, 11:08 to 11:17 UTC, from the batch's commit; five contracts, W, E, C, N and S, and the fix contract F2; not seen: the guard, the fall-backs, a webhook failing closed, Loki's usage report refused, the four other pods of the node rule on the kubelet's port): no pod reaches the webhooks' port 10250 but Prometheus, on the operator's; egress from `observability` is denied by default and admitted by rule; the CloudNativePG operator is released into `meridian` under `config.clusterWide=false` and a policy of its own (`cnpg-system` is gone); `envoy-gateway-system` is denied by default and admitted by rule, and `make deploy` refuses a cluster without the operator's policy; smoke compares a Deployment's name as text. The infrastructure review of the batch is in (nothing critical or high; four medium findings answered by F2); left: the merge of `main`, the whole suite and the pull request, and the rows (the cluster on this machine is the one made from the batch's commit: no `make up` from `main` on it until the batch is merged); the owner decides the writes clause and node-exporter (stays off). S072, 2026-10-07, third part (the owner's "Build client certificates" and "Gateway in front, as for Loki", which reverse the first part's "the three hops stay clear text"; the batch above was merged as pull request 120, so its "left" is history): the collector has a client certificate of the telemetry authority (the common name `otel-collector-client`, one policy that allows only it) and its three hops are TLS 1.3 with it: Tempo's receiver demands it at the handshake, Loki and Prometheus are each behind an nginx that is the only way in (reads need no certificate, one write path needs the collector's subject, everything else answers 403 whatever the certificate), and Loki's and Prometheus's own ports admit the gateways alone; nine certificate policies, smoke's check 12 of ten lines, 56 lines in all after a deploy. Implemented and tested, and seen on kind by R14 (Tempo), R15 and R16b (Loki) and R17 (Prometheus and the whole: `make up` warm in 51 s, smoke 56 of 56, ten writes accepted under the collector's name), in the limits the section's third part gives; not seen: a renewal of any of these certificates, a cold `make up` of the branch, Grafana's pages in a browser, a closed path presented with the collector's certificate. The step stays `doing`: this part is on the branch `s072-writers-mtls` with no pull request yet, the owner has not answered on node-exporter, and the rows homed here that gate nothing wait for the closing record, which re-homes them | S064, S066 |
 | S073 | Renewals, upgrades and what smoke cannot see | On kind: a renewal is seen for the collector's certificate and the database's, and something alerts before the database's end; the services do not all restart in the same minute at a renewal; approver-policy is restarted when it hangs, and a repaired policy does not wait an hour for cert-manager's retry; a first install that fails has a way back that was tried; the chart bounds its rollback history and `make images` says what to remove; the scripts' `kubectl` calls have a request timeout; a manual sweep Job does not hide a stopped schedule; the failure paths of smoke's newer lines are seen once on a cluster with something broken on purpose; the line that reads approver-policy's wording says so when it fails; probes that time out under load have a recorded answer for the machine the cluster runs on now | doing: the first half is done (2026-10-07: the builds and the runs R0 to R4e, with the answer for the machine recorded); the second half is under way (runs R5a, R5b, R7, R8, R9a, R9, R10 and R11 of 2026-10-07: the one-hour watch run again saw the restarts spread across the six services, the node paused ended every call at the clients' own timeout, with the history limit holding at three ReplicaSets, the cold run gave its timings, and the ingestion's word `rate-store-unavailable` was seen on a real 503); approver-policy is restarted when it hangs: seen for a frozen process on 2026-10-07 (run R13: a liveness probe on `/readyz`, applied by `make up`; the kubelet restarted the container 140 seconds after the process was stopped), and the alert for a stuck one (`MeridianCertificateRenewalOverdue`) loaded and quiet and not seen firing; still open: the ingestion's other three words, a call that a bound of the wrapper ends, a first install made to fail, a policy narrowed before the first deploy and a rotation of the rate store's password (the owner's to run or to accept as not seen) | S064, S066 |
 | S074 | Test suite and file sizes | Without the cluster: `infra/kind/smoke.sh`, `test_kind_manifests.py` and the four test files over 800 lines are split along the lines their own tests already cut; the six functions over 50 lines are under it (counted by signature plus body without the docstring, as the section says: by the whole count the row used, four of the six, `assess`, `build_report`, `build_injection_report` and `summarise`, are still over); the template-database fixture survives a test that patches the runner's file list; the tests that failed once under load (a lost connection in a parallel run, a tool server's timeout, the gateway's fallback test) are run repeatedly on the machine the suite runs on now and either hold by construction or are closed as not reproduced, with the numbers; ~~the slowest test of the job is under ten seconds~~ (not met, and not what the step did: the gates' measurement of 2026-10-07 found the slowest test at 45.0 s without coverage, with seven of the ten slowest over ten seconds; the step gives every test a limit of 600 s instead); one CPU-time helper; `unused_port()` on macOS has its answer written down; ~~the owner decides whether CI gates on coverage~~ (answered 2026-10-07: yes, with a file size check and a per-test timeout; built) | doing: the first half is done (2026-10-07; tested, none of it run on a cluster): the two upkeep test files, `test_toolserver_meters.py`, `test_claims_graph.py` and `test_kind_manifests.py` are split by moves a script proves, the template database's builder passes the list it read at import, the stack and demo tests that failed under load no longer rest on the machine's speed (argued; the measurement run, 25 loops of each beside a whole suite, has not run), the counting test takes 0.03 s alone where CI saw 47 s, and one CPU-time helper serves nine files; three questions wait for the owner (coverage in CI, a size check, a pytest-level timeout); the second half is built except what waits (2026-10-07; implemented and tested, none of it run on a cluster): S076's leftovers are closed or accepted row by row (the registry `schemas` link and `--check` line, the services edit's small ends, the scaffold's undo, the import walker's limits pinned, the golden set's workload tied to `Report` by its own validator, the claimant's closed tables read-only and three stale sentences), `run_command`, `build_report` and `render_summary` are under 50 lines by signature plus body (37, 47 and 29) with `--help`, every report and the committed summary byte for byte the same, and two of the half's own commits carried a defect that the review reproduced and a contract fixed; the third part (2026-10-07; moves a script proves, tested; seen on kind once: `make smoke` from the split as it stands printed 46 PASS, 0 FAIL, 0 SKIP, the same lines as the unsplit script's, the trace ID apart): `infra/kind/smoke.sh` is an entry of 1,185 lines and ten files under `infra/kind/smoke.d/` (`shared.sh` and nine checks, 36 to 644 lines), and checks 8 and 10 are still in the entry; the leftovers are done (2026-10-07; tested, none of it run on a cluster): the five loaders of the name-masked cases are one helper, `servicesupport.injection_case_claim`, whose missing case fails by name, and `test_redaction_hungarian.py` (858 lines) is three files and `hungariansupport.py`, the largest 368 lines, by a move a script proves with the collected count unchanged; the last cut (2026-10-07; moves a script proves, tested; seen on kind once, run R12: `make smoke` from the cut printed 46 PASS, 0 FAIL, 0 SKIP, the same lines as the run before it): checks 8 and 10 are `smoke.d/08-network-policy.sh` and `10-certificate-policy.sh`, the entry is 88 lines and every file of the script, twelve parts and the entry, is under 800 lines (the largest 647); the three gates (2026-10-07; the owner answered all three questions; implemented and tested, the numbers measured on the development machine and none of it yet run by the hosted runner: see "The three gates"): `make lint` runs a size check of 800 lines with 51 files listed as a ratchet, every test stops after 600 s, and CI's suite step measures line coverage and fails under 98 (99.11 % measured, 2.0 % of the suite's time), with the job's limit at 30 minutes (coverage's first run on the hosted runner, the `python` job of pull request 128, took 14 minutes 0 seconds, inside the 10 min 1 s to 14 min 29 s measured without coverage the same day); what waits: the rows the section's last table keeps, the backlog rows with home S074 (among them two of the three new ones: the 46 splits no row homed and the ten least covered files; the third, coverage's cost on the hosted runner, is read and closed) and the measurement run of the load-sensitive tests beside a whole suite (not run) | S064, S066, S037 |
@@ -1122,12 +1122,17 @@ that day; the rest stand as their step recorded them.
 | The second infrastructure review's low findings that M4b left, and the first review's L4: a label name with a dot or a colon on the label-values path gets 403 (`translation_strategy` set to a no-escaping value would break it); nginx opens `ssl_certificate` and `ssl_certificate_key` separately, so a handshake between the kubelet's two symlink flips could see a mismatched pair (one failed handshake at worst); no `constraints.privateKey` on the new policies, no CPU limit on the gateways, the chart's access log writes the PromQL of a GET query, and a 127-character comment line in `certificate-policy.yaml`; and the Renovate rule that keeps the nginx tag with the Loki chart now also covers an image a hand-written manifest runs | S072 (third part: second review L-3, L-5, L-8, L-9; first review L4) | open; none blocks | S073 |
 | The test of Loki's rendered location list (`MERIDIAN_LOKI_RENDER=<render file>`, in `test_telemetry_loki_gateway.py`) is skipped in every run, so a chart bump that adds a location without the gateway's check is caught by nobody until a render is read; the evaluator that models the two nginx maps is Python and was compared with a real nginx only in the implementers' containers and by smoke's check 12 on the cluster (R17: lines 9 and 10 for Prometheus's gateway, none for the Loki gateway's odd forms) | S072 (third part: M3b's report, the first review) | open; a test that renders the pinned chart in CI, in the manner of the policy tests' row above | S074 |
 | The download's permit is released when the handler returns, before the body is sent, so the four permits bound the read and the audit write and not the memory a slow reader holds (one answer is up to 1 MiB); a 404 for an unknown id and a 503 from the permit check each use a rate token, so thirty well-shaped requests a minute lock everyone out of downloads; the count of a claim's download rows is unbounded while the audit table is never pruned. Local only, behind a switch that is off | S080 (the short security check of the last fixes, before pull request 130) | open | S080 |
-| What the command guard still does not read before a paid model call, after G2 (the security review of the guard's first round and G2's report; each shape measured on the hook as shipped, from lines in a file and not in a live session): a script on standard input (`bash -s <sub-command> < foundation.sh`) and the backslash and `$'...'` quote forms of a target; a target held in a variable or a substitution, a loop over targets and `echo <target> \| xargs make`; a quote inside a word (`m"a"ke`, or inside an opt-in's name); a copied, symlinked or process-substituted script and a variable sub-command; an opt-in set without `NAME=value` text (an environment file, `set -a; . ./file`, `export NAME` when already set, `printf -v`, `docker run -e NAME`, `os.environ[...]`); a Python script written to a file and run by name (the heredoc body that writes it is dropped), a credential named under another interpreter or in the repository's own code, `just` and a direct call of the evaluation CLI; and `az rest --help`, which asks (no exemption). The settings' ask over allow precedence is assumed and no test runs the matcher: `Bash(az * list*)` and `Bash(az * show*)` would match an `az rest` URL that holds those words if allow beat ask. The hook is the real layer and a file a session can edit (Part D, question 6) | S071 (security review of G1, G2's report, 2026-10-07) | open | S071 (its paid half: before the owner signs in on the machine the sessions run on) |
+| What the command guard still does not read before a paid model call, after G2 (the security review of the guard's first round and G2's report; each shape measured on the hook as shipped, from lines in a file and not in a live session): a script on standard input (`bash -s <sub-command> < foundation.sh`) and the backslash and `$'...'` quote forms of a target; a target held in a variable or a substitution, a loop over targets and `echo <target> \| xargs make`; a quote inside a word (`m"a"ke`, or inside an opt-in's name); a copied, symlinked or process-substituted script and a variable sub-command; an opt-in set without `NAME=value` text (an environment file, `set -a; . ./file`, `export NAME` when already set, `printf -v`, `docker run -e NAME`, `os.environ[...]`); a Python script written to a file and run by name (the heredoc body that writes it is dropped), a credential named under another interpreter or in the repository's own code, `just` and a direct call of the evaluation CLI; and `az rest --help`, which asks (no exemption). The settings' ask over allow precedence is assumed and no test runs the matcher: `Bash(az * list*)` and `Bash(az * show*)` would match an `az rest` URL that holds those words if allow beat ask. The hook is the real layer and a file a session can edit (Part D, question 6) | S071 (security review of G1, G2's report, 2026-10-07) | open; narrowed by rounds three to six: a target held in a variable, a loop over targets and `echo <target> \| xargs make` now ask (the paid-target rule, G4), and a commit message no longer asks for the raw request or the identity library (G3); the rest stands, and the rows at the end of this table carry what the later reviews list | S071 (its paid half: before the owner signs in on the machine the sessions run on) |
 | The documents that say what the command guard asks about and does not see do not name the paid model targets, the opt-in variables, the raw Azure request, the identity library or the flags variable: the hook's header list of what it does not see, the runbook's list ("What the command guard does not see"), `docs/development-environment.md` (the lines that describe what the guard asks about) and the module READMEs | S071 (G1's report and the review's A-9, 2026-10-07) | open | S071 |
 | The live embedding (E9): the evaluation stack and S038's one failing check measured with a real embedding, both opt-in; its paid run answers the golden set again (27 chat calls and about 170 embedding calls, EUR 0.05 expected), so the design question is open whether a second recording keyed on other clauses replaces the first, or sits beside it as the injection run's does | S071 (design E9, 2026-10-07) | open; not built in the free half | S071 (its paid half) |
 | A larger and harder label sample for the judge: the worksheet holds the 13 recorded verdicts, every one of which the judge called grounded, so its "ungrounded" column is empty by construction; a sample with rationales known to be unsupported needs new judge calls (EUR 0 to 0.05 expected) | S071 (J1, 2026-10-07) | open; waits for the owner's labels on the 13 | S071 (its paid half) |
 | Small ends of the paid-run harness and the guard's first round that no contract took, all low: `PYTEST_DB_CONTAINER` is passed to the Makefile, whose recipe starts with `docker rm -f` of that name, so a caller that sets it to another container's name removes that container; the two tests that show neither opt-in starts the other spawn a `pytest` of their own, which the development-environment room check (it counts pytest processes of any kind) can see for a moment; `_why_unanswered` lists every distinct refused reason in the database, so a run that also met a rate window shows both reasons on the budget line; the runtime records `model-error` for a budget refusal as for a provider fault, and a refused judge call shows as `unanswered` only; the gateway cannot tell a withheld completion from the model's own refusal of a structured request, so the injection run's report holds one class for both | S071 (the security review of G1, L1 and L2, and the implementers' reports, 2026-10-07) | open | S071 |
 | Two small ends the held-out set's report found: `tests/meridian/evaluation/test_report_workload.py` asserts that exactly four JSON files stand directly under `data/evaluation/`, so any later file there that is not a gate report trips it (the held-out reports have a folder of their own for that reason); and `EVAL_INPUTS` in the Makefile covers all of `src` and `data/synthetic`, so a new file in either makes an existing `.eval` report look stale to `make eval-compare` until `make eval` runs again | S071 (H2b's report, 2026-10-07) | open | S074 |
+| The command guard's gaps that the sixth round pinned as rows of the case file, each with the word "gap" in its note and today's decision (none, and none on main too, so none is a regression): combined short flags with an argument before the build tool (`sudo -Eu root make`), a long option with a separate argument (`sudo --user root make`), a decimal duration (`timeout 1.5 make`), more flags than the shell gate's window of 80 bytes holds (24 pairs of `-o x`, 25 or 40 `-x` flags, a flag of 90 bytes before `-c`), a substitution inside a parameter expansion (`make ${T/x/eval-record}`), the AWS script's own `apply`, `plan` and `destroy` behind a quoted separator (a deny or an ask on the fourth round, none since the fifth), and `fish -c` | S071 (G6's report and the fifth round's re-check, 2026-10-08) | open | S071 (its paid half) |
+| What the sixth round's check lists beyond the pinned rows, all none on main and on the fifth round (so no regression) and not yet rows of the case file: `bash -oc pipefail '…'`, `bash -c -o pipefail '…'`, `su --command '…'` and `su --command='…'`, `su` with five words before `-c`, seven pairs of `-o x` (six pairs deny and seven fall outside the window: the measured edge), `env -a NAME make` and `env -u A -S '…'`. And two false denies, main none: two letters are still case-blind in the body gate (`bash -C '…'` is read as `-c`, `env -s '…'` as `-S`), and `echo bash -c 'make -m "aws-destroy"'` (a row, kept on purpose: an echo of a shell-wrapped removal), beside `make git commit -m "aws-destroy"` (deny kept: main denies the unquoted form) | S071 (the sixth round's check, 2026-10-08) | open; rows to add to the case file | S071 (its paid half) |
+| The bypasses the reviews of the guard's added rules keep listing, none a regression (main gives none on each): a target split by quotes or built by a substitution (`make eval-"record"`, `make $(printf eval-rec)ord`, `make eval-{record,x}`, `make -m "aws-"apply`, `make azure-"apply"`); a target or a whole command in a file (`make $(cat t.txt)`, `xargs -a t.txt make`, a script written and then run by name, `set -a; . ./live.env`, a script the command names such as `python3 X.py` or `bash X.sh`); the flags variable with its target held elsewhere (`MAKEFLAGS="-- $T" make`, `T` set in an earlier call); the Azure make rule, which has no co-occurrence rule (`T=azure-apply; make $T`); the AWS option rule behind a prefix outside its tables (`stdbuf -oL`, `ionice`, `doas`, `systemd-run`, `eval make`, `\make`, a quoted `"make"`) or with the target in a loop or a variable; a raw request spelled `az re""st`, `"az" rest` or `a=az; $a rest`, or through `python3 -m azure.cli rest` or `subprocess.run(['az','rest'])`; the identity library through `from azure import identity`, `importlib`, `node` or `pwsh`, the classes `OnBehalfOf`, `AuthorizationCode`, `AzurePipelines` and `AzureApplication`, or a heredoc piped into an interpreter the heredoc pass does not know; main's older rules that cut at a separator inside a quote (`git commit --author="A;B" -n`, `kubectl get secret x -n "a;b" -o yaml`, `cat "a;b" .env`); and `parallel -m "…"` and `python3 -m "<quoted>"`, which main's own pass blanks as prose | S071 (the reviews of G3 to G6, 2026-10-07 and 08) | open; the third review listed file-then-run (a command that runs a file a session wrote, `set -a; . ./live.env` included) among the items to close before a paid run on this machine (the other, `${T:-…}`, is closed), and it is not built: the hook would have to open the files a command names (the design's note) | S071 (its paid half) |
+| The paid-target rule's false asks, measured by the third review and the re-check and accepted by the session as the price of co-occurrence (a false ask costs a click, a missed one costs money; the owner may overturn): any command that holds the word make and a paid target as words asks, wherever they stand (`rg -n "make eval-record" docs/`, `grep -rn "make gateway-live" docs`, `git log -S"make gateway-live"`, `gh pr create --body "… make eval-record"`, `make test && git add docs/operations/runbooks/gateway-live`, `make test PYTEST_ARGS="-k gateway-live"`, `echo gateway-live >> notes.txt && make docs`; 8 of the 34 daily shapes the review tried asked, all of this form; a commit message goes in with `-F` and so does not ask); the narrower rule for a default in a parameter expansion asks on `make ${T:-my-eval-record}` and `echo "${T:-eval-record}" && make docs`; and the raw-request and identity rules ask on a search whose quoted pattern names them (`grep -rn "az rest" docs`, `python3 -m pytest -k "DefaultAzureCredential"`). A search with the Grep tool asks nobody, and the review found no target of main's Makefile outside the paid ones that gained an ask | S071 (the third review and the fifth round's re-check, 2026-10-07 and 08) | open; accepted | S071 (its paid half) |
+| A quoted word after `env -S` (an empty string, a comment, an assignment or another prefix) hides the build tool behind it from the added AWS removal rule: `env -S '' make -m "aws-destroy"`, `env -S '# c' make …`, `env -S 'A=b' make …`, `env -S 'nice -n 5' make …`, `env -S 'sudo' make …`. The fifth round denied these forms and the sixth gives none, which is what main gives; the sixth round's check calls it a medium that is not weaker than main, and judges that a session almost certainly would not type it. Its suggested fix: add to the alternatives for `env` a `-S` followed by a quoted word (already masked to `'xxx'`) so that make after it stays the command word, at the cost of a deny on `env -S 'sh' make` (the stronger direction), reverse-checked against row 2841 so that `env -S x make` stays none. The check asked for it before the paid run; the session reads that as the next change of the hook and not as S071's paid model run, because the rule is the AWS removal rule and not one of the paid-model rules | S071 (the sixth round's check, 2026-10-08) | open; left open by the session's decision | S020 (the guard's rules for the Azure wrapper: the next change of the hook, with a security review of its own) |
 
 ## Part C — Step details
 
@@ -17902,7 +17907,7 @@ paid call**: it
 says where the login will be and says nothing of the amount or of the run. The
 cost statement named the price of (b) before the answer: a login where
 sessions run (on the trial a session's login ended within a day) and a guard
-that did not ask before a paid model call. The guard asks now (G1, G2), and
+that did not ask before a paid model call. The guard asks now (G1 to G6), and
 that, with the ceiling (L1, L3), is what stands between a signed-in machine and
 a paid call. The guard is a habit-stopper and not a boundary (T-87, T-112).
 
@@ -17982,8 +17987,8 @@ built it):
   Lesson for a contract: name a new data file's place only after reading what
   fingerprints the directory.
 
-**Advisor:** consulted twice, both before a contract went out; the main
-session adds any later one.
+**Advisor:** consulted three times: twice before a contract went out and once
+at a surprise (the third, below); the main session adds any later one.
 
 - **The cost statement** (2026-10-07, about 12:36 UTC; at the owner's question,
   before a paid ask): three corrections, all taken. The ask said "up to EUR 2
@@ -18000,14 +18005,34 @@ session adds any later one.
   only a prompt, one output file, and its transcript searched afterwards for
   any read of the repository); L1's test asserts the committed `tenants.yaml`
   unchanged.
+- **The guard after a second block** (2026-10-07, about 17:25 UTC; at a
+  surprise: two security reviews in a row had blocked the guard for the same
+  kind of change, and the one-character fix to the second block was at hand).
+  The session wrote the open decision and its alternative into the design
+  first. The advisor read it as: change the shape and do not patch a third
+  time, and sharpened it in three places, all taken. The three guard files go
+  back to G1's content, in which the pass that builds the copy main's rules
+  read is byte-identical to main's, and the new rules are built on that; the
+  proof is textual (the diff against main shows no hunk inside that pass),
+  because a fuzz proves what it sampled and an identical block proves all of
+  it, and the third review checks it first. The two gates are said with their
+  reason: the paid-target rule by co-occurrence has no command-word gate and
+  only asks, and the rule that denies a removal needs the command-word gate,
+  read from the raw text in a pass of its own, so that a commit message naming
+  it stays what main gives. The implementer lists every case row whose
+  decision changes against the earlier round's expectation. What it changed:
+  the plan of the next contract (G4, a rebuild) over the cheaper one (the
+  one-character fix and the reviewer's three closes as G4).
 
 **Work log:**
 
 - A read-only map of the step (`mapping.md`), the cost statement, the design,
   and eight contracts: J1, L1, H1 and H2 (H2 stopped at a stop of its
   contract, below), L2 (after S079 merged), G1 and its security review, L3 and
-  G2 (the review's findings), and this record, D1. Each ran in a worktree of its
-  own and returned a report; the main session read each diff.
+  G2 (the review's findings), this record's first part, D1, then G3 to G6 (the
+  guard's third to sixth rounds, each answering a review) and this record's
+  second part, D2. Each ran in a worktree of its own and returned a report; the
+  main session read each diff.
 - **H1's audit** (12:58 UTC): the blind agent's transcript holds ONE tool use,
   a write of the sentences' file, and no read, search, shell or web call
   (counted from the transcript's `tool_use` parts by a script). 72 entries in
@@ -18018,9 +18043,11 @@ session adds any later one.
   and whether the screen's author drew on the same public phrasings, is not
   controlled. The main session did not read the sentences before the
   measurement.
-- **Reviews:** one security review of G1, L1 and L2 (a read-only checkout at
-  4f2fc52; below); a security review of G2 (below). A `python-reviewer` read of
-  L1 and L2, which the design asked for: not recorded. A
+- **Reviews:** six security reviews, all read-only: one of G1, L1 and L2 (a
+  checkout at 4f2fc52; below), then one of each later round of the command
+  guard (G2, G3, G4, a re-check of G5 and a short check of G6; the table
+  after the rounds). A `python-reviewer` read of L1 and L2, which the design
+  asked for: not recorded. A
   `rag-pipeline-reviewer` read of E9: none, since E9 is not built.
 
 **What the free half built** (where it lives; the evidence as each contract's
@@ -18072,7 +18099,11 @@ Details the table cannot hold:
   names a target also asks (use `git commit -F`, and write prose with the Write
   tool); G2 asks on `az rest` for any method where the review proposed non-GET
   only, and decides the identity library by the interpreter word, so that a
-  `grep` for the names stays free.
+  `grep` for the names stays free. From G3 on, the raw-request and identity
+  rules also blank a commit message and a pull request body, so those stay
+  free too, and the interpreter and the name must stand in one segment; the
+  paid-target rule still reads the whole command, and a search whose quoted
+  pattern names the raw request still asks (`grep -rn "az rest" docs`, G5).
 
 **The held-out result** (made once, nothing tuned: 72 sentences written by an
 agent that read none of the screen, the cases or their summary, applied to a
@@ -18163,13 +18194,262 @@ owner's: `make gateway-live` asks although `make azure-smoke` does not, at the
 same cost class. A review of what the review could not check: Claude Code's own
 permission matcher, any live behaviour, and the database-backed tests.
 
-The security review of G2 (the second round of the guard, 77675a7):
-REVIEW-LINE
+**The command guard, rounds two to six, and its six security reviews.** D1
+wrote this record when the guard stood at its second round; rounds three to
+six are written here, each sentence from the round's report or review in the
+handoff folder. The rule for the hook is that it may only be tightened: for no
+input may a decision be weaker than main's (deny above ask above none). Every
+review ran the hook on command lines read from files, in a read-only checkout,
+and none in a live session. The guard is **a guard for habits and not a
+boundary** (T-87, T-112): it reads the text of a command.
 
-**Evidence, the final tree:** the main session's gates on the branch's tip,
-FINAL-SUITE-RESULT. The reports' own gates are in the table above; each
-contract ran `make lint`, `make test` and `make docs`, and none ran `make
-pytest` on the whole suite but H2b's (no database, 4 workers).
+- **G2, reviewed at 77675a7: BLOCK.** Two criticals broke the rule. C1: the
+  new Python pass rescanned the whole segment once for each message flag after
+  `make`, 14 to 56 s of CPU on a command of 7,904 bytes against the hook's
+  timeout of 10 s, and a hook past its timeout does not block the call (the
+  hook's own header), so a deny hidden behind such padding would go through
+  unread (the review measured the CPU time and did not run a deny through the
+  padding). C2: the word `make` anywhere earlier in the segment, not as its
+  command word, switched on a read of the quoted value that kept its `;`, and
+  the later rules lost the flag after it: eight inputs, `git commit make -m
+  "a; b" -n` among them, were deny on main and none. One high: a separator
+  inside an earlier quoted argument hid a paid target (`make -C "a;b"
+  eval-record`). Two mediums: the raw-request and identity rules read the whole
+  command and asked on a commit message that names them. No earlier row
+  changed, and no row of the case file exposed either critical.
+- **G3 (e65076c) and its review at that commit: BLOCK.** G3 answered each
+  finding: the pass masks the quoted pieces once per call and finds a segment's
+  start without rescanning (the review's four shapes fell from 14 to 56 s to
+  0.2 to 0.5 s); `make` must be the segment's command word, after assignments
+  and a list of prefixes; the value that is read has `;&|` blanked; copies of
+  the command with the separators inside quotes blanked (`cmd_q`, `hook_cmd_q`)
+  are read in addition; the two new rules blank a commit message and a pull
+  request body, and the identity rule needs the interpreter and the name in one
+  segment. The case file went from 2,500 to 2,589 rows. The review lifted C1 and
+  blocked on C2, which in one sentence is: **a deny of main's had become none**,
+  because the blank missed a line break inside the quoted value (with one in
+  the message, `make git commit -m … -n` was deny on main and none, and so was
+  `make -m …` before `gateway-upkeep ARGS=credit`, an ask on main and a command
+  that really runs make). Its fuzz of 2,700 mutations of main's deny and ask
+  rows found 26 weaker decisions, every one with a newline in the value, and a
+  copy of the hook with that one character changed cleared them. It also found
+  the separator fix half done (a separator in an unquoted substitution still
+  hid a paid target) and a new hole (a pipe into a bare `python3` no longer
+  reached the identity rule). Counted: 1 critical, 2 high, 4 medium, 3 low.
+- **Two blocks in a row, one cause, and a change of shape.** Both reviews
+  ended in a block from the same kind of change: G2 and G3 had edited the pass
+  that builds `hook_cmd`, the copy of the command with message values blanked
+  that main's older rules read, so that a quoted value after a make option is
+  read, and every weaker decision found since came from that edit. The
+  one-character fix was at hand and cheaper. The session wrote the open
+  decision down and consulted the advisor (the third consultation above), and
+  did not patch a third time: **every rule this step needs is added beside
+  main's rules, with main's lines untouched.** The three guard files went back
+  to G1's content (G1 never touched the pass, so it is byte-identical to
+  main's there), and the criterion for the rebuild was textual and not a
+  sample.
+- **G4 (5acbfd4): the rebuild as additions; the third review: BLOCK LIFTED,
+  approve with fixes.** The criterion: against main the hook's diff has only
+  added lines, no hunk inside the pass that builds `hook_cmd` and no changed
+  line in any rule of main's, and no decision weaker than main's for any input.
+  It was measured four ways. Textually: 286 added lines and none removed, in
+  three hunks, with main's lines 327 to 367 (the whole pass) byte-identical
+  (`cmp`); the review confirmed it with a `difflib` pass (286 insertions, no
+  replacement or deletion, all 1,475 of main's lines kept in order) and by the
+  order of decision: the hook exits on its first decision and every added ask
+  stands after the last deny of main's, so an added ask cannot pre-empt a deny.
+  By differential: all 2,675 rows against main's hook, 0 weaker and 298
+  changed, all tighter. By fuzz: the implementer's two fuzzers on two seeds
+  each (4,200 to 8,400 candidates a run) and the review's on four fresh seeds
+  (5,400 to 8,400 a run), 0 weaker, where the same harness on G3's hook found
+  17 and 66 weaker decisions, so it can see the fault. By the guard's own test
+  script: 2,900 `ok` lines, no FAIL. What it built: the paid targets by
+  co-occurrence (the word make and a whole-word paid target anywhere in one
+  command ask, so a target in a variable, a loop, `xargs`, an unquoted
+  substitution or beside a quoted separator asks at once); a new rule for an
+  AWS target in a quoted value behind a make option (ask for apply and plan,
+  deny for destroy, with make as the command word); the raw-request and
+  identity rules as G3 had them
+  plus the pipe into bare `python3`; and the review's worst shape as an
+  eleventh CPU test (about 1.2 s against 0.59 s on main, under the bound of
+  3 s; the report's 1.37 s was measured with a fuzz job running). The review's
+  findings: **0 critical, 2 high, 3 medium, 3 low.** HIGH-1 was four classes of
+  false deny, all none on main: a `-c` of `grep` or `wc` read as a shell's, a
+  quoted `VAR=` value read as a target (`make test K="aws-destroy"`), the
+  quoted-separator copy (`rg -n "make (aws-apply|aws-destroy)" docs`) and a
+  prefix that eats an option argument (`sudo -u make git commit -m
+  "aws-destroy"`). HIGH-2: `make ${T:-eval-record}` was none. Mediums: an
+  escaped-quote shell body (`bash -c "make -m \"aws-destroy\""`), a search for
+  the raw request that asked against the hook's own comment, and a note that
+  the hook enforces neither the ceiling nor the owner's yes. Lows: the added
+  passes about double the worst serial cost, which halves the margin to the
+  timeout, and five mutants of the added code survived the 480 added rows (331
+  of them killed none).
+- **G5 (d08bba1): the four classes of false deny closed; the re-check: MERGE.**
+  The `-c` gate opens a body only after a shell word or `eval`; a quoted piece
+  right after `=` is a variable's value and not a target; the quoted-separator
+  copy is gone; a prefix's option arguments are eaten by per-prefix tables, so
+  `make` after them is not the command word. The implementer took four
+  decisions against the contract's wording, and the re-check said of each:
+  (1) it did not drop the hyphen from the paid target's left boundary, since
+  that would turn G1's own rows `make my-eval-record` from none to ask, and
+  added a narrower rule for an operator right before a target inside `${...}`:
+  accepted, with a low (it is not tied to the command word, so `echo
+  "${T:-eval-record}" && make docs` asks); (2) it removed the quoted-separator
+  copy and its reads instead of turning its deny into an ask, since any ask
+  would be more than main's none for a plain search, and found the removal
+  behind a quoted separator in the raw-text pass with make as the command
+  word: nothing weaker than main, but a gap weaker than G4, and a wider one
+  than the report said (not only `aws.sh "a;b" apply` and `plan`: `aws.sh -C
+  "a;b" destroy` was a G4 deny and is none, as on main); (3) it told a prefix's
+  option argument from the command word instead of asking: right in intent, and
+  the tables were case-blind (MEDIUM-1 below); (4) it kept the deny on `make
+  git commit -m "aws-destroy"`: accepted, since main already denies the
+  unquoted form and nobody types it, though the report's reason (GNU make
+  would run the target) is overstated, as without `-k` make stops at "No rule
+  to make target 'git'" first. It also corrected the hook's comment instead of
+  blanking the search pattern of the raw-request rule, as blanking had hidden a
+  command substitution in S036. The report: 69 rows added (2,744), all rows
+  against main's hook 0 weaker and 331 changed (tighter), four fresh fuzz seeds
+  (4,800 to 8,400 candidates) 0 weaker, and a hunt of 59 read-only commands
+  that mention make and an AWS target in quotes (44 none on both, 9 and 6 the
+  decisions main gives, none stronger than main; the same list on G4's hook
+  gave 18 stronger). **The re-check:** the first reviewer stalled with the
+  machine's overload of 2026-10-07 and was replaced by a second, which reused
+  the first one's copies of main's and G4's hooks. It ran 151 distinct inputs
+  through the hook (379 runs, one at a time, G4 beside the new hook on the
+  first 77), **0 weaker than main**, and 41 ordinary read-only commands with no
+  false deny; the structure alone rules a weaker decision out (331 added lines,
+  none removed, every added ask after main's last deny). Counted: 0 critical,
+  0 high, 2 medium, 4 low. MEDIUM-1: the class-4 fix was case-blind, which
+  reopened `sudo -H`, `sudo -P` and `xargs -p`, `-i` and `-l` before make (a
+  flag class written for `-h` also ate `-H`) and lost `command -p` and `setsid
+  -f`: G4 denied them, main and G5 give none. MEDIUM-2: the shell gate missed
+  a flag with an argument (`bash -o pipefail -c '…'`, a common habit). Neither
+  is weaker than main.
+- **G6 (15fcf75): the two mediums closed; the short check: MERGE.** Flag
+  letters are case-sensitive now; the command word stays case-blind on purpose,
+  as main's rules run under `nocasematch` and `SUDO -H MAKE` denied is the
+  stronger direction. `command`, `setsid`, `nohup` and `builtin` are read with
+  their own flags (`command -v` and `-V` stay out: they only look a name up).
+  The shell gate reads `-o` and `-O` with their option names, `+letters`,
+  `--rcfile` and `--init-file` with their file, `--norc`, `--noprofile`,
+  `--login`, `--posix`, `"$SHELL" -c` and `su` with up to four words before
+  `-c`, inside the same window of 80 bytes before the quote, anchored on a shell
+  word or `eval` so that `grep -c`, `wc -c`, `cut -c` and `rg -c` stay what
+  main gives; `fish -c` was not added. Against main the hook is 364 added lines
+  and none removed or changed, in three hunks of 194, 20 and 150 lines, and the
+  pass is byte-identical. 141 rows were added (2,889 in all; 2,748 before,
+  which is G5's 2,744 and four rows main added), each note holding main's
+  decision, G5's and the new one; the test script ran once: 3,122 `ok` lines,
+  no FAIL, 2,889 of them cases. The differential of all 2,889 rows against
+  main's hook, G5's and the new one: **0 weaker than main, 418 tighter, 2,471
+  equal**; 51 rows differ from G5's tip, 49 tighter and 2 narrower, and no row
+  of the first 2,748 changed its expectation. **The two narrower rows** (2841
+  `env -S x make -m "aws-destroy"` and 2842 `xargs -e x make -m
+  "aws-destroy"`) were G5 denies and are none, which is what main gives: after
+  `env -S` the string is the command line, and after `xargs -e` (whose
+  argument is attached or absent) the next word is the command, so make is an
+  argument there. The check confirmed the `xargs -e` reading from GNU findutils
+  4.10.0's help; for `env -S` it found the change too wide (below). **The
+  check** ran 75 hook inputs (223 of its 300 allowed runs, one at a time, no
+  fuzzer): **0 weaker than main**, 48 stronger, all deliberate `make …
+  "aws-destroy"` forms; 56 read-only commands, 0 stronger than main (main was
+  run on the 27 where the new hook did not answer none); the extracted scanner
+  and the hook agreed on all 75, so a Python error is not turning decisions
+  into none behind the hook's `|| true`; the expressions are linear. Counted: 0
+  critical, 0 high, 1 medium, 4 low.
+  - **One medium stays open, by the session's decision:** a quoted word after
+    `env -S` (an empty string, a comment, an assignment, another prefix) hides
+    the build tool behind it from the added AWS rule. The fifth round denied
+    those forms (`env -S '' make -m "aws-destroy"`) and the sixth gives none,
+    which is what main gives. It is not weaker than main, nobody types it (the
+    check: "Almost certainly not"), and it is in the AWS removal rule and not
+    in the paid-model rules this step's paid run rests on; the paid-target
+    rule has no command-word gate, so by its design (G4) make beside a paid
+    target asks behind an `env -S` string too (no run was made for that form).
+    The check wrote that it should be fixed before the paid run; the session
+    reads that as "before the next change of the hook that matters", which is
+    S020's contract for the Azure wrapper's rules (it has a security review of
+    its own), and not as a condition of S071's paid model run. A backlog row
+    with the check's suggested fix has S020 as its home.
+  - **A correction to the sixth round's report.** Its CPU figures (0.025 to
+    0.029 s for the five new shapes) were measured by the test script calling
+    the scanner directly, with shapes sized under 16,384 bytes; the hook
+    answers `ask` above 8,192 bytes without running the scanner, so those
+    shapes did not pass through the hook. The check measured through the hook
+    at about 8,000 bytes: 0.082, 0.131 and 0.094 s of CPU on three inputs
+    (7,943, 7,895 and 7,967 bytes) against the 10 s limit, a depth-3 nest of
+    5.5 KB in 0.154 s, and the scanner alone on 19 shapes at 4, 8 and 16 KB in
+    0.011 to 0.021 s, flat. The check's figures stand; the report's are what
+    they are and no more.
+  - **The check's lows:** two letters are still case-blind in the body gate
+    (`bash -C '…'` read as `-c`, `env -s '…'` as `-S`: main none, now deny; a
+    false deny nobody types); the report's CPU figures (above); five gaps it
+    found that are not yet rows of the case file; `env -a NAME make` and `env
+    -u A -S '…'` are not read (none on main and on G5). All are in the rows
+    below.
+
+| Review | Commit reviewed | Verdict | Critical | High | Medium | Low |
+|---|---|---|---|---|---|---|
+| The first (G1, L1, L2) | 4f2fc52 | approve with fixes | 0 | 0 | 2 | 12 |
+| G2's | 77675a7 | BLOCK | 2 | 1 | 2 | 3 |
+| G3's | e65076c | BLOCK | 1 | 2 | 4 | 3 |
+| G4's (the third on the guard) | 5acbfd4 | BLOCK LIFTED: approve with fixes | 0 | 2 | 3 | 3 |
+| G5's re-check | d08bba1 | MERGE | 0 | 0 | 2 | 4 |
+| G6's short check | 15fcf75 | MERGE | 0 | 0 | 1 | 4 |
+
+The first row is the review's own total. The counts of the other five are the
+items under each severity heading of the review, which prints no total, and
+some of them are notes and not defects (G2's third low says no deny follows the
+new asks; G4's third medium restates what the hook does not enforce; the last
+low of G5 and the second of G6 say what was not re-run or measured).
+
+**What the six rounds say, honestly.** The guard is a pattern on a command's
+text, and it took six rounds and six reviews to reach a tightening that the
+last three reviews found nothing weaker than main in. **Two of the rounds, G2
+and G3, would have weakened main's guard had they been merged** (G2 turned
+eight denies into none and could fail open on a padded command; G3 turned
+denies and asks into none on a newline), **and neither was**: both stopped at
+a review, which is why each round has a review and not one at the end. After
+the rebuild no review found a decision weaker than main's, in about 26,400
+fuzz candidates of the third review and 226 hook inputs of the last two (151
+and 75). That is a
+statement about the inputs tried. It does not make the guard a boundary: the
+ask has never been shown to the owner in a live session, the settings'
+precedence of ask over allow is assumed, and the reviews list what the hook does
+not read (the backlog rows below). What stands between a signed-in machine and
+a paid call is the ceiling the gateway holds for one run (L1, L3), the owner's
+yes, and the key path closed in the Terraform source, with this guard as a
+seat belt for an honest session.
+
+**What stays open from the six rounds** (rows of Part B's follow-up backlog,
+each with its home): the gaps the sixth round pinned as rows of the case file;
+what its check lists beyond them; the bypasses the reviews keep listing; the
+false asks of the paid-target rule, accepted as the price of co-occurrence; and
+the `env -S` medium, with S020 as its home. The hook's header and the
+runbook's list still do not name the new asks and gaps (D1's row, home S071):
+the header is code and not this record's to change.
+
+**Evidence, the final tree:** the main session's gates on the branch's tip
+merged with main at plan v0.92 (270402a), on 2026-10-08: the tests of the areas
+this branch changes, 29 test files against PostgreSQL on four workers, `2024
+passed, 3 skipped in 98.68s`; `make eval`, `eval compare: passed` (a replay,
+no model call); `make test`, `Ran 413 tests` and OK; `make lint`, six import
+contracts kept; and `make docs`. **The whole suite was not run locally.** The
+development machine froze twice (on 2026-10-07 and 08, when too much ran at
+once), and the owner decided on 2026-10-08, asked why the whole suite is run
+locally ("Okay but ehy dont we just test those things that is modified?") and
+offered three ways, to take **"Affected tests, CI runs all (Recommended)"**:
+before a pull request the tests of the changed areas, `make lint`, `make
+docs`, `make test` and the secret scan run locally, and the whole suite runs in
+CI on the pull request (about 14 minutes; a red run is fixed and pushed again;
+nothing merges red). So the whole suite's result for this branch is the pull
+request's own run. The reports' own gates are in the table above; each contract
+ran `make lint`, `make test` and `make docs`, and none ran `make pytest` on the
+whole suite but H2b's (no database, 4 workers). Rounds three to six of the
+guard ran the guard's own script (2,808, 2,900, 2,972 and 3,122 `ok` lines at
+G3, G4, G5 and G6, none failing).
 
 **Not seen:**
 
@@ -18183,7 +18463,9 @@ pytest` on the whole suite but H2b's (no database, 4 workers).
   same to the gateway);
 - the guard's ask shown to the owner for a real paid command: it is measured
   from lines read out of a file, not in a live session, and the settings'
-  ask-over-allow precedence is assumed;
+  ask-over-allow precedence is assumed, and what Claude Code does with a hook
+  that runs past its timeout was read from the hook's header and measured only
+  as CPU time, never as the harness's behaviour;
 - whether the three deployments exist today (the last evidence is 2026-10-03),
   and the trial's remaining credit (the owner's to read in the portal);
 - the owner's labels, and a retrieval measured with a real embedding.
@@ -18308,7 +18590,15 @@ pytest` on the whole suite but H2b's (no database, 4 workers).
 
 - The guard's known gaps after G2, with the settings' precedence (A-4, A-5, A-7
   and the shapes G1 and G2 list as not read) and the credential-building shapes
-  G2 added: home **S071**, the paid half, before the owner signs in.
+  G2 added: home **S071**, the paid half, before the owner signs in. Narrowed
+  since by rounds three to six: a target held in a variable, a loop or `xargs`
+  now asks, and a separator inside a quote or an unquoted substitution no
+  longer hides one.
+- Five rows from the guard's rounds three to six (D2): the gaps the sixth round
+  pinned as rows of the case file; what its check lists beyond them; the
+  bypasses the reviews keep listing; the false asks of the paid-target rule;
+  and the `env -S` medium, whose home is **S020**. The first four have home
+  **S071**, the paid half.
 - The documents that do not yet name the guard's new asks and gaps (the hook's
   header, the runbook's "what the guard does not see" list, and
   `docs/development-environment.md`): home **S071**.
@@ -18334,7 +18624,7 @@ pytest` on the whole suite but H2b's (no database, 4 workers).
   measurement, "about 50 chat calls (42 attacks, 8 benign)").
 
 **Contracts and commits** (the free half; `git log --oneline origin/main..HEAD`
-of the step branch `s071-live-measurements` at 77675a7, before this record):
+of the step branch `s071-live-measurements` at 270402a, before D2's record):
 
 | Contract | What it built | Commit |
 |---|---|---|
@@ -18345,7 +18635,12 @@ of the step branch `s071-live-measurements` at 77675a7, before this record):
 | G1 | the guard's ask before a paid target | 4f2fc52 |
 | L3 | the ceiling required, the write check, EUR 0.50 | b6f3f6b |
 | G2 | the guard's second round | 77675a7 |
-| D1 | this record, the threat row T-112 and the sentences the half made false | with this commit |
+| D1 | the record to G2, the threat row T-112 and the sentences the half made false | 66b4809 |
+| G3 | the guard's third round: the pass bounded, a deny it lost put back, a quoted separator no longer hiding a target | e65076c |
+| G4 | the guard rebuilt as additions beside main's rules | 5acbfd4 |
+| G5 | the third review's fixes: four classes of false deny, a default in a parameter expansion | d08bba1 |
+| G6 | the re-check's two mediums: flag letters keep their case, a shell's flags with an argument | 15fcf75 |
+| D2 | the record of rounds three to six, the rows, the closing evidence, T-112's cells | with this commit |
 
 **Follow-ups:**
 
@@ -22887,7 +23182,7 @@ compared, and one line in the Makefile.
   how and what changed). The whole suite, run alone on 2026-10-08 with the
   cluster's node container stopped for its length: `22437 passed, 9 skipped,
   8 warnings in 226.49s (0:03:46)`, coverage 99.14 %.
-- **PLAN-VERSION, 2026-10-07:** S071, free half (still `doing`; the paid half
+- **PLAN-VERSION, 2026-10-08:** S071, free half (still `doing`; the paid half
   is open and no paid call was made): the label worksheet and its comparison
   for the judge's 13 recorded verdicts, a ceiling the gateway holds for a paid
   run (a registry copy with each charged tenant's budget at or below the run's
@@ -22898,13 +23193,21 @@ compared, and one line in the Makefile.
   place together, and the command guard's ask before the three paid targets,
   their script sub-commands, the opt-in variables, a raw Azure request, the
   identity library and make's flags variable; each tested with a fake
-  provider, none run against a real one. The held-out set for the injection
+  provider, none run against a real one. The guard took six rounds and six
+  security reviews, two of which blocked it for the same kind of change: it was
+  then rebuilt as additions beside main's rules, with no line of main's
+  changed and no decision weaker than main's for any input tried (2,889 case
+  rows, 3,122 `ok` lines), and it remains a guard for habits and not a
+  boundary. The held-out set for the injection
   screen, measured once: 6 of 48 blind attacks stopped and 0 of 24 look-alikes
   flagged, against 26 of 66 and 16 of 28 on the suite's own cases, so the
   earlier figure was tuned to its own set; the set is spent when the patterns
   change. The owner answered that they will sign in to Azure on the virtual
   machine when the paid run is due, which is not a yes to a paid call. T-112
-  new (103 threats) and T-15, T-26, T-73, T-78, T-79 and T-83 changed. Stale
-  figures corrected (55 calls and EUR 0.12; 52 injection cases). Six backlog
-  rows added, four rows brought to the code. CLM-0034's `unsure` is written
-  out for the owner with the session's recommendation (keep the prompt).
+  new (112 threats) and T-15, T-26, T-73, T-78, T-79 and T-83 changed. Stale
+  figures corrected (55 calls and EUR 0.12; 52 injection cases). Eleven backlog
+  rows added (five of them from the guard's last four rounds, one with S020 as
+  its home), four rows brought to the code. CLM-0034's `unsure` is written
+  out for the owner with the session's recommendation (keep the prompt). The
+  whole suite was not run locally, by the owner's decision of 2026-10-08
+  ("Affected tests, CI runs all"): the pull request's own run is its result.
