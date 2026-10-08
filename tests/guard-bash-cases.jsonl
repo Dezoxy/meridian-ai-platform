@@ -2936,7 +2936,7 @@
 {"expect":"ask","note":"S020 GA1 mkw-08-apply: main none","command":"bash -lc 'cd /srv/projects/meridian-ai-platform && make azure-platform-apply'"}
 {"expect":"deny","note":"S020 GA1 mkw-08-destroy: main none","command":"bash -lc 'cd /srv/projects/meridian-ai-platform && make azure-platform-destroy'"}
 {"expect":"none","note":"S020 GA1 ind-01-destroy, gap, pinned: a variable builds the target; not read (the header's list). main none, now none","command":"T=azure-platform-destroy; make $T"}
-{"expect":"none","note":"S020 GA1 ind-02-destroy, gap, pinned: a substitution builds the target; not read. main none, now none","command":"make $(echo azure-platform-destroy)"}
+{"expect":"deny","note":"S020 GA1 ind-02-destroy, a gap at GA2, closed by GA3's removal behind a runner word: a substitution builds the target. main none, GA2 none","command":"make $(echo azure-platform-destroy)"}
 {"expect":"none","note":"S020 GA1 ind-03-destroy, gap, pinned: the target is in another segment than make (xargs); not read. main none, now none","command":"echo azure-platform-destroy | xargs make"}
 {"expect":"none","note":"S020 GA1 ind-04-destroy, gap, pinned: a loop variable builds the target; not read. main none, now none","command":"for t in azure-platform-destroy; do make $t; done"}
 {"expect":"none","note":"S020 GA1 ind-05-destroy, gap, pinned: printf builds the target; not read. main none, now none","command":"make $(printf 'azure-platform-%s' destroy)"}
@@ -3015,11 +3015,11 @@
 {"expect":"deny","note":"S020 GA1 pty-11: main none","command":"socat - EXEC:'make azure-platform-destroy',pty"}
 {"expect":"deny","note":"S020 GA1 pty-12: main none","command":"setsid make azure-platform-apply"}
 {"expect":"deny","note":"S020 GA1 pty-13: main none","command":"setsid -w infra/terraform/azure.sh apply"}
-{"expect":"none","note":"S020 GA1 pty-14, gap, pinned: ssh -tt is not in aws_pty_re, which GA1 reuses by reference (GM1 wanted deny); main none, now none","command":"ssh -tt localhost make azure-platform-destroy"}
+{"expect":"deny","note":"S020 GA1 pty-14, a gap at GA2, closed by GA3's removal behind a runner word: ssh -tt is not in aws_pty_re, which GA1 reuses by reference (GM1 wanted deny). main none, GA2 none","command":"ssh -tt localhost make azure-platform-destroy"}
 {"expect":"deny","note":"S020 GA1 pty-15: main none","command":"python3 - <<'PYEOF'\nimport pty\npty.spawn(['make', 'azure-platform-apply'])\nPYEOF"}
 {"expect":"deny","note":"S020 GA1 pty-16: main none","command":"script -qc 'make azure-platform-plan' /dev/null"}
-{"expect":"none","note":"S020 GA1 pty-17, gap, pinned: tmux is not in aws_pty_re, which GA1 reuses by reference (GM1 wanted deny); main none, now none","command":"tmux new-session -d 'make azure-platform-apply'"}
-{"expect":"none","note":"S020 GA1 pty-18, gap, pinned: screen is not in aws_pty_re, which GA1 reuses by reference (GM1 wanted deny); main none, now none","command":"screen -dmS x make azure-platform-destroy"}
+{"expect":"ask","note":"S020 GA1 pty-17, a gap at GA2 (none), now asked by GA3's apply behind a runner word: tmux is not in aws_pty_re, which GA1 reuses by reference (GM1 wanted deny). main none, GA2 none","command":"tmux new-session -d 'make azure-platform-apply'"}
+{"expect":"deny","note":"S020 GA1 pty-18, a gap at GA2, closed by GA3's removal behind a runner word: screen is not in aws_pty_re, which GA1 reuses by reference (GM1 wanted deny). main none, GA2 none","command":"screen -dmS x make azure-platform-destroy"}
 {"expect":"deny","note":"S020 GA1 tr-01: main none","command":"bash -x infra/terraform/azure.sh apply"}
 {"expect":"deny","note":"S020 GA1 tr-02: main none","command":"sh -x infra/terraform/azure.sh plan"}
 {"expect":"deny","note":"S020 GA1 tr-03: main none","command":"bash -xv infra/terraform/azure.sh destroy"}
@@ -3241,7 +3241,7 @@
 {"expect":"deny","note":"S020 GA1 e-n-17: in a brace group. main none","command":"{ make azure-platform-destroy; }"}
 {"expect":"deny","note":"S020 GA1 e-n-18: after a pipe. main none","command":"echo y | make azure-platform-destroy"}
 {"expect":"deny","note":"S020 GA1 e-n-19: xargs as a prefix. main none","command":"xargs -I{} make azure-platform-destroy"}
-{"expect":"none","note":"S020 GA1 e-n-20: gap, pinned: a command substitution inside a double-quoted word is not read (the old scanner's gap too). main none","command":"echo \"$(make azure-platform-destroy)\""}
+{"expect":"deny","note":"S020 GA1 e-n-20: a gap at GA2, closed by GA3's removal behind a runner word: a command substitution inside a double-quoted word. main none, GA2 none","command":"echo \"$(make azure-platform-destroy)\""}
 {"expect":"ask","note":"S020 GA1 e-n-21: two targets, the higher one decides. main none","command":"make -j4 azure-platform-plan azure-platform-apply"}
 {"expect":"deny","note":"S020 GA1 e-n-22: the worst of two commands decides. main none","command":"make azure-platform-plan; make azure-platform-destroy"}
 {"expect":"ask","note":"S020 GA1 e-n-23: a body and the check target. main none","command":"bash -c \"make azure-platform-plan\" && make azure-platform-validate"}
@@ -3318,14 +3318,14 @@
 {"expect":"ask","note":"S020 GA1 e-as-15: AZURE_CONFIG_DIR in front of a quoted target. main none","command":"AZURE_CONFIG_DIR=/tmp/azcfg make \"azure-platform-plan\""}
 {"expect":"ask","note":"S020 GA1 e-n-39: xargs -I{} (a brace glued to a word cuts nothing). main none","command":"echo x | xargs -I{} make azure-platform-apply {}"}
 {"expect":"none","note":"S020 GA1 gap, pinned: a name piped into a shell (printf of a target is what main gives). main none","command":"printf 'make azure-platform-destroy\\n' | bash"}
-{"expect":"none","note":"S020 GA1 gap, pinned: a name in a here-string given to a shell. main none","command":"bash <<< \"make azure-platform-destroy\""}
-{"expect":"none","note":"S020 GA1 gap, pinned: a prefix outside the list (doas). main none","command":"doas make azure-platform-destroy"}
+{"expect":"deny","note":"S020 GA1: a gap at GA2, closed by GA3's removal behind a runner word: a name in a here-string given to a shell. main none, GA2 none","command":"bash <<< \"make azure-platform-destroy\""}
+{"expect":"deny","note":"S020 GA1: a gap at GA2, closed by GA3's removal behind a runner word: a prefix outside the list (doas). main none, GA2 none","command":"doas make azure-platform-destroy"}
 {"expect":"none","note":"S020 GA1 gap, pinned: a quoted command word. main none","command":"'make' azure-platform-destroy"}
-{"expect":"none","note":"S020 GA1 gap, pinned: a script read with source or a dot. main none","command":"source infra/terraform/azure.sh destroy"}
+{"expect":"deny","note":"S020 GA1: a gap at GA2, closed by GA3's removal behind a runner word: a script read with source or a dot. main none, GA2 none","command":"source infra/terraform/azure.sh destroy"}
 {"expect":"ask","note":"S020 GA1 e-s-31: a TF_ assignment does not make an AWS target behind env -S an Azure name: the AWS apply asks with its own wording. main none","command":"TF_VAR_x=1 env -S '' make -m \"aws-apply\""}
 {"expect":"deny","note":"S020 GA1 e-s-32: the same with the AWS removal, which denies with the AWS wording. main none","command":"TF_VAR_x=1 env -S '' make -m \"aws-destroy\""}
 {"expect":"deny","note":"S020 GA1 e-h1-19: the AWS twin of e-h1-17, for the record: main denies make git commit -m \"aws-destroy\" (G5), so the Azure deny is parity. main deny","command":"make git commit -m \"aws-destroy\""}
-{"expect":"none","note":"S020 GA1 gap, pinned: a quoted remote command after ssh is not a body the scanner opens (main's AWS regex reads through the quote, the command-word gate does not). main none","command":"ssh host \"make azure-platform-destroy\""}
+{"expect":"deny","note":"S020 GA1: a gap at GA2, closed by GA3's removal behind a runner word: a quoted remote command after ssh is not a body the scanner opens (the AWS twin's regex reads through the quote, the command-word gate does not). main none, GA2 none","command":"ssh host \"make azure-platform-destroy\""}
 {"expect":"none","note":"S020 GA1 e-pt-07: a file name that only starts with a target is not a name (the AWS twin has no boundary; the Azure names have one). main none","command":"rg -n \"script\" docs/azure-platform-plan.md"}
 {"expect":"none","note":"S020 GA1 e-pt-08: a file name that only starts with the script's name is not a name. main none","command":"grep -n script docs/azure.sh.md"}
 {"expect":"deny","note":"S020 GA1 e-tr-05: the trace form near a name, in an echo: false alarm by design, as the AWS twin (echo \"bash -x aws.sh\" denies on main). main none","command":"echo \"bash -x infra/terraform/azure.sh plan\""}
@@ -3508,7 +3508,7 @@
 {"expect":"deny","note":"S020 GA2 ah-01: cat of the cloud CLI's profile. main none","command":"cat ~/.azure/azureProfile.json"}
 {"expect":"deny","note":"S020 GA2 ah-02: cat under $HOME. main none","command":"cat $HOME/.azure/msal_token_cache.json"}
 {"expect":"deny","note":"S020 GA2 ah-02b: cat under ${HOME}. main none","command":"cat ${HOME}/.azure/msal_token_cache.json"}
-{"expect":"deny","note":"S020 GA2 ah-02c: cat under an absolute home. main none","command":"cat /home/developer/.azure/accessTokens.json"}
+{"expect":"deny","note":"S020 GA2 ah-02c: cat under an absolute home. main none","command":"cat /home/user/.azure/accessTokens.json"}
 {"expect":"none","note":"S020 GA2 ah-03: ls of the folder passes (control). main none","command":"ls -la ~/.azure"}
 {"expect":"deny","note":"S020 GA2 ah-04: cp -r of the folder. main none","command":"cp -r ~/.azure /tmp/az-copy"}
 {"expect":"deny","note":"S020 GA2 ah-05: tar of the folder. main none","command":"tar czf /tmp/az.tgz ~/.azure"}
@@ -3695,3 +3695,130 @@
 {"expect":"none","note":"identity ip-19: a quoted search for the script's command. main none","command":"rg -n 'identity.sh passwords' infra/kind/README.md"}
 {"expect":"none","note":"identity ip-20: the linter over the script. main none","command":"shellcheck infra/kind/identity.sh"}
 {"expect":"none","note":"identity ip-21: another target that starts with the same word. main none","command":"make identity-passwords-help"}
+{"expect":"deny","note":"S020 GA3 rb-01: a remote shell runs the removal (the AWS twin denies it). main none","command":"ssh -tt host make azure-platform-destroy"}
+{"expect":"deny","note":"S020 GA3 rb-02: a terminal multiplexer starts the removal. main none","command":"tmux new 'make azure-platform-destroy'"}
+{"expect":"deny","note":"S020 GA3 rb-03: a terminal multiplexer is sent the removal. main none","command":"tmux send-keys 'make azure-platform-destroy' Enter"}
+{"expect":"deny","note":"S020 GA3 rb-04: a privilege wrapper (pkexec). main none","command":"pkexec make azure-platform-destroy"}
+{"expect":"deny","note":"S020 GA3 rb-05: a privilege wrapper (chroot). main none","command":"chroot / make azure-platform-destroy"}
+{"expect":"deny","note":"S020 GA3 rb-06: a wrapper tool (nsenter). main none","command":"nsenter -t 1 make azure-platform-destroy"}
+{"expect":"deny","note":"S020 GA3 rb-07: a wrapper tool (flock). main none","command":"flock /tmp/x make azure-platform-destroy"}
+{"expect":"deny","note":"S020 GA3 rb-08: a wrapper tool (stdbuf). main none","command":"stdbuf -o0 make azure-platform-destroy"}
+{"expect":"deny","note":"S020 GA3 rb-09: a wrapper tool (ionice). main none","command":"ionice make azure-platform-destroy"}
+{"expect":"deny","note":"S020 GA3 rb-10: a wrapper tool (taskset). main none","command":"taskset 1 make azure-platform-destroy"}
+{"expect":"deny","note":"S020 GA3 rb-11: a wrapper tool (unshare). main none","command":"unshare -r make azure-platform-destroy"}
+{"expect":"deny","note":"S020 GA3 rb-12: a wrapper tool (watch). main none","command":"watch make azure-platform-destroy"}
+{"expect":"deny","note":"S020 GA3 rb-13: a wrapper tool (parallel) with the target after the colons. main none","command":"parallel make ::: azure-platform-destroy"}
+{"expect":"deny","note":"S020 GA3 rb-14: a command substitution holds the whole target name. main none","command":"make $(printf azure-platform-destroy)"}
+{"expect":"deny","note":"S020 GA3 rb-15: a backtick substitution holds the whole target name. main none","command":"make `echo azure-platform-destroy`"}
+{"expect":"deny","note":"S020 GA3 rb-16: the dot command runs the script. main none","command":". infra/terraform/azure.sh destroy"}
+{"expect":"deny","note":"S020 GA3 rb-17: find runs the script with -exec. main none","command":"find infra -name azure.sh -exec bash {} destroy \\;"}
+{"expect":"deny","note":"S020 GA3 rb-18: an interpreter starts a process (python3 os.system). main none","command":"python3 -c \"import os; os.system('make azure-platform-destroy')\""}
+{"expect":"deny","note":"S020 GA3 rb-19: an interpreter starts a process (perl system). main none","command":"perl -e 'system(\"make azure-platform-destroy\")'"}
+{"expect":"deny","note":"S020 GA3 rb-20: an interpreter starts a process (node execSync). main none","command":"node -e \"require('child_process').execSync('make azure-platform-destroy')\""}
+{"expect":"deny","note":"S020 GA3 rb-21: an interpreter starts a process (awk system). main none","command":"awk 'BEGIN{system(\"make azure-platform-destroy\")}'"}
+{"expect":"deny","note":"S020 GA3 rb-22: an interpreter reads its program from a heredoc. main none","command":"python3 - <<'X'\nimport os\nos.system('make azure-platform-destroy')\nX"}
+{"expect":"deny","note":"S020 GA3 rb-23: the target piped into a shell. main none","command":"echo 'make azure-platform-destroy' | bash"}
+{"expect":"deny","note":"S020 GA3 rb-24: the target piped into sh -s. main none","command":"echo 'make azure-platform-destroy' | sh -s"}
+{"expect":"deny","note":"S020 GA3 rb-25: a here-string in single quotes given to a shell. main none","command":"bash <<< 'make azure-platform-destroy'"}
+{"expect":"deny","note":"S020 GA3 rb-26: the build tool with a backslash (the shell skips an alias). main none","command":"\\make azure-platform-destroy"}
+{"expect":"deny","note":"S020 GA3 rb-27: the shell with a backslash, the script's removal. main none","command":"\\bash infra/terraform/azure.sh destroy"}
+{"expect":"deny","note":"S020 GA3 rb-28: env behind a path (the scanner's prefix list). main none","command":"/usr/bin/env make azure-platform-destroy"}
+{"expect":"deny","note":"S020 GA3 rb-29: env -S behind a path. main none","command":"/usr/bin/env -S make azure-platform-destroy"}
+{"expect":"deny","note":"S020 GA3 rb-30: a shell that the body scan does not list (fish). main none","command":"fish -c 'make azure-platform-destroy'"}
+{"expect":"deny","note":"S020 GA3 rb-31: -c followed by -- before the body. main none","command":"bash -c -- 'make azure-platform-destroy'"}
+{"expect":"deny","note":"S020 GA3 rb-32: make's own --eval runs a make line. main none","command":"make --eval='x: ; make azure-platform-destroy'"}
+{"expect":"deny","note":"S020 GA3 rb-33: the script's removal piped into a shell. main none","command":"echo 'infra/terraform/azure.sh destroy' | bash"}
+{"expect":"deny","note":"S020 GA3 rb-34: the script's removal after ssh. main none","command":"ssh host infra/terraform/azure.sh destroy"}
+{"expect":"deny","note":"S020 GA3 rb-35: the script's removal in a here-string. main none","command":"bash <<< 'infra/terraform/azure.sh destroy'"}
+{"expect":"deny","note":"S020 GA3 rb-36: the script's removal after watch. main none","command":"watch infra/terraform/azure.sh destroy"}
+{"expect":"deny","note":"S020 GA3 rb-37: the script sourced with a path behind source. main none","command":"source ./infra/terraform/azure.sh destroy"}
+{"expect":"deny","note":"S020 GA3 rb-38: a runner word after the target, in the same command. main none, GA2 deny","command":"make azure-platform-destroy $(echo x)"}
+{"expect":"deny","note":"S020 GA3 rb-39: a runner behind a separator before the removal (the removal is the command word, GA1 denies too). main none, GA2 deny","command":"ssh host true; make azure-platform-destroy"}
+{"expect":"deny","note":"S020 GA3 rb-40: a quoted remote command with the script. main none","command":"ssh host \"infra/terraform/azure.sh destroy\""}
+{"expect":"deny","note":"S020 GA3 rb-41: sudo, a remote shell and a quoted removal. main none","command":"sudo ssh host 'make -C /srv/x azure-platform-destroy'"}
+{"expect":"deny","note":"S020 GA3 rb-42: a heredoc fed to a shell with a substitution around the removal. main none","command":"bash <<'X'\necho \"$(make azure-platform-destroy)\"\nX"}
+{"expect":"ask","note":"S020 GA3 ra-01: a remote shell with a terminal runs the apply (the AWS twin asks). main none","command":"ssh -tt host make azure-platform-apply"}
+{"expect":"ask","note":"S020 GA3 ra-02: a terminal multiplexer starts the apply. main none","command":"tmux new 'make azure-platform-apply'"}
+{"expect":"ask","note":"S020 GA3 ra-03: screen starts the apply. main none","command":"screen make azure-platform-apply"}
+{"expect":"ask","note":"S020 GA3 ra-04: a terminal faker (faketty) around the apply. main none","command":"faketty make azure-platform-apply"}
+{"expect":"ask","note":"S020 GA3 ra-05: a terminal faker (winpty) around the apply. main none","command":"winpty make azure-platform-apply"}
+{"expect":"ask","note":"S020 GA3 ra-06: a shell with another start-up file runs the script's plan. main none","command":"bash --rcfile /tmp/x infra/terraform/azure.sh plan"}
+{"expect":"ask","note":"S020 GA3 ra-07: a remote shell runs the plan. main none","command":"ssh host \"make azure-platform-plan\""}
+{"expect":"ask","note":"S020 GA3 ra-08: a substitution holds the apply's name. main none","command":"make $(printf azure-platform-apply)"}
+{"expect":"ask","note":"S020 GA3 ra-09: the apply piped into a shell. main none","command":"echo 'make azure-platform-apply' | bash"}
+{"expect":"ask","note":"S020 GA3 ra-10: the script's apply sourced. main none","command":"source infra/terraform/azure.sh apply"}
+{"expect":"ask","note":"S020 GA3 ra-11: the script's plan in a here-string. main none","command":"bash <<< 'infra/terraform/azure.sh plan'"}
+{"expect":"ask","note":"S020 GA3 ra-12: a privilege wrapper outside the prefix list (doas) around the apply. main none","command":"doas make azure-platform-apply"}
+{"expect":"ask","note":"S020 GA3 ra-13: find runs the script's apply. main none","command":"find infra -name azure.sh -exec bash {} apply \\;"}
+{"expect":"ask","note":"S020 GA3 ra-14: an interpreter starts the plan. main none","command":"python3 -c \"import os; os.system('make azure-platform-plan')\""}
+{"expect":"none","note":"S020 GA3 gp-01: a loop builds the target (pinned gap, the AWS twin has it too). main none","command":"for t in destroy; do make azure-platform-$t; done"}
+{"expect":"none","note":"S020 GA3 gp-02: a brace expansion builds the target (pinned gap, the twin has it too). main none","command":"make azure-platform-{destroy,}"}
+{"expect":"none","note":"S020 GA3 gp-03: an empty quote splits the name (pinned gap, the twin has it too). main none","command":"make azure-pl''atform-destroy"}
+{"expect":"none","note":"S020 GA3 gp-04: the script linked under another name (pinned gap, the twin has it too). main none","command":"ln -s infra/terraform/azure.sh /tmp/a && /tmp/a destroy"}
+{"expect":"none","note":"S020 GA3 gp-05: the script copied under another name (pinned gap, the twin has it too). main none","command":"cp infra/terraform/azure.sh /tmp/a.sh && bash /tmp/a.sh destroy"}
+{"expect":"none","note":"S020 GA3 gp-06: the build tool in quotes (pinned gap, the twin has it too). main none","command":"\"make\" azure-platform-destroy"}
+{"expect":"none","note":"S020 GA3 gp-07: the build tool found by which (pinned gap, the twin has it too). main none","command":"$(which make) azure-platform-destroy"}
+{"expect":"none","note":"S020 GA3 gp-08: the sub-command in a variable (pinned gap, the twin has it too). main none","command":"infra/terraform/azure.sh $CMD"}
+{"expect":"none","note":"S020 GA3 gp-09: a variable holds the whole target and xargs reads it across a pipe (pinned gap). main none","command":"printf '%s\\n' azure-platform-destroy | xargs make"}
+{"expect":"none","note":"S020 GA3 rc-01: a search for the removal with a dot as the folder (a dot in the part is not the dot command). main none","command":"rg -n \"make azure-platform-destroy\" . docs"}
+{"expect":"none","note":"S020 GA3 rc-02: the removal's name piped to a linter, not to a shell. main none","command":"echo 'make azure-platform-destroy' | shellcheck -"}
+{"expect":"none","note":"S020 GA3 rc-03: the removal's name piped to cat. main none","command":"echo make azure-platform-destroy | cat"}
+{"expect":"none","note":"S020 GA3 rc-04: a print of the apply's name in an interpreter is not a start of it. main none","command":"python3 -c \"print('make azure-platform-apply')\""}
+{"expect":"none","note":"S020 GA3 rc-05: a commit message that names a runner and the removal. main none","command":"git commit -m \"S020: ssh host make azure-platform-destroy is denied\""}
+{"expect":"none","note":"S020 GA3 rc-06: a pull request body that names a runner and the plan. main none","command":"gh pr create --title t --body \"run it through ssh: make azure-platform-plan\""}
+{"expect":"none","note":"S020 GA3 rc-07: a search for the script's removal beside a file named ssh.md. main none","command":"rg -n 'azure.sh destroy' docs/ssh.md"}
+{"expect":"none","note":"S020 GA3 rc-08: the make target that only validates, behind ssh. main none","command":"ssh host make azure-platform-validate"}
+{"expect":"none","note":"S020 GA3 rc-09: a pipe into a program whose name starts with sh. main none","command":"echo 'infra/terraform/azure.sh destroy' | shfmt"}
+{"expect":"none","note":"S020 GA3 rc-10: a pipe into a program whose name starts with sh, make form. main none","command":"echo 'make azure-platform-apply' | shellcheck -"}
+{"expect":"deny","note":"S020 GA3 rc-11: false alarm by design, as the twin: an echo with a substitution beside the removal's name. main none","command":"echo \"done at $(date): make azure-platform-destroy is the removal\""}
+{"expect":"ask","note":"S020 GA3 pw-01: a pseudo-terminal tool around the target: a terminal needs no SHOW=1 (the strongest miss). main none","command":"script -qc \"make identity-passwords\" /dev/null"}
+{"expect":"ask","note":"S020 GA3 pw-02: a pseudo-terminal tool around the script. main none","command":"script -qc \"infra/kind/identity.sh passwords\" /dev/null"}
+{"expect":"ask","note":"S020 GA3 pw-03: a shell body in single quotes. main none","command":"bash -c 'make identity-passwords'"}
+{"expect":"ask","note":"S020 GA3 pw-04: a shell body with the variable that lets the output go to a file. main none","command":"bash -c 'MERIDIAN_IDENTITY_SHOW=1 make identity-passwords'"}
+{"expect":"ask","note":"S020 GA3 pw-05: a shell body in double quotes holding the script. main none","command":"bash -c \"MERIDIAN_IDENTITY_SHOW=1 infra/kind/identity.sh passwords\""}
+{"expect":"ask","note":"S020 GA3 pw-06: a remote shell with the variable and the target in quotes. main none","command":"ssh host 'MERIDIAN_IDENTITY_SHOW=1 make identity-passwords'"}
+{"expect":"ask","note":"S020 GA3 pw-07: a terminal multiplexer starts the target. main none","command":"tmux new 'make identity-passwords'"}
+{"expect":"ask","note":"S020 GA3 pw-08: the target in double quotes. main none","command":"make \"identity-passwords\""}
+{"expect":"ask","note":"S020 GA3 pw-09: the target in single quotes. main none","command":"make 'identity-passwords'"}
+{"expect":"ask","note":"S020 GA3 pw-10: the script by its name after a cd. main none","command":"cd infra/kind && bash identity.sh passwords"}
+{"expect":"ask","note":"S020 GA3 pw-11: the script by its name after a cd, sh and a semicolon. main none","command":"cd infra/kind; sh identity.sh passwords"}
+{"expect":"ask","note":"S020 GA3 pw-12: a shell body with ./ before the script. main none","command":"bash -c './identity.sh passwords'"}
+{"expect":"ask","note":"S020 GA3 pw-13: the sub-command in double quotes. main none","command":"infra/kind/identity.sh \"passwords\""}
+{"expect":"ask","note":"S020 GA3 pw-14: the sub-command in single quotes. main none","command":"infra/kind/identity.sh 'passwords'"}
+{"expect":"ask","note":"S020 GA3 pw-15: a multiplexer session with the variable and a redirect, all in quotes. main none, GA2 ask","command":"tmux new-session -d -s x 'MERIDIAN_IDENTITY_SHOW=1 make identity-passwords > /tmp/p'"}
+{"expect":"ask","note":"S020 GA3 pw-16: a pseudo-terminal tool and the target's name with a backslash-blank (only the terminal rule reads it). main none","command":"script -qc make\\ identity-passwords /dev/null"}
+{"expect":"ask","note":"S020 GA3 pw-17: a shell body with a cd and the script. main none","command":"sh -c \"cd infra/kind && ./identity.sh passwords\""}
+{"expect":"ask","note":"S020 GA3 pw-18: the script by its name behind an assignment. main none","command":"MERIDIAN_IDENTITY_SHOW=1 identity.sh passwords > cast.txt"}
+{"expect":"ask","note":"S020 GA3 pw-19: a script path in double quotes. main none","command":"\"infra/kind/identity.sh\" passwords"}
+{"expect":"ask","note":"S020 GA3 pw-33: a shell body with the whole script path in single quotes and its sub-command. main none","command":"sh -c \"'infra/kind/identity.sh' 'passwords'\""}
+{"expect":"none","note":"S020 GA3 pw-20: false ask of the first rule: a commit message that names the target passes. main none, GA2 ask","command":"git commit -m \"docs: make identity-passwords prints the test users' passwords\""}
+{"expect":"none","note":"S020 GA3 pw-21: a commit message that names the script and its sub-command. main none","command":"git commit -m \"docs: infra/kind/identity.sh passwords\""}
+{"expect":"none","note":"S020 GA3 pw-22: a pull request body that names the target. main none","command":"gh pr create --title \"x\" --body \"make identity-passwords\""}
+{"expect":"none","note":"S020 GA3 pw-23: a search for the word script in the script (the printing command is skipped). main none","command":"grep -n script infra/kind/identity.sh"}
+{"expect":"none","note":"S020 GA3 pw-24: a quoted search for the script's command. main none","command":"rg \"identity.sh passwords\" docs"}
+{"expect":"none","note":"S020 GA3 pw-25: an echo of the target. main none","command":"echo \"make identity-passwords\""}
+{"expect":"none","note":"S020 GA3 pw-26: a shell body that lists the people, not the passwords. main none","command":"bash -c 'make identity-users'"}
+{"expect":"none","note":"S020 GA3 pw-27: a pseudo-terminal tool around another target. main none","command":"script -qc \"make identity-users\" /dev/null"}
+{"expect":"none","note":"S020 GA3 pw-28: the sub-command in a variable (pinned gap, as Grafana's rule). main none","command":"infra/kind/identity.sh $A"}
+{"expect":"none","note":"S020 GA3 pw-29: the sub-command split by empty quotes (pinned gap, as Grafana's rule). main none","command":"infra/kind/identity.sh pass\"\"words"}
+{"expect":"none","note":"S020 GA3 pw-30: the people listed behind a quoted script path. main none","command":"\"infra/kind/identity.sh\" users"}
+{"expect":"ask","note":"S020 GA3 pw-31: a print whose quote ends on a newline is still asked (kept from the first rule, which ends the target at a blank). main none, GA2 ask","command":"printf 'make identity-passwords\n'"}
+{"expect":"none","note":"S020 GA3 pw-32: a search whose pattern names the target behind a shell body. main none","command":"rg -n \"bash -c 'make identity-passwords'\" docs"}
+{"expect":"none","note":"S020 GA3 gp-10: a runner on no list (chrt): pinned gap, the AWS twin denies it. main none","command":"chrt -f 1 make azure-platform-destroy"}
+{"expect":"none","note":"S020 GA3 gp-11: a runner on no list (systemd-run): pinned gap, the AWS twin denies it. main none","command":"systemd-run --user make azure-platform-destroy"}
+{"expect":"none","note":"S020 GA3 gp-12: a runner on no list (docker run): pinned gap, the AWS twin denies it. main none","command":"docker run --rm img make azure-platform-destroy"}
+{"expect":"none","note":"S020 GA3 gp-13: a path before a prefix other than env: pinned gap, the AWS twin denies it. main none","command":"/usr/bin/sudo make azure-platform-destroy"}
+{"expect":"none","note":"S020 GA3 gp-14: a runner on no list (strace): pinned gap, the AWS twin denies it. main none","command":"strace -f make azure-platform-destroy"}
+{"expect":"none","note":"S020 GA3 rc-12: the way round for the word beside the wrapper's name: the check without the word. main none","command":"bash -n infra/terraform/azure.sh && echo ok"}
+{"expect":"none","note":"S020 GA3 rc-13: a search whose pattern holds ssh and a dot (the dot ends the word); the twin denies a search for the target. main none","command":"rg -n \"ssh.*make azure-platform-destroy\" docs"}
+{"expect":"deny","note":"S020 GA3 rc-14: false alarm by design, as the twin: a search whose pattern names a runner and the removal. main none","command":"git log --oneline --grep=\"ssh host make azure-platform-destroy\""}
+{"expect":"deny","note":"S020 GA3 rc-15: false alarm by design, as the twin: a comment body given with -b is not blanked. main none","command":"gh issue comment 1 -b \"ssh host then make azure-platform-destroy\""}
+{"expect":"none","note":"S020 GA3 pw-34: a comment body given with -b that names the target passes (gh is skipped, as a printing command). main none","command":"gh pr comment 1 -b \"run make identity-passwords\""}
+{"expect":"ask","note":"S020 GA3 pw-35: gh with a substitution is still read. main none, GA2 ask","command":"gh pr comment 1 -b \"$(make identity-passwords)\""}
+{"expect":"none","note":"S020 GA3 pw-36: a search with a runner and the script's name but no passwords. main none","command":"rg -n \"ssh host infra/kind/identity.sh up\" docs"}
+{"expect":"ask","note":"S020 GA3 pw-37: ssh around the script in quotes. main none","command":"ssh host \"infra/kind/identity.sh passwords\""}
+{"expect":"ask","note":"S020 GA3 pw-38: a command in a substitution with a quote after the target. main none","command":"pw=$(bash -c 'make identity-passwords')"}
+{"expect":"deny","note":"S020 GA3 rc-16: false alarm by design: a search for the module's .terraform folder after a cd into the module (the dot is any character). main none, GA2 deny","command":"cd infra/terraform/azure && rg -n \".terraform\" ."}
+{"expect":"none","note":"S020 GA3 rc-17: the way round for rc-16: the dot in a bracket, so that the name .terraform is not in the text. main none","command":"cd infra/terraform/azure && rg -n \"[.]terraform\" ."}
+{"expect":"deny","note":"S020 GA3 rc-18: false alarm by design: an escaped dot does not help after a cd into the module (the escape is a backslash before the name). main none, GA2 deny","command":"cd infra/terraform/azure && rg -n \"\\.terraform\" ."}
+{"expect":"none","note":"S020 GA3 rc-19: a search from outside the module names the folder with an escaped dot and no cd. main none","command":"rg -n \"\\.terraform\" infra/terraform/azure"}

@@ -1204,7 +1204,7 @@ SPLIT = r"(?:(?-i:-[A-Za-z]*S)|--split-string)\s+[\x27\"]x*[\x27\"]"
 PREFIX = (
     r"(?:(?:"
     r"sudo(?:\s+" + flag("ugphCDRTUrt") + r")*"
-    r"|env(?:\s+(?:" + SPLIT + r"|" + flag("uCP") + r"))*"
+    r"|(?:\S*/)?env(?:\s+(?:" + SPLIT + r"|" + flag("uCP") + r"))*"
     r"|timeout(?:\s+" + flag("sk") + r")*(?:\s+\d+[smhd]?)?"
     r"|xargs(?:\s+" + flag("InLPsEda") + r")*"
     r"|nice(?:\s+" + flag("n") + r")*"
@@ -1324,7 +1324,7 @@ s020_scan() { # $1=the raw text: "family verb bad cfg" (a "-" where there is non
   printf '%s' "$1" | python3 -I -c "$s020_azure_py" 2>/dev/null || true
 }
 s020_removal_deny="make azure-platform-destroy and infra/terraform/azure.sh destroy remove the Azure platform environment (the cluster, the database, the registry and the log workspace, which is purged for good, the audit log with it, with no export) and are the owner's to run (hard rule 8): in a terminal of your own, signed in by the owner, after looking at the log if there was an incident (infra/terraform/azure/README.md, \"Removal\")."
-s020_pty_deny="azure.sh and make azure-platform-plan, azure-platform-apply and azure-platform-destroy are not run under a pseudo-terminal tool (script, unbuffer, expect, socat, setsid, pty): a pseudo-terminal passes any check that reads a terminal, and the owner's confirmation is theirs to give in a terminal of their own."
+s020_pty_deny="azure.sh and make azure-platform-plan, azure-platform-apply and azure-platform-destroy are not run under a pseudo-terminal tool (script, unbuffer, expect, socat, setsid, pty): a pseudo-terminal passes any check that reads a terminal, and the owner's confirmation is theirs to give in a terminal of their own. The word is read anywhere beside the name, so a check or a search that only names it is denied too (bash -n azure.sh && echo script ok): leave the word out (echo ok passes) or search with the Grep tool."
 s020_trace_deny="azure.sh and make azure-platform-* are not run traced (bash -x, set -x, SHELLOPTS, BASH_XTRACEFD, PS4) or with a start-up file (BASH_ENV, ENV): a trace prints the subscription, the tenant and the operator's address that the script keeps out of its output, and a start-up file runs code before its first line."
 s020_assign_deny="A TF_* or ARM_* assignment in front of make azure-platform-plan, azure-platform-apply, azure-platform-destroy or azure.sh changes what Terraform and the Azure provider run with (a log level, extra arguments, a variable, a workspace, a subscription, a tenant, a client, a token, an endpoint). Set the value in the module or in the local file instead."
 s020_apply_ask="make azure-platform-apply and azure.sh apply create or change the Azure platform environment (the cluster, the database, the registry, the log workspace, the network) and COST MONEY: it bills until make azure-platform-destroy. The owner runs it, after reading the plan, in a terminal of their own and signed in by themselves (infra/terraform/azure/README.md); confirm only if that is where this runs."
@@ -1335,8 +1335,14 @@ s020_family=""
 s020_verb=""
 s020_bad=""
 s020_cfg=""
+s020_noscan=""
 if [[ "$cmd" == *azure-platform* || "$cmd" == *azure.sh* || ( "$cmd" == *aws-* && "$cmd" == *make* && "$cmd" == *-S* ) ]]; then
   s020_found="$(s020_scan "$cmd")"
+  # A normal scan never prints nothing (it prints "- - 0 0"). Nothing back for a
+  # command that holds one of the names means the scanner did not run (no python3,
+  # or it raised): GA3 asks for it after the added deny block below, so that no deny
+  # that needs no python3 is shadowed by this ask.
+  [ -n "$s020_found" ] || [[ ! "$cmd" =~ $s020_names_re ]] || s020_noscan=1
   read -r s020_family s020_verb s020_bad s020_cfg <<<"$s020_found" || true
   if [[ "$s020_verb" == destroy ]]; then
     [[ "$s020_family" == aws ]] && decide deny "$s071_aws_removal_deny"
@@ -1467,6 +1473,59 @@ if [[ ( ( "$cmd" == *terraform* || "$cmd" == *tofu* ) && ( "$cmd" == *azure* || 
   done < <(printf '%s\n' "$ga2_text" | sed -E 's/(&&|\|\||;|\|)/\n/g')
 fi
 
+# ---- S020 (GA3): ADDED deny for the Azure removal behind a runner word ----
+# GA1 reads the wrapper's names only where make or azure.sh is the command word
+# (behind assignments, the prefix list, a shell's -c body). The AWS twin reads
+# make ... aws-destroy and aws.sh ... destroy anywhere in a command, so every
+# runner the scanner does not open (a remote shell, a multiplexer, a privilege
+# or wrapper tool, source and the dot command, find -exec, a pipe into a shell,
+# a here-string, a substitution, an interpreter's way to start a process, a
+# backslashed build tool) was a way round that the twin does not have. This
+# block closes it for the removal, and only for it, with a co-occurrence rule:
+# the prose-blanked copy (s071_prose_blank: the quoted value of a message option
+# is emptied; with no python3 the raw text) holds the removal in the twin's loose
+# form (make, then anything in the same part, then the target; or the script's
+# name, then anything in the same part, then destroy) AND a runner word stands
+# in the same command. The word on its own is not read (a search, an echo or a
+# message that names the removal and no runner passes, as it did): a rule that
+# read the loose form without the runner flipped four prose rows. A bare
+# interpreter with -c is not a runner word (python3 -c "print('make
+# azure-platform-apply')" is a print), and a pipe into a program whose name only
+# starts with sh (shellcheck, shfmt) is not a pipe into a shell. The runner list
+# is the security review's, with six words more that its own commands need: fish,
+# --eval (make runs a make line), --rcfile and --init-file (a shell with another
+# start-up file), -c followed by -- before a body, and a backslashed shell. The
+# apply and the plan behind the same words ask, in the last block of the file.
+# The scan that did not run (no python3, or it raised) is answered here too,
+# after this deny, so that no deny that needs no python3 is shadowed by the ask:
+# the hook never answers none on a command the gate recognised.
+s020_noscan_ask="The Azure name scanner did not run (python3 is missing or failed), so the rules that read make azure-platform-* and azure.sh as a command did NOT read this command, and it may hold the removal, an apply, a plan, a TF_*/ARM_* assignment, a pseudo-terminal or a trace: confirm that it holds none, or write it to a script with the Write tool and run the file. The settings deny the four plain spellings of the removal."
+ga3_word_end="([^[:alnum:]_.-]|\$)"
+ga3_pre="(^|[^[:alnum:]_.-])(g|gnu)?make[[:space:]]+([^;&|${eol}]*[[:space:]])?[\"${sq}]?"
+ga3_spre="azure\.sh[[:space:]]+([^;&|${eol}]*[[:space:]])?[\"${sq}]?"
+ga3_destroy_re="${ga3_pre}azure-platform-destroy${aws_end}|${ga3_spre}destroy${aws_end}"
+ga3_apply_re="${ga3_pre}azure-platform-apply${aws_end}|${ga3_spre}apply${aws_end}"
+ga3_plan_re="${ga3_pre}azure-platform-plan${aws_end}|${ga3_spre}plan${aws_end}"
+ga3_runner_re="(^|[^[:alnum:]_.-])(ssh|doas|pkexec|chroot|nsenter|flock|stdbuf|ionice|taskset|unshare|watch|parallel|tmux|screen|faketty|winpty|source|su|fish)${ga3_word_end}"
+ga3_runner_re+="|(^|[;&|(\`{${eol}]|(then|do|else|elif|if|while|until|!)[[:space:]])[[:space:]]*\\.[[:space:]]"
+ga3_runner_re+="|[[:space:]]-exec(dir)?([[:space:]]|\$)"
+ga3_runner_re+="|\\|[[:space:]]*((sudo|env|exec|command)[[:space:]]+)*([^[:space:];&|]*/)?(ba|z|da|k|a)?sh${ga3_word_end}"
+ga3_runner_re+="|<<<|\\$\\(|\`|system\\(|execSync|spawnSync|subprocess|popen|child_process|os\\.(exec|spawn)"
+ga3_runner_re+="|(^|[[:space:];&|(\`])\\\\((g|gnu)?make|(ba|z|da|k|a)?sh)([^[:alnum:]_-]|\$)"
+ga3_runner_re+="|(^|[[:space:]])--(eval|rcfile|init-file)([=[:space:]]|\$)"
+ga3_runner_re+="|[[:space:]]-[a-zA-Z]*c[[:space:]]+--([[:space:]]|\$)"
+ga3_text=""
+ga3_runner=""
+if [[ "$cmd" == *azure-platform-destroy* || "$cmd" == *azure-platform-apply* \
+      || "$cmd" == *azure-platform-plan* || "$cmd" == *azure.sh* ]]; then
+  ga3_text="$(s071_prose_blank "$cmd")"
+  if [[ "$ga3_text" =~ $ga3_runner_re ]]; then
+    ga3_runner=1
+    [[ "$ga3_text" =~ $ga3_destroy_re ]] && decide deny "$s020_removal_deny"
+  fi
+fi
+[[ -n "$s020_noscan" ]] && decide ask "$s020_noscan_ask"
+
 # ---- confirmations ----
 [[ "$cmd" =~ (terraform|tofu)[[:space:]].*apply ]] && \
   decide ask "terraform apply mutates cloud infrastructure; confirm the plan and workspace first."
@@ -1528,10 +1587,47 @@ fi
 # well as at the start of a part, so an assignment before it is read too
 # (MERIDIAN_IDENTITY_SHOW=1 is the spelling that lets the output go to a file).
 # `identity.sh users`, `status` and a search for the target's name pass.
+# S020 (GA3) reads the prose-blanked copy (s071_prose_blank: the quoted value of a
+# message option is emptied, so a commit message or a pull request body that
+# names the target passes) and adds a second reading of the quoted and bare
+# forms, which a search or a print of the name must not ask: per part of the
+# command, a part that starts with a printing command (ga2_printer_re, by
+# reference) or with gh (a comment or a body given with -b is not blanked; a
+# substitution in either is still read) is skipped. That second reading
+# takes the quote characters at the end of the target and of the sub-command (a
+# shell body in quotes: bash -c 'make identity-passwords', ssh host '...'), a
+# quoted target or sub-command (make "identity-passwords", identity.sh
+# "passwords"), and the script by its name without a path (cd infra/kind && bash
+# identity.sh passwords). The first reading is kept as it was at the tip before,
+# so what it asked still asks (a print that ends on a newline). A pseudo-terminal
+# word (aws_pty_re, by reference) in a part that names the target or the script
+# asks too: a pseudo-terminal passes the script's own check for a terminal, so
+# MERIDIAN_IDENTITY_SHOW=1 is not needed. The sub-command in a variable or split
+# by empty quotes is not read, as the Grafana rule does not read it.
 identity_make_re="(^|[^[:alnum:]_.-])make[[:space:]]+([^\;\&\|${nl}]*[[:space:]])?identity-passwords([[:space:]]|\$|[;\&\|\)])"
 identity_script_re="(^|[[:space:]\;\&\|\(${nl}])([^[:space:]\'\"]*infra/kind/|\./)identity\.sh[[:space:]]+passwords([[:space:]]|\$|[;\&\|\)])"
-if [[ "$cmd" =~ $identity_make_re ]] || [[ "$cmd" =~ $identity_script_re ]]; then
-  decide ask "This prints the test users' passwords of the local sign-in issuer into the transcript; confirm, or run it in a terminal of your own."
+identity_q="[\"${sq}]?"
+identity_end="([[:space:]]|\$|[;&|)\"${sq}])"
+identity_make_q_re="(^|[^[:alnum:]_.-])make[[:space:]]+([^;&|${nl}]*[[:space:]])?${identity_q}identity-passwords${identity_q}${identity_end}"
+identity_script_q_re="(^|[[:space:];&|(\"${sq}/${nl}])identity\.sh${identity_q}[[:space:]]+${identity_q}passwords${identity_q}${identity_end}"
+identity_gh_re="^[[:space:]]*${ga2_assign}((sudo|time|nohup|command|exec)[[:space:]]+)*gh[[:space:]]"
+identity_ask="This prints the test users' passwords of the local sign-in issuer into the transcript; confirm, or run it in a terminal of your own."
+identity_text="$cmd"
+if [[ "$cmd" == *identity* ]]; then
+  identity_text="$(s071_prose_blank "$cmd")"
+  if [[ "$identity_text" =~ $identity_make_re ]] || [[ "$identity_text" =~ $identity_script_re ]]; then
+    decide ask "$identity_ask"
+  fi
+  while IFS= read -r seg; do
+    if [[ "$seg" =~ $ga2_printer_re || "$seg" =~ $identity_gh_re ]] \
+       && [[ "$seg" != *\$\(* && "$seg" != *'`'* && "$seg" != *'<('* ]]; then
+      continue
+    fi
+    [[ "$seg" =~ $identity_make_q_re || "$seg" =~ $identity_script_q_re ]] && decide ask "$identity_ask"
+    if [[ "$seg" =~ $aws_pty_re && ( "$seg" == *identity-passwords* || "$seg" == *identity.sh* ) ]]; then
+      decide ask "$identity_ask"
+    fi
+  done < <(printf '%s\n' "$identity_text" | sed -E 's/(&&|\|\||;|\|)/\n/g')
 fi
 # `make azure-state`, `make azure-apply` and the scripts behind them create
 # Azure resources without the word terraform or az on the command line, so the
@@ -2230,6 +2326,16 @@ if [[ ( "$cmd" == *"az "* || "$cmd" == *kubelogin* ) \
     unhelped "$seg" "$ga2_az_ask_re" && decide ask "$ga2_az_ask_msg"
     unhelped "$seg" "$ga2_kubelogin_re" && decide ask "$ga2_az_ask_msg"
   done < <(printf '%s\n' "$ga2_text" | sed -E 's/(&&|\|\||;|\|)/\n/g')
+fi
+
+# ---- S020 (GA3): ADDED asks for the apply and the plan behind a runner word ----
+# The last block of the file. The deny block of GA3 above found the runner word
+# (ga3_runner) in the prose-blanked copy (ga3_text); the apply and the plan in the
+# loose form ask with the wording of GA1's asks (a false ask costs a window, a
+# missed apply costs money). The apply is asked first, as GA1 does.
+if [[ -n "$ga3_runner" ]]; then
+  [[ "$ga3_text" =~ $ga3_apply_re ]] && decide ask "$s020_apply_ask"
+  [[ "$ga3_text" =~ $ga3_plan_re ]] && decide ask "$s020_plan_ask"
 fi
 
 exit 0

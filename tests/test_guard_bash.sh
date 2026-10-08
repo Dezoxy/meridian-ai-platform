@@ -1050,4 +1050,109 @@ cpu_shape "every trigger word of both passes and the new gates, 3750 escaped quo
   "git aws rest record azure- credential MERIDIAN_ python3 make aws- azure-platform-apply azure.sh -S env terraform local.env-azure azure.tfplan azure/.terraform .azure az storage blob login $(repeat "$esc_quote" 3750)$(repeat '&' 300)"
 ask_for "that shape followed by a denied part of the new rules is denied" deny \
   "git aws rest record azure- credential MERIDIAN_ python3 make aws- azure-platform-apply azure.sh -S env terraform local.env-azure azure.tfplan azure/.terraform .azure az storage blob login $(repeat "$esc_quote" 3750)$(repeat '&' 100); az storage blob upload --container-name tfstate"
+
+# S020 (GA3): the security review's fixes. The removal behind a runner word is denied
+# and the apply and the plan behind one are asked (the rows hold the shapes; the
+# reasons and the settings are pinned here); the scanner that did not run is asked,
+# which a row cannot show, because a row carries no PATH; the passwords rule reads
+# the quoted and the bare forms.
+reason_check "the removal behind a runner word" 'ssh host make azure-platform-destroy' "*owner's*hard rule 8*terminal of your own*Removal*"
+reason_check "the apply behind a runner word" 'ssh -tt host make azure-platform-apply' "*COST MONEY*owner runs it*terminal of their own*"
+reason_check "the plan behind a runner word" 'ssh host "make azure-platform-plan"' "*sign in*remote state*operator's address*foundation's firewall*"
+reason_check "the way round for a word beside the wrapper's name" 'bash -n infra/terraform/azure.sh && echo script ok' "*pseudo-terminal*denied too*leave the word out*Grep tool*"
+reason_check "the test users' passwords behind a pseudo-terminal tool" 'script -qc "make identity-passwords" /dev/null' "*test users' passwords*transcript*terminal of your own*"
+if in_list ask 'Bash(make identity-passwords*)'; then
+  echo "ok   ask holds Bash(make identity-passwords*)"
+else
+  echo "FAIL ask lacks Bash(make identity-passwords*)"
+  fail=1
+fi
+# No python3 on the PATH (T-113): a directory of links to the other tools. The name rules
+# need the scanner (python3), so a command that holds a name is ASKED, not passed: the hook
+# never answers none on a command the gate recognised. The removal behind a runner word and
+# the closed files need no python3 and are still denied (the ask comes after them), and the
+# settings deny the plain spellings of the removal.
+nopy_dir="$(mktemp -d)"
+ln -s /usr/bin/* "$nopy_dir/" 2>/dev/null || true
+rm -f "$nopy_dir"/python* "$nopy_dir"/pypy*
+for tool in bash jq sed awk grep; do
+  [ -e "$nopy_dir/$tool" ] || ln -s "$(command -v "$tool")" "$nopy_dir/$tool"
+done
+nopy_bash="$(command -v bash)"
+nopy_decision() { # $1=the command: the hook's decision with no python3 on the PATH
+  jq -nc --arg c "$1" '{tool_input:{command:$c}}' | env PATH="$nopy_dir" "$nopy_bash" "$hook" \
+    | jq -r '.hookSpecificOutput.permissionDecision // "none"'
+}
+nopy_ask_for() { # $1=expected decision $2=command
+  local got
+  got="$(nopy_decision "$2")"
+  [ -z "$got" ] && got=none
+  if [ "$got" != "$1" ]; then
+    echo "FAIL with no python3, expected $1, got $got: $2"
+    fail=1
+  else
+    echo "ok   with no python3: $1 for $2"
+  fi
+}
+if env PATH="$nopy_dir" "$nopy_bash" -c 'command -v python3 >/dev/null 2>&1'; then
+  echo "FAIL the directory for the no-python run holds a python3"
+  fail=1
+else
+  echo "ok   the directory for the no-python run holds no python3"
+fi
+nopy_ask_for ask 'make azure-platform-destroy'
+nopy_ask_for ask 'make azure-platform-apply'
+nopy_ask_for ask 'make -C . azure-platform-destroy'
+nopy_ask_for ask "bash -c 'make azure-platform-destroy'"
+nopy_ask_for ask 'sudo make azure-platform-destroy'
+nopy_ask_for ask './infra/terraform/azure.sh destroy'
+nopy_ask_for ask 'TF_LOG=1 make azure-platform-plan'
+nopy_ask_for ask 'git commit -m "docs: azure.sh is the wrapper"'
+nopy_ask_for deny 'ssh host make azure-platform-destroy'
+nopy_ask_for deny 'cat infra/terraform/azure.sh ~/.azure/config'
+nopy_ask_for deny 'git push --force'
+nopy_ask_for none 'make azure-platform-validate'
+nopy_ask_for none 'echo hi'
+nopy_ask_for ask 'make identity-passwords'
+# The prose-blanking pass is python3 too, and falls back to the raw text: a message that
+# names the target asks, which is the stronger direction.
+nopy_ask_for ask 'git commit -m "docs: make identity-passwords prints them"'
+nopy_reason="$(jq -nc --arg c 'make azure-platform-destroy' '{tool_input:{command:$c}}' | env PATH="$nopy_dir" "$nopy_bash" "$hook" \
+  | jq -r '.hookSpecificOutput.permissionDecisionReason // ""')"
+case "$nopy_reason" in
+  *"scanner did not run"*"python3"*"did NOT read this command"*"Write tool"*)
+    echo "ok   the reason for the scanner that did not run says what was not read"
+    ;;
+  *)
+    echo "FAIL the reason for the scanner that did not run: $nopy_reason"
+    fail=1
+    ;;
+esac
+rm -rf "$nopy_dir"
+# The cost of the rules GA3 adds: the removal's loose form is read only when a runner
+# word stands in the command, the passwords rule reads a command that holds the word
+# identity, per part. Each shape holds the trigger words in a long run and stays under
+# the one CPU bound; a denied part after the worst shape is denied.
+cpu_shape "1500 repetitions of make before a near-miss removal, with ssh in the command" \
+  "ssh host $(repeat 'make ' 1500)azure-platform-destroyx"
+cpu_shape "800 repetitions of azure.sh before a near-miss removal, with a substitution" \
+  "\$(true) $(repeat 'azure.sh ' 800)destroyx"
+cpu_shape "800 repetitions of a runner word and make before a near-miss apply" \
+  "$(repeat 'ssh make ' 800)azure-platform-applyx"
+cpu_shape "800 pipes into sh with the removal's name" \
+  "make azure-platform-destroyx $(repeat '| sh ' 800)"
+cpu_shape "600 -exec words and 600 backslashed shells with the removal's name" \
+  "azure.sh destroyx $(repeat '-exec ' 600)$(repeat '\bash ' 600)"
+cpu_shape "600 repetitions of /usr/bin/env before make and a near-miss Azure target" \
+  "git azure-platform-plan; $(repeat '/usr/bin/env ' 600)make azure-platform-applyx"
+cpu_shape "1500 repetitions of make before a near-miss identity target" \
+  "$(repeat 'make ' 1500)identity-passwordsx"
+cpu_shape "1000 repetitions of script before the identity script" \
+  "$(repeat 'script ' 1000)infra/kind/identity.shx passwords"
+cpu_shape "1000 parts that hold the identity script and a quote" \
+  "$(repeat "x identity.sh 'y'; " 400)"
+cpu_shape "every trigger word of the rules GA3 adds, escaped quotes and separators" \
+  "git ssh source fish tmux watch -exec --eval --rcfile \\bash \$( make azure-platform-destroyx azure.sh destroyx identity-passwords identity.sh script $(repeat "$esc_quote" 3500)$(repeat '&' 300)"
+ask_for "that shape followed by the removal behind a runner word is denied" deny \
+  "git ssh source fish tmux watch -exec --eval --rcfile \\bash \$( make azure-platform-destroyx azure.sh destroyx identity-passwords identity.sh script $(repeat "$esc_quote" 3500)$(repeat '&' 100); ssh host make azure-platform-destroy"
 exit "$fail"

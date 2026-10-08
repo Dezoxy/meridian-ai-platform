@@ -231,7 +231,10 @@ a finding in an early commit is not fixed by a later one.
   it asks before `psql`, `pg_dump`, `pg_dumpall` or `pg_restore` through
   `kubectl exec`, `kubectl run` or `kubectl debug`, before `kubectl cnpg
   psql`, before `helm get manifest`, `values`, `hooks` and `all`, before
-  `make grafana-password`, before `make gateway-upkeep` when it can
+  `make grafana-password`, before `make identity-passwords` and
+  `infra/kind/identity.sh passwords` (the test users' passwords of the local
+  sign-in issuer; the settings ask for the target too), before `make
+  gateway-upkeep` when it can
   change a tenant's budget ledger, and before the other printers of a
   credential listed below. It reads only the command a session types.
   The rule is the operator's to keep.
@@ -548,7 +551,7 @@ guard for habits, and the barrier is where the credentials are):
   (`…/foundation/../aws`) is not seen; one that ends in `/..` counts as the
   module, and fails closed.
 
-The Azure platform module (S020, GA1 and GA2; the rules are implemented and
+The Azure platform module (S020, GA1, GA2 and GA3; the rules are implemented and
 tested against a case file and were never seen in a live session). The module,
 `infra/terraform/azure/`, is checked and never applied, and the wrapper the
 rules guard, `infra/terraform/azure.sh` with the targets
@@ -556,9 +559,15 @@ rules guard, `infra/terraform/azure.sh` with the targets
 does not exist yet: the rules come first, on purpose. They are the AWS family's
 twins, added beside the older rules (the hook's hunks for them add lines and
 change none, and a differential over the whole case file finds no decision
-weaker than before), they read the command with prose blanked as the AWS rules
-do, and the barrier is the same one: that no Azure sign-in is on the machine a
-session runs on, which S071 plans to end for a live model call.
+weaker than before). What they read differs by block. GA1's scanner reads the
+raw command, because a bash pattern cannot know a quote: a name counts where
+`make` or the script is the command word of a part, so a commit message or a
+search that names one passes, and a body that holds the name at a line start
+does not. GA2's blocks and GA3's read the command with prose blanked (the
+quoted value of `-m`, `--message`, `--body`, `--title` and `--notes` is
+emptied). The barrier is the same one as for the AWS rules: that no Azure
+sign-in is on the machine a session runs on, which S071 plans to end for a live
+model call.
 
 Denied:
 
@@ -572,9 +581,27 @@ Denied:
   "aws-destroy"`), which closes the open medium of S071's sixth review. An
   `echo`, a `printf`, a search, a commit message and a pull request body that
   name the target are what they were;
+- the removal behind a runner word (GA3), read as the AWS twin reads it
+  (the build tool, anything in the same part, the target; or the script,
+  anything in the same part, `destroy`) when one of these stands in the same
+  command: `ssh`, `doas`, `pkexec`, `chroot`, `nsenter`, `flock`, `stdbuf`,
+  `ionice`, `taskset`, `unshare`, `watch`, `parallel`, `tmux`, `screen`,
+  `faketty`, `winpty`, `source`, `su`, `fish`; the dot command; `-exec`; a pipe
+  into a shell; `<<<`; a substitution (`$(` or a backtick); `system(`,
+  `execSync`, `spawnSync`, `subprocess`, `popen`, `child_process`, `os.exec`,
+  `os.spawn`; a backslashed `make` or shell; `--eval`, `--rcfile`,
+  `--init-file`; and `-c --` before a body. The word alone is not read: a
+  search, an `echo`, a commit message or a pull request body that names the
+  removal and no runner passes, so do `python3 -c "print('make
+  azure-platform-apply')"` (a bare interpreter with `-c` is not a runner), a
+  pipe into `shellcheck` or `shfmt`, and a search beside a file named
+  `ssh.md`. GA1's scanner also reads `/usr/bin/env make …` and `env -S` behind
+  a path now;
 - the wrapper's names under a pseudo-terminal tool or traced, as the AWS twins
   (a search for the word `script` in a command that names the wrapper is
-  denied too, a false alarm by design), and a `TF_*=` or any `ARM_*=`
+  denied too, a false alarm by design; the message says the way round, which is
+  to leave the word out, `bash -n azure.sh && echo ok` passes, or to search
+  with the Grep tool), and a `TF_*=` or any `ARM_*=`
   assignment in front of them (the foundation's own `make azure-plan`,
   `azure-apply` and `azure-smoke` do not move);
 - `terraform` or `tofu` by hand where the module is: `-chdir` or a `cd` into
@@ -614,15 +641,32 @@ Asked:
   that they use the sign-in and read the remote state, which holds the
   operator's address since the foundation's firewall (the settings allow `make
   *`, so the settings add an ask for both targets and deny the removal in the
-  forms a session types);
+  forms a session types); the same two behind a runner word (GA3: the removal's
+  list above, plus the apply and the plan under `ssh -tt`, `tmux`, `screen`,
+  `faketty` and `winpty`, and a shell with `--rcfile`), whose text is the same;
 - `AZURE_CONFIG_DIR=` in front of the wrapper's names (it moves the sign-in the
   wrapper uses);
+- any command that holds one of the names when the scanner of GA1 did not run
+  (`python3` is missing from the PATH, or it raised): the hook asks and says
+  that the name rules did not read the command. It never answers none on a
+  command the gate recognised. Measured with no `python3` on the PATH, the
+  plain removal, `-C`, `bash -c`, `sudo`, the script's removal and `TF_LOG=1`
+  with the plan all ask where they were none; the settings deny the four plain
+  spellings of the removal, and the removal behind a runner word and the
+  readers of the closed files are still denied, because the ask comes after
+  those denies. Not made a deny without `python3`: that would need a pure-bash
+  rule for the plain form, the AWS twin's pattern copied as it is, which
+  flipped four prose rows;
 - `terraform` or `tofu` where the module is (as above) with `plan` (it signs
   in), `show`, `output`, `console`, `refresh`, `state list|show|pull` and
   `workspace select default` (`workspace show` asks as a `show`). The settings
-  still allow `terraform -chdir=* plan*`, and whether an ask in the hook outranks
-  an allow in the settings is not verified, so the hook's ask is what a
-  session meets;
+  allow `terraform -chdir=* plan*` and ask for `terraform -chdir=*azure* plan*`
+  (the AWS pair's twin, added at the tip before GA3); whether an ask outranks an
+  allow in the settings is not verified, so the hook's ask is the one that was
+  measured (26 rows). That entry does not match `tofu -chdir=*azure* plan*`,
+  `-chdir=$MOD`, a path to the binary or `-chdir azure` with a space: those
+  match no settings rule and rely on the hook, which asks only when it sees the
+  module's name;
 - the cloud CLI's `provider register` and `provider unregister`, `aks
   get-credentials` and `aks command invoke`, `acr login`, `postgres
   flexible-server execute` and `connect`, `login`, `logout` and `account set`,
@@ -631,7 +675,23 @@ Asked:
   login`); `--help` passes. A part that starts with a printing command (`echo`,
   `printf`, `rg`, `grep`, `cat`, `git` and the like, behind `sudo`, `time`,
   `nohup`, `command` or `exec`) and holds no substitution is a message or a
-  search and is not read, so `rg -n 'az login' docs` passes.
+  search and is not read, so `rg -n 'az login' docs` passes;
+- `make identity-passwords` and `infra/kind/identity.sh passwords`, which print
+  the test users' passwords of the local sign-in issuer into the transcript: the
+  Grafana password's ask, beside it, and the settings ask for the target too
+  (GA3; the first form came with the tip before). The command is read
+  with prose blanked, so a commit message or a pull request body that names the
+  target passes. A shell's body in quotes (`bash -c '…'`, `ssh host '…'`, `tmux
+  new '…'`), a quoted target or sub-command (`make "identity-passwords"`,
+  `identity.sh "passwords"`) and the script by its name without a path (`cd
+  infra/kind && bash identity.sh passwords`) ask; so does a pseudo-terminal word
+  (`script`, `unbuffer`, `expect`, `socat`, `setsid`, `pty`) beside the target's
+  or the script's name, because a pseudo-terminal passes the script's own check
+  for a terminal and needs no `MERIDIAN_IDENTITY_SHOW=1`. A part that starts
+  with a printing command or `gh` and holds no substitution is not read in
+  those quoted and bare forms, so `rg "identity.sh passwords" docs` passes. Not
+  read: the sub-command in a variable or split by empty quotes
+  (`identity.sh $A`, `pass""words`), as the Grafana rule does not read them.
 
 Passes unasked: `make azure-platform-validate` and `azure-platform-scan` (the
 module's two free doors), `terraform -chdir=infra/terraform/foundation …` as
@@ -640,35 +700,71 @@ closed files, and `rm` of the local file or of the plan, on purpose: removing a
 door closes it.
 
 Not seen, once, for this family (nothing below is built; each is a way past a
-guard for habits):
+guard for habits; the answers are the tip's, measured on 2026-10-08, and where
+the AWS twin on main answers the same shape it is said):
 
-- The wrapper's target in a variable, a loop or a substitution
-  (`T=azure-platform-destroy; make $T`, `make $(echo azure-platform-destroy)`,
-  `echo azure-platform-destroy | xargs make`, brace expansion,
-  `MAKEFLAGS="-- azure-platform-destroy"`), a quote in the middle of a word, and
-  a script written to a file and run by name. This is the AWS rules' gap too.
-- A pseudo-terminal made by `ssh -tt`, `tmux` or `screen`: the word list is the
-  AWS twin's (`script`, `unbuffer`, `expect`, `socat`, `setsid`, `pty`) and a
-  third list for both families is a backlog row.
-- `make --trace` and `make -d` ask by the target and are not denied; `doas`; a
-  quoted `'make'`; `printf … | bash`; a here-string to a shell; `$(…)` inside
-  double quotes; `ssh host "make …"` (the remote shell's quoted command);
-  `source` or the dot command on the wrapper itself.
-- `find … -exec cat` over the module's folder or the cloud CLI's folder, a
-  `cd` into `~/.azure` followed by a reader of a bare name, a glob or a variable
-  that builds the path, a redirect from the file (`while read … < file`,
-  `$(<file)`), an editor (`vim`, `nano`: the reader list is the AWS twin's),
-  `python3` with `pathlib`, and `rm` (on purpose). A project folder named
-  `.azure` (the Azure Developer CLI makes one) is read as the CLI's folder, and
-  so is a filter such as `jq .azure x.json` (the AWS twin's `jq .aws x.json` is
-  denied the same way; `jq .azure.subscription x.json` passes).
+- The wrapper's target in a variable, a loop or a brace, a quote in the middle
+  of a word, a name read across a pipe by `xargs`, a copied or linked script and
+  `MAKEFLAGS`: `T=azure-platform-destroy; make $T`, `for t in destroy; do make
+  azure-platform-$t; done`, `make azure-platform-{destroy,}`, `make
+  azure-pl''atform-destroy`, `echo azure-platform-destroy | xargs make`,
+  `ln -s infra/terraform/azure.sh /tmp/a && /tmp/a destroy`, `cp
+  infra/terraform/azure.sh /tmp/a.sh && bash /tmp/a.sh destroy`,
+  `MAKEFLAGS="-- azure-platform-destroy" make`, `infra/terraform/azure.sh $CMD`;
+  also the build tool in quotes (`"make" azure-platform-destroy`) and found by
+  `which` (`$(which make) azure-platform-destroy`). All none, and none for the
+  AWS twin too.
+- A runner that is on no list. The removal behind it is read by the AWS twin
+  (deny) and not here (none, measured): `chrt -f 1`, `systemd-run --user`,
+  `strace -f`, `numactl -N 0`, `busybox`, `bwrap --bind / /`, `docker run --rm
+  img`, `chronic` and a path before a prefix other than `env`
+  (`/usr/bin/sudo make azure-platform-destroy`). The list is closed on purpose:
+  the twin's rule, which reads the loose form with no runner word, flipped four
+  prose rows, and each word added is a word that a message may hold.
+- A pseudo-terminal made by `ssh -tt`, `tmux` or `screen` is not on the word
+  list that denies a pseudo-terminal around the names (the AWS twin's:
+  `script`, `unbuffer`, `expect`, `socat`, `setsid`, `pty`); behind them the
+  removal is denied and the apply and the plan ask since GA3. `make --trace` and
+  `make -d` ask by the target and are not denied.
+- A reader or a writer the AWS twin's list does not name, so all none and all
+  none for the twin: a redirect from the file (`< local.env-azure cat`,
+  `$(<local.env-azure)`), an editor or viewer (`vim`, `view`, `code`), `gzip
+  -c`, `zcat`, `tr`, `paste`, `column`, `rev`, `docker run --env-file
+  local.env-azure alpine env`, `bash local.env-azure`, a recursive search of the
+  parent folder (`grep -r . infra/terraform`, `rg -uuu x infra/terraform`), a
+  `cd` into `~/.azure` followed by a reader of a bare name (`cd ~/.azure && cat
+  config`), `find ~/.azure -exec cat {} \;`, a glob or a variable that builds
+  the path, and `python3` with `pathlib`. `rm` is left on purpose. Cloud CLI
+  commands the rules do not name: `az extension add`, `az account clear`, `az
+  configure --defaults` (none; the cloud CLI has no twin).
+- A project folder named `.azure` (the Azure Developer CLI makes one) is read as
+  the CLI's folder, and so is a filter such as `jq .azure x.json` (the AWS
+  twin's `jq .aws x.json` is denied the same way; `jq .azure.subscription
+  x.json` passes). A search for the module's working folder is denied too
+  (`cd infra/terraform/azure && rg -n ".terraform" .`, and `cat
+  .terraform/environment` after the `cd`); the way round is to escape the dot
+  (`rg -n "\.terraform" .`).
 - A message or a comment body given with `-b` (`gh pr comment -b`) is not
-  blanked, so one that names a reader and a closed file is denied, as for the
-  AWS twin.
-- A flag with a value between `az` and the sub-command (`az --subscription x
-  login`), `az` through `python3` or a container, and the state blob read or
-  written by another tool (`azcopy`, `curl` on the blob's address, the storage
-  SDK) or named only by a variable.
+  blanked, so one that names a reader and a closed file, or the removal beside
+  a runner word, is denied, as for the AWS twin. A body for `git commit -F -` or
+  `gh … --body-file -` in a heredoc is read as the command it is part of: a line
+  that names a target at its start is denied (the removal) or asked (the apply
+  and the plan), as the twin does; write the file with the editor tool and pass
+  its path.
+- GA1's scanner reads the raw command and its name rules need `python3`: with
+  none, a command that holds a name asks (above), and a name rule that needs a
+  pure-bash reading of the plain form is not built.
+- Parked until the wrapper is built (the wrapper's step may change the names;
+  the measured commands and the fixes are in the step's section "Guard rules to
+  add when the wrapper is built"): a flag with a value between `az` and the
+  sub-command (`az --subscription x login`, `az -o none storage blob upload -c
+  tfstate …`); a credential handed out for the state or the deletion of its
+  container (`az storage container generate-sas`, `az storage account
+  show-connection-string`, `az storage account keys renew`, `az ad app
+  credential reset`, `az storage container delete -n tfstate` asks by the
+  generic rule only); `az` through `python3` or a container, and the state blob
+  read or written by another tool (`azcopy`, `curl` on the blob's address, the
+  storage SDK) or named only by a variable.
 - A subdirectory of the module as a root (`-chdir=infra/terraform/azure/x`): it
   is another root, and the older rows of the case file ask about one.
 - The harness directory is the module only when the call's `cwd` says so;
