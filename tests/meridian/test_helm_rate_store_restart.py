@@ -13,7 +13,7 @@ and pin the two probes, the fixed arguments of the shell string, the time the
 restart takes, and where the helpers live. They also RUN the rendered script
 (with a stand-in ``redis-cli``) against a directory built the way the kubelet
 builds a Secret volume, so that the rule is exercised and not only read. The
-proof on the pinned Redis image, over TLS, is in the step's Part C section.
+proof on the pinned Redis image, over TLS, is in the step's file under docs/plan/steps/.
 """
 
 import os

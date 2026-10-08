@@ -24,6 +24,9 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 from servicesupport import REGISTRY_DIR
 from toolsupport import CANARY, World, run_call, settings_for
 
+from meridian.platform.claims_mcp.app import (
+    create_app as create_claims_app,
+)
 from meridian.platform.common import metrics as common_metrics
 from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.platform.knowledge_mcp.app import create_app as create_knowledge_app
@@ -34,9 +37,6 @@ from meridian.platform.toolserver import server as server_module
 from meridian.platform.toolserver.meters import CALLS, ToolServerMeters
 from meridian.platform.toolserver.pipeline import Finished
 from meridian.platform.toolserver.settings import ToolServerSettings
-from meridian.workloads.claims_triage.mcp_server.app import (
-    create_app as create_claims_app,
-)
 
 
 # ── a counter that raises does not fail the call it counts ──────────────────

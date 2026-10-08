@@ -34,12 +34,12 @@ from toolsupport import (
     text_of,
 )
 
+from meridian.platform.claims_mcp.app import create_app
 from meridian.platform.common.db import connect
 from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.platform.registry import load_registry
 from meridian.platform.toolserver.validation import build_validator, fits
 from meridian.platform.toolserver.wire import META_CALL_ID, META_REFUSAL
-from meridian.workloads.claims_triage.mcp_server.app import create_app
 
 THREADS = 8
 ROUNDS = 25

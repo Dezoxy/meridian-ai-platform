@@ -890,7 +890,7 @@ def test_the_makefile_pins_promtool_by_tag_and_digest_and_has_the_target() -> No
 def test_the_python_workflow_checks_the_rules_after_linting_the_chart() -> None:
     steps = yaml.safe_load(
         (REPO_ROOT / ".github" / "workflows" / "python.yml").read_text("utf-8")
-    )["jobs"]["python"]["steps"]
+    )["jobs"]["static"]["steps"]  # S074: the lint steps moved from `python`
     names = [step.get("name") for step in steps]
 
     assert "Check the alert rules" in names

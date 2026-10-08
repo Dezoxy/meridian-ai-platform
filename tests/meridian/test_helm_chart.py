@@ -377,8 +377,8 @@ def test_deploy_passes_helm_the_arguments_the_chart_tests_render_with() -> None:
     assert 'run_job "meridian-upkeep' not in DEPLOY_SH
 
 
-def workflow_steps() -> list[dict]:
-    return WORKFLOW["jobs"]["python"]["steps"]
+def workflow_steps(job: str = "static") -> list[dict]:
+    return WORKFLOW["jobs"][job]["steps"]  # S074: linted in `static`
 
 
 def test_the_workflow_installs_the_helm_version_the_readme_documents() -> None:
@@ -386,17 +386,20 @@ def test_the_workflow_installs_the_helm_version_the_readme_documents() -> None:
     ((laptop, linux),) = re.findall(
         r"^\| helm \| (v\d+\.\d+\.\d+) \| (v\d+\.\d+\.\d+) \|$", README, re.MULTILINE
     )
-    (setup,) = [
-        s for s in workflow_steps() if s.get("uses", "").startswith("azure/setup-helm@")
-    ]
+    for job in ("static", "tests"):
+        (setup,) = [
+            s
+            for s in workflow_steps(job)
+            if s.get("uses", "").startswith("azure/setup-helm@")
+        ]
 
-    assert re.fullmatch(r"azure/setup-helm@[0-9a-f]{40}", setup["uses"])
-    assert setup["with"]["version"] == laptop
-    assert setup["with"]["version"] == linux
+        assert re.fullmatch(r"azure/setup-helm@[0-9a-f]{40}", setup["uses"])
+        assert setup["with"]["version"] == laptop
+        assert setup["with"]["version"] == linux
 
 
-def test_the_workflow_lints_the_chart_before_the_tests_run() -> None:
-    steps = workflow_steps()
+def test_the_workflow_lints_the_chart_and_installs_helm_before_the_tests_run() -> None:
+    steps = workflow_steps("static")
     runs = [s.get("run") for s in steps]
     (setup,) = [
         i
@@ -405,10 +408,7 @@ def test_the_workflow_lints_the_chart_before_the_tests_run() -> None:
     ]
 
     assert runs.count("make helm-lint") == 1
-    assert setup < runs.index("make helm-lint") < runs.index("make pytest")
-    # The evaluation gate must stay the step right after the tests.
-    names = [s.get("name") for s in steps]
-    assert names.index("Evaluation gate") == names.index("Tests") + 1
+    assert setup < runs.index("make helm-lint")  # the test jobs: test_ci_workflow_jobs
 
 
 def test_make_helm_lint_lints_the_chart_strictly_with_kinds_values_and_every_job() -> (
