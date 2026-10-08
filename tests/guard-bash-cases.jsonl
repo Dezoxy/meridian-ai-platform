@@ -3674,3 +3674,24 @@
 {"expect":"deny","note":"S020 GA2 fx-17: an appended redirect onto the plan's record. main none","command":"true >> infra/terraform/azure/azure.tfplan.meta"}
 {"expect":"deny","note":"S020 GA2 fx-18: a redirect into the module's folder. main none","command":"date > infra/terraform/azure/.terraform/x"}
 {"expect":"none","note":"S020 GA2 pr-p06: vim on a file of the cloud CLI's folder is not on the reader list (pinned gap; the AWS twin's list lacks it). main none","command":"vim ~/.azure/config"}
+{"expect":"ask","note":"identity ip-01: the target that prints the test users' passwords. main none","command":"make identity-passwords"}
+{"expect":"ask","note":"identity ip-02: an option before the target. main none","command":"make -s identity-passwords"}
+{"expect":"ask","note":"identity ip-03: from another folder. main none","command":"cd infra && make -C .. identity-passwords"}
+{"expect":"ask","note":"identity ip-04: in a substitution. main none","command":"pw=$(make identity-passwords)"}
+{"expect":"ask","note":"identity ip-05: into a pipe. main none","command":"make identity-passwords | tee cast.txt"}
+{"expect":"ask","note":"identity ip-06: the variable that lets the output go to a file, before make. main none","command":"MERIDIAN_IDENTITY_SHOW=1 make identity-passwords > cast.txt"}
+{"expect":"ask","note":"identity ip-07: the script by its path. main none","command":"infra/kind/identity.sh passwords"}
+{"expect":"ask","note":"identity ip-08: the script through an interpreter. main none","command":"bash infra/kind/identity.sh passwords"}
+{"expect":"ask","note":"identity ip-09: the script from its folder. main none","command":"cd infra/kind && ./identity.sh passwords"}
+{"expect":"ask","note":"identity ip-10: the variable before the script, into a file (Grafana's rule would not read an assignment). main none","command":"MERIDIAN_IDENTITY_SHOW=1 infra/kind/identity.sh passwords > cast.txt"}
+{"expect":"ask","note":"identity ip-11: env, the variable and an interpreter. main none","command":"env MERIDIAN_IDENTITY_SHOW=1 bash infra/kind/identity.sh passwords | cat"}
+{"expect":"ask","note":"identity ip-12: the script in a substitution. main none","command":"pw=$(infra/kind/identity.sh passwords)"}
+{"expect":"ask","note":"identity ip-13: after another command. main none","command":"make down && make identity-passwords"}
+{"expect":"ask","note":"identity ip-14: an absolute path. main none","command":"/srv/checkout/infra/kind/identity.sh passwords"}
+{"expect":"none","note":"identity ip-15: the list of people prints no password. main none","command":"infra/kind/identity.sh users"}
+{"expect":"none","note":"identity ip-16: the status prints no password. main none","command":"infra/kind/identity.sh status"}
+{"expect":"none","note":"identity ip-17: a search for the target's name. main none","command":"grep -n identity-passwords Makefile"}
+{"expect":"none","note":"identity ip-18: a quoted search for the command. main none","command":"grep -rn 'make identity-passwords' docs/"}
+{"expect":"none","note":"identity ip-19: a quoted search for the script's command. main none","command":"rg -n 'identity.sh passwords' infra/kind/README.md"}
+{"expect":"none","note":"identity ip-20: the linter over the script. main none","command":"shellcheck infra/kind/identity.sh"}
+{"expect":"none","note":"identity ip-21: another target that starts with the same word. main none","command":"make identity-passwords-help"}

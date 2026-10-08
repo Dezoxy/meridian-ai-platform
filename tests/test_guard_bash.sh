@@ -989,7 +989,8 @@ reason_check "the account switch, from the older rule" 'az account set --subscri
 # there too (Bash(make *) is allowed, and a hook that timed out would let the removal
 # through); the script's removal is denied in the three spellings a session types;
 # the cloud CLI's folder is closed to the three tools; the free doors stay free.
-for entry in 'Bash(make azure-platform-plan*)' 'Bash(make azure-platform-apply*)'; do
+for entry in 'Bash(make azure-platform-plan*)' 'Bash(make azure-platform-apply*)' \
+  'Bash(terraform -chdir=*azure* plan*)'; do
   if in_list ask "$entry"; then
     echo "ok   ask holds ${entry}"
   else

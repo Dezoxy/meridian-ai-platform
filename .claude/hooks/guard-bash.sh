@@ -1522,6 +1522,17 @@ grafana_script_re="(^|[\;\&\|\(${nl}])[[:space:]]*((bash|sh|zsh)[[:space:]]+)?([
 if [[ "$cmd" =~ $grafana_make_re ]] || [[ "$cmd" =~ $grafana_script_re ]]; then
   decide ask "This prints the Grafana admin password into the transcript; confirm, or run it in a terminal of your own."
 fi
+# `make identity-passwords` and `identity.sh passwords` (the sign-in step) print
+# the test users' passwords of the local sign-in issuer: the same ask as the
+# Grafana rule above. The script is read wider than Grafana's: after a space as
+# well as at the start of a part, so an assignment before it is read too
+# (MERIDIAN_IDENTITY_SHOW=1 is the spelling that lets the output go to a file).
+# `identity.sh users`, `status` and a search for the target's name pass.
+identity_make_re="(^|[^[:alnum:]_.-])make[[:space:]]+([^\;\&\|${nl}]*[[:space:]])?identity-passwords([[:space:]]|\$|[;\&\|\)])"
+identity_script_re="(^|[[:space:]\;\&\|\(${nl}])([^[:space:]\'\"]*infra/kind/|\./)identity\.sh[[:space:]]+passwords([[:space:]]|\$|[;\&\|\)])"
+if [[ "$cmd" =~ $identity_make_re ]] || [[ "$cmd" =~ $identity_script_re ]]; then
+  decide ask "This prints the test users' passwords of the local sign-in issuer into the transcript; confirm, or run it in a terminal of your own."
+fi
 # `make azure-state`, `make azure-apply` and the scripts behind them create
 # Azure resources without the word terraform or az on the command line, so the
 # rules above never see them. Same anchoring as the Grafana rules, widened for
