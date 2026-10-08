@@ -1153,7 +1153,7 @@ that day; the rest stand as their step recorded them.
 | The import layering page (`docs/architecture/code/import-layering.md`: its diagram, its table of contracts and its counts) and the `RuntimeComponents` view were read from the code of 2026-10-07. S082 moves the workloads' graphs and the sweep's SQL and adds a contract per service, S083 makes a package per service and S086 cuts the sweep in two: each brings the page, `model/components.dsl` and the view's register row to the code it leaves | S089, S090 | open | S082 |
 | The `DataOwnership` and `AuditTrail` views (`docs/architecture/model/data.dsl`) draw the grants of 2026-10-07, read from the migration files' GRANT and REVOKE statements and not from a catalog. S084 takes the tool servers' reads of runs and claims away, S085 replaces the one audit table by a table per service and a relay, S086 cuts the sweep's reach into the runtime's schema, and S087 makes five databases: each brings the model's arrows, the two views and their register rows to what it leaves, and S087's baselines are where the grants are read from a migrated database's catalog and compared with the views | S091 | open | S085 |
 | Grafana's pages were not exercised in a browser against the Prometheus gateway's read list, and the two gateways' memory was not read under load or on a large answer: smoke's calls through Grafana's datasource (queries and rules, R17) are all that went through it, so the metrics browser's label drop-downs, Explore and the Alerting page, and with them `series`, `labels`, `metadata`, `query_exemplars` and `format_query`, were not seen used, and a path Grafana needs that the list lacks would not have shown (it would answer 403, class `x` in the gateway's log). The gateways' working sets were read once after R17: 4.3 MiB (peak 9.6 MiB) against 64 MiB for Prometheus's, 19.8 MiB at its peak for Loki's | S072 (third part, R17: P7, P10) | open; a hand check in a browser, then the gateway's log searched for `class=x`; the lines that are Grafana's are added to the list once each | S073 |
-| The log agent spins at more than one core, silently, minutes after it starts: measured from `/proc` on the development machine on 2026-10-08 (1.14 to 1.33 cores over 10 and 30 seconds, on an instance 6.4 hours old and on a fresh pod at 190 and 370 seconds of age, with load 2 to 3; 0.01 cores at 70 seconds), with an idle network and an ordinary log whose one error, between the calm and the spinning reading, is `fileconsumer/file.go:280 Failed to open file ... no such file or directory` for the log file of a finished sweep pod the cluster had just removed (stanza's file consumer, v0.162.0). Its values (`infra/kind/values/log-agent.yaml`, S064; not changed by S072) request 25m of CPU and set no CPU limit, so nothing bounds it; smoke, the alerts and Prometheus's own CPU series for the pod (0.001 cores at the same minute) saw none of it. Why the instance of 2026-10-07 11:13 to 18:33 averaged 8.7 % of a core is not known | S072 (third part: found after R18, when the machine was read after an overload) | open; a CPU limit so that a spin is bounded, the cause looked up and fixed or worked around (the poll interval, an exclusion for finished pods), and something that sees it (an alert on the container's CPU from a source that shows it, or a smoke line) | S073 |
+| The log agent spins at more than one core, silently, minutes after it starts: measured from `/proc` on the development machine on 2026-10-08 (1.14 to 1.33 cores over 10 and 30 seconds, on an instance 6.4 hours old and on a fresh pod at 190 and 370 seconds of age, with load 2 to 3; 0.01 cores at 70 seconds), with an idle network and an ordinary log whose one error, between the calm and the spinning reading, is `fileconsumer/file.go:280 Failed to open file ... no such file or directory` for the log file of a finished sweep pod the cluster had just removed (stanza's file consumer, v0.162.0). Its values (`infra/kind/values/log-agent.yaml`, S064; not changed by S072) request 25m of CPU and set no CPU limit, so nothing bounds it; smoke, the alerts and Prometheus's own CPU series for the pod (0.001 cores at the same minute) saw none of it. Why the instance of 2026-10-07 11:13 to 18:33 averaged 8.7 % of a core is not known | S072 (third part: found after R18, when the machine was read after an overload) | narrowed by S073 (2026-10-08): the cause was reproduced in a container and the memory limit raised to 384Mi, with a CPU limit of 500m as a bound (run LR1 on kind saw the agent calm for twelve minutes). Open: something that sees a spin (an alert on the container's CPU from a source that shows it, or a smoke line); Prometheus's series did not, which has a row of its own below | S073 |
 | What the final infrastructure check before S072's third pull request left, all low (`s072` handoff, the check of 2026-10-07): T-90's cell keeps its superseded sentences ahead of the dated note that reverses them; four `die` sentences inside `make up`'s warm window (the database's steps and the roles' wait) carry no note that telemetry is refused until a re-run; the streaming of a chunked request body through Prometheus's gateway is recalled from nginx's documentation and was not seen; the placeholder check is a word match and a test could count the four tokens instead; the Service address check would pass `...` or `:` (the value is only an annotation); no test holds that the gateway image's pin has a registry segment, which the split for Loki's chart needs; and `scratch_repo` in `test_kind_cluster_holder.py` copies `up.sh` without `gateways.sh`, harmless until a test runs `up.sh` from that tree | S072 (third part, the final check: LOW-1 to LOW-7) | open | S073 |
 | A closed path presented with the collector's own client certificate (remote write, `/-/reload`, `/-/quit`, the admin API on Prometheus's gateway) was seen refused only in a container of the pinned image, never on the cluster: smoke has no key, because it never reads `tls.key`. The only live test mounts the collector's client Secret read-only into a throwaway pod that carries the collector's label, or issues a second short-lived Certificate under the same policy, and either puts a private key in a pod and must be removed afterwards | S072 (third part, R17: P9) | open; the owner's call (it handles a private key); not run | S073 |
 | What no run saw of a renewal and a roll in the new hops: a renewal of a gateway's certificate or of the telemetry authority (the gateways read their certificate at each handshake in a container and their client CA at start; the authority's roll by the pods' annotations is tested, not seen); a Prometheus Service made again (the annotation's roll); a broken gateway configuration stopping `make up` with the new sentence (the run saw only the new pod Ready); and Tempo's receiver, which reads its certificate at start only, so a renewal at day 60 is taken up by the next `make up` and, if none runs before day 90, the receiver serves an expired certificate and the collector's traces are refused, with no alert (`MeridianCertificateNotRenewed` reads the Certificate, which was renewed; only smoke's check 12 sees it). A kind cluster rarely lives 60 days; on Azure it would | S072 (third part: T-90's note, the second review's H1 and M-2) | open; a short-lived Certificate for each; on Azure S020 decides whether Tempo gets a reload | S073 |
@@ -1174,6 +1174,8 @@ that day; the rest stand as their step recorded them.
 | The bypasses the reviews of the guard's added rules keep listing, none a regression (main gives none on each): a target split by quotes or built by a substitution (`make eval-"record"`, `make $(printf eval-rec)ord`, `make eval-{record,x}`, `make -m "aws-"apply`, `make azure-"apply"`); a target or a whole command in a file (`make $(cat t.txt)`, `xargs -a t.txt make`, a script written and then run by name, `set -a; . ./live.env`, a script the command names such as `python3 X.py` or `bash X.sh`); the flags variable with its target held elsewhere (`MAKEFLAGS="-- $T" make`, `T` set in an earlier call); the Azure make rule, which has no co-occurrence rule (`T=azure-apply; make $T`); the AWS option rule behind a prefix outside its tables (`stdbuf -oL`, `ionice`, `doas`, `systemd-run`, `eval make`, `\make`, a quoted `"make"`) or with the target in a loop or a variable; a raw request spelled `az re""st`, `"az" rest` or `a=az; $a rest`, or through `python3 -m azure.cli rest` or `subprocess.run(['az','rest'])`; the identity library through `from azure import identity`, `importlib`, `node` or `pwsh`, the classes `OnBehalfOf`, `AuthorizationCode`, `AzurePipelines` and `AzureApplication`, or a heredoc piped into an interpreter the heredoc pass does not know; main's older rules that cut at a separator inside a quote (`git commit --author="A;B" -n`, `kubectl get secret x -n "a;b" -o yaml`, `cat "a;b" .env`); and `parallel -m "…"` and `python3 -m "<quoted>"`, which main's own pass blanks as prose | S071 (the reviews of G3 to G6, 2026-10-07 and 08) | open; the third review listed file-then-run (a command that runs a file a session wrote, `set -a; . ./live.env` included) among the items to close before a paid run on this machine (the other, `${T:-…}`, is closed), and it is not built: the hook would have to open the files a command names (the design's note) | S071 (its paid half) |
 | The paid-target rule's false asks, measured by the third review and the re-check and accepted by the session as the price of co-occurrence (a false ask costs a click, a missed one costs money; the owner may overturn): any command that holds the word make and a paid target as words asks, wherever they stand (`rg -n "make eval-record" docs/`, `grep -rn "make gateway-live" docs`, `git log -S"make gateway-live"`, `gh pr create --body "… make eval-record"`, `make test && git add docs/operations/runbooks/gateway-live`, `make test PYTEST_ARGS="-k gateway-live"`, `echo gateway-live >> notes.txt && make docs`; 8 of the 34 daily shapes the review tried asked, all of this form; a commit message goes in with `-F` and so does not ask); the narrower rule for a default in a parameter expansion asks on `make ${T:-my-eval-record}` and `echo "${T:-eval-record}" && make docs`; and the raw-request and identity rules ask on a search whose quoted pattern names them (`grep -rn "az rest" docs`, `python3 -m pytest -k "DefaultAzureCredential"`). A search with the Grep tool asks nobody, and the review found no target of main's Makefile outside the paid ones that gained an ask | S071 (the third review and the fifth round's re-check, 2026-10-07 and 08) | open; accepted | S071 (its paid half) |
 | A quoted word after `env -S` (an empty string, a comment, an assignment or another prefix) hides the build tool behind it from the added AWS removal rule: `env -S '' make -m "aws-destroy"`, `env -S '# c' make …`, `env -S 'A=b' make …`, `env -S 'nice -n 5' make …`, `env -S 'sudo' make …`. The fifth round denied these forms and the sixth gives none, which is what main gives; the sixth round's check calls it a medium that is not weaker than main, and judges that a session almost certainly would not type it. Its suggested fix: add to the alternatives for `env` a `-S` followed by a quoted word (already masked to `'xxx'`) so that make after it stays the command word, at the cost of a deny on `env -S 'sh' make` (the stronger direction), reverse-checked against row 2841 so that `env -S x make` stays none. The check asked for it before the paid run; the session reads that as the next change of the hook and not as S071's paid model run, because the rule is the AWS removal rule and not one of the paid-model rules | S071 (the sixth round's check, 2026-10-08) | open; left open by the session's decision | S020 (the guard's rules for the Azure wrapper: the next change of the hook, with a security review of its own) |
+| Prometheus's CPU series for the log agent's pod showed 0.001 cores in the same minute that the process used more than one (1.14 to 1.33 cores from `/proc`, 2026-10-08). Why is not known and nobody looked: the query, its source and the cluster's scrape of the containers' metrics were not read, and the reproduction had no such scrape (LA1). Until it is known, no alert or dashboard on container CPU is evidence that this fault is absent, and the telemetry runbook says to read the process on the node instead. Run LR1's CPU figures are from `/proc` too | S073 (the spin of 2026-10-08; LA1's report; run LR1) | open | S073 |
+| The trigger of the log agent's thrash on the cluster is not identified. LA1 reproduced a mechanism in a container (a burst of a few hundred lines at 192Mi, the page cache giving up the binary's pages and the process reading them back); it did not reproduce the event that started it on the cluster. The "Failed to open file ... no such file or directory" line seen before the first spin is consistent with a coincidence: a removed file, a removed directory and a checkpoint naming a gone file did nothing in the reproduction. Why the instance of 2026-10-07 from 11:13 to 18:33 averaged 8.7 % of a core is not known. At 384Mi run LR1 saw the agent calm for twelve minutes (0.01 cores, no reads, 0 to 43 refaults a second) through smoke's burst; the case the limit does not cure (140,000 lines at once with the exporter failing: 270 MiB of anonymous memory, reads of 0.3 to 2.9 GB a second) was not run on the cluster | S073 (the spin of 2026-10-08; LA1's report; run LR1) | open | S073 |
 | The two evaluation tests run twice on every pull request: once in a shard, whichever the hash gives them, and once in the `evaluation` job, which exists because no shard is sure to hold both tests that write the reports. Together about 85 s of runner time. Not changed: the job is not the slowest, and a way to run them once (a shard that deselects them, or the gate reading a shard's reports) would make the gate depend on the split | S074 (CI speed, 2026-10-08) | open; low | S074 |
 | What the shards' reports do not prove, from the short re-check of the rework (L-2 to L-4): skips are not counted (the report holds the tests kept, not the tests that passed, so a test that skips silently in CI still counts; `MERIDIAN_REQUIRE_DB` covers the database and Redis tests); the report is written when collection finishes, about four minutes before a shard ends, in the workspace the shard's tests then run in, and no test overwrites it that anyone found; and nothing pins the expected suite but the coverage floor: equal digests prove only that the shards agree with each other, so a module dropped by `--ignore` or a `collect_ignore` entry gives equal digests and a smaller total. Fixes, if wanted: the skipped count at `pytest_sessionfinish`, and a total or digest committed to the repository | S074 (CI speed; the short re-check, 2026-10-08) | open; low; the last is accepted residual risk | S074 |
 
@@ -17226,6 +17228,140 @@ rule tests and `tests/test_renovate_config.py`, `make lint`, `make test`, `make
 docs` and `make check`: the main session's run of the suite before the merge
 ended `20080 passed, 8 skipped, 8 warnings in 266.07s (0:04:26)`, in plan v0.83.
 
+**The log agent's memory limit, and run LR1 (2026-10-08).** The log agent on
+the local kind cluster was found using more than a core and reading the disk
+at about 2 GB a second; the cause was reproduced in a container (LA1), its
+memory limit went from 192Mi to 384Mi and it got a CPU limit of 500m (commit
+1d4479b on the branch `s073-log-agent`), and run LR1 then ran the agent on the
+cluster with the new limits for twelve minutes and saw it calm. What the
+reproduction and the run do not show is in *Not seen*, below.
+
+*How it was found.* The development machine had stalled overnight, after an
+overload the evening before, and the session measured the cluster from `/proc`
+when it was running again. At 02:59 and 03:00 UTC
+one process used 1.14 and 1.19 cores with its network counters not moving,
+while Prometheus's own CPU series for the pod said 0.001 cores. It was first
+taken for the collector, and the collector's pod was deleted once at 03:01 on
+that reading; that changed nothing (the collector was calm before and after,
+and one healthy pod was rolled for nothing). At 03:04 the process, which is
+`/otelcol-contrib` and not the collector's `/otelcol`, was matched by its
+control group to the pod list of the API server: it was the log agent's. A
+fresh log-agent pod, made by deleting the old one, was calm at 70 seconds of
+age (0.01 cores) and spun at 190 and 370 seconds (1.32 and 1.33). The machine
+froze a second time at 03:28 and the owner restarted it (boot 03:47:56). At
+03:55, from the pods' control groups, the log agent's pod (started 03:48:08,
+spinning again) was at 191 of its 192 MiB, had read 2,194 MB a second, which
+is 97 % of the 2,259 MB a second that all the cluster's containers read, and
+held all the memory pressure on the machine. It was paused at 03:56 UTC by a
+node selector that no node has. Smoke, the alerts and Prometheus's CPU series
+for the pod had shown none of it.
+
+*The cause as LA1 reproduced it, and the fix.* The reproduction ran in one
+container: the pinned image, the receiver, processors and checkpoint of
+`infra/kind/values/log-agent.yaml`, fixture log files in the node's layout,
+192 MiB, two CPUs, no swap. It is not the cluster. The contrib binary is 520
+MB; the process wants well over 100 MiB of its pages in the control group's
+page cache besides about 50 MiB of its own memory. At 192 MiB there is room
+for both only while the heap stays small. A burst of 700 lines began the
+state: the heap grew by 15 to 50 MiB, the cache paid for it, the mapped file
+pages of the control group fell from about 110 MiB to 2 to 5, and the process
+read them back as fast as they were evicted: 6 to 7 GB a second of reads,
+about 700,000 page refaults a second and 1.0 to 1.3 cores, with the exporter
+idle. It did not end when the burst did, because the heap stayed large. That
+the evicted pages are the executable's is inferred from the mapped pages;
+no profile was taken. A removed file, a removed directory and a checkpoint
+that names a file that is gone did nothing on their own. (A rig pitfall: the
+state shows only when the control group is charged for the binary's pages, so
+each start dropped them from the cache first.)
+
+The fix, in `values/log-agent.yaml` and nowhere else in the chart: the memory
+limit 384Mi (256Mi still spun with the exporter's destination down, 320Mi
+held, 384Mi kept 180 MiB of cache then; at 384Mi no line was lost or repeated:
+35,000 in and 35,000 out, then 140,000 in and 140,000 out) and a new CPU limit
+of 500m (the idle agent used 0.01 cores and the heaviest burst averaged 0.11).
+The requests stay at 25m and 64Mi. A CPU limit throttles a spin and does not
+end it: at a quarter of a core the thrashing agent still read 1.7 GB a second;
+the memory limit removes the cause and the CPU limit is a bound.
+**Not cured**, in LA1's own words: 140,000 lines at once with the exporter's
+destination down still pushed the pod's anonymous memory to 270 MiB at 384Mi
+and the reads to 0.3 to 2.9 GB a second. The kind README has the table of
+cases and the telemetry runbook says how to see an agent that uses a whole
+core; tests pin both limits and the reason. Until LR1 this was seen in a
+container only.
+
+*Run LR1* (2026-10-08, 05:22 to 05:34 UTC; the local kind cluster; the
+cluster checkout at 296f5d1, which is the branch with main at plan v0.92 merged
+in; nothing deleted; the run's record is `runs/lr1.log` of the handoff folder,
+and its script `tools/la_run.sh`). `make up` on the warm cluster ended 0 in 31
+seconds. It did not undo the pause: the DaemonSet still wanted no pod before
+and after it, and only the pause script's `resume` (05:22:41) started one.
+The rollout finished and the pod's own spec gave `limits {"cpu":"500m",
+"memory":"384Mi"}` and `requests {"cpu":"25m","memory":"64Mi"}`. Five readings
+of the agent's process followed, each a 30-second window ending at the time
+given, CPU from the process's `/proc` ticks and the rest from the pod's
+control group on the host:
+
+| Reading (UTC; the script's label) | Process age | CPU, cores | Reads, MB/s | Refaults, /s | Memory, MiB of limit | Mapped file, MiB |
+|---|---|---|---|---|---|---|
+| 05:23:49 (about +1 min) | 74 s | 0.01 | 0 | 0 | 383 of 384 | 156 |
+| 05:25:49 (about +3 min) | 194 s | 0.01 | 0 | 32 | 383 of 384 | 133 |
+| 05:28:49 (about +6 min) | 375 s | 0.01 | 0 | 0 | 383 of 384 | 130 |
+| 05:30:40 (after smoke) | 485 s | 0.01 | 0 | 43 | 383 of 384 | 129 |
+| 05:34:30 (labelled about +16 min) | 715 s | 0.01 | 0 | 16 | 309 of 384 | 99 |
+
+Smoke ran between the third and fourth reading (05:28:49 to 05:30:10, 81
+seconds, the burst of lines its access-line check sends) and ended 0: 55
+PASS, 0 FAIL, 1 SKIP. The skipped line is the cost series: "the gateway has
+settled no call since it started at 2026-10-08T04:03:00Z (make demo sends a
+claim)", the designed skip after a restart of the Model Gateway (check 5 in
+the kind README). The log agent's lines passed: the pod is the shape its values
+say (one hostPath, `/var/log/pods`, read-only; no host network, PID or port;
+`runAsNonRoot`; no service-account token); the agent shipped the Claims API's
+access line for smoke's path and Loki has it (status 404); and Loki holds a
+stream of the Claims API's container and none of a container named `postgres`
+or outside the namespace `meridian`. After the last reading the agent's log
+was 26 lines, none of which matched `error`, `retry`, `refus` or `403`
+(case-insensitive), no pod on the cluster was not Ready and the log agent's
+restart count was 0. The checkout stayed at 296f5d1 and the holder's record
+says S073, state ok.
+
+The pod's memory reads 383 of 384 MiB, and that is the page cache filling to
+the limit, which a control group does by design; it is not a sign of trouble,
+and the 191 of 192 MiB read on the spinning pod could not have told the two
+apart either. The signals that tell a healthy agent from a thrashing one are
+the reads a second (0 here), the refaults a second (0 to 43 here, about
+700,000 in the reproduction) and the CPU (0.01 cores here, 1.0 to 1.3 in the
+spin), not the memory figure. A calm agent therefore does refault a little,
+and the README and the runbook, which said it shows none, say so since this
+part. The last reading's 309 MiB and 99 MiB of mapped file are lower than the
+earlier four; the run shows no cause and no effect on the reads or the CPU.
+
+*Not seen.* Why Prometheus's CPU series for the pod was blind while the
+process used more than a core: nobody looked at the query, its source or the
+cluster's container-metrics scrape, and the reproduction had no such scrape
+(a backlog row below). What triggered the state on the cluster: LA1 found a
+mechanism that reproduces it, not the event; the "Failed to open file" line
+seen before the first spin is consistent with a coincidence, and why the
+instance of 2026-10-07 from 11:13 to 18:33 averaged only 8.7 % of a core is
+not known (a backlog row below). Anything past twelve minutes of the process's
+life: the span is said with its reason, which is that the script labels its
+last reading "about +16 min" and the process was 715 seconds old at it, so the
+run saw twelve minutes, not sixteen; the spin had appeared within minutes of
+every start, so twelve minutes is a short run for it, not a long one.
+The agent under the reproduction's heaviest burst on the cluster (140,000
+lines with the exporter failing, the case the limit does not cure): the burst
+in LR1 was smoke's, a few lines. And the old limit in the same run: it was not
+run, so LR1 is no comparison of 192Mi with 384Mi on the cluster, only the new
+limits seen calm.
+
+*The advisor* was consulted once on 2026-10-08, after the run. It changed the
+sentence on the memory figure above, and that the span of the run is said with
+its reason.
+
+*Rows.* Two rows are new in Part B's follow-up backlog, each with its home at
+S073: the blind CPU series, and the trigger that is not identified. The Part B
+row for S073 says nothing of the log agent and stays as it was.
+
 ### S070 — Claims intake and what the adjuster is told
 **Status:** doing · **Started:** 2026-10-07 · **Finished:** —
 **Left before it is done:** four questions of the owner's (For the owner;
@@ -23895,6 +24031,20 @@ row.
   docs`. The whole suite was not run locally, by the owner's decision of
   2026-10-08 ("Affected tests, CI runs all"): the pull request's own run is
   its result.
+- **v0.96, 2026-10-08:** S073 `doing`, the log agent's fix and run LR1.
+  The log agent on kind, found using more than a core and reading the disk at
+  about 2 GB a second, was reproduced in a container as a page-cache thrash
+  (its binary is 520 MB and 192Mi left the cache too little); its memory limit
+  is now 384Mi and it has a CPU limit of 500m, which bounds the fault and does
+  not end it. Run LR1 on the cluster (twelve minutes from 296f5d1) saw it
+  calm: 0.01 cores, no reads, 0 to 43 refaults a second, smoke 55 PASS, 0 FAIL,
+  1 SKIP (the cost series, by design), no restart and no error line. Its
+  memory reads 383 of 384 MiB because the page cache fills to the limit, so
+  the reads, the refaults and the CPU are the signals, not the memory figure.
+  Not seen: why Prometheus's CPU series for the pod was blind, what triggered
+  the state on the cluster, anything past twelve minutes, and the heaviest
+  burst. Two backlog rows are new, each homed at S073. The kind README and the
+  telemetry runbook no longer say that a calm agent has no refaults.
 - **v0.97, 2026-10-08:** S074, CI speed (still `doing`): the owner chose
   "Split suite + docs fast path (Recommended)"; the suite runs in four shards
   by a hash of the test id and the required check `python` combines their
