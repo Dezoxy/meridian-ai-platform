@@ -939,7 +939,9 @@ overdue to an adjuster and cleans up what a failed request left behind, a
 claimant submits a claim (the API stamps its report date, and a decided or still
 open claim counts in the policy's claim history), reads its status, reports
 documents and withdraws it on server-rendered pages that say nothing of the
-proposal (no sign-in yet), CI grades the golden set's proposals with rules and
+proposal (no sign-in yet), `make demo-seed` fills the adjuster's queue and the
+claimant's lookup on kind with the first forty synthetic claims, deciding none
+(S098), CI grades the golden set's proposals with rules and
 an LLM judge against a reviewed baseline (the model's answers recorded from
 Azure OpenAI and replayed through the gateway), alert rules, a health dashboard
 and five runbooks exist as files, applied to the kind cluster and none
@@ -1019,6 +1021,7 @@ service runs in Azure yet.
 | 2026-10-08 | S092 | Mermaid and PDF render under rootless Docker | [S092.md](plan/steps/S080-S099/S092.md) |
 | 2026-10-08 | S096 | The PDF: no row lost, and a brief edition | [S096.md](plan/steps/S080-S099/S096.md) |
 | 2026-10-08 | S097 | The plan in files | [S097.md](plan/steps/S080-S099/S097.md) |
+| 2026-10-08 | S098 | Demo claims on kind | [S098.md](plan/steps/S080-S099/S098.md) |
 | 2026-10-08 | S099 | A dispatcher and workers: the test lock and the two briefs | [S099.md](plan/steps/S080-S099/S099.md) |
 | 2026-10-08 | S100 | The plan's layout: step folders, the backlog in files, the change log ended | [S100.md](plan/steps/S100-S119/S100.md) |
 | 2026-10-08 | S101 | The plan shows no status: the finished steps and those in flight are its last part | [S101.md](plan/steps/S100-S119/S101.md) |
@@ -1040,7 +1043,6 @@ service runs in Azure yet.
 | 2026-10-07 | S080 | File uploads for a claim, before sign-in | doing | [S080.md](plan/steps/S080-S099/S080.md) |
 | 2026-10-07 | S081 | The decision record for the move toward services | doing | [S081.md](plan/steps/S080-S099/S081.md) |
 | 2026-10-07 | S082 | Code in the wrong place moves; import contracts per service | doing | [S082.md](plan/steps/S080-S099/S082.md) |
-| 2026-10-08 | S098 | Demo claims on kind | doing | [S098.md](plan/steps/S080-S099/S098.md) |
 | — | S095 | Retention and erasure of uploaded files | todo | [S095.md](plan/steps/S080-S099/S095.md) |
 
 <!-- plan-progress: end -->

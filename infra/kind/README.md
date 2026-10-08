@@ -592,7 +592,7 @@ node image, Kubernetes components and the platform).
 | `make helm-lint` | `helm lint --strict` on the chart with kind's values and every Job on (the upkeep Job with one argument and a suffix, which it needs to render). Needs no cluster; CI runs it. |
 | `make alerts` | Prometheus's own checker (`promtool`, from a pinned image) on the alert rules, then their unit tests. Needs Docker and no cluster; CI runs it. |
 | `make demo` | Runs `make deploy`, then posts a synthetic claim and finds its trace in Tempo; when the claim waits for an adjuster, posts the decision (`make demo DECISION=reject`; approve by default) and finds that trace too. Prints PASS only when each trace has at least one span from each service it must cross (a service Tempo lists with no span does not count) and its span counts have settled (unchanged for three readings, six seconds). Passed on the cluster on 2026-10-06 with spans from every service, in 30 s; the zero-span rule and the FAIL wording "alternated" were tested against a stub and not seen on the cluster. |
-| `make demo-seed` | Needs `make deploy`. Posts the first `COUNT` synthetic claims (40 by default, at most 47; `PACE_SECONDS` apart, 10 by default) through the edge one at a time, so the adjuster's and the claimant's pages show content; prints a line a claim and the counts by state. Kind only; the model is simulated, so it costs nothing; safe to run twice; decides nothing. Reads who holds the cluster and stops for another holder unless `TAKE_CLUSTER=1` is in front of it; refuses under 2,500 MB of free memory and while a test database container runs. Written and tested against stand-ins; not run on a cluster. See "Filling the pages with claims". |
+| `make demo-seed` | Needs `make deploy`. Posts the first `COUNT` synthetic claims (40 by default, at most 47; `PACE_SECONDS` apart, 10 by default) through the edge one at a time, so the adjuster's and the claimant's pages show content; prints a line a claim and the counts by state. Kind only; the model is simulated, so it costs nothing; safe to run twice; decides nothing. Reads who holds the cluster and stops for another holder unless `TAKE_CLUSTER=1` is in front of it; refuses under 2,500 MB of free memory and while a test database container runs. Run on kind on 2026-10-08: 36 claims posted and 4 skipped in 363 s, no triage failed, `make smoke` 62 PASS after it. See "Filling the pages with claims". |
 | `make smoke` | One PASS, FAIL or SKIP line per check; exits non-zero on any FAIL. |
 | `make gateway-upkeep ARGS="..."` | Needs `make up` (the Secret `gateway-upkeep-db`) and `make deploy` (the image). Runs the gateway's upkeep command (`meridian gateway`, S066) as a Job of its own under the database role `gateway_upkeep` and prints its output; `ARGS` is the subcommand and its arguments (`reservations --older-than 15`, `close ATTEMPT_ID --reason SLUG`, `credit TENANT --tokens N --reason SLUG`, `expire --before YYYY-MM --reason SLUG [--limit N] [--confirm]`, `expire-audit --before YYYY-MM-DD --reason SLUG [--limit N] [--confirm]`; only the date form of `expire-audit` passes the word check below, which allows no colon or plus sign). `infra/kind/upkeep.sh` splits `ARGS` on blanks into an array without reading any of it as shell and refuses, before it asks the cluster anything, a word with a character outside letters, digits, `.`, `_`, `=` and `-`: a quote, a backslash, a `$`, a backtick, a newline or a glob character among them. It passes the words to `helm template` as one JSON list (`--set-json`), with a suffix of its own so that a second run is a new Job, applies the Job outside the release (`make deploy` neither creates nor removes it) with the image the release runs, waits for it and prints its log through the same filter as the deploy's Jobs. Exit code 0 when the Job succeeded; 1 when it failed (the command exits 1 on a refusal, `ERROR GUnnn`, and 2 on a usage error: both are a Failed Job, never retried), when it did not finish in three minutes or when `make up` or `make deploy` is missing (`make` itself returns 2 for the failed recipe). A failure whose output holds a line that says what the command removed "before the failure" (the two expiries remove in batches, and a failure can follow batches that committed) says what stays removed and that running the command again continues; one that holds the command's own `ERROR GUnnn` line and no such line says that the refusal changed nothing; every other failure, and a Job that did not finish, says that the change may have been applied and to read the reservations or the audit rows before running it again, because a credit is a new row on every run. Make itself expands `$(...)` and `$$` in a value given on its command line before the script sees it (the script's header and the target's help line say so); what reaches the script is then checked as above. The Job and its output are kept for a day. Implemented and tested (stub `kubectl`, the real chart), and run on kind on 2026-10-06 (second and third runs of S066): a read, a refusal and a credit of one token; the audit row of the credit was not read on the cluster. |
 | `make grafana` | Port-forward Grafana to <http://127.0.0.1:3000>. User `admin`. |
@@ -2549,9 +2549,11 @@ T-69), and the edge serves them only to the laptop.
 `make demo` posts one claim and decides it, so the adjuster's queue and the
 claimant's lookup stay nearly empty. `make demo-seed` posts the first `COUNT`
 claims of `data/synthetic/claims.json` (40 by default; at most 47, all of them
-golden claims) so that both pages show content. Written and tested against stand-ins for
-`curl`, `kubectl`, `docker` and `sleep`; **not run on a cluster yet** (hard rule
-7): the figures below that a run would give are marked as not measured.
+golden claims) so that both pages show content. Run on kind on 2026-10-08 with
+its defaults (the figures are below); its refusals, the conflicts, a failed
+triage, a claim that never settles and a post that `curl` cannot finish are
+tested against stand-ins for `curl`, `kubectl`, `docker` and `sleep` and were
+not seen on a cluster, except the skip of a claim that is already there.
 
 - **Kind only, synthetic only.** It stops before it posts anything when the
   Docker engine is not a local unix socket, when there is no `kubeconfig` of
@@ -2591,22 +2593,38 @@ golden claims) so that both pages show content. Written and tested against stand
   rate allows (`tenant-request-rate`, `docs/demo.md`), which fails the triage
   of a claim, and one over its token window (`tenant-token-rate`); the default
   of 10 seconds between claims keeps a run under both, and a larger
-  `PACE_SECONDS` spaces them further.
+  `PACE_SECONDS` spaces them further. Measured on kind on 2026-10-08, from the
+  gateway's ledger: a triage that asks the model makes 5 gateway calls (4
+  embeddings and 1 chat) within 0.2 s and reserves 1,142 to 1,408 tokens (it is
+  charged about half); one the rules settle makes 4 calls, or 1, and reserves
+  20 to 53. The tenant's windows are 10 requests in 10 seconds and 10,000
+  tokens a minute, and they count in replay mode: so 2 seconds between claims
+  would put four claims' calls into one window of requests, and 5 seconds up
+  to eleven reservations into one minute (both computed from these figures,
+  neither provoked), while 10 seconds puts at most six into a minute. The
+  day's budget of 300,000 tokens is far: the 36 triages were charged 7,915.
 - **What it prints.** One line a claim: its ID, what happened (`posted`,
   `skipped`, `different`, `waited`, `at-cap`, `not-settled`) and its state;
   then the counts by what the claims are now (referred to an adjuster,
-  approved, rejected, awaiting documents, triage failed, withdrawn, not settled,
-  skipped, other content) and where to look: `/adjuster/claims` and
+  approved, rejected, awaiting documents, triage failed, withdrawn, another
+  state, not settled, skipped, at the triage cap, other content; a row only
+  when its count is not zero) and where to look: `/adjuster/claims` and
   `/claimant/claims` on the edge. Never a claimant's name, a policy holder, a
   description or any field of a claim but its ID and its state, and a refusal's
   text only when it is one of the Claims API's four 409 sentences (any other
   answer is printed as a fixed text with its HTTP status).
-- **Its exit status** is non-zero only when the edge cannot be reached, a post
-  is refused for a reason other than the 409s above (the run stops there, after
-  the summary of what had happened), or no claim could be posted (every claim
-  answered "other content"). A second run that skips every claim exits 0.
-- **How long.** Each claim is one triage run plus the pause; about two to four
-  minutes for 40 is an estimate, not a measurement.
+- **Its exit status** is non-zero only when the edge cannot be reached (at the
+  start, or at a post in the middle of the run), a post is refused for a
+  reason other than the 409s above, a claim of the file has no usable ID, or
+  no claim could be posted (every claim answered "other content"); in each
+  case the run stops there and still prints the summary of what had happened.
+  A post that `curl` gave up on after 60 seconds may have stored the claim: it
+  is read from the route, and is a refusal only when the route has no such
+  claim. A second run that skips every claim exits 0.
+- **How long.** A triage takes under a second, so a run is its pauses: 363 s
+  on kind on 2026-10-08 for 40 claims of which 36 were new (26 referred to an
+  adjuster, 5 approved, 5 awaiting documents, 4 skipped; none failed). A
+  skipped claim takes no pause, so a second run is quick (not timed).
 - **`COUNT=47`** adds `CLM-0041` to `CLM-0047`, the seven claims added to the
   golden set from a second random stream (`data/synthetic/README.md`): three
   with one fraud indicator on its boundary, three one day off it, and one whose
@@ -2619,8 +2637,11 @@ golden claims) so that both pages show content. Written and tested against stand
   `triage-abandoned`, `runs-ended`, `threads-cleaned`, `failures`) can differ
   after a seed. That line asserts that each of the six series has a sample in
   the last 15 minutes and prints the values; it compares none of them with a
-  number, so seeded claims cannot make it fail (read in `smoke.d/07-sweep.sh`,
-  not run after a seed). The triage runs inside the Claims API's request, so
+  number, so seeded claims cannot make it fail. On kind on 2026-10-08 `make
+  smoke` passed all 62 lines before the seed and after it, with the six values
+  at 0 both times, and no Meridian alert fired or was pending: a rate refusal
+  fires none, and a used-up budget (`MeridianTenantBudgetUsedUp`) was never
+  near. The triage runs inside the Claims API's request, so
   stopping this script strands no claim; the sweep moves a claim stranded by a
   dead API pod to `triage_failed`, as it does for any claim.
 
