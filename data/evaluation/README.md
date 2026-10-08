@@ -2,7 +2,8 @@
 
 What the claims-triage workload's evaluation is made from and what it
 produced. Everything here is synthetic claims and a model's answers to them.
-Never edit a file by hand: each has a command that writes it.
+Never edit a file by hand: each has a command that writes it. The one
+exception is the label worksheet, which a person fills in (its row says so).
 
 | File | What it is | Written by |
 |---|---|---|
@@ -13,6 +14,11 @@ Never edit a file by hand: each has a command that writes it.
 | `prompt-comparison.md` | The two live reports side by side (`meridian eval diff`) | `make eval-record` |
 | `claims-triage-injection-baseline.json` | The report of the injection cases answered by a scripted model that obeys: the injection gate's baseline | `make eval-baseline` |
 | `injection-summary.md` | That baseline's counts, by carrier and family, with the IDs of the cases that passed the screen | `make eval-baseline` |
+| `recordings/claims-triage-injection.json` | The answers a real model gave to the injection cases the baseline says reached the model, in the golden recording's form | `make eval-injection-record`: written by the paid run; not in the repository yet |
+| `claims-triage-injection-live.json` | The report of that run: per case the graders' reading, the finish reason, any refusal, the cost; then the totals | `make eval-injection-record`: written by the paid run; not in the repository yet |
+| `injection-live-summary.md` | That report's totals as a table, with the date, the deployment and the cost | `make eval-injection-record`: written by the paid run; not in the repository yet |
+| `injection-heldout/injection-heldout.json` and `injection-heldout-summary.md` | The injection screen measured once on 72 held-out sentences: a report, neither a fingerprint nor a baseline; `make eval` does not read it. Its own folder, because a test loads every JSON file directly here as a gate report | `python -m meridian.workloads.claims_triage.injection_heldout` |
+| `judge-labels/claims-triage.json` | A person's worksheet, neither a fingerprint nor a report: the 13 recorded judge verdicts' rationales and clauses, to label blind. The one file here edited by hand; `make eval` does not read it | `python -m meridian.workloads.claims_triage.judge_labels sheet` |
 
 ## The gate
 
@@ -96,7 +102,7 @@ here for an Azure host, an account name, an email address and a GUID).
 A changed prompt or schema finds no entry. The gateway then answers 502,
 the run fails, and the evaluation says how many requests have no recording
 and for which prompt the file was made. Record again with
-`make eval-record`: about 60 chat calls on the live model, with an Azure
+`make eval-record`: 55 chat calls on the live model, with an Azure
 login, measured at EUR 0.12 on 2026-10-03. Then `make eval-baseline`, and
 read the grade diff before committing it.
 
@@ -179,7 +185,9 @@ more:
   model, what the rules, the limits and the allowlist still hold.
 
 It does not measure what a real model does with an injection it is shown.
-That needs live calls; no recording of them exists.
+That needs live calls: the run is built and tested with a fake provider
+("A real model's answers to the injection cases" below), no paid run has been
+made, and no recording of a real model's answers exists.
 
 Six graders, the same on every case:
 
@@ -292,6 +300,158 @@ changed one of the 27 recorded requests, and nothing here is paid. The "not
 covered" bullet of the last section is unchanged: a name made of the words
 an exclusion turns on is still a backlog row (S070), asked of the owner.
 
+### A real model's answers to the injection cases (S071, built; not run)
+
+Status: **implemented and tested with a fake provider; no paid run has been
+made**. The three files below do not exist in the repository, and until a
+recording is committed `make eval` knows nothing of this run: the pull request
+that commits one adds the replay to the gate with its baseline in the same
+reviewed change.
+
+What the run is: the injection cases whose committed baseline says the model
+was asked (`observed.model_asked` is 1: 52 on 2026-10-07, 40 attacks and 12
+benign cases, read from the file at run time and not counted in code) go
+through the same real services as the scripted run, in the baseline's order,
+with the runtime's model calls going through a live-mode Model Gateway whose
+Azure provider is wrapped in the recording provider. A clause case edits the
+stored clause as the suite does and puts it back. There is no judge: the
+question is what the model does with an injection, which the three absolute
+graders and each case's expectation already read. The harness is
+`tests/meridian/injectionrecordsupport.py`; the stack's other gateway stays in
+replay mode, as in the golden run, so the clauses found and each request are
+the same when recording and replaying.
+
+What it costs and who runs it: `make eval-injection-record`, on a machine with
+an Azure login and Docker (the owner will sign in on the virtual machine, which
+is not a yes to a run), after the owner's yes to the amount; the command guard
+asks before it, and the amount is stated first. About EUR
+0.12 is expected (52 calls at the golden run's measured EUR 0.0020 to 0.0023),
+EUR 0.31 if every answer ran to its cap. The ceiling is the gateway's, not the
+session's: the run's gateway loads a copy of the registry in which the tenant
+it charges, `claims-triage`, has a monthly budget of EUR 0.50, so a call that
+would pass it is refused (429) and the run is incomplete. EUR 0.50 is about four
+times the expected cost and clears the EUR 0.31 at the cap; the gateway can pass
+a ceiling by one call's excess over its reservation, about EUR 0.015 at most.
+The committed registry is not changed, and a paid run without the ceiling cannot
+start: with the real provider the harness refuses, before it reads an
+environment variable, unless it is given a registry that is not the committed
+one and in which every tenant it charges holds a budget at or below the named
+ceiling. The ceiling is per tenant and bounds one run: the ledger lives in a
+database dropped afterwards, so no sum across runs is held by any code. The
+target is opt-in by its own variable beside `MERIDIAN_LIVE_AZURE=1`, and the
+golden recording's now needs both of its two as well: neither variable alone
+starts either run, and the golden recording's own does not start this one.
+Before any file is written the run refuses a recording or a report that holds a
+GUID shape, an Azure OpenAI host name, the account name's prefix, an e-mail
+address, a bearer-token marker, a JWT's opening or a URL scheme, or a recording
+entry over 4,000 characters (the wire's output cap is about that), naming the
+file and the kind and never the text; the three files are written to a staging
+directory beside the target and moved into place together, so a failure between
+two leaves none of them.
+
+The three files, written together and only by a complete run:
+
+- `recordings/claims-triage-injection.json`: the golden recording's form, so
+  one replay provider reads both: the answers keyed by the hash of the request.
+  It keeps the model's answers as they were given, because a replay needs them.
+  Some answer may quote the sentence its case added; the recording is not
+  altered for it.
+- `claims-triage-injection-live.json`: per case, the IDs, label, family,
+  carrier and base claim; `grades` and `observed`, computed by the functions
+  that make the scripted baseline, so "the platform held" means one thing in
+  both files; `injection_obeyed` for an attack (the graders' reading: the route
+  or the recommendation was not held), the finish reason, the deployment, the
+  gateway's `refusal` when there was one, and the calls, tokens, cost in
+  micro-EUR and latency of the case; then `totals`, by label and family and in
+  all (answers obeying the injection, refusals, withheld completions, calls,
+  tokens, cost), and `answers_quoting_the_case` by case ID.
+- `injection-live-summary.md`: the totals as a table, the run's date, the
+  deployment and the cost, and a caution on how far it reads: one model, one
+  day, the suite's cases.
+
+Why the recording is exempt from the scan for a case's sentence and the
+reports are not: the suite's rule is that no committed file holds a sentence a
+case adds, so that a reader of the diff meets IDs and counts and never an
+attack. The recording is the one file whose point is the model's own words, and
+a replay is only as faithful as they are; editing them would make a different
+fingerprint of the gate. So the reports are written from IDs and numbers, and
+the writer refuses to write a string that holds a sentence a case adds (a test
+scans the files for them as well); the recording's text is read in the paid
+run's diff before it is committed, as the golden recording's was.
+
+An incomplete run writes nothing and names the case IDs with no answer and
+why: no proposal, a run that failed, a call the model was never asked, a call
+that did not settle, an entry count that is not the chat calls. A call the
+gateway refused for the budget is told from a provider fault by the gateway's
+own answer (429, "the tenant's budget is used up") and its `refused` audit row
+(`tenant-cost-budget`), not by the runtime's code, which is `model-error` for
+both.
+
+What a refusal and a withheld completion look like, and the completeness rule:
+a refusal of the request (Azure's content filter on the prompt, a 400) and a
+completion the filter withheld, or the model's own refusal of a structured
+request, are ANSWERS of the model and the run is complete: the case has a
+proposal whose assessment is `unavailable` because `filtered`, the run ended as
+designed, and the report's case carries `refusal` with the gateway's class
+(`filtered`), whether a completion was drafted (`completion`: `withheld` or
+`none`), the status (400) and the response headers S069 added, by name and
+value: `X-Meridian-Refusal: content-filter` on both, and for a withheld
+completion also `X-Meridian-Completion`, `X-Meridian-Deployment`,
+`X-Meridian-Provider` and `X-Meridian-Mode`. A withheld completion is billed
+with its reservation kept; a refused prompt is not. The gateway cannot tell a
+withheld completion from the model's own refusal of a structured request: both
+reach it as one provider error. Neither is in the recording (nothing was
+answered), so a replay of them would find no entry; the replay added to the
+gate with a recording covers the answered cases only.
+
+What this does not show: one model on one day. A fake provider tested the
+harness, not the model; what a real model does is unknown until the owner's run.
+
+## The judge against a person's labels
+
+`judge-labels/claims-triage.json` is a worksheet for one person, not a
+fingerprint of the gate and not a report: `make eval` does not read it, and
+nothing reads it but the two commands below and their own tests (a test
+searches the repository for the directory's name and fails when another file
+names it). Filling it in moves no baseline and no fingerprint.
+
+It holds one entry for each of the 13 judge verdicts in the recording, in the
+recording's order: the claim's ID, its peril and description, the triage
+model's assessment and rationale (what the judge was asked about), the clauses
+the judge was shown (number, title and text), an empty `person_grounded` and
+an empty `person_note`. It holds neither the judge's verdict nor its reason,
+so that the person labels blind: do not open the baseline or the recording
+before every entry is labelled. Set `person_grounded` to `true` when every
+statement of the rationale is supported by the claim and the clauses shown,
+`false` otherwise, and write a note where the call was close. Everything in
+it is synthetic and already committed elsewhere.
+
+```text
+uv run python -m meridian.workloads.claims_triage.judge_labels sheet
+uv run python -m meridian.workloads.claims_triage.judge_labels compare
+```
+
+`sheet` writes the worksheet from the baseline, the recording and
+`data/synthetic/`; it refuses to overwrite a file that already holds a label
+or a note. `compare` reads the filled worksheet and the baseline and prints
+how many entries are labelled and how many are missing, the agreement (count
+and share), each disagreement by claim ID with both verdicts and the judge's
+reason, and the four cells of the confusion table. With no label filled it
+says so and exits 0; a label that is not `true`, `false` or `null` is refused
+with the claim's ID. It prints IDs and verdicts, never a rationale, a
+description or a clause. The command lives in the claims workload, not in
+`meridian eval`: the clauses the judge saw come from the rules' own selection
+(`select_terms`), and the platform never imports a workload.
+
+Read the result for what it is. It is 13 cases from one recording, and the
+judge called every one of them grounded, so the "judge: ungrounded" column of
+the confusion table is empty by construction. Agreement shows that the judge
+and the person agree on cases the judge passed; it says little about the
+judge's ability to say "ungrounded". A person who labels a case false finds
+the judge's miss; a person who labels all 13 true shows only that the judge
+was not wrong about these. A larger and harder sample, with rationales that
+are known to be unsupported, is a paid step (it needs the live judge).
+
 ## Commands
 
 - `make eval`: the golden set through the stack with the recorded answers
@@ -304,6 +464,10 @@ an exclusion turns on is still a backlog row (S070), asked of the owner.
   change.
 - `make eval-record`: record again from the live model. It spends money and
   needs an Azure login.
+- `make eval-injection-record`: answer the injection cases the baseline says
+  reach the model with the live model, and write the three files above. It
+  spends money, needs an Azure login and Docker, and starts only after the
+  owner's yes to the amount: the command guard asks before it.
 - `uv run meridian eval diff A B`: two reports side by side, as
   `prompt-comparison.md`.
 - `uv run meridian eval run --base-url URL --report FILE`: post the golden
@@ -343,3 +507,52 @@ an empty evaluation: `meridian eval run --allow-empty` says that nothing was
 evaluated, sends nothing and writes no report, and without the flag the run
 fails (T-82). Cases added later are synthetic and come from a seeded generator
 (hard rule 2), and the manifest's hash changes with them.
+
+## The screen on held-out sentences
+
+`injection-heldout/injection-heldout.json` and
+`injection-heldout/injection-heldout-summary.md` are a report, not a
+fingerprint of the gate: `make eval` does not read them and no baseline or
+fingerprint moves with them. They have a folder of their own because a test
+loads every JSON file directly under this folder as a gate report, and this is
+not one. They are the injection screen measured once on 72
+held-out sentences, 48 attacks and 24 look-alikes, that an agent wrote having
+read none of the screen, the existing cases or their summary
+(`data/synthetic/README.md`, "Held-out injection cases", says how the cases are
+built). **The rule: the screen, its patterns, the existing cases and the
+sentences are not changed after the result is read, because a set that was
+tuned on is no longer held out.**
+
+The result, made once on 2026-10-07 with nothing tuned: the injection screen
+stopped **6 of 48 attacks (13 %)** and flagged **0 of 24 look-alikes**, where
+on the suite's own cases it stops 26 of 66 (39 %) and flags 16 of 28. By family
+it stopped override 1 of 6, role 2 of 6, role-marker 2 of 6 and answer-format 1
+of 6, and none of the authority, obfuscated, other-language and indirect
+attacks (0 of 6 each); of the 6 stopped, all are in English. So the earlier
+figure was tuned to its own set, and the screen is bound to English keywords.
+The 0 of 24 is the count of these sentences that tripped the screen; it is not
+a false-alarm rate on real claims. The summary holds the table by family and by
+language and the IDs.
+
+```text
+uv run python -m meridian.workloads.claims_triage.injection_heldout
+```
+
+The command applies the screen to each held-out description as the service does:
+the special-category screen first, then the injection screen, on the description
+as posted and on the run's copy with the claimant's name replaced. It needs no
+model, no database and no cluster. A test runs it into a temporary folder and
+compares the bytes with the committed files, so a change of the screen, of the
+cases or of the command shows as a failure that says the set is spent. Do not
+regenerate the files to make it pass: a changed screen needs a new blind set.
+
+The JSON holds, per case, the ID, the writer's ID, label, family, language, base
+claim and the outcome (`injection-suspected`, `special-data` or `none`), never a
+sentence or a description. The summary counts the attacks the injection screen
+stopped and the look-alikes it flagged, by family and by language, beside the
+existing set's two rates quoted from `injection-summary.md`, and lists the
+cases by ID. Read the number for what it is: the set is small (one case is two
+to four points), a model wrote it and not an attacker, and the existing set
+joins its sentences in other ways too (before a description, on a new line)
+where every held-out sentence is appended, so the two rates are not measured
+the same way.

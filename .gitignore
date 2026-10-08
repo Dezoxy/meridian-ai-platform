@@ -18,6 +18,10 @@ __pycache__/
 .mypy_cache/
 .import_linter_cache/
 .eval/
+# What a paid run's writer can leave after a hard kill: a staging directory
+# (.injection-run-*.tmp) or a temporary file of the recording and report writers
+# (.NAME.XXXX.tmp), which hold a model's text. Never committed by git add -A.
+data/evaluation/**/.*.tmp
 .alerts/
 dist/
 # What a COVERAGE=1 run leaves in the working directory: the combined data file
