@@ -446,18 +446,32 @@ ASSIGN = r"[A-Za-z_]\w*=\S*"
 # of an option (sudo -u make git commit ...) is not the command word. The second
 # alternative of a flag refuses an argument-taking letter followed by a blank, so
 # the engine cannot take -u as a flag without argument when the first fails.
+# The letters of a flag are CASE-SENSITIVE ((?-i: ...) inside the pattern that is
+# compiled with re.I): the tools tell -h from -H, -p from -P and -i from -I, and a
+# flag read as a neighbour of its own case eats the real command word (sudo -H
+# make, sudo -P make, xargs -p/-i/-l make: G5, MEDIUM-1). The words themselves
+# (sudo, make) stay case-blind on purpose, as the rules of main are (nocasematch): a
+# denied command in an unusual case is denied, which is the stronger direction. Letters
+# that take an argument SEPARATED by a blank are listed, and only those: env -S
+# is left out, because env -S make ... runs make (its string is the command line,
+# so make is the command word, and a quoted string after env -S is scanned as a
+# body below); xargs -e, -i and -l take their argument attached or none.
+# nohup, command, builtin and setsid take flags of their own (command -p, setsid
+# -f), and the word after them is still the command word; command -v and -V only
+# look a name up and run nothing, so they are not read as a prefix.
 def flag(args):
-    return r"(?:-[" + args + r"]\s+\S+|-(?![" + args + r"]\s)\S+)"
+    return r"(?-i:-[" + args + r"]\s+\S+|-(?![" + args + r"]\s)\S+)"
+OWN_FLAGS = r"(?:\s+-(?![A-Za-z]*[vV])\S+)*"
 PREFIX = (
     r"(?:(?:"
     r"sudo(?:\s+" + flag("ugphCDRTUrt") + r")*"
-    r"|env(?:\s+" + flag("uCSP") + r")*"
+    r"|env(?:\s+" + flag("uCP") + r")*"
     r"|timeout(?:\s+" + flag("sk") + r")*(?:\s+\d+[smhd]?)?"
-    r"|xargs(?:\s+" + flag("IneLPsEda") + r")*"
+    r"|xargs(?:\s+" + flag("InLPsEda") + r")*"
     r"|nice(?:\s+" + flag("n") + r")*"
     r"|time(?:\s+" + flag("fo") + r")*"
     r"|exec(?:\s+" + flag("a") + r")*"
-    r"|nohup|command|builtin|setsid"
+    r"|(?:nohup|command|builtin|setsid)" + OWN_FLAGS +
     r")\s+(?:" + ASSIGN + r"\s+)*)*"
 )
 COMMAND_WORD = re.compile(
@@ -474,9 +488,28 @@ WORD = re.compile(r"(?<!\S)aws-(?:kubeadm-)?(destroy|apply|plan)(?![\w.-])", re.
 # A quoted word after the -c of a shell (bash -c "...", sh -lc ..., not grep -c,
 # wc -c or cut -c) or after eval is a command line of its own and is scanned the same
 # way, to a depth of three. A double-quoted body is unescaped first (\" and \\).
+# Between the shell and its -c the gate allows what people type (G6, MEDIUM-2): a
+# flag in one word (-x, -eu, +e, --norc, --login, --posix), a flag that ends in o
+# or O and its option name (-o pipefail, -eo pipefail, -euo pipefail, -O extglob,
+# +o history), and --rcfile or --init-file and its file, in any number. The
+# argument of those is a word that does not start with - or + , so that each word
+# has ONE reading and a run of them cannot be split two ways (no backtracking
+# blow-up). The window before the quote is still 80 bytes: more flags than fit in
+# it are not read (a pinned gap). The gate stays anchored on a shell word, so
+# grep -c, wc -c, cut -c and rg -c are what main gives. Also a body: "$SHELL" -c,
+# su [user] -c (up to four words between, none a quote or separator), and a quoted
+# string after env -S (env -S with a quoted string runs it as a command line).
+SHELL_OPTS = (
+    r"(?:\s+(?:--(?:rcfile|init-file)\s+[^\s+-]\S*"
+    r"|[-+][A-Za-z]*[oO]\s+[^\s+-]\S*"
+    r"|[-+]\S+))*"
+)
 BODY = re.compile(
-    r"(?:^|[\s;&|(/])(?:ba|z|da|k|a)?sh(?:\s+-\S+)*\s+-[A-Za-z]*c\s+$"
-    r"|(?:^|[\s;&|(])eval\s+$",
+    r"(?:^|[\s;&|(/])(?:(?:ba|z|da|k|a)?sh|\"?\$\{?SHELL\}?\"?)"
+    + SHELL_OPTS + r"\s+-[A-Za-z]*c\s+$"
+    r"|(?:^|[\s;&|(])eval\s+$"
+    r"|(?:^|[\s;&|(/])su(?:\s+[^\s;&|\"\x27]+){0,4}?\s+-[A-Za-z]*c\s+$"
+    r"|(?:^|[\s;&|(/])env(?:\s+-\S+)*\s+-[A-Za-z]*S\s+$",
     re.I,
 )
 rank = {"": 0, "plan": 1, "apply": 2, "destroy": 3}

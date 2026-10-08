@@ -889,6 +889,21 @@ cpu_shape "800 prefixes with option arguments before make" \
 cpu_shape "1500 sudo -u without an argument-taking end" "git aws-destroy; $(repeat 'sudo -u ' 1500)git commit"
 cpu_shape "400 repetitions of timeout and xargs options before a near-miss word" \
   "git aws-destroy; $(repeat 'timeout -s K 5 xargs -I X ' 400)makefile -m \"aws-apply\""
+# G6: the gate that reads a shell's -c body now allows flags that take an argument
+# (-o pipefail), and the flag classes of the prefixes are case-sensitive. A long run
+# of -o pairs before -c (past the 80-byte window the gate reads), the same run
+# before every quoted piece, a run of mixed-case flags before make, and one before
+# a word that only starts like make.
+cpu_shape "3000 pairs of -o x before a shell's -c" \
+  "git aws-destroy; bash $(repeat '-o x ' 3000)-c 'make -m \"aws-apply\"'"
+cpu_shape "200 shells with a run of -o pairs, each before a quoted piece" \
+  "git aws-destroy; $(repeat "bash $(repeat '-o x ' 12)-c 'q' " 200)make -m \"aws-apply\""
+cpu_shape "800 prefixes with flags of both cases before make" \
+  "git aws-destroy; $(repeat 'sudo -H -P -u x xargs -p -i -l -I Y ' 400)make -m \"aws-apply\""
+cpu_shape "400 repetitions of four prefixes with flags before a near-miss word" \
+  "git aws-destroy; $(repeat 'command -p setsid -f env -S xargs -i ' 400)makefile -m \"aws-apply\""
+cpu_shape "300 repetitions of su and env -S, each before a quoted piece" \
+  "git aws-destroy; $(repeat "su a b c d -c 'q' env -i -S 'q' " 300)make -m \"aws-apply\""
 # A line that reaches the passes with padding is still read to its end: the
 # denied part after the padding is denied, not skipped.
 ask_for "the first review's worst shape followed by a denied part is denied" deny \

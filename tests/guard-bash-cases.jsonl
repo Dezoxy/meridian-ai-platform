@@ -2746,3 +2746,144 @@
 {"expect":"none","note":"S020 (Z5): as the line above","command":"make azure-platform-scan"}
 {"expect":"none","command":"make -C . azure-platform-validate azure-platform-scan"}
 {"expect":"none","command":"infra/terraform/aws.sh validate azure"}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: the flag classes are case-sensitive and the flags of command, setsid, nohup and builtin are read. main none, G5 none, now deny","command":"sudo -H make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: the flag classes are case-sensitive and the flags of command, setsid, nohup and builtin are read. main none, G5 none, now deny","command":"sudo -P make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: the flag classes are case-sensitive and the flags of command, setsid, nohup and builtin are read. main none, G5 none, now deny","command":"xargs -p make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: the flag classes are case-sensitive and the flags of command, setsid, nohup and builtin are read. main none, G5 none, now deny","command":"xargs -i make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: the flag classes are case-sensitive and the flags of command, setsid, nohup and builtin are read. main none, G5 none, now deny","command":"xargs -l make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: the flag classes are case-sensitive and the flags of command, setsid, nohup and builtin are read. main none, G5 none, now deny","command":"xargs -e make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: the flag classes are case-sensitive and the flags of command, setsid, nohup and builtin are read. main none, G5 none, now deny","command":"command -p make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: the flag classes are case-sensitive and the flags of command, setsid, nohup and builtin are read. main none, G5 none, now deny","command":"setsid -f make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: the flag classes are case-sensitive and the flags of command, setsid, nohup and builtin are read. main none, G5 none, now deny","command":"setsid --fork make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: the flag classes are case-sensitive and the flags of command, setsid, nohup and builtin are read. main none, G5 none, now deny","command":"nohup -- make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: the flag classes are case-sensitive and the flags of command, setsid, nohup and builtin are read. main none, G5 none, now deny","command":"builtin -- make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: env -S is not a prefix option that eats a word (env -S make runs make), and a quoted string after env -S is a body. main none, G5 none, now deny","command":"env -S make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: env -S is not a prefix option that eats a word (env -S make runs make), and a quoted string after env -S is a body. main none, G5 none, now deny","command":"env -S 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: the flag classes are case-sensitive and the flags of command, setsid, nohup and builtin are read. main none, G5 none, now deny","command":"SUDO -H MAKE -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"sudo -h host make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: the flag classes are case-sensitive and the flags of command, setsid, nohup and builtin are read. main none, G5 none, now deny","command":"sudo -H -u root make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: the flag classes are case-sensitive and the flags of command, setsid, nohup and builtin are read. main none, G5 none, now deny","command":"sudo -u root -H make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"sudo -H env -i A=b make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"xargs -P 4 make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"xargs -I X make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"xargs -n1 make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"xargs make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"sudo -E make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"sudo -- make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"sudo -n make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"sudo --user=root make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"sudo -u root make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"env -i make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"env -u X make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"timeout 60 make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"timeout -s KILL 60 make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"nice make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"nice -n 5 make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"time -p make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"time -f %e make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"exec -a x make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"sudo -E env -i A=b make -m \"aws-destroy\""}
+{"expect":"none","note":"S071 G6, MEDIUM-1: an ordinary command with the same prefixes that must stay none. main none, G5 none, now none","command":"sudo -H git commit -m \"aws-destroy\""}
+{"expect":"none","note":"S071 G6, MEDIUM-1: an ordinary command with the same prefixes that must stay none. main none, G5 none, now none","command":"sudo -u make git commit -m \"aws-destroy\""}
+{"expect":"none","note":"S071 G6, MEDIUM-1: an ordinary command with the same prefixes that must stay none. main none, G5 none, now none","command":"xargs -I make git commit -m \"aws-destroy\""}
+{"expect":"none","note":"S071 G6, MEDIUM-1: command -v only looks a name up and runs nothing, so it is not a prefix. main none, G5 none, now none","command":"command -v make -m \"aws-destroy\""}
+{"expect":"none","note":"S071 G6, MEDIUM-1: an ordinary command with the same prefixes that must stay none. main none, G5 none, now none","command":"env -S git commit -m \"aws-destroy\""}
+{"expect":"none","note":"S071 G6, MEDIUM-1: an ordinary command with the same prefixes that must stay none. main none, G5 none, now none","command":"setsid -f git commit -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a flag that takes an argument between a shell and -c is read. main none, G5 none, now deny","command":"bash -o pipefail -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a flag that takes an argument between a shell and -c is read. main none, G5 none, now deny","command":"bash -O extglob -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a flag that takes an argument between a shell and -c is read. main none, G5 none, now deny","command":"bash +e -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a flag that takes an argument between a shell and -c is read. main none, G5 none, now deny","command":"bash --rcfile x -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a flag that takes an argument between a shell and -c is read. main none, G5 none, now deny","command":"bash --init-file x -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a form the gate read before and still reads. main none, G5 deny, now deny","command":"bash --norc -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a form the gate read before and still reads. main none, G5 deny, now deny","command":"bash --noprofile --norc -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a form the gate read before and still reads. main none, G5 deny, now deny","command":"bash --login -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a form the gate read before and still reads. main none, G5 deny, now deny","command":"bash --posix -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a flag that takes an argument between a shell and -c is read. main none, G5 none, now deny","command":"bash -eo pipefail -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a flag that takes an argument between a shell and -c is read. main none, G5 none, now deny","command":"bash -euo pipefail -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a flag that takes an argument between a shell and -c is read. main none, G5 none, now deny","command":"bash -o pipefail -o errexit -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a flag that takes an argument between a shell and -c is read. main none, G5 none, now deny","command":"bash -O extglob -O nullglob -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a flag that takes an argument between a shell and -c is read. main none, G5 none, now deny","command":"bash +o history -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a flag that takes an argument between a shell and -c is read. main none, G5 none, now deny","command":"bash -o pipefail -x --norc -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a flag that takes an argument between a shell and -c is read. main none, G5 none, now deny","command":"sh -o pipefail -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a flag that takes an argument between a shell and -c is read. main none, G5 none, now deny","command":"/bin/bash -o pipefail -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a flag that takes an argument between a shell and -c is read. main none, G5 none, now deny","command":"sudo bash -o pipefail -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a flag that takes an argument between a shell and -c is read. main none, G5 none, now deny","command":"env bash -o pipefail -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a flag that takes an argument between a shell and -c is read. main none, G5 none, now deny","command":"bash -o pipefail -c \"make -m \\\"aws-destroy\\\"\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a shell named by $SHELL, or su, before -c is read. main none, G5 none, now deny","command":"\"$SHELL\" -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a shell named by $SHELL, or su, before -c is read. main none, G5 none, now deny","command":"$SHELL -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a shell named by $SHELL, or su, before -c is read. main none, G5 none, now deny","command":"\"${SHELL}\" -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a shell named by $SHELL, or su, before -c is read. main none, G5 none, now deny","command":"su -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a shell named by $SHELL, or su, before -c is read. main none, G5 none, now deny","command":"su root -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a shell named by $SHELL, or su, before -c is read. main none, G5 none, now deny","command":"su - deploy -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a shell named by $SHELL, or su, before -c is read. main none, G5 none, now deny","command":"su -s /bin/sh deploy -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a shell named by $SHELL, or su, before -c is read. main none, G5 none, now deny","command":"sudo su -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a form the gate read before and still reads. main none, G5 deny, now deny","command":"bash -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a form the gate read before and still reads. main none, G5 deny, now deny","command":"eval 'make -m \"aws-destroy\"'"}
+{"expect":"none","note":"S071 G6, MEDIUM-2: a -c that is not a shell's -c (the gate is anchored on a shell word) stays what main gives. main none, G5 none, now none","command":"grep -c \"make -m 'aws-destroy'\" docs/x.md"}
+{"expect":"none","note":"S071 G6, MEDIUM-2: a -c that is not a shell's -c (the gate is anchored on a shell word) stays what main gives. main none, G5 none, now none","command":"wc -c \"aws-destroy.md\" && make docs"}
+{"expect":"none","note":"S071 G6, MEDIUM-2: a -c that is not a shell's -c (the gate is anchored on a shell word) stays what main gives. main none, G5 none, now none","command":"cut -c1-80 \"make aws-destroy.md\""}
+{"expect":"none","note":"S071 G6, MEDIUM-2: a -c that is not a shell's -c (the gate is anchored on a shell word) stays what main gives. main none, G5 none, now none","command":"grep -e x -c \"aws-destroy\" docs/x.md && make docs"}
+{"expect":"none","note":"S071 G6, MEDIUM-2: a -c that is not a shell's -c (the gate is anchored on a shell word) stays what main gives. main none, G5 none, now none","command":"grep -o x -c \"aws-destroy\" docs/x.md && make docs"}
+{"expect":"none","note":"S071 G6, MEDIUM-2: a -c that is not a shell's -c (the gate is anchored on a shell word) stays what main gives. main none, G5 none, now none","command":"sort -o out.txt -c \"aws-destroy\" && make docs"}
+{"expect":"none","note":"S071 G6, MEDIUM-2: a -c that is not a shell's -c (the gate is anchored on a shell word) stays what main gives. main none, G5 none, now none","command":"awk -o x -c \"aws-destroy\" docs/x.md && make docs"}
+{"expect":"none","note":"S071 G6, MEDIUM-2: a -c that is not a shell's -c (the gate is anchored on a shell word) stays what main gives. main none, G5 none, now none","command":"git commit -m \"su -c make aws-destroy\""}
+{"expect":"none","note":"S071 G6, MEDIUM-2: a -c that is not a shell's -c (the gate is anchored on a shell word) stays what main gives. main none, G5 none, now none","command":"echo \"$SHELL\" -c 'make docs'"}
+{"expect":"none","note":"S071 G6, MEDIUM-2: a -c that is not a shell's -c (the gate is anchored on a shell word) stays what main gives. main none, G5 none, now none","command":"rsu -c 'make -m \"aws-destroy\"'"}
+{"expect":"none","note":"S071 G6, MEDIUM-2: a -c that is not a shell's -c (the gate is anchored on a shell word) stays what main gives. main none, G5 none, now none","command":"pip install sudo-su -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, LOW, known, kept: an echo of a shell-wrapped removal is read as the removal; contrived, and telling an echo from a run is what the hook cannot do (S071 G5 review, LOW). main none, G5 deny, now deny","command":"echo bash -c 'make -m \"aws-destroy\"'"}
+{"expect":"none","note":"S071 G6, gap, pinned (G6 does not close it): sudo with a bundled flag that takes an argument (-Eu root) is not read as a prefix. main none, G5 none, now none","command":"sudo -Eu root make -m \"aws-destroy\""}
+{"expect":"none","note":"S071 G6, gap, pinned (G6 does not close it): sudo with a long option and its argument in the next word (--user root) is not read. main none, G5 none, now none","command":"sudo --user root make -m \"aws-destroy\""}
+{"expect":"none","note":"S071 G6, gap, pinned (G6 does not close it): timeout takes whole seconds only (1.5 is not read). main none, G5 none, now none","command":"timeout 1.5 make -m \"aws-destroy\""}
+{"expect":"none","note":"S071 G6, gap, pinned (G6 does not close it): a default-value operator outside - = + ? (here /) is not read as a paid target. main none, G5 none, now none","command":"T=x; make ${T/x/eval-record}"}
+{"expect":"none","note":"S071 G6, gap, pinned (G6 does not close it): the AWS wrapper's own target behind a quoted separator, a copy of the text G5 removed. main none, G5 none, now none","command":"infra/terraform/aws.sh \"a;b\" apply"}
+{"expect":"none","note":"S071 G6, gap, pinned (G6 does not close it): the AWS wrapper's own target behind a quoted separator, a copy of the text G5 removed. main none, G5 none, now none","command":"infra/terraform/aws.sh \"a;b\" plan"}
+{"expect":"none","note":"S071 G6, gap, pinned (G6 does not close it): the AWS wrapper's own target behind a quoted separator, a copy of the text G5 removed. main none, G5 none, now none","command":"infra/terraform/aws.sh \"a;b\" destroy"}
+{"expect":"none","note":"S071 G6, MEDIUM-1, a decision narrower than G5's: env -S takes a string that is the command line, so the word after env -S x is that string's argument and make is not the command word (G5 ate x and denied). main none, G5 deny, now none","command":"env -S x make -m \"aws-destroy\""}
+{"expect":"none","note":"S071 G6, MEDIUM-1, a decision narrower than G5's: xargs -e takes its argument attached or none, so x is the command and make its argument (G5 ate x and denied). main none, G5 deny, now none","command":"xargs -e x make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: xargs -E takes its argument in the next word and is still eaten, so make is the command word. main none, G5 deny, now deny","command":"xargs -E EOF make -m \"aws-destroy\""}
+{"expect":"none","note":"S071 G6, gap, pinned (G6 does not close it): more flags before -c than fit in the gate's window of 80 bytes (24 pairs of -o x here) are not read; G4 read 40 flags. main none, G5 none, now none","command":"bash -o x -o x -o x -o x -o x -o x -o x -o x -o x -o x -o x -o x -o x -o x -o x -o x -o x -o x -o x -o x -o x -o x -o x -o x -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: ten pairs of -o x are inside the window of 80 bytes and are read. main none, G5 none, now deny","command":"bash -o x -o x -o x -o x -o x -o x -o x -o x -o x -o x -c 'make -m \"aws-destroy\"'"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"bash -o pipefail -c 'make docs'"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"bash -o pipefail -c 'grep -c \"aws-destroy\" docs/x.md'"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"bash -eo pipefail -c 'echo hi' && make lint"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"su -c 'make docs'"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"su root -c 'ls -l'"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"\"$SHELL\" -c 'make docs'"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"env -S 'echo hi'"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"env -S 'make docs'"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"command -p ls"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"sudo -H ls /root"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"find . -name x | xargs -i make docs"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"xargs -p echo \"aws-destroy\""}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"setsid -f sleep 1"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"git log -S\"su -c\" --oneline"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"ssh host su -c 'ls'"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"grep -rc \"aws-plan\" docs/ --include=x.md"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"grep -o pipefail -c \"aws-plan\" docs/x.md"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"rg -o x -c \"aws-plan\" docs"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"git commit -m \"bash -o pipefail -c 'make aws-destroy'\""}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"git commit -F msg.txt && sudo -H make docs"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"nohup -- sleep 1 \"aws-apply\""}
+{"expect":"deny","note":"S071 G6, main denies this itself (it reads the quoted target); the exclusion of command -v is shown by the row with -m above. main deny, G5 deny, now deny","command":"command -V make \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, main denies this itself (it reads the quoted target); the exclusion of command -v is shown by the row with -m above. main deny, G5 deny, now deny","command":"command -pv make \"aws-destroy\""}
+{"expect":"ask","note":"S071 G6, the apply and plan targets behind the same prefixes and gates ask. main none, G5 none, now ask","command":"bash -o pipefail -c 'make -m \"aws-apply\"'"}
+{"expect":"ask","note":"S071 G6, the apply and plan targets behind the same prefixes and gates ask. main none, G5 none, now ask","command":"sudo -H make -m \"aws-apply\""}
+{"expect":"ask","note":"S071 G6, the apply and plan targets behind the same prefixes and gates ask. main none, G5 none, now ask","command":"xargs -i make -m \"aws-plan\""}
+{"expect":"ask","note":"S071 G6, the apply and plan targets behind the same prefixes and gates ask. main none, G5 none, now ask","command":"\"$SHELL\" -c 'make -m \"aws-plan\"'"}
+{"expect":"ask","note":"S071 G6, the apply and plan targets behind the same prefixes and gates ask. main none, G5 none, now ask","command":"su -c 'make -m \"aws-apply\"'"}
+{"expect":"ask","note":"S071 G6, the apply and plan targets behind the same prefixes and gates ask. main none, G5 none, now ask","command":"command -p make -m \"aws-apply\""}
+{"expect":"deny","note":"S071 G6, the shell gate nests (depth two). main none, G5 none, now deny","command":"bash -o pipefail -c \"bash -o pipefail -c 'make -m \\\"aws-destroy\\\"'\""}
+{"expect":"deny","note":"S071 G6, the shell gate nests (depth two). main none, G5 none, now deny","command":"bash -o pipefail -c 'su -c \"make -m \\\"aws-destroy\\\"\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2 table of the G5 re-check: a shell behind busybox is read. main none, G5 deny, now deny","command":"busybox sh -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2 table of the G5 re-check: a shell behind env is read. main none, G5 deny, now deny","command":"env bash -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2 table of the G5 re-check: a shell behind command is read. main none, G5 deny, now deny","command":"command sh -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2 table of the G5 re-check: a shell behind sudo is read. main none, G5 deny, now deny","command":"sudo bash -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2 table of the G5 re-check: a bundled -lc is read. main none, G5 deny, now deny","command":"bash -lc 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2 table of the G5 re-check: a shell behind xargs is read. main none, G5 deny, now deny","command":"xargs sh -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2 table of the G5 re-check: a shell behind docker exec is read. main none, G5 deny, now deny","command":"docker exec c sh -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2 table of the G5 re-check: a double-quoted body with escaped quotes is read. main none, G5 deny, now deny","command":"bash -c \"make -m \\\"aws-destroy\\\"\""}
+{"expect":"none","note":"S071 G6, gap, pinned (G6 does not close it): fish is not in the list of shell words (G4 read it). main none, G5 none, now none","command":"fish -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2 table of the G5 re-check: ten single flags are inside the window of 80 bytes and are read. main none, G5 deny, now deny","command":"bash -x -x -x -x -x -x -x -x -x -x -c 'make -m \"aws-destroy\"'"}
+{"expect":"none","note":"S071 G6, gap, pinned (G6 keeps the window of 80 bytes): 25 flags do not fit in it (G4 read them). main none, G5 none, now none","command":"bash -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -c 'make -m \"aws-destroy\"'"}
+{"expect":"none","note":"S071 G6, gap, pinned (G6 keeps the window of 80 bytes): 40 flags do not fit in it (G4 read them). main none, G5 none, now none","command":"bash -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -c 'make -m \"aws-destroy\"'"}
+{"expect":"none","note":"S071 G6, gap, pinned (G6 keeps the window of 80 bytes): a flag of 90 bytes does not fit in it (G4 read it). main none, G5 none, now none","command":"bash -aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -c 'make -m \"aws-destroy\"'"}
