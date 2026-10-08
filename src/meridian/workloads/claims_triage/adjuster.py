@@ -45,12 +45,12 @@ from meridian.platform.common.http import (
     database_failure,
     error_answer,
 )
+from meridian.platform.common.runlease import ABANDONED_REASON
 from meridian.platform.common.telemetry import (
     mark_error,
     set_span_attributes,
     start_span,
 )
-from meridian.runtime.sweep import ABANDONED_REASON
 from meridian.workloads.claims_triage.adjuster_queue import (
     QUEUE_LIMIT,
     UNREADABLE_PROPOSAL_MARK,

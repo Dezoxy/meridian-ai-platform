@@ -16,15 +16,25 @@
 #          candidate made to fail and two with a response schema, with this
 #          az login and a throwaway PostgreSQL (needs Docker). Read-only
 #          in Azure apart from those calls (well under EUR 0.01).
-#   eval-record  SPENDS MONEY (about 60 chat calls, under EUR 0.50): the golden
-#          set and a variant prompt answered by the live models, judged by the
-#          judge, through the Model Gateway on this laptop; records the answers
-#          and rewrites the files under data/evaluation/ (S050). Same login and
-#          throwaway PostgreSQL as gateway-live; PYTEST_DB_CONTAINER and
-#          PYTEST_DB_PORT in the environment name the database container and
-#          port, PYTEST_REDIS_CONTAINER and PYTEST_REDIS_PORT those of the
-#          throwaway Redis that starts beside it (S066). Also one long answer
-#          under the output cap (T-45).
+#   eval-record  SPENDS MONEY (55 chat calls and EUR 0.12 as measured on
+#          2026-10-03; the gateway refuses a run past EUR 0.50 for each of the
+#          two tenants it charges): the golden set and a variant prompt answered
+#          by the live models, judged by the judge, through the Model Gateway on
+#          this laptop; records the answers and rewrites the files under
+#          data/evaluation/ (S050). Same login and throwaway PostgreSQL as
+#          gateway-live; PYTEST_DB_CONTAINER and PYTEST_DB_PORT in the
+#          environment name the database container and port,
+#          PYTEST_REDIS_CONTAINER and PYTEST_REDIS_PORT those of the throwaway
+#          Redis that starts beside it (S066). Also one long answer under the
+#          output cap (T-45).
+#   eval-injection-record  SPENDS MONEY (the cases the committed baseline says
+#          reach the model, 52 on 2026-10-07, about EUR 0.12 expected; the
+#          gateway refuses the run past EUR 0.50): the injection cases answered
+#          by the live model, no judge, through the Model Gateway on this
+#          laptop; writes the recording, the live report and its summary under
+#          data/evaluation/ (S071). Same login, throwaway PostgreSQL and Redis
+#          variables as eval-record; started by its own opt-in, so neither run
+#          starts the other.
 # Everything printed from az and Terraform is GUID-redacted (redact in common.sh).
 # Prints one PASS or FAIL line per smoke check and exits non-zero on any FAIL.
 set -euo pipefail
@@ -44,7 +54,7 @@ fail() {
 }
 
 usage() {
-  printf 'usage: %s <init|plan|apply|smoke|outputs|gateway-live|eval-record>\n' "$(basename "$0")" >&2
+  printf 'usage: %s <init|plan|apply|smoke|outputs|gateway-live|eval-record|eval-injection-record>\n' "$(basename "$0")" >&2
   exit 2
 }
 
@@ -366,7 +376,7 @@ cmd_eval_record() {
   [[ -z "${PYTEST_DB_PORT:-}" ]] || overrides+=("PYTEST_DB_PORT=${PYTEST_DB_PORT}")
   [[ -z "${PYTEST_REDIS_CONTAINER:-}" ]] || overrides+=("PYTEST_REDIS_CONTAINER=${PYTEST_REDIS_CONTAINER}")
   [[ -z "${PYTEST_REDIS_PORT:-}" ]] || overrides+=("PYTEST_REDIS_PORT=${PYTEST_REDIS_PORT}")
-  log "about 60 chat calls on the live models, under EUR 0.50; rewrites files under data/evaluation/ (synthetic text only)"
+  log "55 chat calls on the live models, EUR 0.12 as measured on 2026-10-03; the gateway refuses a run past EUR 0.50 for each of the two tenants it charges; rewrites files under data/evaluation/ (synthetic text only)"
   MERIDIAN_LIVE_AZURE=1 \
     MERIDIAN_EVAL_RECORD=1 \
     MERIDIAN_AZURE_OPENAI_ENDPOINTS="${endpoints}" \
@@ -375,6 +385,60 @@ cmd_eval_record() {
     PYTEST_WORKERS=0 \
     ${overrides[@]+"${overrides[@]}"} \
     PYTEST_ARGS="${EVAL_RECORD_TESTS} -s -q -p no:cacheprovider" 2>&1 |
+    redact | redact_account
+}
+
+# ── eval-injection-record ────────────────────────────────────────────────────
+# The injection cases the committed baseline says reached the model, answered by
+# the live model (S071), through the Model Gateway on this laptop: no judge.
+# Like eval-record the endpoints come from Terraform's outputs and the token from
+# this az login, and the output is filtered the same way. The one test writes
+# the recording, the live report and its summary under data/evaluation/ and
+# prints per call only the case, the tokens, the latency and the rate. It starts
+# only with its own variable beside MERIDIAN_LIVE_AZURE, so eval-record does not
+# start it and it does not start eval-record. One process (PYTEST_WORKERS=0).
+readonly EVAL_INJECTION_RECORD_TESTS='tests/meridian/test_injection_record.py::test_record_the_injection_cases_with_the_live_model'
+readonly EVAL_INJECTION_BASELINE=data/evaluation/claims-triage-injection-baseline.json
+# What one triage call cost at most in the golden run measured on 2026-10-03, in
+# EUR (the README's "at most EUR 0.0023 per claim"). The expected cost of the run
+# is this times the number of cases read from the baseline, so the figure stays
+# true when the baseline is made again and the count moves.
+readonly EVAL_INJECTION_EUR_PER_CASE=0.0023
+
+cmd_eval_injection_record() {
+  tf_init
+  local deployments endpoints cases expected
+  deployments="$(tf output -json openai_deployments 2>/dev/null)" ||
+    die "Terraform has no openai_deployments output; run 'make azure-apply' first"
+  endpoints="$(jq -ce 'with_entries(.key |= split("/")[0] | .value |= .endpoint) | select(length > 0)' \
+    <<<"${deployments}" 2>/dev/null)" ||
+    die "the openai_deployments output has no endpoints"
+  # The number of cases is read from the baseline now, so the line stays true
+  # after the baseline is made again; the figure of the day is the fallback.
+  if cases="$(jq -e '[.cases[] | select(.observed.model_asked == 1)] | length' \
+    "${TF_DIR}/../../${EVAL_INJECTION_BASELINE}" 2>/dev/null)" && [[ "${cases}" =~ ^[0-9]+$ ]]; then
+    expected="$(awk -v n="${cases}" -v c="${EVAL_INJECTION_EUR_PER_CASE}" \
+      'BEGIN { printf "%.2f", n * c }')"
+    cases="${cases} cases"
+  else
+    cases="the cases the baseline says reach the model, 52 on 2026-10-07"
+    expected=0.12
+  fi
+  # A caller who must not collide with another run names its own container and port.
+  local -a overrides=()
+  [[ -z "${PYTEST_DB_CONTAINER:-}" ]] || overrides+=("PYTEST_DB_CONTAINER=${PYTEST_DB_CONTAINER}")
+  [[ -z "${PYTEST_DB_PORT:-}" ]] || overrides+=("PYTEST_DB_PORT=${PYTEST_DB_PORT}")
+  [[ -z "${PYTEST_REDIS_CONTAINER:-}" ]] || overrides+=("PYTEST_REDIS_CONTAINER=${PYTEST_REDIS_CONTAINER}")
+  [[ -z "${PYTEST_REDIS_PORT:-}" ]] || overrides+=("PYTEST_REDIS_PORT=${PYTEST_REDIS_PORT}")
+  log "${cases} answered by the live model, about EUR ${expected} expected (EUR ${EVAL_INJECTION_EUR_PER_CASE} a case at most, measured 2026-10-03); the gateway refuses the run past EUR 0.50; writes files under data/evaluation/ (synthetic text only)"
+  MERIDIAN_LIVE_AZURE=1 \
+    MERIDIAN_EVAL_INJECTION_RECORD=1 \
+    MERIDIAN_AZURE_OPENAI_ENDPOINTS="${endpoints}" \
+    MERIDIAN_AZURE_TENANT_ID="${ARM_TENANT_ID}" \
+    make -C "${TF_DIR}/../.." --no-print-directory pytest-db \
+    PYTEST_WORKERS=0 \
+    ${overrides[@]+"${overrides[@]}"} \
+    PYTEST_ARGS="${EVAL_INJECTION_RECORD_TESTS} -s -q -p no:cacheprovider" 2>&1 |
     redact | redact_account
 }
 
@@ -404,6 +468,10 @@ case "$1" in
   eval-record)
     need_tools terraform az jq docker uv make
     cmd_eval_record
+    ;;
+  eval-injection-record)
+    need_tools terraform az jq docker uv make
+    cmd_eval_injection_record
     ;;
   *) usage ;;
 esac

@@ -133,7 +133,13 @@ def test_the_makefile_has_the_four_evaluation_targets_in_its_phony_list() -> Non
         line for line in MAKEFILE.splitlines() if line.startswith(".PHONY:")
     ).split()
 
-    for target in ("eval", "eval-compare", "eval-baseline", "eval-record"):
+    for target in (
+        "eval",
+        "eval-compare",
+        "eval-baseline",
+        "eval-record",
+        "eval-injection-record",
+    ):
         assert target in phony
         assert re.search(rf"^{target}:", MAKEFILE, re.MULTILINE)
 
@@ -213,12 +219,131 @@ def test_make_eval_record_runs_the_script_that_records_and_says_what_it_spends()
         MAKEFILE,
         re.MULTILINE,
     )
-    assert "about 60 chat calls, under EUR 0.50" in help_line
+    # The figures are the measured ones (S071): 55 chat calls and EUR 0.12 on
+    # 2026-10-03, and the ceiling the gateway holds for each tenant the run
+    # charges; the old "about 60 chat calls, under EUR 0.50" is gone.
+    assert "55 chat calls, EUR 0.12 as measured on 2026-10-03" in help_line
+    assert "EUR 0.50 for each of the two tenants" in help_line
+    assert "about 60" not in help_line
     assert "data/evaluation/" in help_line
+    assert help_line.endswith("(needs az login, Docker; the owner runs it)")
     assert re.search(r"^  eval-record\)$", foundation, re.MULTILINE)
     # The database container and port are the caller's to name.
     assert "PYTEST_DB_CONTAINER" in foundation
     assert "PYTEST_DB_PORT" in foundation
+
+
+FOUNDATION = (REPO_ROOT / "infra" / "terraform" / "foundation.sh").read_text(
+    encoding="utf-8"
+)
+
+
+def function_body(name: str) -> str:
+    return FOUNDATION.split(f"{name}() {{", 1)[1].split("\n}\n", 1)[0]
+
+
+def test_make_eval_injection_record_runs_the_script_and_says_what_it_spends() -> None:
+    (help_line,) = re.findall(
+        r"^## eval-injection-record\s+(.+)$", MAKEFILE, re.MULTILINE
+    )
+
+    assert re.search(
+        r"^eval-injection-record:\n\tinfra/terraform/foundation\.sh "
+        r"eval-injection-record$",
+        MAKEFILE,
+        re.MULTILINE,
+    )
+    assert help_line.startswith("SPENDS MONEY:")
+    assert help_line.endswith("(needs az login, Docker; the owner runs it)")
+    assert "52 on 2026-10-07" in help_line
+    assert "about EUR 0.12 expected" in help_line
+    assert "the gateway refuses the run past EUR 0.50" in help_line
+    assert "EUR 1.00" not in help_line
+    assert "no judge" in help_line
+    assert "data/evaluation" in help_line
+
+
+def test_the_script_has_the_injection_recording_as_a_case_and_a_function() -> None:
+    assert re.search(r"^  eval-injection-record\)$", FOUNDATION, re.MULTILINE)
+    assert "cmd_eval_injection_record\n" in FOUNDATION
+    assert "<init|plan|apply|smoke|outputs|gateway-live|eval-record|" in FOUNDATION
+    case = FOUNDATION.split("  eval-injection-record)\n", 1)[1].split(";;", 1)[0]
+    assert "need_tools terraform az jq docker uv make" in case
+    assert "cmd_eval_injection_record" in case
+
+
+def test_the_injection_recording_sets_both_opt_ins_and_runs_its_one_test() -> None:
+    recording = function_body("cmd_eval_injection_record")
+    (tests,) = re.findall(
+        r"^readonly EVAL_INJECTION_RECORD_TESTS='([^']+)'$", FOUNDATION, re.MULTILINE
+    )
+
+    assert "MERIDIAN_LIVE_AZURE=1" in recording
+    assert "MERIDIAN_EVAL_INJECTION_RECORD=1" in recording
+    # The golden recording's variable is not set, so neither run starts the other.
+    assert "MERIDIAN_EVAL_RECORD=1" not in recording
+    assert "MERIDIAN_EVAL_INJECTION_RECORD" not in function_body("cmd_eval_record")
+    assert "PYTEST_WORKERS=0" in recording
+    assert "${EVAL_INJECTION_RECORD_TESTS} -s -q" in recording
+    path, _, name = tests.partition("::")
+    assert (path, name) == (
+        "tests/meridian/test_injection_record.py",
+        "test_record_the_injection_cases_with_the_live_model",
+    )
+    assert f"def {name}(" in (REPO_ROOT / path).read_text(encoding="utf-8")
+    for variable in (
+        "PYTEST_DB_CONTAINER",
+        "PYTEST_DB_PORT",
+        "PYTEST_REDIS_CONTAINER",
+        "PYTEST_REDIS_PORT",
+    ):
+        assert f'[[ -z "${{{variable}:-}}" ]] || overrides+=' in recording
+
+
+def test_the_injection_recording_says_what_it_spends_in_the_scripts_words() -> None:
+    recording = function_body("cmd_eval_injection_record")
+    (line,) = [ln for ln in recording.splitlines() if ln.lstrip().startswith("log ")]
+
+    # The number of cases is read from the baseline at run time; the figure of
+    # the day is only the fallback for a baseline jq cannot read.
+    assert "model_asked == 1" in recording
+    assert "52 on 2026-10-07" in recording
+    assert "refuses the run past EUR 0.50" in line
+    assert "EUR 1.00" not in FOUNDATION
+    # The expected cost is the case count read from the baseline times a named,
+    # dated per-case figure, not a constant beside a count that moves (S071, L3).
+    assert "about EUR ${expected} expected" in line
+    assert "measured 2026-10-03" in line
+    assert "n * c" in recording
+    assert '-v c="${EVAL_INJECTION_EUR_PER_CASE}"' in recording
+    assert "about EUR 0.12 expected" not in line
+
+
+def test_the_per_case_figure_of_the_script_gives_the_expected_cost_of_52_cases() -> (
+    None
+):
+    (figure,) = re.findall(
+        r"^readonly EVAL_INJECTION_EUR_PER_CASE=(\d\.\d+)$", FOUNDATION, re.MULTILINE
+    )
+    comment = FOUNDATION.split("readonly EVAL_INJECTION_EUR_PER_CASE=", 1)[0]
+
+    # The figure is dated where it is named, and it is the README's measured
+    # maximum per claim.
+    assert "2026-10-03" in comment[-400:]
+    assert "0.0023" in (REPO_ROOT / "data/evaluation/README.md").read_text("utf-8")
+    assert f"{52 * float(figure):.2f}" == "0.12"
+    # The fallback, for a baseline jq cannot read, says the same figure.
+    assert "expected=0.12" in function_body("cmd_eval_injection_record")
+
+
+def test_the_figures_of_the_golden_recording_are_the_measured_ones() -> None:
+    recording = function_body("cmd_eval_record")
+    (line,) = [ln for ln in recording.splitlines() if ln.lstrip().startswith("log ")]
+
+    assert "55 chat calls" in line
+    assert "EUR 0.12 as measured on 2026-10-03" in line
+    assert "EUR 0.50 for each of the two tenants" in line
+    assert "about 60" not in FOUNDATION
 
 
 def test_the_recording_run_passes_the_redis_container_and_port_on_as_well() -> None:
@@ -254,6 +379,39 @@ def test_the_python_workflow_never_enables_a_live_or_recording_run() -> None:
     assert "MERIDIAN_LIVE_AZURE" not in WORKFLOW_TEXT
     assert "eval-record" not in WORKFLOW_TEXT
     assert "gateway-live" not in WORKFLOW_TEXT
+    # Nor the injection run's: its own variable, its own target (S071).
+    assert "MERIDIAN_EVAL_INJECTION_RECORD" not in WORKFLOW_TEXT
+    assert "eval-injection-record" not in WORKFLOW_TEXT
+
+
+PAID_NAMES = (
+    "eval-record",
+    "eval-injection-record",
+    "gateway-live",
+    "azure-smoke",
+    "MERIDIAN_EVAL_RECORD",
+    "MERIDIAN_EVAL_INJECTION_RECORD",
+    "MERIDIAN_LIVE_AZURE",
+)
+
+
+def test_no_workflow_file_names_a_paid_target_or_sets_an_opt_in_variable() -> None:
+    """All of them, not only the python workflow (the security review, section
+    8): a paid target or an opt-in variable anywhere under ``.github/workflows``
+    would let CI spend money. ``azure-smoke`` is held out with the paid ones
+    though it is cheap: no workflow signs in to Azure."""
+    workflows = sorted(
+        path
+        for pattern in ("*.yml", "*.yaml")
+        for path in (REPO_ROOT / ".github" / "workflows").glob(pattern)
+    )
+
+    assert len(workflows) >= 3
+    assert any(path.name == "python.yml" for path in workflows)
+    for path in workflows:
+        text = path.read_text(encoding="utf-8")
+        found = [name for name in PAID_NAMES if name in text]
+        assert found == [], f"{path.name} names {found}"
 
 
 # ── what the job costs can be read from a run (S057) ────────────────────────

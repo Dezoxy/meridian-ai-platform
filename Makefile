@@ -113,7 +113,7 @@ EVAL_INPUTS         := src config/registry data/synthetic data/evaluation/record
 
 STRUCTURIZR := docker run --rm -v "$(CURDIR)/$(ARCH_DIR):/w:ro"
 
-.PHONY: help validate inspect check docs test secret-scan view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db alerts eval eval-compare eval-baseline eval-record synthetic up deploy images helm-lint demo smoke gateway-upkeep grafana grafana-password cert-renew cluster-holder down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry aws-validate aws-scan aws-plan aws-apply aws-destroy gcp-validate gcp-scan aws-kubeadm-validate aws-kubeadm-scan gcp-kubeadm-validate gcp-kubeadm-scan azure-platform-validate azure-platform-scan
+.PHONY: help validate inspect check docs test secret-scan view export mermaid-views mermaid-render mermaid pdf clean lint pytest pytest-db alerts eval eval-compare eval-baseline eval-record eval-injection-record synthetic up deploy images helm-lint demo smoke gateway-upkeep grafana grafana-password cert-renew cluster-holder down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry aws-validate aws-scan aws-plan aws-apply aws-destroy gcp-validate gcp-scan aws-kubeadm-validate aws-kubeadm-scan gcp-kubeadm-validate gcp-kubeadm-scan azure-platform-validate azure-platform-scan
 .DEFAULT_GOAL := help
 
 ## help            list the targets
@@ -269,9 +269,13 @@ eval-baseline:
 	MERIDIAN_EVAL_INJECTION_SUMMARY=$(abspath $(EVAL_INJECTION_SUMMARY)) \
 	$(MAKE) pytest-db PYTEST_WORKERS=0 PYTEST_ARGS="$(EVAL_TEST) $(EVAL_INJECTION_TEST) -q"
 
-## eval-record     SPENDS MONEY: about 60 chat calls, under EUR 0.50, on the live Azure models, with the judge, to record the golden set's answers and a variant prompt's; rewrites files under data/evaluation/ (needs az login, Docker; the owner runs it)
+## eval-record     SPENDS MONEY: 55 chat calls, EUR 0.12 as measured on 2026-10-03 (the gateway refuses a run past EUR 0.50 for each of the two tenants it charges), on the live Azure models, with the judge, to record the golden set's answers and a variant prompt's; rewrites files under data/evaluation/ (needs az login, Docker; the owner runs it)
 eval-record:
 	infra/terraform/foundation.sh eval-record
+
+## eval-injection-record  SPENDS MONEY: the injection cases the baseline says reach the model (52 on 2026-10-07, about EUR 0.12 expected; the gateway refuses the run past EUR 0.50), answered by the live Azure model with no judge, to write their recording, live report and summary under data/evaluation/ (needs az login, Docker; the owner runs it)
+eval-injection-record:
+	infra/terraform/foundation.sh eval-injection-record
 
 ## registry        validate config/registry, compare it with the Terraform snapshot and check the generated schemas and the tool-server contracts under api/mcp
 registry:
