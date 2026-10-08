@@ -27,10 +27,20 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # The merge commit and its parents' tips: the step check diffs against HEAD^1.
+          fetch-depth: 2
       # The mechanical half of docs-sync, then the checker's and the harness's
       # own regression tests.
       - name: Check documentation against the tree
         run: make docs
+      # The title is untrusted text: it reaches the script through the environment
+      # only, never through the shell's command line.
+      - name: A step's pull request changes the step's file
+        if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: python3 scripts/check_pr_step.py
       - name: Tests
         run: make test
       - name: Bash guard regression cases
