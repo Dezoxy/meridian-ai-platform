@@ -11,19 +11,33 @@ usage error (exit status 4): a shard that silently kept the wrong tests, or all
 of them, is the failure this must not allow. A shard that keeps nothing ends
 with pytest's exit status 5.
 
+``MERIDIAN_TEST_SHARD_REPORT`` names a file the shard writes at collection, as
+JSON: ``shard``, ``shards``, ``collected`` (the tests collected before the
+selection), ``kept`` (the tests this shard keeps) and ``digest`` (the SHA-256,
+in hex, of the sorted node ids of everything collected before the selection,
+joined by newlines and encoded as UTF-8). CI's final job reads the four reports
+and refuses unless every digest and every total is the same and the kept counts
+add up to the total: that is the proof, on the runners, that the shards together
+are the whole suite. The variable without a shard selection is a usage error.
+
 This file is stdlib and pytest only: it is loaded before any fixture, and every
 test under ``tests/meridian`` and ``tests/synthetic`` loads it.
-``tests/meridian/test_test_sharding.py`` proves the shards are disjoint and
-together are the whole collection.
+``tests/meridian/test_test_sharding.py`` proves the selection on a synthetic
+list and the hook and the report on a small file.
 """
 
+import hashlib
+import json
 import os
 import zlib
+from collections.abc import Sequence
+from pathlib import Path
 
 import pytest
 
 SHARD_ENV = "MERIDIAN_TEST_SHARD"
 SHARDS_ENV = "MERIDIAN_TEST_SHARDS"
+REPORT_ENV = "MERIDIAN_TEST_SHARD_REPORT"
 
 
 def _whole_number(name: str, value: str) -> int:
@@ -54,14 +68,63 @@ def selection(environ: dict[str, str] | os._Environ[str]) -> tuple[int, int] | N
     return shard, shards
 
 
+def report_path(environ: dict[str, str] | os._Environ[str]) -> str | None:
+    """The file the shard reports to, or None when no report is asked for."""
+    if REPORT_ENV not in environ:
+        return None
+    path = environ[REPORT_ENV]
+    if not path:
+        raise pytest.UsageError(f"{REPORT_ENV} is set and names no file")
+    if selection(environ) is None:
+        raise pytest.UsageError(
+            f"{REPORT_ENV} asks for a shard's report, and neither {SHARD_ENV} "
+            f"nor {SHARDS_ENV} is set"
+        )
+    return path
+
+
 def shard_of(node_id: str, shards: int) -> int:
     """The shard (from 1) a test belongs to."""
     return zlib.crc32(node_id.encode("utf-8")) % shards + 1
 
 
+def in_shard(node_id: str, shard: int, shards: int) -> bool:
+    """Whether the test is the shard's: exactly its own, never "up to" it."""
+    return shard_of(node_id, shards) == shard
+
+
+def digest_of(node_ids: Sequence[str]) -> str:
+    """The SHA-256 (hex) of the sorted ids joined by newlines, as UTF-8."""
+    return hashlib.sha256("\n".join(sorted(node_ids)).encode("utf-8")).hexdigest()
+
+
+def write_report(
+    path: str, shard: int, shards: int, node_ids: Sequence[str], kept: int
+) -> None:
+    """Write the shard's report; whole or not at all, whichever worker is last.
+
+    Every pytest-xdist worker collects and selects, so each writes the same
+    content. A temporary file of the worker's own, moved into place, leaves no
+    half-written report to read.
+    """
+    report = {
+        "shard": shard,
+        "shards": shards,
+        "collected": len(node_ids),
+        "kept": kept,
+        "digest": digest_of(node_ids),
+    }
+    temporary = f"{path}.{os.getpid()}.tmp"
+    Path(temporary).write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    os.replace(temporary, path)
+
+
 def pytest_configure(config: pytest.Config) -> None:
     # Early, so a wrong value stops the run before 22,000 tests are collected.
     selection(os.environ)
+    report_path(os.environ)
 
 
 def pytest_collection_modifyitems(
@@ -71,8 +134,11 @@ def pytest_collection_modifyitems(
     if chosen is None:
         return
     shard, shards = chosen
-    kept = [item for item in items if shard_of(item.nodeid, shards) == shard]
-    dropped = [item for item in items if shard_of(item.nodeid, shards) != shard]
+    kept = [item for item in items if in_shard(item.nodeid, shard, shards)]
+    dropped = [item for item in items if not in_shard(item.nodeid, shard, shards)]
+    report = report_path(os.environ)
+    if report is not None:
+        write_report(report, shard, shards, [item.nodeid for item in items], len(kept))
     if dropped:
         config.hook.pytest_deselected(items=dropped)
     items[:] = kept

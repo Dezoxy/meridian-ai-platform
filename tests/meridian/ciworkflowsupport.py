@@ -2,7 +2,7 @@
 
 ``test_ci_config.py`` and ``test_ci_workflow_jobs.py`` read the same file; this
 module holds the reading so that neither repeats it. The workflow has one job
-for each of classify, static, tests, evaluation, docs-tests and python.
+for each of static, tests (a matrix of shards), evaluation and python.
 """
 
 import yaml
@@ -12,9 +12,8 @@ WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "python.yml"
 WORKFLOW_TEXT = WORKFLOW_PATH.read_text(encoding="utf-8")
 WORKFLOW = yaml.safe_load(WORKFLOW_TEXT)
 JOBS = WORKFLOW["jobs"]
-# The jobs that run the tests and need the whole toolchain and the services.
-TEST_JOB_NAMES = ("tests", "docs-tests")
-SERVICE_JOB_NAMES = ("tests", "docs-tests", "evaluation")
+# The jobs that run tests against the database and Redis service containers.
+SERVICE_JOB_NAMES = ("tests", "evaluation")
 
 
 def triggers() -> dict:

@@ -386,7 +386,7 @@ def test_the_workflow_installs_the_helm_version_the_readme_documents() -> None:
     ((laptop, linux),) = re.findall(
         r"^\| helm \| (v\d+\.\d+\.\d+) \| (v\d+\.\d+\.\d+) \|$", README, re.MULTILINE
     )
-    for job in ("static", "tests", "docs-tests"):
+    for job in ("static", "tests"):
         (setup,) = [
             s
             for s in workflow_steps(job)

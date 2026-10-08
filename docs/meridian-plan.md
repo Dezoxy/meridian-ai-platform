@@ -1169,6 +1169,7 @@ that day; the rest stand as their step recorded them.
 | The bypasses the reviews of the guard's added rules keep listing, none a regression (main gives none on each): a target split by quotes or built by a substitution (`make eval-"record"`, `make $(printf eval-rec)ord`, `make eval-{record,x}`, `make -m "aws-"apply`, `make azure-"apply"`); a target or a whole command in a file (`make $(cat t.txt)`, `xargs -a t.txt make`, a script written and then run by name, `set -a; . ./live.env`, a script the command names such as `python3 X.py` or `bash X.sh`); the flags variable with its target held elsewhere (`MAKEFLAGS="-- $T" make`, `T` set in an earlier call); the Azure make rule, which has no co-occurrence rule (`T=azure-apply; make $T`); the AWS option rule behind a prefix outside its tables (`stdbuf -oL`, `ionice`, `doas`, `systemd-run`, `eval make`, `\make`, a quoted `"make"`) or with the target in a loop or a variable; a raw request spelled `az re""st`, `"az" rest` or `a=az; $a rest`, or through `python3 -m azure.cli rest` or `subprocess.run(['az','rest'])`; the identity library through `from azure import identity`, `importlib`, `node` or `pwsh`, the classes `OnBehalfOf`, `AuthorizationCode`, `AzurePipelines` and `AzureApplication`, or a heredoc piped into an interpreter the heredoc pass does not know; main's older rules that cut at a separator inside a quote (`git commit --author="A;B" -n`, `kubectl get secret x -n "a;b" -o yaml`, `cat "a;b" .env`); and `parallel -m "…"` and `python3 -m "<quoted>"`, which main's own pass blanks as prose | S071 (the reviews of G3 to G6, 2026-10-07 and 08) | open; the third review listed file-then-run (a command that runs a file a session wrote, `set -a; . ./live.env` included) among the items to close before a paid run on this machine (the other, `${T:-…}`, is closed), and it is not built: the hook would have to open the files a command names (the design's note) | S071 (its paid half) |
 | The paid-target rule's false asks, measured by the third review and the re-check and accepted by the session as the price of co-occurrence (a false ask costs a click, a missed one costs money; the owner may overturn): any command that holds the word make and a paid target as words asks, wherever they stand (`rg -n "make eval-record" docs/`, `grep -rn "make gateway-live" docs`, `git log -S"make gateway-live"`, `gh pr create --body "… make eval-record"`, `make test && git add docs/operations/runbooks/gateway-live`, `make test PYTEST_ARGS="-k gateway-live"`, `echo gateway-live >> notes.txt && make docs`; 8 of the 34 daily shapes the review tried asked, all of this form; a commit message goes in with `-F` and so does not ask); the narrower rule for a default in a parameter expansion asks on `make ${T:-my-eval-record}` and `echo "${T:-eval-record}" && make docs`; and the raw-request and identity rules ask on a search whose quoted pattern names them (`grep -rn "az rest" docs`, `python3 -m pytest -k "DefaultAzureCredential"`). A search with the Grep tool asks nobody, and the review found no target of main's Makefile outside the paid ones that gained an ask | S071 (the third review and the fifth round's re-check, 2026-10-07 and 08) | open; accepted | S071 (its paid half) |
 | A quoted word after `env -S` (an empty string, a comment, an assignment or another prefix) hides the build tool behind it from the added AWS removal rule: `env -S '' make -m "aws-destroy"`, `env -S '# c' make …`, `env -S 'A=b' make …`, `env -S 'nice -n 5' make …`, `env -S 'sudo' make …`. The fifth round denied these forms and the sixth gives none, which is what main gives; the sixth round's check calls it a medium that is not weaker than main, and judges that a session almost certainly would not type it. Its suggested fix: add to the alternatives for `env` a `-S` followed by a quoted word (already masked to `'xxx'`) so that make after it stays the command word, at the cost of a deny on `env -S 'sh' make` (the stronger direction), reverse-checked against row 2841 so that `env -S x make` stays none. The check asked for it before the paid run; the session reads that as the next change of the hook and not as S071's paid model run, because the rule is the AWS removal rule and not one of the paid-model rules | S071 (the sixth round's check, 2026-10-08) | open; left open by the session's decision | S020 (the guard's rules for the Azure wrapper: the next change of the hook, with a security review of its own) |
+| The two evaluation tests run twice on every pull request: once in a shard, whichever the hash gives them, and once in the `evaluation` job, which exists because no shard is sure to hold both tests that write the reports. Together about 85 s of runner time. Not changed: the job is not the slowest, and a way to run them once (a shard that deselects them, or the gate reading a shard's reports) would make the gate depend on the split | S074 (CI speed, 2026-10-08) | open; low | S074 |
 
 ## Part C — Step details
 
@@ -15566,6 +15567,94 @@ a cluster.
   The three owner questions no longer wait. The step could not close: those
   rows are open, and the main session decides what to do with them.
 
+**CI speed (2026-10-08): the suite in four shards, the documents fast path
+built and removed, and the proof that the shards are the whole suite.**
+Branch `s074-ci-speed`, in two contracts: CI1 built the shards and the fast
+path, CI2 (this record) removed the fast path and wrote the fixes of the
+infrastructure review. Where a figure is from a run on GitHub it says so;
+nothing here was run on the cluster, no model was called, no migration and no
+fingerprint moved. The whole suite was not run locally, by the owner's decision
+of 2026-10-08 ("Affected tests, CI runs all"): the pull request's own run is the
+result.
+
+- **The owner's choice,** quoted: "Split suite + docs fast path
+  (Recommended)". Two parts: the suite in shards, and a smaller group of tests
+  for a pull request that changes documents alone. The second part is the one
+  removed below.
+- **What CI1 built.** The one job `python` became `classify`, `static`,
+  `tests` (a matrix of four shards), `evaluation`, `docs-tests` and a last job
+  `python`, the required check, which succeeds only on a closed truth table of
+  the others' results and on the combined coverage of the shards (the floor of
+  `pyproject.toml`, applied once). A test belongs to the shard its node id
+  hashes to (`tests/conftest.py`, `zlib.crc32`): by count, not by time. The
+  fast path was `classify` (a script that said whether every changed file was
+  on a closed allowlist of documents), `docs-tests` (the test files that name a
+  document, `tests/documents-group.txt`, which a test held complete) and the
+  verdict's second winning row.
+- **The numbers, measured on GitHub in pull request 139's own run
+  (2026-10-08).**
+
+| | Before | With four shards |
+|---|---|---|
+| The tests | 14 min 41 s in one job | 3 min 52 s to 4 min 50 s a shard (5,606 to 5,652 passed each) |
+| A job | 15 min 36 s | 4 min 26 s to 5 min 26 s |
+| Pull request to a green `python` | about 16 min | about 6 min |
+
+  `classify` took 7 s, `static` 30 s, `evaluation` 1 min 17 s and `python`
+  15 s; the combined coverage was 99.14 % from four files. The shard that held
+  the slowest job was shard 1, which held CI1's own partition test, a test that
+  collected the suite five times.
+- **The fast path is removed, whole.** The documents group is 207 files and 44 %
+  of the suite's tests in one job, pro rata about seven minutes, so the fast
+  path would have been slower than the four shards it replaces. It was also the
+  only part of the change that could skip a test, and its list was kept by hand
+  (two tests of `test_documents_group.py` failed on CI1's tip because `main`
+  had gained test files that name a document). The session decided this after
+  the advisor, with these numbers; the owner is told with this record, and may
+  ask for a sharded documents path (about three minutes), at the price of a
+  hand-kept list that can miss a test. Removed: the `classify` and `docs-tests`
+  jobs, `scripts/ci_classify.py` and its test, `tests/documents-group.txt` and
+  its test, the Makefile's `pytest-documents`, and every sentence about
+  documents-only pull requests.
+- **What CI2 built instead.** The matrix is the literal list `[1, 2, 3, 4]`
+  and `TEST_SHARD_COUNT` the one variable the shards and `python` read; raising
+  the count is two edits in one file, and a test fails on one without the
+  other. `python` needs `static`, `tests` and `evaluation` and succeeds on
+  exactly one combination, all three `success`; the unit test walks every
+  combination of the results GitHub can give. Each shard writes, when
+  `MERIDIAN_TEST_SHARD_REPORT` names a file, a report (the shard, the count,
+  the tests collected before the selection, the tests kept and the SHA-256 of
+  the sorted list of node ids) and uploads it with its coverage data; `python`
+  refuses unless there is one report for each shard, every digest and every
+  total is the same and the kept counts add up to the total, and it prints the
+  total and the four counts. The partition test that collected the suite five
+  times is replaced by a test of the selection function on 6,000 synthetic ids
+  (disjoint and complete for counts 1 to 8, no shard of four empty), the tests
+  that run pytest on a small file, and one that the report holds what is
+  written above; no test in the suite collects the whole suite now.
+- **The review.** An infrastructure review of CI1 (2026-10-08): verdict "merge
+  with fixes", no critical and no high finding, three medium and four low. M1
+  (the coverage steps ran only on an output of an earlier step, which a missing
+  `$GITHUB_OUTPUT` would have left unset, so they would have been skipped and
+  `python` green): closed, the steps are unconditional and the output is gone.
+  M2 (nothing proved on GitHub that the shards are the whole suite): closed by
+  the reports. M3 (a re-run might meet its own earlier artifact): closed,
+  `overwrite: true` with a comment. L3 (a whitespace change in the Makefile's
+  `## alerts` help line): closed, that line is `main`'s bytes. L1, L2 and L4
+  were about the classifier and fell away with it.
+- **The advisor was consulted twice:** before CI1's contract, and after the
+  first run on GitHub. The second consultation changed the fast path's fate
+  (removed), the partition test (replaced by the selection test and the
+  reports) and the matrix (a literal list).
+- **Not seen.** `python` red on GitHub from a failing test (the main session
+  shows it on a throwaway branch before the merge), a cancelled run, and a
+  re-run of a single failed shard. The reports were seen only in tests on a
+  small file and in the unit tests of the script; a run on GitHub is their
+  first real result.
+- **One backlog row**, home S074: the two evaluation tests run twice, once in a
+  shard and once in `evaluation`, about 85 s of runner time.
+- **Plan version of this part:** PLAN-VERSION
+
 ### S068 — Database upkeep and retention
 **Status:** done · **Started:** 2026-10-06 · **Finished:** 2026-10-07
 **Goal:** rows of the platform's insert-only audit table and of the Model
@@ -23367,3 +23456,22 @@ row.
   out for the owner with the session's recommendation (keep the prompt). The
   whole suite was not run locally, by the owner's decision of 2026-10-08
   ("Affected tests, CI runs all"): the pull request's own run is its result.
+- **PLAN-VERSION, 2026-10-08:** S074, CI speed (still `doing`): the owner chose
+  "Split suite + docs fast path (Recommended)"; the suite runs in four shards
+  by a hash of the test id and the required check `python` combines their
+  coverage and applies the floor once. Measured on GitHub in pull request 139:
+  the tests 14 min 41 s in one job against 3 min 52 s to 4 min 50 s a shard, a
+  pull request to a green `python` about 16 min against about 6. The documents
+  fast path was built and then removed, because the documents group is 44 % of
+  the suite's tests, about seven minutes in one job, slower than the shards,
+  and its hand-kept list could miss a test; the owner may ask for a sharded
+  documents path (about three minutes) at that price. `python` now needs
+  `static`, `tests` and `evaluation` and succeeds on exactly one combination;
+  each shard writes a report (counts and a digest of the full list of test ids)
+  and `python` refuses unless the four agree and add up to the whole suite. The
+  infrastructure review's three medium findings are closed (unconditional
+  coverage steps, the reports, `overwrite: true` on the upload) and the
+  partition test that collected the suite five times is replaced by a test of
+  the selection on 6,000 synthetic ids. Not seen on GitHub: `python` red from a
+  failing test, a cancelled run, a re-run of one shard. One backlog row (the
+  evaluation tests run twice, about 85 s). The whole suite was not run locally.

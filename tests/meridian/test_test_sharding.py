@@ -3,40 +3,60 @@
 ``MERIDIAN_TEST_SHARD`` (1-based) out of ``MERIDIAN_TEST_SHARDS`` keeps the
 tests whose node id hashes to it. The point of the design is that the shards
 are disjoint and together are exactly the whole suite: a test that ran in no
-shard would be a test CI never ran, and the required check would say so only if
-something looked. The partition test below is that look, over the whole
-collection and with the shard count the workflow holds.
+shard would be a test CI never ran. No test here collects the whole suite. The
+function that decides is proved on a synthetic list of some thousands of node
+ids, the hook on a small real file, and the real suite is checked on every CI
+run by ``MERIDIAN_TEST_SHARD_REPORT``: each shard writes the number of tests it
+collected, the number it kept and a digest of the full list, and the final job
+refuses a set of reports that do not agree (``scripts/ci_python_verdict.py``).
 
 Each run is a subprocess with the sharding variables set for it alone, and with
 coverage's and make's variables taken out, so the run that executes this test
-(a shard itself, under coverage) cannot change what a collection holds.
+(a shard itself, under coverage, with a report of its own to write) cannot
+change what a collection holds or overwrite its own report.
 """
 
+import hashlib
+import importlib.util
+import json
 import os
 import subprocess
 import sys
 from collections.abc import Mapping
+from pathlib import Path
+from types import ModuleType
 
 import pytest
-from ciworkflowsupport import WORKFLOW
 from servicesupport import REPO_ROOT
 
 SHARD = "MERIDIAN_TEST_SHARD"
 SHARDS = "MERIDIAN_TEST_SHARDS"
+REPORT = "MERIDIAN_TEST_SHARD_REPORT"
 # A small, quick collection for the usage errors.
 SMALL = "tests/synthetic/test_oracle.py"
 USAGE_ERROR = 4
 NO_TESTS = 5
-# The one number of shards, held by the workflow (its top-level env): the
-# partition below is proved for the number CI runs.
-SHARD_COUNT = int(WORKFLOW["env"]["TEST_SHARD_COUNT"])
+
+
+def load_conftest() -> ModuleType:
+    # The module the hook lives in, loaded under a name of its own: it is stdlib
+    # and pytest only, so a second copy beside the one pytest loaded is harmless.
+    spec = importlib.util.spec_from_file_location(
+        "sharding_conftest", REPO_ROOT / "tests" / "conftest.py"
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def clean_environment(extra: Mapping[str, str]) -> dict[str, str]:
     kept = {
         key: value
         for key, value in os.environ.items()
-        if key not in (SHARD, SHARDS, "COVERAGE", "PYTEST_ARGS", "COVERAGE_FILE")
+        if key
+        not in (SHARD, SHARDS, REPORT, "COVERAGE", "PYTEST_ARGS", "COVERAGE_FILE")
         and not key.startswith(("COV_CORE", "MAKEFLAGS", "MFLAGS", "PYTEST_XDIST"))
     }
     return {**kept, **extra}
@@ -134,26 +154,151 @@ def test_the_same_test_lands_in_the_same_shard_in_every_run() -> None:
     assert first == second
 
 
-def test_the_shards_are_disjoint_and_together_are_the_whole_suite() -> None:
-    # About 90 s: five collections of the suite. Its name was chosen so that its
-    # hash puts it in shard 1 with four shards, not in shard 3 with the slowest
-    # tests (S074); only the node id decides, and a rename moves it.
-    whole = node_ids(collect({}))
+def synthetic_node_ids(count: int) -> list[str]:
+    # The shape of the suite's ids: a file, a test, sometimes a parameter.
+    return [
+        f"tests/meridian/area_{number % 83}/test_unit_{number % 211}.py"
+        f"::test_case_{number}" + (f"[param-{number}]" if number % 3 else "")
+        for number in range(count)
+    ]
+
+
+@pytest.mark.parametrize("shards", range(1, 9))
+def test_the_selection_makes_disjoint_shards_that_are_the_whole_list(
+    shards: int,
+) -> None:
+    # The function the hook decides with, on a list the size of a real
+    # collection's thousands, for every count from 1 to 8. A shard that kept
+    # more than its own (a comparison that is not an equality) overlaps.
+    conftest = load_conftest()
+    ids = synthetic_node_ids(6000)
+    assert len(ids) == len(set(ids))
+
+    chosen = [
+        [i for i in ids if conftest.in_shard(i, number, shards)]
+        for number in range(1, shards + 1)
+    ]
+
+    assert sum(len(part) for part in chosen) == len(ids)
+    assert set().union(*chosen) == set(ids)
+    for number, part in enumerate(chosen, start=1):
+        assert all(conftest.shard_of(i, shards) == number for i in part)
+
+
+def test_no_shard_of_four_is_empty_and_none_is_far_from_a_fair_share() -> None:
+    conftest = load_conftest()
+    ids = synthetic_node_ids(6000)
+
+    sizes = [
+        sum(conftest.in_shard(i, number, 4) for i in ids) for number in range(1, 5)
+    ]
+
+    assert all(sizes), sizes
+    # Balance by count is the design; a shard far from a fair share would mean
+    # the hash is not spreading the ids.
+    assert all(0.9 * 1500 < size < 1.1 * 1500 for size in sizes), sizes
+
+
+def test_the_shards_of_a_real_file_are_disjoint_and_together_are_the_file() -> None:
+    # The hook itself, on one small file and three shards: the last shard is the
+    # one a comparison that keeps "up to" its number would get wrong.
+    whole = node_ids(collect({}, SMALL))
     shards = [
-        node_ids(collect({SHARD: str(number), SHARDS: str(SHARD_COUNT)}))
-        for number in range(1, SHARD_COUNT + 1)
+        node_ids(collect({SHARD: str(number), SHARDS: "3"}, SMALL))
+        for number in (1, 2, 3)
     ]
 
     assert len(whole) == len(set(whole)), "a node id is collected twice"
-    seen: set[str] = set()
-    for number, ids in enumerate(shards, start=1):
-        assert ids, f"shard {number} is empty"
-        assert not seen & set(ids), f"shard {number} repeats a test of another shard"
-        seen |= set(ids)
     assert sum(len(ids) for ids in shards) == len(whole)
-    assert seen == set(whole)
-    # Balance by count is the design; a shard far from a fair share would mean
-    # the hash is not spreading the ids.
-    fair = len(whole) / SHARD_COUNT
-    for number, ids in enumerate(shards, start=1):
-        assert 0.8 * fair < len(ids) < 1.2 * fair, (number, len(ids), fair)
+    assert set().union(*map(set, shards)) == set(whole)
+
+
+def digest_of(ids: list[str]) -> str:
+    return hashlib.sha256("\n".join(sorted(ids)).encode("utf-8")).hexdigest()
+
+
+def test_the_report_holds_the_shard_the_counts_and_the_digest_of_the_full_list(
+    tmp_path: Path,
+) -> None:
+    whole = node_ids(collect({}, SMALL))
+    report = tmp_path / "shard-2.report.json"
+    done = collect({SHARD: "2", SHARDS: "3", REPORT: str(report)}, SMALL)
+    kept = node_ids(done)
+
+    written = json.loads(report.read_text(encoding="utf-8"))
+    assert written == {
+        "shard": 2,
+        "shards": 3,
+        "collected": len(whole),
+        "kept": len(kept),
+        "digest": digest_of(whole),
+    }
+    assert 0 < written["kept"] < written["collected"]
+    assert not list(tmp_path.glob("*.tmp")), "a temporary file was left"
+
+
+def test_the_report_is_the_same_under_parallel_workers(tmp_path: Path) -> None:
+    # CI runs the shard with four workers, each of which collects and selects,
+    # so each writes the file. This is a real run, not a collection: xdist
+    # starts no worker under --collect-only. The content is the same as a
+    # single process gives, the run passes, and no temporary file is left.
+    whole = node_ids(collect({}, SMALL))
+    alone = tmp_path / "alone.report.json"
+    kept = node_ids(collect({SHARD: "2", SHARDS: "3", REPORT: str(alone)}, SMALL))
+    report = tmp_path / "shard-2.report.json"
+    done = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-n",
+            "2",
+            "-p",
+            "no:cacheprovider",
+            SMALL,
+        ],
+        cwd=REPO_ROOT,
+        env=clean_environment({SHARD: "2", SHARDS: "3", REPORT: str(report)}),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert done.returncode == 0, done.stdout[-2000:] + done.stderr[-2000:]
+    assert "bringing up nodes" in done.stdout
+    written = json.loads(report.read_text(encoding="utf-8"))
+    assert written == json.loads(alone.read_text(encoding="utf-8"))
+    assert written["digest"] == digest_of(whole)
+    assert written["collected"] == len(whole)
+    assert written["kept"] == len(kept)
+    assert f"{len(kept)} passed" in done.stdout
+    assert sorted(path.name for path in tmp_path.iterdir()) == [
+        "alone.report.json",
+        "shard-2.report.json",
+    ]
+
+
+@pytest.mark.parametrize(
+    "environment",
+    [
+        {REPORT: "report.json"},
+        {REPORT: ""},
+    ],
+)
+def test_a_report_without_a_shard_selection_or_without_a_name_is_a_usage_error(
+    environment: dict[str, str],
+) -> None:
+    # A report that nothing writes would be missing at the end, but the run that
+    # asked for it should not spend its time first.
+    done = collect(environment, SMALL)
+
+    assert done.returncode == USAGE_ERROR, done.stdout + done.stderr
+    assert REPORT in done.stderr + done.stdout
+
+
+def test_a_report_that_cannot_be_written_fails_the_run(tmp_path: Path) -> None:
+    report = tmp_path / "absent" / "shard-1.report.json"
+    done = collect({SHARD: "1", SHARDS: "2", REPORT: str(report)}, SMALL)
+
+    assert done.returncode not in (0, NO_TESTS), done.stdout + done.stderr

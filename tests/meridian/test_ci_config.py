@@ -710,25 +710,20 @@ def terraform_step(job: str = "tests") -> dict:
 
 
 def test_the_workflow_installs_terraform_before_the_tests_without_its_wrapper() -> None:
-    # Both jobs that run tests which call terraform: the shards and the
-    # documents group (the group holds the modules' tests).
-    for job, tests_step in (
-        ("tests", "Tests"),
-        ("docs-tests", "Tests that read documents"),
-    ):
-        steps = JOBS[job]["steps"]
-        setup = terraform_step(job)
-        (run,) = [s for s in steps if s.get("name") == tests_step]
+    # The job that runs the tests, which call terraform: the shards.
+    steps = JOBS["tests"]["steps"]
+    setup = terraform_step("tests")
+    (run,) = [s for s in steps if s.get("name") == "Tests"]
 
-        assert re.fullmatch(r"hashicorp/setup-terraform@[0-9a-f]{40}", setup["uses"])
-        assert steps.index(setup) < steps.index(run)
-        # One pin: the step reads the workflow's value. The tests read the
-        # program's own output, so the wrapper is off, and nothing else is given
-        # to the action (no credential, no hostname, no token).
-        assert setup["with"] == {
-            "terraform_version": "${{ env.TERRAFORM_VERSION }}",
-            "terraform_wrapper": False,
-        }
+    assert re.fullmatch(r"hashicorp/setup-terraform@[0-9a-f]{40}", setup["uses"])
+    assert steps.index(setup) < steps.index(run)
+    # One pin: the step reads the workflow's value. The tests read the
+    # program's own output, so the wrapper is off, and nothing else is given
+    # to the action (no credential, no hostname, no token).
+    assert setup["with"] == {
+        "terraform_version": "${{ env.TERRAFORM_VERSION }}",
+        "terraform_wrapper": False,
+    }
 
 
 def test_the_workflow_runs_no_terraform_command_of_its_own() -> None:
