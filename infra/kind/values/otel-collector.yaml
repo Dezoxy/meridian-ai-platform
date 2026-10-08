@@ -6,8 +6,17 @@
 #
 # The gRPC receiver (4317) is closed: nothing but smoke's telemetrygen used it,
 # and that now sends over HTTP too. The collector's own hops to Tempo, Prometheus
-# and Loki stay clear text: they are inside `observability`, and T-90 names the
-# hop from the services to the collector.
+# and Loki were clear text: they are inside `observability`, and T-90 names the
+# hop from the services to the collector. Since S072 all three are TLS with the
+# collector's client certificate: Tempo's receiver (contract M2), Loki's gateway
+# (contract M3) and Prometheus's gateway (contract M4).
+#
+# up.sh gives the pod two annotations, the SHA-256 of the client certificate and
+# of the authority's certificate (`podAnnotations`, set by --set-string on the
+# release), so a `make up` that changed either rolls the pod. Without them a
+# re-issued client certificate whose SUBJECT changed (the gateways admit a write
+# from one common name only) reached the exporters only at the next reload
+# interval, and the writes of those minutes were refused and lost (run R16).
 #
 # The server certificate is the Secret otel-collector-tls, which cert-manager
 # makes from the Certificate in manifests/telemetry-ca.yaml (up.sh waits for it
@@ -79,14 +88,28 @@ serviceAccount:
   automountServiceAccountToken: false
 
 # A directory mount, not a subPath: a subPath never sees the renewed Secret.
+#
+# The second Secret, otel-collector-client-tls, is the collector's CLIENT
+# certificate (S072, contract M1; the Certificate is in manifests/telemetry-ca.yaml
+# and up.sh waits for it before this release). Since contract M2 the exporter to
+# Tempo presents it, since contract M3 the exporter to Loki's gateway does and
+# since contract M4 the exporter to Prometheus's gateway does. Its ca.crt is also
+# what verifies Tempo and the two gateways.
 extraVolumes:
   - name: tls
     secret:
       secretName: otel-collector-tls
       defaultMode: 288 # 0440
+  - name: client-tls
+    secret:
+      secretName: otel-collector-client-tls
+      defaultMode: 288 # 0440
 extraVolumeMounts:
   - name: tls
     mountPath: /etc/otel-collector/tls
+    readOnly: true
+  - name: client-tls
+    mountPath: /etc/otel-collector/client-tls
     readOnly: true
 
 config:
@@ -114,13 +137,48 @@ config:
     debug: null
     otlp_grpc/tempo:
       endpoint: tempo.observability.svc.cluster.local:4317
+      # TLS with a client certificate (S072, contract M2): Tempo's receiver
+      # serves a certificate of the telemetry authority and asks for one. The
+      # authority verifies Tempo, from the ca.crt of the client Secret (which a
+      # CA Issuer of cert-manager writes there: expected, seen only on the
+      # cluster), and the pair is the collector's client certificate. The same
+      # reload interval and floor as the receiver above.
       tls:
-        insecure: true
+        ca_file: /etc/otel-collector/client-tls/ca.crt
+        cert_file: /etc/otel-collector/client-tls/tls.crt
+        key_file: /etc/otel-collector/client-tls/tls.key
+        reload_interval: 5m
+        min_version: "1.3"
     # otlp_http appends /v1/metrics and /v1/logs to the endpoint.
+    # Metrics go to Prometheus's gateway (S072, contract M4), not to Prometheus:
+    # Prometheus's own port takes connections from the gateway alone. The gateway
+    # answers 403 on the OTLP receiver's path unless the client certificate
+    # verified against the telemetry authority and carries the collector's common
+    # name, so the same block as the other two exporters (the authority verifies
+    # the gateway, from the ca.crt of the client Secret; the pair is the
+    # collector's client certificate; the same reload interval and floor).
     otlp_http/prometheus:
-      endpoint: http://kube-prometheus-stack-prometheus.observability.svc.cluster.local:9090/api/v1/otlp
+      endpoint: https://prometheus-gateway.observability.svc.cluster.local:8443/api/v1/otlp
+      tls:
+        ca_file: /etc/otel-collector/client-tls/ca.crt
+        cert_file: /etc/otel-collector/client-tls/tls.crt
+        key_file: /etc/otel-collector/client-tls/tls.key
+        reload_interval: 5m
+        min_version: "1.3"
+    # Logs go to Loki's gateway (S072, contract M3), not to Loki: Loki's own port
+    # takes connections from the gateway alone. The gateway answers 403 on /otlp
+    # unless the client certificate verified against the telemetry authority, so
+    # the same block as Tempo's exporter above (the authority verifies the
+    # gateway, from the ca.crt of the client Secret; the pair is the collector's
+    # client certificate; the same reload interval and floor).
     otlp_http/loki:
-      endpoint: http://loki.observability.svc.cluster.local:3100/otlp
+      endpoint: https://loki-gateway.observability.svc.cluster.local:8443/otlp
+      tls:
+        ca_file: /etc/otel-collector/client-tls/ca.crt
+        cert_file: /etc/otel-collector/client-tls/tls.crt
+        key_file: /etc/otel-collector/client-tls/tls.key
+        reload_interval: 5m
+        min_version: "1.3"
   service:
     pipelines:
       traces:

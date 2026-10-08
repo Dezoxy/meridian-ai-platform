@@ -61,3 +61,41 @@ dynamic meridian "ClaimsApproval" "What happens when an adjuster decides on a pa
     meridian.runtime -> meridian.platformDb "Ends the run, writes its audit event and deletes its checkpoints"
     autoLayout lr
 }
+
+// Inside one container. `include *` also draws the arrows between the
+// neighbours, which the Containers view has; they are excluded so that every
+// arrow here starts or ends at a component.
+component meridian.runtime "RuntimeComponents" "Which responsibilities sit inside the Agent Runtime, and which of them is the only way out to a model, a tool and the database?" {
+    include *
+    exclude meridian.registry
+    exclude "meridian.claimsApp -> meridian.platformDb"
+    exclude "meridian.gateway -> meridian.platformDb"
+    exclude "meridian.policyMcp -> meridian.platformDb"
+    exclude "meridian.knowledgeMcp -> meridian.platformDb"
+    exclude "meridian.claimsMcp -> meridian.platformDb"
+    exclude "meridian.knowledgeMcp -> meridian.gateway"
+    autoLayout tb 300 150
+}
+
+// Inside the database: its schemas, and who reads and writes which. Two views,
+// because every service writes the audit trail and those six arrows would
+// cross the rest. Each selects its arrows by a tag of data.dsl. The tall
+// rank separation keeps a service's arrow from passing through its
+// neighbours: at 300 several did.
+component meridian.platformDb "DataOwnership" "Which service owns which schema of the Platform Database, and which reads and writes cross into another service's schema?" {
+    include *
+    exclude meridian.platformDb.auditSchema
+    exclude "relationship.tag!=SchemaGrant"
+    autoLayout tb 1600 100
+}
+
+// Without the gateway schema, whose expiry functions delete old audit events:
+// with it the layout put the services beside the database and their arrows
+// through one another. The model has that arrow; DataOwnership shows the
+// gateway's upkeep job running those functions.
+component meridian.platformDb "AuditTrail" "Which services write the audit trail, and what reads it?" {
+    include "->meridian.platformDb.auditSchema->"
+    exclude meridian.platformDb.gatewaySchema
+    exclude "relationship.tag!=AuditTrail"
+    autoLayout tb 600 100
+}

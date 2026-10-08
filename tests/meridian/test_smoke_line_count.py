@@ -3,14 +3,15 @@
 The documents say how many PASS lines a healthy ``make smoke`` prints, and
 ``test_smoke_alert_rules.py`` pins that number (``SMOKE_LINES_AFTER_DEPLOY``) in
 them. Here the number is tied to ``infra/kind/smoke.sh``: the sum of what each
-check prints when everything is as it should be. Of the eleven checks, eight have
+check prints when everything is as it should be. Of the twelve checks, nine have
 at least one harness of their own that runs the function in bash against stubs:
 the database (its stores, and its policy's address line), telemetry (the round
 trip, and the two TLS lines that open it), the cost panel, the sweep (the Job's
 line, and the findings' apart), the network
 policy (four lines, and the collector's and the rate store's apart), service
 identity, the certificate
-policy (the policy, and the refused request apart) and the alert rules. Three
+policy (the policy, and the refused request apart), the alert rules and the
+telemetry stores (S072, M3b). Three
 have none (the edge, the tools, the adjuster pages), and the pgvector lines of
 the database check have none either: their count is the number of ``pass`` calls
 in the function's source (times the databases the loop names). There is no
@@ -46,6 +47,7 @@ from test_smoke_network_rate_store import run_rate_store_check
 from test_smoke_stores import run_stores_check
 from test_smoke_sweep_findings import healthy_sweep_findings_lines
 from test_smoke_telemetry import run_telemetry_check
+from test_smoke_telemetry_stores import run_check as run_telemetry_stores_check
 from test_smoke_telemetry_tls import healthy_ca_lines, healthy_clear_text_lines
 
 pytestmark = requires_jq
@@ -128,6 +130,9 @@ def printed(tmp_path_factory: pytest.TempPathFactory) -> dict[str, int]:
         + all_pass(run_refused_request_check(fresh()).lines)
         + all_pass(healthy_certificate_lines(fresh())),
         "check_alert_rules": all_pass(run_alert_rules(fresh())),
+        # Five lines since S072 (M3b): the refusals of Loki's gateway, Tempo's
+        # receiver and Loki's own port, and the two certificates served.
+        "check_telemetry_stores": all_pass(run_telemetry_stores_check(fresh())[0]),
     }
 
 

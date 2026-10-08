@@ -20,16 +20,28 @@ KIND_DIR = REPO_ROOT / "infra" / "kind"
 SERVICES_POLICY = "meridian-services"
 CA_POLICY = "meridian-services-ca"
 DENY_POLICY = "meridian-deny-unlisted"
-# The two policies of the collector's own authority in `observability` (S063,
-# manifests/telemetry-ca.yaml): its CA certificate's and the collector's.
+# The three policies of the collector's own authority in `observability` (S063,
+# manifests/telemetry-ca.yaml): its CA certificate's, the collector's server
+# certificate's and, since S072 (contract M1), the collector's client certificate's.
 AUTHORITY_POLICY = "telemetry-ca"
 COLLECTOR_POLICY = "otel-collector"
+COLLECTOR_CLIENT_POLICY = "otel-collector-client"
+# Tempo's receiver's server certificate (S072, contract M2), same authority.
+TEMPO_RECEIVER_POLICY = "tempo-receiver"
+# The server certificate of Loki's gateway (S072, contract M3), same authority.
+LOKI_GATEWAY_POLICY = "loki-gateway"
+# The server certificate of Prometheus's gateway (S072, contract M4), same authority.
+PROMETHEUS_GATEWAY_POLICY = "prometheus-gateway"
 POLICY_NAMES = {
     SERVICES_POLICY,
     CA_POLICY,
     DENY_POLICY,
     AUTHORITY_POLICY,
     COLLECTOR_POLICY,
+    COLLECTOR_CLIENT_POLICY,
+    TEMPO_RECEIVER_POLICY,
+    LOKI_GATEWAY_POLICY,
+    PROMETHEUS_GATEWAY_POLICY,
 }
 
 
@@ -68,6 +80,11 @@ def request_of(certificate: dict, namespace: str | None = None) -> dict:
         "usages": spec.get("usages", []),
         "isCA": spec.get("isCA", False),
         "commonName": spec.get("commonName", ""),
+        # A `subject:` block (organizations, countries, ...): none of Meridian's
+        # Certificates has one (contract M4b), because the gateways compare the
+        # whole subject, `$ssl_client_s_dn`, with `CN=otel-collector-client`, and
+        # an organization would make every write a 403.
+        "subject": spec.get("subject", {}),
         # cert-manager copies the Certificate's spec.duration to the request
         # as it is (requestmanager_controller.go at v1.21.2: `Duration:
         # crt.Spec.Duration`) and its defaults set no duration, so a
@@ -104,6 +121,15 @@ def common_name_ok(rule: dict | None, common_name: str) -> bool:
     return not common_name or wildcard(rule["value"], common_name)
 
 
+def subject_ok(rule: dict | None, subject: dict) -> bool:
+    """approver-policy's ``allowed.subject`` (organizations, countries, ...; recalled
+    from its CRD, as a field that is left out is "deny all"): no policy of this
+    repository sets one, so a request that carries a subject block is not
+    permitted, and the model reads no rule it has no policy to test."""
+    assert rule is None, "no policy sets allowed.subject: the model reads none"
+    return not any(subject.values())
+
+
 def never_decides(policy: dict, request: dict) -> bool:
     """constraints/evaluator.go at approver-policy v0.28.0: with maxDuration
     set and no duration in the request, ``request.Spec.Duration.String()`` is
@@ -129,6 +155,7 @@ def allows(policy: dict, request: dict) -> bool:
         and values_ok(allowed.get("ipAddresses"), request["ipAddresses"])
         and values_ok(allowed.get("emailAddresses"), request["emailAddresses"])
         and common_name_ok(allowed.get("commonName"), request["commonName"])
+        and subject_ok(allowed.get("subject"), request.get("subject", {}))
         and (allowed.get("isCA", False) or not request["isCA"])
         and set(request["usages"]) <= set(allowed.get("usages", []))
         and within
