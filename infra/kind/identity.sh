@@ -14,8 +14,9 @@
 #
 # There is no command that removes the add-on. Turning the switch off does not
 # remove it either; the README ("The sign-in issuer") says how a person or a session
-# removes the namespace by hand. Written and tested without a cluster; not run on
-# one yet.
+# removes the namespace by hand. Tested without a cluster, and run on kind once
+# (run KR1, 2026-10-08, the first install only); the README lists what that run did
+# not show.
 #
 # `up` does, in this order. Every check that only READS runs first, and nothing
 # changes on the cluster until the last of them has passed:

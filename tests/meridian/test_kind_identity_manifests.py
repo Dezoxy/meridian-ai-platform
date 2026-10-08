@@ -12,7 +12,7 @@ Three files under ``infra/kind/manifests/`` hold it:
   pods), so that neither the edge's file nor the chart changes with the switch off.
 
 Nothing here needs a cluster or a container, and nothing here shows that the pod
-starts: that is for the first run on kind (the README lists what is untried).
+starts: run KR1 (kind, 2026-10-08) did, and the README lists what it did not show.
 """
 
 import re
@@ -439,7 +439,7 @@ def test_the_probe_sentence_cites_where_the_node_traffic_was_measured() -> None:
     header = header_of(NAMESPACE_FILE)
 
     assert "cert-manager-networkpolicy.yaml" in header
-    assert "not seen for this pod" in header
+    assert "seen for this pod on kind 2026-10-08, run KR1" in header
     assert "measured on kind 2026-10-07" in header
 
 

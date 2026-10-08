@@ -46,6 +46,8 @@ FUNCTIONS = (
     "check_issuer_keys",
     "issuer_edge_404",
     "check_issuer_closed",
+    "issuer_local_path",
+    "issuer_in_allowed_prefix",
     "check_issuer_climbing",
     "check_issuer_inside",
     "check_issuer",
@@ -115,7 +117,7 @@ def run_check(
     identity: str = "keycloak",
     pods: str = GOOD_POD,
     pods_fail: bool = False,
-    answers: dict[str, tuple[str, str]] | None = None,
+    answers: dict[str, tuple[str, ...]] | None = None,
     curl_fail: str = "",
     deployed: bool = True,
     inside: str = REALM,
@@ -134,12 +136,15 @@ def run_check(
         **{f"{FRONT}{path}": ("404", "") for path in (*CLOSED, *CLIMBING)},
         **(answers or {}),
     }
-    answers_script = ["declare -A STATUS BODY"]
-    for n, (url, (status, body)) in enumerate(table.items()):
+    answers_script = ["declare -A STATUS BODY LOCATION"]
+    for n, (url, answer) in enumerate(table.items()):
+        status, body, *location = answer
         body_file = tmp_path / f"body-{n}"
         body_file.write_text(body)
         answers_script.append(f"STATUS[{shlex.quote(url)}]={shlex.quote(status)}")
         answers_script.append(f"BODY[{shlex.quote(url)}]={shlex.quote(str(body_file))}")
+        where = location[0] if location else ""
+        answers_script.append(f"LOCATION[{shlex.quote(url)}]={shlex.quote(where)}")
     script = "\n".join(
         [
             "set -euo pipefail",
@@ -173,9 +178,10 @@ def run_check(
             '  printf "%s" "${PODS}"',
             "}",
             "curl() {",
-            '  local out="" url="" previous="" argument',
+            '  local out="" url="" previous="" argument headers=""',
             '  for argument in "$@"; do',
             '    [[ "${previous}" == -o ]] && out="${argument}"',
+            '    [[ "${previous}" == -D ]] && headers="${argument}"',
             '    previous="${argument}"; url="${argument}"',
             "  done",
             f'  echo "$*" >>"{fetched}"',
@@ -183,6 +189,10 @@ def run_check(
             '    echo "curl: (7) Failed to connect" >&2; return 7',
             "  fi",
             '  cp "${BODY[${url}]}" "${out}"',
+            '  printf "HTTP/1.1 %s\\r\\n" "${STATUS[${url}]}" >"${headers}"',
+            '  if [[ -n "${LOCATION[${url}]}" ]]; then',
+            '    printf "location: %s\\r\\n" "${LOCATION[${url}]}" >>"${headers}"',
+            "  fi",
             '  printf "%s" "${STATUS[${url}]}"',
             "}",
             "check_issuer",
@@ -441,10 +451,163 @@ def test_the_edge_lines_fail_on_any_answer_but_the_edges_own_404_and_name_the_pa
             expected = ["FAIL" if i == index else "PASS" for i in range(6)]
             assert kinds(lines) == expected, (path, status)
             assert path in lines[index] and status in lines[index]
+            marker = "got" if index == 3 else "redirect to one:"
             others = [p for p in paths if p != path]
             assert not any(
-                other in lines[index].split("got", 1)[1] for other in others
+                other in lines[index].split(marker, 1)[1] for other in others
             ), (path, status)
+
+
+# ── the climbing line: the edge's 404, or its own redirect to one ────────────
+
+ESCAPED = [p for p in CLIMBING if "%2f" in p]  # the two forms KR1 saw redirected
+NOT_ESCAPED = [p for p in CLIMBING if p not in ESCAPED]
+
+
+def redirected(location: str = "/realms/master/", forms: list[str] = ESCAPED) -> dict:
+    """KR1: the edge answers an escaped slash with a 307, no body, Location."""
+    return {f"{FRONT}{path}": ("307", "", location) for path in forms}
+
+
+def climbing_line(tmp_path: Path, **kwargs: object) -> str:
+    lines, _, _ = run_check(tmp_path, **kwargs)  # type: ignore[arg-type]
+    assert len(lines) == 6 and kinds(lines)[:4] == PASSING[:4]
+    assert kinds(lines)[5] == "PASS"
+    return lines[4]
+
+
+def test_what_kr1_saw_passes_and_the_line_says_which_forms_were_which(
+    tmp_path: Path,
+) -> None:
+    line = climbing_line(tmp_path, answers=redirected())
+
+    assert line.startswith("PASS")
+    gone, sent = line.split("; a 307 ")
+    assert all(p in gone for p in NOT_ESCAPED) and not any(p in gone for p in ESCAPED)
+    assert all(f"{p} -> /realms/master/" in sent for p in ESCAPED)
+    assert "edge's own empty 404" in gone and "itself the edge's own empty 404" in sent
+
+
+def test_the_target_is_fetched_as_written_once_for_each_redirected_form(
+    tmp_path: Path,
+) -> None:
+    _, _, fetched = run_check(tmp_path, answers=redirected())
+
+    targets = [call for call in fetched if call.endswith(f"{FRONT}/realms/master/")]
+    # Once for the closed line's own path, and once for each redirected form.
+    assert len(targets) == 1 + len(ESCAPED)
+    assert all("--path-as-is" in call.split() for call in targets)
+
+
+@pytest.mark.parametrize(
+    "location",
+    [
+        "/realms/master/",
+        f"{FRONT}/realms/master/",
+        "/realms/master/?x=1",
+        "/nowhere",
+    ],
+)
+def test_a_307_to_a_path_on_this_host_that_is_the_edges_own_404_passes(
+    tmp_path: Path, location: str
+) -> None:
+    answers = redirected(location)
+    target = location.removeprefix(FRONT)
+    answers[f"{FRONT}{target}"] = ("404", "")
+
+    assert climbing_line(tmp_path, answers=answers).startswith("PASS")
+
+
+@pytest.mark.parametrize(
+    "location",
+    [
+        "/resources/x.css",
+        "/resources",
+        "/realms/meridian-staff/protocol/openid-connect/auth",
+        "/realms/meridian-staff/.well-known/openid-configuration",
+        "/realms/meridian-staff/login-actions/authenticate?x=1",
+        f"{FRONT}/resources/",
+    ],
+)
+def test_a_307_to_an_allowed_prefix_fails_and_names_the_form(
+    tmp_path: Path, location: str
+) -> None:
+    line = climbing_line(tmp_path, answers=redirected(location))
+
+    assert line.startswith("FAIL")
+    for form in ESCAPED:
+        assert f"{form} -> 307 to " in line
+    assert "a prefix the route forwards" in line
+    assert not any(f"{form} -> 404" in line for form in NOT_ESCAPED)
+
+
+@pytest.mark.parametrize("status", ["200", "400", "302", "503"])
+def test_a_307_whose_target_answers_anything_but_the_edges_404_fails(
+    tmp_path: Path, status: str
+) -> None:
+    answers = redirected("/elsewhere/")
+    answers[f"{FRONT}/elsewhere/"] = (status, "")
+    line = climbing_line(tmp_path, answers=answers)
+
+    assert line.startswith("FAIL")
+    assert f"-> 307 to /elsewhere/, which answers {status}" in line
+
+
+def test_a_307_whose_target_answers_404_with_a_body_fails(tmp_path: Path) -> None:
+    answers = redirected("/elsewhere/")
+    answers[f"{FRONT}/elsewhere/"] = ("404", "<html>not found</html>")
+    line = climbing_line(tmp_path, answers=answers)
+
+    assert line.startswith("FAIL")
+    assert "which answers 404 with a body" in line and "Keycloak" in line
+
+
+@pytest.mark.parametrize(
+    "location",
+    ["http://example.org/realms/master/", "//example.org/realms/master/", ""],
+    ids=["another host", "protocol-relative", "no location"],
+)
+def test_a_307_to_another_host_or_with_no_location_fails(
+    tmp_path: Path, location: str
+) -> None:
+    line = climbing_line(tmp_path, answers=redirected(location))
+
+    assert line.startswith("FAIL")
+    assert "not a path on this host" in line
+
+
+def test_a_307_with_a_body_and_other_redirects_are_not_the_edges_and_fail(
+    tmp_path: Path,
+) -> None:
+    body = redirected()
+    key = f"{FRONT}{ESCAPED[0]}"
+    body[key] = ("307", "<html>moved</html>", "/realms/master/")
+
+    assert climbing_line(tmp_path / "a", answers=body).startswith("FAIL")
+    for status in ("301", "302", "308"):
+        line = climbing_line(
+            tmp_path / status,
+            answers={key: (status, "", "/realms/master/")},
+        )
+        assert line.startswith("FAIL") and f"{ESCAPED[0]} -> {status}" in line
+
+
+@pytest.mark.parametrize("status", ["200", "400"])
+def test_a_200_or_a_400_for_a_form_fails_and_names_it(
+    tmp_path: Path, status: str
+) -> None:
+    form = NOT_ESCAPED[1]
+    line = climbing_line(tmp_path, answers={f"{FRONT}{form}": (status, "")})
+
+    assert line.startswith("FAIL") and f"{form} -> {status}" in line
+
+
+def test_a_redirect_does_not_excuse_the_closed_line(tmp_path: Path) -> None:
+    lines, _, _ = run_check(
+        tmp_path, answers={f"{FRONT}/admin/": ("307", "", "/realms/master/")}
+    )
+
+    assert kinds(lines) == [*PASSING[:3], "FAIL", *PASSING[4:]]
 
 
 @pytest.mark.parametrize(

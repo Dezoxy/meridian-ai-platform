@@ -222,8 +222,8 @@ about 2 minutes and 2.5 GB free; 6 passed against the pinned image on
 2026-10-08). By the owner's answer of 2026-10-08 ("Keep it, opt-in only
 (Recommended)") Keycloak on kind is an add-on that is off unless switched on
 and not part of plain `make up`; the switch, the script, the manifests and the
-smoke lines are written and tested without a cluster, and not yet run on one
-(the list of what is untried is under "The sign-in issuer").
+smoke lines are tested without a cluster and were run on kind once (run KR1,
+2026-10-08); what that run did not show is listed under "The sign-in issuer".
 
 To read what a chart installs by default (its tags must be the ones in
 `pins.env`), render it without the `--set` arguments, here for cert-manager;
@@ -2812,9 +2812,12 @@ changed by hand or by a command that does not read it.
 Keycloak is the local stand-in for the issuer of sign-in. Entra ID is the
 issuer on Azure; nothing here is for Azure. It is an **add-on that is off unless
 switched on** and is not part of plain `make up` (the owner, 2026-10-08: "Keep
-it, opt-in only"). Status: **written and tested without a cluster; not run on
-the cluster yet.** Keycloak 26.8.0 has run in a container (the opt-in rig of
-S021's Y2a), and no more than that.
+it, opt-in only"). Status: **tested without a cluster, and seen on kind once
+(run KR1, 2026-10-08): `make up` with the switch on ended 0 in 54 seconds, the
+pod was Ready at its first start, and smoke passed all but one line, whose
+expectation is corrected here.** Keycloak 26.8.0 had run in a container before
+(the opt-in rig of S021's Y2a). What KR1 did not show is listed at the end of
+this section.
 
 ```sh
 MERIDIAN_IDENTITY=keycloak make up      # makes the add-on, last
@@ -2837,7 +2840,9 @@ run made the add-on, one line from `make up` saying that the namespace still
 exists.
 
 What the switch makes (`infra/kind/identity.sh`, which `up.sh` calls last).
-**Written and tested without a cluster; none of it has run on the cluster yet.**
+**Tested without a cluster; every row was made on kind once (run KR1,
+2026-10-08), and the list at the end of this section says what that run did not
+show.**
 
 | Object | Where | What it is |
 |---|---|---|
@@ -2846,7 +2851,7 @@ What the switch makes (`infra/kind/identity.sh`, which `up.sh` calls last).
 | Policies `identity-edge-egress`, `identity-claims-api-egress` | `manifests/identity-peers-networkpolicy.yaml`, in `envoy-gateway-system` and `meridian` | The other ends of those two connections, as policies of their own that add to the existing ones, so the edge's file and the chart do not change with the switch |
 | Secrets `keycloak-realm`, `keycloak-credentials` | `identity`, made by the script | The realm file, and the same passwords and secrets as `KEY=value` lines |
 | Deployment, Service `keycloak`, ServiceAccount | `manifests/identity.yaml` | One replica from `KEYCLOAK_IMAGE` (by digest, from `pins.env`); the Service has port 8080 only, never the health port 9000 |
-| HTTPRoute `keycloak` | `manifests/identity.yaml` | Host `id.meridian.localhost` (a `.localhost` name, the chart's own rule, tested); forwards what the sign-in flow needs and nothing else: `/realms/meridian-staff/.well-known/`, `/realms/meridian-staff/protocol/openid-connect/`, `/realms/meridian-staff/login-actions/` and `/resources/`; so `/admin/`, `/realms/master/`, the staff realm's `account/` and `clients-registrations/` get the edge's 404 (that the login page still loads with these four prefixes is untried) |
+| HTTPRoute `keycloak` | `manifests/identity.yaml` | Host `id.meridian.localhost` (a `.localhost` name, the chart's own rule, tested); forwards what the sign-in flow needs and nothing else: `/realms/meridian-staff/.well-known/`, `/realms/meridian-staff/protocol/openid-connect/`, `/realms/meridian-staff/login-actions/` and `/resources/`; so `/admin/`, `/realms/master/`, the staff realm's `account/` and `clients-registrations/` get the edge's 404 (seen on kind, run KR1, for the first two prefixes and the closed paths; that the login page still loads in a browser with all four is untried) |
 | The edge Gateway `edge` | `gateways.sh`, applied by `up.sh` | With the switch on, the listener admits routes from the namespaces named `meridian` or `identity` (a selector on the name label, never `All`) |
 
 The Claims API's own egress needs no change in the chart: the policy
@@ -2899,10 +2904,11 @@ copy of its client secret is Y3's and Y4's to make.
 
 **Memory.** The pod requests 700Mi and may use 1Gi (no CPU limit); 600 to 700
 MiB were observed in a container against that limit, and the container cost
-about 570 MB of the host's available memory. The script refuses under 2,500 MB.
-The suite's own room check wants 3,500 MB: after the first run on the cluster,
-read the figure the script prints and check that a suite can still start (the
-plan's S021 section makes that Y2's stop).
+about 570 MB of the host's available memory. On kind (run KR1) the machine's
+available memory went from 4,984 to 4,472 MB, about 510 MB, with the platform
+up. The script refuses under 2,500 MB. The suite's own room check wants 3,500
+MB; that a whole suite still starts with the add-on up was not tried (the plan's
+S021 section makes that Y2's stop).
 
 **Restarts.** Development mode keeps its database in the pod and nothing
 persists: a restart makes new signing keys and imports the realm again. The
@@ -2930,56 +2936,67 @@ kubectl -n meridian delete networkpolicy identity-claims-api-egress
 kubectl -n envoy-gateway-system delete networkpolicy identity-edge-egress
 ```
 
-**Untried: what only the first run on the cluster can settle.** Each is a thing
-to tick off, in the order the run meets them:
+**Seen on kind, run KR1 (2026-10-08).** `make up` with the switch on ended 0 in
+54 seconds. The scheduler accepted the pod, and the pod was Ready at its first
+start with the read-only root file system and no restart: the init container
+`copy-quarkus` (`cp -R`) completed with an empty log, and the main container
+ran with every path that `start-dev` writes (`/opt/keycloak/lib/quarkus`,
+`/opt/keycloak/data` and `/tmp`) an `emptyDir`. The realm Secret, mounted at
+`/opt/keycloak/data/import` inside the `emptyDir` at `/opt/keycloak/data`, was
+read ("Realm 'meridian-staff' imported"), and Keycloak started in 8.3 seconds
+with no ERROR line. The probe on 9000 passed under the default deny, after one
+refused connection while the server started; the management interface listens
+on 9000 over plain HTTP, and the pod had no restart in the three minutes of the
+run (the liveness probe, `/health/live`, has not failed). The `imageID` ends in
+the pinned digest. The route is Accepted, and the listener admits `meridian`
+and `identity`. Through the edge the discovery document (path `.well-known/`)
+and the key document (path `protocol/openid-connect/`) were served, and
+`/admin/`, `/realms/master/`, `account/` and `clients-registrations/
+openid-connect` were the edge's own 404 with an empty body. From the Claims
+API's pod, the discovery document fetched by the Service's name
+(`keycloak.identity.svc:8080`) names the front URL as its issuer, which shows
+the policy that admits the Claims API, the path and `--hostname` working, and
+that the edge reaches the pod through its policy. The machine's available
+memory went from 4,984 to 4,472 MB (about 510 MB) with the platform up. Smoke
+with the switch on passed 61 lines and failed one, the climbing line, whose
+expectation was wrong and not the route: for an escaped slash (`..%2f`) the
+edge unescapes, normalises and answers 307 with an empty body and a Location of
+`/realms/master/`, which is itself the edge's 404 (the main session's
+measurement; nothing reaches Keycloak). The line now accepts that, and nothing
+else but the edge's own empty 404. Smoke with the switch off passed 56 lines
+and skipped one. The fallback, should a later image need a path that is not
+covered, is `readOnlyRootFilesystem: false` in `manifests/identity.yaml`.
 
-1. Whether the scheduler accepts the pod: the node's allocatable memory minus
-   the platform's requests against 700Mi (`describe pod`: not Pending with
-   "Insufficient memory"), and the image pull (about 716 MiB) against the
-   five-minute rollout timeout.
-2. The init container `copy-quarkus` (`cp -R`, no preservation: `-a` was
-   expected to fail on the root-owned volume) and then the main container's log
-   for a read-only path. `start-dev` builds the server again at each start and
-   writes under `/opt/keycloak/lib/quarkus`, `/opt/keycloak/data` and `/tmp`;
-   the manifest gives each an `emptyDir`. If the pod crash-loops with a path
-   read-only, the one line to change is `readOnlyRootFilesystem: true` in the
-   container's securityContext in `manifests/identity.yaml`.
-3. The realm Secret, mounted at `/opt/keycloak/data/import` inside the
-   `emptyDir` at `/opt/keycloak/data` (mode 0440, group 0 through `fsGroup`, the
-   files being links): the "realm imported" line in the log, the probes green
-   (`/health/ready` and `/health/live` on 9000, the management bind address and
-   scheme untried, the kubelet reaching 9000 through the default deny), the
-   startup probe's five minutes, and Keycloak's warning that there is no
-   administrator.
-4. The route Accepted after the Gateway's selector became `matchExpressions`,
-   and smoke's six lines, including the `imageID` ending in the index digest
-   (if the cluster reports the platform digest instead, line 1 fails: compare
-   the Deployment's image alone), that Envoy Gateway forwards the four prefixes
-   with their trailing slash and answers the edge's own 404, with an empty body,
-   for `account/` and `clients-registrations/openid-connect`, and that the
-   climbing forms (`..`, `%2e%2e`, `..%2f`, sent as written) are 404 and not a
-   400 (if Envoy answers 400 for an encoded form, line 5's expectation changes).
-5. From the Claims API's pod (smoke's last line does the discovery document):
-   `iss` is the front URL when asked by the Service's name (`--hostname`, no
-   `--proxy-headers`), a client-credentials token asked there carries the same
-   `iss`, and `/` and `/admin/master/console/` are what the pod sees.
-6. That the two additive policies are enough and nothing more: a refusal from a
-   pod that is not admitted, and from a pod of `meridian` that is not the Claims
-   API (smoke has no line that proves a refusal yet).
-7. Which built-in clients exist after the import (`admin-cli`,
+**Untried: what KR1 did not show.** Each is a thing to tick off, in this
+order:
+
+1. A token by client credentials from inside the cluster (the `iss` it carries
+   when asked by the Service's name), and what `/` and `/admin/master/console/`
+   show to the Claims API's pod.
+2. Which built-in clients exist after the import (`admin-cli`,
    `account-console`), and what the master realm and the welcome page show on
    8080 to the two admitted peers.
-8. The memory figure after the pod is Ready, with the whole platform up, and
-   whether a suite can still start.
-9. A browser: that the login page still loads with the four narrowed prefixes
-   (untried: a path under `/realms/meridian-staff/` that the form or the page
-   needs and the route lacks would show as a broken page or a 404 in the network
-   tab), and that Keycloak's login cookies, `Secure; SameSite=None` on an HTTP
-   name, are kept by the browser on `id.meridian.localhost` (not established).
-10. The switch turned on, off and on again (the Gateway narrows and widens, the
-    one line appears), `MERIDIAN_IDENTITY_ROTATE=1` (the pod rolls through the
-    annotation), and a rotation interrupted on purpose before the Deployment is
-    applied, then a plain run (the pod rolls then).
+3. A refusal by the network policy from a pod that is not admitted, and from a
+   pod of `meridian` that is not the Claims API (smoke has no line that proves a
+   refusal yet).
+4. The login page in a browser with the narrowed prefixes: only two of the four
+   were exercised (`.well-known/` and `protocol/openid-connect/`, by smoke);
+   `login-actions/` and `/resources/` need the page itself, and a path that the
+   form or the page needs and the route lacks would show as a broken page or a
+   404 in the network tab. And the cookie question: Keycloak's login cookies are
+   `Secure; SameSite=None` on an HTTP name, and whether a browser keeps them on
+   `id.meridian.localhost` is not established.
+5. The switch turned off and on again with `make up` (the Gateway narrows and
+   widens, the one line appears); only smoke with the switch off was run, with
+   the add-on left up.
+6. `MERIDIAN_IDENTITY_ROTATE=1` (the pod rolls through the annotation), and a
+   rotation interrupted on purpose before the Deployment is applied, then a
+   plain run (the pod rolls then).
+7. A whole suite starting with the add-on up (the suite's room check wants
+   3,500 MB; 4,452 MB were available after the run).
+8. Not on the list of the run but still not seen: the image pull on a node that
+   does not have the image yet (it was already there) against the five-minute
+   rollout timeout.
 
 ## If `make up` was interrupted
 

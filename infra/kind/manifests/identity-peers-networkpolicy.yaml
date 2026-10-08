@@ -7,7 +7,10 @@
 # are additive: a pod may do what any policy that selects it allows), so that
 # neither the edge's file (envoy-gateway-networkpolicy.yaml, whose test pins its
 # rules) nor the Meridian chart changes with the switch. Written and tested without
-# a cluster; not run on the cluster yet.
+# a cluster, and run on kind once (run KR1, 2026-10-08): the edge reached Keycloak
+# through the first, and the Claims API's pod through the second (smoke's discovery
+# document by the Service's name). That a pod which is not admitted is refused is
+# untried.
 #
 #   identity-edge-egress         in envoy-gateway-system: the proxy pods may send to
 #                                Keycloak's pods in `identity`, port 8080 (the

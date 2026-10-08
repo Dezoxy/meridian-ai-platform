@@ -2,9 +2,11 @@
 # (S021, Y2b): an add-on that is OFF unless MERIDIAN_IDENTITY=keycloak, applied by
 # infra/kind/identity.sh after the namespace and its policies
 # (identity-networkpolicy.yaml) and the Secrets exist. Entra ID is the issuer on
-# Azure; nothing here is for Azure. Written and tested without a cluster; NOT RUN on
-# the cluster yet: what a first run must show, and what is untried, is in
-# infra/kind/README.md, "The sign-in issuer".
+# Azure; nothing here is for Azure. Written and tested without a cluster, and run
+# on kind once (run KR1, 2026-10-08): the pod was Ready at its first start with
+# the read-only root file system, the realm imported and the route was Accepted.
+# What that run did not show is untried, and listed in infra/kind/README.md, "The
+# sign-in issuer".
 #
 # Four objects: a ServiceAccount (no token is mounted), the Deployment, the Service
 # `keycloak` (port 8080 only; the health port 9000 is not in it) and an HTTPRoute on
@@ -15,8 +17,9 @@
 # (login-actions/), and /resources/ (the login page's styles and scripts). Not the
 # account console (account/), not the client registration (clients-registrations/),
 # not /admin, not /realms/master: they have no rule, so the edge answers them with
-# its 404; smoke proves it (smoke.d/13-issuer.sh). That the login page still loads
-# with these four prefixes is untried.
+# its 404; smoke proves it (smoke.d/13-issuer.sh; seen on kind, run KR1: the four
+# prefixes forwarded with their trailing slash, the rest the edge's own 404). That
+# the login page still loads in a browser with these four prefixes is untried.
 #
 # The image is a placeholder word, twice (the init container and the container),
 # and the realm Secret's fingerprint is another, once (a pod annotation, below);
@@ -38,22 +41,24 @@
 # Plain HTTP: the edge reaches this pod over plain HTTP, and so does the Claims API
 # (threat model T-116). Accepted on a disposable development cluster, said in the
 # README, and a backlog row (S094: TLS to the issuer). No `--proxy-headers` is set:
-# a proxy in front was not tried.
+# a proxy in front was not tried (the issuer was the front URL from inside the
+# cluster too, seen on kind in run KR1).
 #
 # Memory: requests 700Mi, limit 1Gi, no CPU limit. 600 to 700 MiB were observed
 # against a 1 GiB limit in the container run, with no OOM kill; the JVM's heap is 70
-# percent of the limit. Recreate, not a rolling update: two of these would not fit
-# the machine together.
+# percent of the limit. On kind (run KR1) the machine's available memory went from
+# 4,984 to 4,472 MB, about 510 MB, with the platform up. Recreate, not a rolling
+# update: two of these would not fit the machine together.
 #
-# THE ROOT FILE SYSTEM IS READ-ONLY, AND THAT IS UNTRIED. `start-dev` builds the
-# server again at each start, which writes under /opt/keycloak/lib/quarkus, and the
-# server writes /opt/keycloak/data (its database, its temporary files; the import
-# folder is a Secret mounted inside it) and /tmp. Each is an emptyDir below; the
-# first is filled by the init container, a copy of what the image has, so that
-# nothing the build reads is hidden. If the first run on the cluster shows that the
-# pod cannot start (a crash loop whose log says a path is read-only), the ONE line
-# to change is `readOnlyRootFilesystem: true` in the container's securityContext,
-# and the init container, the `quarkus` volume and its mount can then be taken out.
+# The root file system is read-only; seen on kind 2026-10-08, run KR1: the pod was
+# Ready at its first start, with no restart. `start-dev` builds the server again at
+# each start, which writes under /opt/keycloak/lib/quarkus, and the server writes
+# /opt/keycloak/data (its database, its temporary files; the import folder is a
+# Secret mounted inside it) and /tmp. Each is an emptyDir below; the first is filled
+# by the init container, a copy of what the image has (it completed). Should a
+# later image need a path that is not covered, the fallback is the line
+# `readOnlyRootFilesystem: true` in the container's securityContext (and the init
+# container, the `quarkus` volume and its mount can then be taken out).
 apiVersion: v1
 kind: ServiceAccount
 metadata:

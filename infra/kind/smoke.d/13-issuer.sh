@@ -14,10 +14,16 @@
 #                 body (a 404 from Keycloak has a body): /admin/, /realms/master/
 #                 and, under the staff realm, account/ and clients-registrations/
 #                 openid-connect, because the route forwards what the sign-in flow
-#                 needs and nothing else; three ways of climbing from the staff
-#                 realm to the master realm (a plain .., %2e%2e and ..%2f, sent
-#                 as written with curl's --path-as-is) are 404 too, and so is one
-#                 from inside an allowed prefix; and, from INSIDE the cluster, the
+#                 needs and nothing else; four ways of climbing from the staff
+#                 realm to the master realm (a plain .., %2e%2e and ..%2f, and a
+#                 plain .. from inside .well-known/, sent as written with curl's
+#                 --path-as-is) each pass when the answer is the edge's own empty
+#                 404, or a 307 with an empty body to a path on this host that is
+#                 under no forwarded prefix and is itself the edge's own empty 404
+#                 (for an escaped slash the edge unescapes, normalises and
+#                 redirects by itself: seen on kind, run KR1); a redirect into a
+#                 forwarded prefix, a 200 or a 404 with a body fails and is named;
+#                 and, from INSIDE the cluster, the
 #                 Claims API's pod fetches the discovery document by the Service's
 #                 name (keycloak.identity.svc:8080) and it names the FRONT URL as
 #                 its issuer, which proves the policy that admits the Claims API,
@@ -26,8 +32,10 @@
 #                 documents: no line reads a Secret, signs anyone in or asks for a
 #                 token. The lines say what they prove and not more: that a
 #                 browser's sign-in works and that the pod keeps its keys are not
-#                 checked here, and neither is a refusal by the network policy. Not
-#                 run on the cluster yet. A pod that is not up yet fails the first
+#                 checked here, and neither is a refusal by the network policy. Run
+#                 on kind once (run KR1, 2026-10-08): five lines passed and the
+#                 climbing line failed on its own expectation, now corrected. A
+#                 pod that is not up yet fails the first
 #                 line and the others run all the same; an add-on that was never
 #                 made fails them all.
 
@@ -42,9 +50,14 @@ readonly ISSUER_CLIMBING_PATHS="/realms/meridian-staff/../master/ /realms/meridi
 # is in its image; curl is not): the issuer of the discovery document, one line.
 readonly ISSUER_SERVICE_URL=http://keycloak.identity.svc:8080/realms/meridian-staff
 readonly ISSUER_INSIDE_PROBE='import json, sys, urllib.request; print(json.load(urllib.request.urlopen(sys.argv[1], timeout=8)).get("issuer", ""))'
-# What the last issuer_get left: the status, the body and, when curl failed, why.
+# The prefixes the route forwards (identity.yaml): a redirect that lands on one of
+# them is a way in, not a way out.
+readonly ISSUER_ALLOWED_PREFIXES="/realms/meridian-staff/.well-known/ /realms/meridian-staff/protocol/openid-connect/ /realms/meridian-staff/login-actions/ /resources/"
+# What the last issuer_get left: the status, the body, the Location header (cleaned,
+# at most 300 characters) and, when curl failed, why.
 issuer_status=""
 issuer_body=""
+issuer_location=""
 issuer_error=""
 
 # ── 13. issuer ───────────────────────────────────────────────────────────────
@@ -53,16 +66,19 @@ issuer_error=""
 # status in ${issuer_status} and the body in ${issuer_body}. Nothing is followed, and
 # the path goes as written (--path-as-is: curl would otherwise remove the dots).
 issuer_get() {
-  local out status
+  local out headers status
   out="$(mktemp)"
-  if ! status="$(curl -q --noproxy '*' -sS --path-as-is -m 10 -o "${out}" -w '%{http_code}' "$1" 2>&1)"; then
+  headers="$(mktemp)"
+  issuer_location=""
+  if ! status="$(curl -q --noproxy '*' -sS --path-as-is -m 10 -D "${headers}" -o "${out}" -w '%{http_code}' "$1" 2>&1)"; then
     issuer_error="$(clean_lines "${status}")"
-    rm -f "${out}"
+    rm -f "${out}" "${headers}"
     return 1
   fi
   issuer_status="$(clean_lines "${status}")"
   issuer_body="$(<"${out}")"
-  rm -f "${out}"
+  issuer_location="$(awk 'tolower($1) == "location:" { print $2; exit }' "${headers}" | LC_ALL=C tr -cd '[:print:]' | cut -c 1-300)"
+  rm -f "${out}" "${headers}"
 }
 
 check_issuer_pod() {
@@ -162,10 +178,73 @@ check_issuer_closed() {
   issuer_edge_404 "the admin console, the master realm, the staff realm's account console and its client registration" "${paths[@]}"
 }
 
+# issuer_local_path LOCATION: the path (with any query) of a redirect that stays on
+# this host, on stdout: LOCATION when it starts with one slash, or the front URL's
+# path when it starts with the front URL. Nothing for any other host or scheme.
+issuer_local_path() {
+  case "$1" in
+    //*) ;;
+    /*) printf '%s' "$1" ;;
+    "${ISSUER_FRONT_URL}"/*) printf '%s' "${1#"${ISSUER_FRONT_URL}"}" ;;
+  esac
+}
+
+# issuer_in_allowed_prefix PATH: 0 when PATH, without its query, is under a prefix
+# the route forwards (a path equal to a prefix without its last slash counts).
+issuer_in_allowed_prefix() {
+  local path="${1%%\?*}" prefix prefixes
+  read -r -a prefixes <<<"${ISSUER_ALLOWED_PREFIXES}"
+  for prefix in "${prefixes[@]}"; do
+    [[ "${path}/" == "${prefix}"* ]] && return 0
+  done
+  return 1
+}
+
+# check_issuer_climbing: a way of climbing to the master realm passes when the
+# answer through the edge is EITHER the edge's own empty 404, OR a 307 with an
+# empty body whose Location is a path on this host that is under no prefix the
+# route forwards and that, fetched as written, is the edge's own empty 404 (seen
+# on kind, run KR1: for an escaped slash the edge unescapes, normalises and
+# redirects by itself, and nothing reaches Keycloak). Anything else fails and
+# names the form and what came back: a 200, a 30x to an allowed prefix or to
+# another host, a redirect whose target answers anything but the edge's 404, a 404
+# with a body, a 400.
 check_issuer_climbing() {
-  local paths
+  local paths path target gone="" redirected="" wrong=""
   read -r -a paths <<<"${ISSUER_CLIMBING_PATHS}"
-  issuer_edge_404 "the ways of climbing to the master realm, sent as written" "${paths[@]}"
+  for path in "${paths[@]}"; do
+    if ! issuer_get "${ISSUER_FRONT_URL}${path}"; then
+      fail "issuer: ${ISSUER_FRONT_URL}${path} did not answer: ${issuer_error}"
+      return
+    fi
+    if [[ "${issuer_status}" == 404 && -z "${issuer_body}" ]]; then
+      gone+="${gone:+ }${path}"
+    elif [[ "${issuer_status}" == 404 ]]; then
+      wrong+="${wrong:+, }${path} -> 404 with a body, which is Keycloak's and not the edge's"
+    elif [[ "${issuer_status}" == 307 && -z "${issuer_body}" ]]; then
+      target="$(issuer_local_path "${issuer_location}")"
+      if [[ -z "${target}" ]]; then
+        wrong+="${wrong:+, }${path} -> 307 to '${issuer_location}', which is not a path on this host"
+      elif issuer_in_allowed_prefix "${target}"; then
+        wrong+="${wrong:+, }${path} -> 307 to ${target}, a prefix the route forwards"
+      elif ! issuer_get "${ISSUER_FRONT_URL}${target}"; then
+        wrong+="${wrong:+, }${path} -> 307 to ${target}, which did not answer: ${issuer_error}"
+      elif [[ "${issuer_status}" != 404 ]]; then
+        wrong+="${wrong:+, }${path} -> 307 to ${target}, which answers ${issuer_status}"
+      elif [[ -n "${issuer_body}" ]]; then
+        wrong+="${wrong:+, }${path} -> 307 to ${target}, which answers 404 with a body, Keycloak's and not the edge's"
+      else
+        redirected+="${redirected:+, }${path} -> ${target}"
+      fi
+    else
+      wrong+="${wrong:+, }${path} -> ${issuer_status}$([[ -z "${issuer_body}" ]] || printf ' with a body')"
+    fi
+  done
+  if [[ -n "${wrong}" ]]; then
+    fail "issuer: a way of climbing to the master realm, sent as written, is not the edge's 404 or a redirect to one: ${wrong}"
+  else
+    pass "issuer: the ways of climbing to the master realm, sent as written, reach nothing: the edge's own empty 404 for [${gone:-none}]; a 307 with an empty body to a path that is itself the edge's own empty 404 for [${redirected:-none}]"
+  fi
 }
 
 # check_issuer_inside: from the Claims API's pod, the discovery document by the

@@ -125,7 +125,8 @@ apply_prometheus_gateway() {
 # fill_placeholder does, so a file that lost the block is refused and not applied
 # as it stands. A later run with the switch off applies the file again, and the
 # widening should go from the Gateway (server-side apply drops a field its manager
-# no longer sends; written, not run on the cluster).
+# no longer sends; the widening was seen on kind in run KR1, the narrowing again
+# was not).
 # edge_gateway_manifest [FILE]: FILE is the Gateway's manifest (the committed one by
 # default; a test gives it another).
 readonly EDGE_GATEWAY_FILE="${KIND_DIR}/manifests/gateway.yaml"
