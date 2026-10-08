@@ -7,15 +7,18 @@ no container: what Keycloak does with the file is the rig's question
 (test_keycloak_rig.py, opt-in), and the cluster's is the next contract's.
 """
 
+import ast
 import json
 import os
 import re
 import shutil
 import stat
 import subprocess
+import unicodedata
 from pathlib import Path
 
 import pytest
+from keycloakcastsupport import password_key, realm_cast
 from kindsupport import KIND_DIR, REPO_ROOT
 
 SCRIPT = KIND_DIR / "identity-realm.sh"
@@ -25,6 +28,28 @@ ORIGIN = "http://claims.meridian.localhost:8088"
 REALM_FILE = "meridian-staff-realm.json"
 SECRETS_FILE = "secrets.env"
 ROLES = ["platform-admin", "agent-developer", "adjuster", "auditor"]
+# The cast (S021, Y2e): the staff of ONE fictional insurer, user name, first
+# name, last name and the one role (None: a user with no role, to show a refusal).
+# Written out here on purpose: a change of the script's list fails this file.
+CAST: list[tuple[str, str, str, str | None]] = [
+    ("aino.lindqvist", "Aino", "Lindqvist", "platform-admin"),
+    ("soren.halvorsen", "Soren", "Halvorsen", "agent-developer"),
+    ("ingrid.strand", "Ingrid", "Strand", "adjuster"),
+    ("mikkel.vang", "Mikkel", "Vang", "adjuster"),
+    ("freja.dahl", "Freja", "Dahl", "adjuster"),
+    ("henrik.eide", "Henrik", "Eide", "auditor"),
+    ("linnea.berg", "Linnea", "Berg", None),
+]
+USER_NAMES = [name for name, _, _, _ in CAST]
+# The groups (owner, 2026-10-08): one a role, named as an Entra ID group could be.
+# A user's role comes from the group; no user holds a role directly.
+GROUP_OF_ROLE = {
+    "platform-admin": "meridian-platform-admins",
+    "agent-developer": "meridian-agent-developers",
+    "adjuster": "meridian-adjusters",
+    "auditor": "meridian-auditors",
+}
+SYNTHETIC_DIR = REPO_ROOT / "data" / "synthetic"
 # The directory `make up` is meant to write to; .gitignore must hide it.
 IGNORED_DIRECTORY = "infra/kind/.identity"
 
@@ -100,24 +125,144 @@ def test_it_has_the_four_roles_and_no_other_realm_role(made: Path) -> None:
     assert [role["name"] for role in realm["roles"]["realm"]] == ROLES
 
 
-def test_each_role_has_one_test_user_with_that_role_and_a_password(made: Path) -> None:
-    realm = realm_of(made)
-    people = [u for u in realm["users"] if "serviceAccountClientId" not in u]
+def people_of(realm: dict) -> list[dict]:
+    return [u for u in realm["users"] if "serviceAccountClientId" not in u]
 
-    assert sorted(u["username"] for u in people) == sorted(f"test-{r}" for r in ROLES)
-    for user in people:
-        role = user["username"].removeprefix("test-")
-        assert user["realmRoles"] == [role]
+
+def test_the_cast_is_seven_users_of_one_organisation_with_one_role_each(
+    made: Path,
+) -> None:
+    people = {u["username"]: u for u in people_of(realm_of(made))}
+
+    assert list(people) == USER_NAMES
+    for name, first, last, role in CAST:
+        user = people[name]
+        assert (user["firstName"], user["lastName"]) == (first, last)
+        # The role comes from the group the user is a member of (a path, as the
+        # import reads it), or there is none: no group, no role. Nothing is held
+        # directly, and no null stands in a list (the import would refuse it).
+        assert user["groups"] == ([f"/{GROUP_OF_ROLE[role]}"] if role else [])
+        assert "realmRoles" not in user
+    by_role = [role for _, _, _, role in CAST]
+    assert by_role.count("platform-admin") == 1
+    assert by_role.count("agent-developer") == 1
+    assert by_role.count("adjuster") == 3
+    assert by_role.count("auditor") == 1
+    assert by_role.count(None) == 1
+    assert {role for role in by_role if role} == set(ROLES)
+
+
+def test_four_groups_one_a_role_each_carry_exactly_their_one_realm_role(
+    made: Path,
+) -> None:
+    realm = realm_of(made)
+
+    assert [g["name"] for g in realm["groups"]] == list(GROUP_OF_ROLE.values())
+    for group, role in zip(realm["groups"], GROUP_OF_ROLE, strict=True):
+        assert group["realmRoles"] == [role]
+        assert not group.get("subGroups")
+        assert not group.get("clientRoles")
+    # Every group has a member, and no user is in two.
+    member_of = [g for u in people_of(realm) for g in u["groups"]]
+    assert sorted(set(member_of)) == sorted(f"/{n}" for n in GROUP_OF_ROLE.values())
+    assert len(member_of) == 6
+    assert [u["username"] for u in people_of(realm) if not u["groups"]] == [
+        "linnea.berg"
+    ]
+
+
+@pytest.mark.parametrize("client_id", ["meridian-claims-web", "meridian-scripts"])
+def test_nothing_about_groups_goes_into_a_token(made: Path, client_id: str) -> None:
+    client = client_of(realm_of(made), client_id)
+
+    # The app reads `roles` and nothing else; a group claim would tie it to
+    # Keycloak and not to Entra ID.
+    kinds = [m["protocolMapper"] for m in client["protocolMappers"]]
+    assert "oidc-group-membership-mapper" not in kinds
+    assert sorted(kinds) == [
+        "oidc-audience-mapper",
+        "oidc-usermodel-realm-role-mapper",
+    ]
+    assert "groups" not in json.dumps(client["protocolMappers"]).lower()
+
+
+def test_every_cast_member_can_sign_in_with_a_password_and_nothing_to_do_first(
+    made: Path,
+) -> None:
+    for user in people_of(realm_of(made)):
         assert user["enabled"] is True
         # A user that must still act (verify an address, change the password)
         # stops the code flow at a second form and the direct grant with an error.
         assert user["requiredActions"] == []
         assert user["emailVerified"] is True
-        assert user["email"] and user["firstName"] and user["lastName"]
+        # The reserved .example domain (RFC 2606): never an address that exists.
+        assert re.fullmatch(r"[a-z.]+@[a-z.]+\.example", user["email"])
         (credential,) = user["credentials"]
         assert credential["type"] == "password"
         assert credential["temporary"] is False
         assert len(credential["value"]) >= 32
+
+
+def test_every_person_has_a_password_under_the_name_the_rig_derives(
+    made: Path,
+) -> None:
+    cast = realm_cast(made / REALM_FILE)
+
+    # The roles are what each person's group carries; the rig signs in as the
+    # adjuster named below and looks for each password by this name.
+    assert cast == {name: [role] if role else [] for name, _, _, role in CAST}
+    assert [password_key(user) in read_secrets(made) for user in cast] == [True] * 7
+
+
+def test_no_user_name_is_the_old_one_per_role_and_none_needs_escaping(
+    made: Path,
+) -> None:
+    names = [u["username"] for u in people_of(realm_of(made))]
+
+    assert not [n for n in names if n.startswith("test-")]
+    # One separator, so that two names cannot give the same name of a secret.
+    assert all(re.fullmatch(r"[a-z]+\.[a-z]+", n) for n in names)
+    assert len({n.replace(".", "_") for n in names}) == len(names)
+
+
+def words(text: str) -> set[str]:
+    folded = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
+    return set(re.findall(r"[a-z]+", folded.lower()))
+
+
+def synthetic_name_words() -> set[str]:
+    """Every word of a claimant's or a policy holder's name in the committed
+    synthetic data, and of the generator's two lists of names, read as TEXT (the
+    generator is fingerprinted; this test imports none of it)."""
+    found: set[str] = set()
+    for file, key in (("claims.json", "claimant"), ("policies.json", "holder")):
+        for record in json.loads((SYNTHETIC_DIR / file).read_text(encoding="utf-8")):
+            found |= words(record[key]["name"])
+    tree = ast.parse((SYNTHETIC_DIR / "generator" / "people.py").read_text("utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and node.targets[0].id in {  # type: ignore[attr-defined]
+            "GIVEN_NAMES",
+            "SURNAMES",
+        }:
+            for name in ast.literal_eval(node.value):
+                found |= words(name)
+    return found
+
+
+def test_the_synthetic_names_are_read_and_a_collision_would_be_seen() -> None:
+    # The check below is only worth anything if it reads names at all.
+    synthetic = synthetic_name_words()
+
+    assert len(synthetic) > 30
+    assert {"anna", "horvath", "kovacic"} <= synthetic
+
+
+def test_no_cast_name_is_a_synthetic_claimant_or_policy_holder_name() -> None:
+    synthetic = synthetic_name_words()
+
+    for _, first, last, _ in CAST:
+        assert words(first).isdisjoint(synthetic), first
+        assert words(last).isdisjoint(synthetic), last
 
 
 def test_the_pages_client_is_confidential_code_flow_with_pkce_required(
@@ -198,8 +343,8 @@ def test_every_user_has_an_id_of_its_own_that_the_next_run_gives_it_again(
     first, second = realm_of(made)["users"], realm_of(again)["users"]
 
     ids = [user["id"] for user in first]
-    assert len(first) == 5
-    assert len(set(ids)) == 5
+    assert len(first) == 8  # seven people and the scripts' service account
+    assert len(set(ids)) == 8
     for identifier in ids:
         assert re.fullmatch(r"[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}", identifier)
     # The token's `sub` is this id: after a Keycloak that starts on an empty
@@ -310,8 +455,8 @@ def test_the_secrets_file_holds_a_password_per_user_and_a_secret_per_client(
     secrets = read_secrets(made)
 
     passwords = [
-        f"MERIDIAN_STAFF_USER_TEST_{role.upper().replace('-', '_')}_PASSWORD"
-        for role in ROLES
+        f"MERIDIAN_STAFF_USER_{name.upper().replace('.', '_')}_PASSWORD"
+        for name in USER_NAMES
     ]
     assert sorted(secrets) == sorted(
         [
@@ -391,7 +536,7 @@ def test_the_script_prints_none_of_what_it_generated(
 
     assert result.returncode == 0, result.stderr
     values = read_secrets(out).values()
-    assert len(values) == 6
+    assert len(values) == 9  # seven passwords and two clients' secrets
     for value in values:
         assert value not in result.stdout
         assert value not in result.stderr

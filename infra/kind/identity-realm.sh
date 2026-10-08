@@ -29,7 +29,14 @@
 # step S093's: a second realm is one more spec function and one more call of
 # write_realm below, and its secrets join the same file under their own prefix):
 #   - four realm roles: platform-admin, agent-developer, adjuster, auditor, and
-#     a test user per role (test-<role>) holding only that role
+#     four groups, one a role (meridian-platform-admins, -agent-developers,
+#     -adjusters, -auditors), each carrying exactly its one realm role, and the
+#     cast (S021, Y2e): seven test people of one fictional insurer, each with a
+#     user name, a first and a last name, members of one group and holding no role
+#     directly (one platform admin, one agent developer, three adjusters, one
+#     auditor) or of none (one user, so with no role, to show a refusal);
+#     STAFF_CAST below lists them, and `identity.sh users` prints the cast the
+#     cluster holds
 #   - meridian-claims-web: the pages. Confidential; the authorization-code flow
 #     with PKCE required (S256); direct grants, implicit flow and service
 #     account off
@@ -59,6 +66,37 @@ readonly API_AUDIENCE=meridian-claims-api
 readonly STAFF_ROLES='["platform-admin","agent-developer","adjuster","auditor"]'
 readonly SCRIPTS_ROLES='["adjuster","auditor"]'
 readonly SECRET_BYTES=24
+# The cast: the staff of ONE fictional insurer (the owner, 2026-10-08: "Users, one
+# organisation"). Organised in GROUPS, as a business directory is and as the same
+# cast will be written for Entra ID: a group per role, named as an Entra group could
+# be named, carrying exactly its one realm role; a user is a MEMBER of a group and
+# holds no role directly, so the role comes from the group. A user in no group has
+# no role (to show a refusal). Nothing about groups goes into a token (no groups
+# claim: the app reads `roles`, which keeps Keycloak and Entra interchangeable).
+# A user: a user name, a first and a last name, and a group name or null. The names
+# are Nordic on purpose: the synthetic claimants and policy holders
+# (data/synthetic/generator/people.py) are Austrian, Slovak, Slovene, Croatian
+# and Hungarian, and a test reads both lists and fails on a shared word. A user
+# name is two lower-case words and one dot, so that the name of its secret
+# (`envname` below turns a dot into an underscore) cannot be another user's.
+# Fictional people; no password is here, and the e-mail address is made from the
+# user name under the reserved .example domain.
+readonly STAFF_GROUPS='[
+  {"name": "meridian-platform-admins", "role": "platform-admin"},
+  {"name": "meridian-agent-developers", "role": "agent-developer"},
+  {"name": "meridian-adjusters", "role": "adjuster"},
+  {"name": "meridian-auditors", "role": "auditor"}
+]'
+readonly STAFF_CAST='[
+  {"username": "aino.lindqvist", "firstName": "Aino", "lastName": "Lindqvist", "group": "meridian-platform-admins"},
+  {"username": "soren.halvorsen", "firstName": "Soren", "lastName": "Halvorsen", "group": "meridian-agent-developers"},
+  {"username": "ingrid.strand", "firstName": "Ingrid", "lastName": "Strand", "group": "meridian-adjusters"},
+  {"username": "mikkel.vang", "firstName": "Mikkel", "lastName": "Vang", "group": "meridian-adjusters"},
+  {"username": "freja.dahl", "firstName": "Freja", "lastName": "Dahl", "group": "meridian-adjusters"},
+  {"username": "henrik.eide", "firstName": "Henrik", "lastName": "Eide", "group": "meridian-auditors"},
+  {"username": "linnea.berg", "firstName": "Linnea", "lastName": "Berg", "group": null}
+]'
+readonly STAFF_EMAIL_DOMAIN=meridian.example
 
 # Shared by the two jq programs: the name of a secret in secrets.env.
 readonly JQ_DEFS='
@@ -128,17 +166,18 @@ $spec as $spec | secrets_map as $s
     ssoSessionIdleTimeout: $spec.ssoSessionIdleTimeout,
     ssoSessionMaxLifespan: $spec.ssoSessionMaxLifespan,
     roles: {realm: [$spec.roles[] | {name: ., description: "Meridian role \(.)"}]},
+    groups: [$spec.groups[] | {name: .name, realmRoles: [.role]}],
     users: (
       [$spec.users[] | {
         id: lookup($ids; .username),
         username: .username, enabled: true, emailVerified: true,
-        firstName: "Test", lastName: .role,
-        email: "\(.username)@meridian.test", requiredActions: [],
+        firstName: .firstName, lastName: .lastName,
+        email: "\(.username)@\($spec.emailDomain)", requiredActions: [],
         credentials: [{
           type: "password", temporary: false,
           value: lookup($s; password_key($spec.realm; .username))
         }],
-        realmRoles: [.role]
+        groups: (if .group == null then [] else ["/\(.group)"] end)
       }]
       + [$spec.clients[] | select(.flow == "credentials") | {
         id: lookup($ids; "service-account-\(.clientId)"),
@@ -158,11 +197,14 @@ usage() {
 # The spec of the staff realm: what is chosen, no secret in it.
 staff_spec() {
   jq -n --arg redirect "$1" --arg origin "$2" --arg audience "${API_AUDIENCE}" \
-    --argjson roles "${STAFF_ROLES}" --argjson scripts_roles "${SCRIPTS_ROLES}" '
+    --argjson roles "${STAFF_ROLES}" --argjson scripts_roles "${SCRIPTS_ROLES}" \
+    --argjson cast "${STAFF_CAST}" --argjson groups "${STAFF_GROUPS}" \
+    --arg email_domain "${STAFF_EMAIL_DOMAIN}" '
     {
       realm: "meridian-staff", audience: $audience, roles: $roles,
       accessTokenLifespan: 300, ssoSessionIdleTimeout: 1800, ssoSessionMaxLifespan: 28800,
-      users: [$roles[] | {username: "test-\(.)", role: .}],
+      emailDomain: $email_domain, groups: $groups,
+      users: $cast,
       clients: [
         {clientId: "meridian-claims-web", flow: "code",
          redirectUris: [$redirect], webOrigins: [$origin]},

@@ -2902,6 +2902,63 @@ a changed realm rolls the pod on any run, also a plain run after a rotation
 that was interrupted before the Deployment was applied. The Claims API's own
 copy of its client secret is Y3's and Y4's to make.
 
+**The cast (Y2e).** The realm holds seven test people of one fictional
+insurer, to sign in with (the owner, 2026-10-08: "Users, one organisation"),
+organised in groups as a business directory is, and a user's role comes from
+the group:
+
+| Group | Its one realm role | Members |
+|---|---|---|
+| `meridian-platform-admins` | `platform-admin` | 1 |
+| `meridian-agent-developers` | `agent-developer` | 1 |
+| `meridian-adjusters` | `adjuster` | 3 |
+| `meridian-auditors` | `auditor` | 1 |
+| none (to show a refusal) | none | 1 |
+
+On Azure the same four groups are meant to exist in Entra ID (designed; nothing
+is built or applied there). Each person has a user name (`firstname.lastname`),
+a first and a last name, membership of one group and no role of their own (the
+seventh is in no group, so has no role), and an e-mail address under the
+reserved `.example` domain. Nothing about groups goes into a token: the access
+token carries the top-level `roles` list as before, which is what the services
+read, so Keycloak and Entra stay interchangeable. The pinned Keycloak gives a
+user in no group no `roles` claim at all (seen in a container, not on the
+cluster), and `check_bearer` of `signin.py` reads an absent claim as no roles.
+The names are written in `identity-realm.sh` (`STAFF_CAST`), are
+Nordic on purpose, and a test fails on any word they share with the synthetic
+claimants' and policy holders' names. Each has a password made at run time like
+the clients' secrets: new at every rotation, never committed, never printed by
+`up`, `status`, `users`, smoke or a log.
+
+```sh
+infra/kind/identity.sh users     # user name, display name, group, role; no password
+make identity-passwords          # each user name and password; prints secrets
+```
+
+`users` is read-only and reads the realm Secret, so it lists the people the
+cluster really holds, with the group and the role each has: `up` keeps the
+Secrets it finds, and a cluster made before the cast still holds the four
+`test-<role>` users, with roles of their own and no group, until
+`MERIDIAN_IDENTITY_ROTATE=1 MERIDIAN_IDENTITY=keycloak make up` makes the new
+realm. `make identity-passwords` is the only code path that prints a password.
+Its first line says they are disposable test passwords of the local mock issuer,
+made for this cluster, and that a rotation replaces them. It refuses a Docker
+engine that is not local and a cluster that does not answer (the checks `up`
+makes), and it refuses when its output is not a terminal, so a pipe or a log
+file does not keep the passwords by accident; `MERIDIAN_IDENTITY_SHOW=1` says
+that you mean it. Like `make grafana-password`, it is for a terminal of your
+own: in a session its output is the transcript.
+
+This is **kind only** and a **mock issuer**: on Azure the issuer is Entra ID and
+there is no cast. And signing in with these users **does nothing in the pages
+yet**: no route of the Claims API is wired to the issuer, so the cast is a list
+of logins the realm accepts and not a working sign-in. The tokens a signed-in
+user would carry are measured by the opt-in rig (`test-adjuster` in its older
+runs is `ingrid.strand` now); that all seven sign in through the pages' flow,
+that each carries the role of their group in `roles` and no `groups` claim, and
+that the group-less one carries no `roles` claim at all, was seen twice, in a
+container, not on the cluster.
+
 **Memory.** The pod requests 700Mi and may use 1Gi (no CPU limit); 600 to 700
 MiB were observed in a container against that limit, and the container cost
 about 570 MB of the host's available memory. On kind (run KR1) the machine's

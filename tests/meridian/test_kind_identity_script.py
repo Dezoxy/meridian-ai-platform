@@ -15,6 +15,7 @@ import base64
 import hashlib
 import json
 import os
+import pty
 import re
 import shutil
 import stat
@@ -241,9 +242,13 @@ def run_script(
     rotate: str = "",
     fail: str = "",
     edits: tuple[tuple[str, str, str], ...] = (),
+    env: dict[str, str] | None = None,
+    terminal: bool = False,
 ) -> Run:
     """``edits``: (file under infra/kind, old text, new text), applied to the copy
-    before the run, for the tests of a file that is malformed."""
+    before the run, for the tests of a file that is malformed. ``env`` adds to the
+    script's environment. ``terminal``: standard output is a terminal (a pty), as
+    when a person runs the command; otherwise it is a pipe, as in every test."""
     tmp_path.mkdir(parents=True, exist_ok=True)
     kind = tmp_path / "infra" / "kind"
     stub = tmp_path / "stub"
@@ -276,7 +281,7 @@ def run_script(
         stub / "sources",
     ):
         stale.unlink(missing_ok=True)
-    env = {
+    environment = {
         "PATH": f"{stub}:{os.environ['PATH']}",
         "HOME": str(tmp_path / "home"),
         "XDG_CACHE_HOME": str(cache),
@@ -288,6 +293,7 @@ def run_script(
         "STUB_FAIL": fail,
         "MERIDIAN_IDENTITY": identity,
         "MERIDIAN_IDENTITY_ROTATE": rotate,
+        **(env or {}),
     }
     for key, on in (
         ("STUB_REALM_SECRET", realm_secret),
@@ -296,15 +302,50 @@ def run_script(
         ("STUB_NAMESPACE", namespace),
     ):
         if on:
-            env[key] = "1"
+            environment[key] = "1"
+    command = ["bash", str(kind / "identity.sh"), *args]
+    if terminal:
+        return Run(run_on_terminal(command, environment), stub, cache)
     done = subprocess.run(
-        ["bash", str(kind / "identity.sh"), *args],
-        capture_output=True,
-        text=True,
-        env=env,
-        check=False,
+        command, capture_output=True, text=True, env=environment, check=False
     )
     return Run(done, stub, cache)
+
+
+def run_on_terminal(
+    command: list[str], environment: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    """Run with standard output on a pty (so ``-t 1`` is true) and read what was
+    written there; standard error stays a pipe. A terminal turns \\n into \\r\\n:
+    the carriage returns are removed."""
+    master, slave = pty.openpty()
+    try:
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=slave,
+            stderr=subprocess.PIPE,
+            env=environment,
+            text=True,
+        )
+        _, stderr = process.communicate(timeout=60)
+        os.close(slave)
+        slave = -1
+        written = b""
+        while True:
+            try:
+                chunk = os.read(master, 4096)
+            except OSError:  # the other end is closed: all of it was read
+                break
+            if not chunk:
+                break
+            written += chunk
+    finally:
+        os.close(master)
+        if slave != -1:
+            os.close(slave)
+    text = written.decode("utf-8").replace("\r\n", "\n")
+    return subprocess.CompletedProcess(command, process.returncode, text, stderr)
 
 
 def secret_values(run: Run) -> list[str]:
@@ -390,7 +431,7 @@ def test_nothing_of_the_realm_or_the_secrets_is_printed_or_put_on_a_command_line
     run = run_script(tmp_path, "up")
     values = secret_values(run)
 
-    assert len(values) == 6
+    assert len(values) == 9  # the cast's seven passwords and two clients' secrets
     assert all(len(value) == 48 for value in values)
     for value in values:
         assert value not in run.output

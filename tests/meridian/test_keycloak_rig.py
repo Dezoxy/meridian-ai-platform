@@ -38,6 +38,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import jwt
+import keycloakcastsupport as cast
 import pytest
 from kindsupport import KIND_DIR
 
@@ -65,6 +66,7 @@ PAGES = "meridian-claims-web"
 SCRIPTS = "meridian-scripts"
 REDIRECT = "http://claims.meridian.localhost:8088/auth/callback"
 ORIGIN = "http://claims.meridian.localhost:8088"
+ADJUSTER = "ingrid.strand"  # of the cast (Y2e), in place of `test-adjuster`
 MEMORY_FLOOR_MB = 2500
 MEMORY_PATIENCE_SECONDS = 15 * 60
 START_PATIENCE_SECONDS = 240
@@ -456,7 +458,7 @@ def refusals(container: Container, secret: str, password: str) -> dict[str, Any]
         }
         direct = client.post(
             endpoint("token"),
-            data={"grant_type": "password", "username": "test-adjuster",
+            data={"grant_type": "password", "username": ADJUSTER,
                   "password": password},
             auth=(PAGES, secret), headers=headers,
         )  # fmt: skip
@@ -596,15 +598,15 @@ def observe_tokens(
 ) -> dict[str, Any]:
     """The flows and what the tokens carry; returns the raw tokens for the
     checks that follow (they are never written)."""
-    password = secrets_by_name["MERIDIAN_STAFF_USER_TEST_ADJUSTER_PASSWORD"]
+    password = secrets_by_name[cast.password_key(ADJUSTER)]
     pages_secret = secrets_by_name["MERIDIAN_STAFF_CLIENT_MERIDIAN_CLAIMS_WEB_SECRET"]
     scripts_secret = secrets_by_name["MERIDIAN_STAFF_CLIENT_MERIDIAN_SCRIPTS_SECRET"]
     flows = {
         "pages_exchanged_at_front": code_flow(
-            container, "test-adjuster", password, pages_secret, FRONT_HOST
+            container, ADJUSTER, password, pages_secret, FRONT_HOST
         ),
         "pages_exchanged_at_back": code_flow(
-            container, "test-adjuster", password, pages_secret, BACK_HOST
+            container, ADJUSTER, password, pages_secret, BACK_HOST
         ),
         "scripts_at_front": scripts_token(container, scripts_secret, FRONT_HOST),
         "scripts_at_back": scripts_token(container, scripts_secret, BACK_HOST),
@@ -707,8 +709,8 @@ def observe_restart(
     pages_secret = secrets_by_name["MERIDIAN_STAFF_CLIENT_MERIDIAN_CLAIMS_WEB_SECRET"]
     scripts_secret = secrets_by_name["MERIDIAN_STAFF_CLIENT_MERIDIAN_SCRIPTS_SECRET"]
     new_scripts = scripts_token(container, scripts_secret, FRONT_HOST)["access_token"]
-    password = secrets_by_name["MERIDIAN_STAFF_USER_TEST_ADJUSTER_PASSWORD"]
-    code_flow(container, "test-adjuster", password, pages_secret, FRONT_HOST)
+    password = secrets_by_name[cast.password_key(ADJUSTER)]
+    code_flow(container, ADJUSTER, password, pages_secret, FRONT_HOST)
     fresh = KeySet(connect_url(container, endpoint("certs")))
     record[f"after_{how}"] = {
         "token_from_before_with_a_new_key_set": verdict(old, settings, fresh),
@@ -747,6 +749,10 @@ def test_the_pinned_image_signs_in_and_its_tokens_are_recorded() -> None:
                 for host in (FRONT_HOST, BACK_HOST, f"127.0.0.1:{container.port}")
             }
             flows = observe_tokens(container, secrets_by_name, record)
+            cast.observe_cast(
+                lambda u, p, s: code_flow(container, u, p, s, FRONT_HOST),
+                secrets_by_name, imports / f"{REALM}-realm.json", record,
+            )  # fmt: skip
             keys = observe_verdicts(container, flows, record)
             record["stats_after_flows"] = container.stats()
             observe_restart(container, secrets_by_name, flows, keys, record, "restart")
@@ -778,6 +784,7 @@ def assert_the_design_holds(record: dict[str, Any]) -> None:
         assert ident["claims"]["aud"] == PAGES
         assert ident["claims"]["roles"] == ["adjuster"]
         assert tokens[name]["id_token_nonce_equals_the_one_sent"] is True
+    cast.assert_the_cast_holds(record)
     scripts = tokens["scripts_at_back"]["access_token"]["claims"]
     assert scripts["iss"] == front
     assert scripts["roles"] == ["adjuster", "auditor"]

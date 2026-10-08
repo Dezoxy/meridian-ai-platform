@@ -11,6 +11,23 @@
 #                       their contents) and the memory available
 #   identity.sh note    what `make up` runs when the switch is OFF: one line if an
 #                       earlier run left the namespace, nothing otherwise
+#   identity.sh users   read-only (Y2e): the cast the cluster holds, as a table of
+#                       user name, display name, group and role (the role is the one
+#                       the group carries); never a password, never a client secret
+#   identity.sh passwords
+#                       (Y2e) `make identity-passwords`: each cast member's user
+#                       name and password, and nothing else of the Secret, after one
+#                       line that says they are disposable test passwords of the
+#                       local mock issuer. The ONLY command that prints a password.
+#                       It refuses a Docker engine or a cluster that is not the local
+#                       one, and refuses when standard output is not a terminal
+#                       unless MERIDIAN_IDENTITY_SHOW=1 is set, so that a pipe or a
+#                       log file does not collect passwords by accident
+#   Both read the realm Secret `keycloak-realm` (the cluster's own copy of the cast:
+#   a Secret that an older run made is kept by `up` and may hold other users than
+#   STAFF_CAST in identity-realm.sh) through a pipe into jq, which selects the user
+#   names, the names and the roles (users) or the user names and passwords (passwords)
+#   of the people, never of a service account or a client.
 #
 # There is no command that removes the add-on. Turning the switch off does not
 # remove it either; the README ("The sign-in issuer") says how a person or a session
@@ -121,7 +138,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 usage() {
-  die "usage: identity.sh up | status | note (infra/kind/README.md, 'The sign-in issuer'); there is no command that removes the add-on"
+  die "usage: identity.sh up | status | note | users | passwords (infra/kind/README.md, 'The sign-in issuer'); passwords prints secrets and needs a terminal or MERIDIAN_IDENTITY_SHOW=1; there is no command that removes the add-on"
 }
 
 # available_mb: the memory available, in whole MB, on stdout.
@@ -379,6 +396,83 @@ status() {
   log "identity: $(available_mb) MB of memory available"
 }
 
+# The jq programs of `users` and `passwords`. Each picks fields of the people in the
+# realm file, never of a service account (it has serviceAccountClientId) and never of
+# a client, and gives one tab-separated line a person. A user with no password stops
+# the second: a half list of logins would read as a whole one.
+# shellcheck disable=SC2016 # the $names in the program are jq's
+readonly IDENTITY_USERS_FILTER='. as $realm | .users[]? | select(.serviceAccountClientId == null)
+  | ((.groups // []) | map(ltrimstr("/"))) as $member
+  | ([$realm.groups[]? | select(.name as $n | any($member[]; . == $n)) | .realmRoles[]?]
+     + (.realmRoles // []) | unique) as $roles
+  | [.username, "\(.firstName // "") \(.lastName // "")",
+     ($member | if length == 0 then "(none)" else join(",") end),
+     ($roles | if length == 0 then "(none)" else join(",") end)] | @tsv'
+readonly IDENTITY_PASSWORDS_FILTER='.users[]? | select(.serviceAccountClientId == null)
+  | [.username, (.credentials[0].value // error("a user has no password"))] | @tsv'
+
+# read_cast FILTER: the realm file as the cluster holds it in the Secret
+# keycloak-realm, through a pipe into jq with FILTER, on stdout. The Secret's content
+# (which holds every password and client secret) is read once into a variable, is
+# never printed and is never an argument; jq's own errors are dropped, because they
+# can quote a value, and a fixed sentence is said instead. It stops, with a
+# sentence, when the Secret is not there (the add-on was never made on this cluster),
+# holds no realm file, is not a realm file, or gives no user. Run it in a command
+# substitution and stop on its status, as realm_fingerprint is.
+read_cast() {
+  { set +x; } 2>/dev/null
+  local encoded cast
+  secret_exists "${IDENTITY_REALM_SECRET}" ||
+    die "the Secret ${IDENTITY_REALM_SECRET} is not in the namespace ${IDENTITY_NAMESPACE}: the sign-in issuer add-on is not on this cluster (MERIDIAN_IDENTITY=keycloak make up makes it), so there is no cast to show"
+  encoded="$(kctl -n "${IDENTITY_NAMESPACE}" get secret "${IDENTITY_REALM_SECRET}" \
+    -o "jsonpath={.data.${IDENTITY_REALM_KEY//./\\.}}")" ||
+    die "could not read the Secret ${IDENTITY_REALM_SECRET} (kubectl's error is above)"
+  [[ -n "${encoded}" ]] ||
+    die "the Secret ${IDENTITY_REALM_SECRET} holds no ${IDENTITY_REALM_KEY}"
+  cast="$(printf '%s' "${encoded}" | base64 -d 2>/dev/null | jq -r "$1" 2>/dev/null)" ||
+    die "the content of the Secret ${IDENTITY_REALM_SECRET} could not be read as a realm file with a name for every user (and a password, for passwords); nothing is printed"
+  [[ -n "${cast}" ]] ||
+    die "the realm in the Secret ${IDENTITY_REALM_SECRET} holds no users"
+  printf '%s\n' "${cast}"
+}
+
+# users: read-only. The cast the cluster holds: user name, display name, role.
+users() {
+  { set +x; } 2>/dev/null
+  local cast name display group role
+  need_tools kubectl jq base64 awk timeout
+  need_cluster
+  cast="$(read_cast "${IDENTITY_USERS_FILTER}")" || exit 1
+  printf '%-18s  %-22s  %-26s  %s\n' "USER NAME" "DISPLAY NAME" "GROUP" "ROLE"
+  while IFS=$'\t' read -r name display group role; do
+    printf '%-18s  %-22s  %-26s  %s\n' "${name}" "${display}" "${group}" "${role}"
+  done <<<"${cast}"
+}
+
+# passwords: the one place a password is printed, and only on request. The checks
+# that cost nothing come first and read nothing: the variable, and the terminal. A
+# pipe or a file would keep the passwords; a person who means it says so with
+# MERIDIAN_IDENTITY_SHOW=1. Then a local engine and a cluster that answers (the
+# kubeconfig and the context of the local cluster alone, common.sh). The notice is
+# printed after the read, so that a refusal prints nothing on standard output.
+passwords() {
+  { set +x; } 2>/dev/null
+  local shown="${MERIDIAN_IDENTITY_SHOW:-}" cast name password
+  [[ "${shown}" =~ ^1?$ ]] ||
+    die "MERIDIAN_IDENTITY_SHOW must be empty or 1 (1 allows the passwords to go to a pipe or a file); nothing was read"
+  if [[ "${shown}" != 1 && ! -t 1 ]]; then
+    die "identity.sh passwords prints secrets and its output is not a terminal, so it prints nothing: a pipe or a log file would keep the passwords. Run it in a terminal (make identity-passwords), or set MERIDIAN_IDENTITY_SHOW=1 when you mean it; nothing was read"
+  fi
+  need_tools kubectl jq base64 awk timeout
+  require_local_docker
+  need_cluster
+  cast="$(read_cast "${IDENTITY_PASSWORDS_FILTER}")" || exit 1
+  printf 'These are disposable test passwords of the local mock issuer (Keycloak on kind), made for this cluster; MERIDIAN_IDENTITY_ROTATE=1 replaces them.\n'
+  while IFS=$'\t' read -r name password; do
+    printf '%-18s  %s\n' "${name}" "${password}"
+  done <<<"${cast}"
+}
+
 # note_when_off: what `make up` says with the switch off. A read that fails is
 # said and does not stop make up, which has done everything else by now.
 note_when_off() {
@@ -395,5 +489,7 @@ case "${1:-}" in
   up) install_addon ;;
   status) status ;;
   note) note_when_off ;;
+  users) users ;;
+  passwords) passwords ;;
   *) usage ;;
 esac

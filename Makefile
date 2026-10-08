@@ -123,7 +123,7 @@ EVAL_INPUTS         := src config/registry data/synthetic data/evaluation/record
 
 STRUCTURIZR := docker run --rm -v "$(CURDIR)/$(ARCH_DIR):/w:ro"
 
-.PHONY: help validate inspect check docs test secret-scan view export mermaid-views mermaid-render mermaid pdf clean lint pytest coverage-floor pytest-db alerts eval eval-tests eval-compare eval-baseline eval-record eval-injection-record synthetic up deploy images helm-lint demo smoke gateway-upkeep grafana grafana-password cert-renew cluster-holder down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry aws-validate aws-scan aws-plan aws-apply aws-destroy gcp-validate gcp-scan aws-kubeadm-validate aws-kubeadm-scan gcp-kubeadm-validate gcp-kubeadm-scan azure-platform-validate azure-platform-scan
+.PHONY: help validate inspect check docs test secret-scan view export mermaid-views mermaid-render mermaid pdf clean lint pytest coverage-floor pytest-db alerts eval eval-tests eval-compare eval-baseline eval-record eval-injection-record synthetic up deploy images helm-lint demo smoke gateway-upkeep grafana grafana-password identity-passwords cert-renew cluster-holder down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry aws-validate aws-scan aws-plan aws-apply aws-destroy gcp-validate gcp-scan aws-kubeadm-validate aws-kubeadm-scan gcp-kubeadm-validate gcp-kubeadm-scan azure-platform-validate azure-platform-scan
 .DEFAULT_GOAL := help
 
 ## help            list the targets
@@ -342,6 +342,10 @@ grafana:
 ## grafana-password print the Grafana admin password
 grafana-password:
 	@infra/kind/grafana.sh password
+
+## identity-passwords print, on the terminal, the user name and password of each test user of the local sign-in issuer (Keycloak on kind, MERIDIAN_IDENTITY=keycloak): prints secrets, disposable ones of this cluster; refuses a cluster it cannot tell is the local one, and a pipe or a file unless MERIDIAN_IDENTITY_SHOW=1 is set; infra/kind/identity.sh users lists the people without them (infra/kind/README.md, "The sign-in issuer")
+identity-passwords:
+	@infra/kind/identity.sh passwords
 
 ## helm-lint       lint the Meridian chart strictly, with kind's values (the rate store on, with the image of PYTEST_REDIS_IMAGE: the pin in infra/kind/pins.env is the same one) and every Job on, the upkeep Job with one argument (needs helm)
 helm-lint:
