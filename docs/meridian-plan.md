@@ -606,7 +606,7 @@ which another branch adds.
 | ID | Step | Done when | Status | Depends |
 |---|---|---|---|---|
 | S081 | The decision record for the move toward services | [ADR 10](architecture/decisions/0010-split-the-platform-into-services-with-a-database-each-and-their-own-releases.md) is accepted and indexed: it says what the owner decided (five databases on one server, six images with independent versions, the tool servers trusting the authenticated caller with the lost double check accepted as a risk, the audit trail as an outbox per service, a fresh baseline per database, the building after the steps in flight) apart from the session's own design, lists the ten couplings with the step that replaces each, what stays shared, the consequences and the two checkpoints; this table exists and Part D's questions 7 and 8 are answered; `make docs`, `make check` and `make test` pass. Nothing is built. `doing` until the pull request is merged, then `done` | doing | — |
-| S082 | Code in the wrong place moves; import contracts per service | With no change in behaviour and no assertion of an existing test changed: the claims tool server leaves the claims workload's package, the Claims API no longer imports the runtime's models or its sweep's constants (the models both sides use sit in a module of their own), the sweep's runtime SQL sits with the runtime, and the workloads' graphs sit in a package of their own; an import contract keeps each service's package from importing another service's; `make lint`, `make pytest` and `make smoke` pass. Designed | doing: the sweep's lock statement and the run's shared models and constants are moved (the first two moves, 2026-10-07; implemented and tested against PostgreSQL, **not deployed**: no chart, image or manifest changed and `make smoke` was not run) on the step's branch `s082-code-moves`, and its pull request is held until S071's free half and S072's client certificates are on `main`; the claims tool server's move waits for S072, the graphs' move for the owner's two answers (the section), and the per-service import contract comes last | S081, and the four steps that were in flight on 2026-10-07 merged (S071's free half, S072's client certificates, S080 and S020's code half): the session's reading of the owner's words, see the section |
+| S082 | Code in the wrong place moves; import contracts per service | With no change in behaviour and no assertion of an existing test changed: the claims tool server leaves the claims workload's package, the Claims API no longer imports the runtime's models or its sweep's constants (the models both sides use sit in a module of their own), the sweep's runtime SQL sits with the runtime, and the workloads' graphs sit in a package of their own; an import contract keeps each service's package from importing another service's; `make lint`, `make pytest` and `make smoke` pass. Designed | doing: the sweep's lock statement and the run's shared models and constants are moved (the first two moves, 2026-10-07; implemented and tested against PostgreSQL, **not deployed**: no chart, image or manifest changed and `make smoke` was not run) on the step's branch `s082-code-moves`, and its pull request is held until S071's free half and S072's client certificates are on `main`; the claims tool server's move waits for S072, the graphs' move, whose shape the owner chose on 2026-10-08 (the triage graph moves to a sibling package: the section), for S071's free half and S021's routes contract, and the per-service import contract comes last | S081, and the four steps that were in flight on 2026-10-07 merged (S071's free half, S072's client certificates, S080 and S020's code half): the session's reading of the owner's words, see the section |
 | S083 | Six packages, six images, a tag per service | A `uv` workspace holds a common library (`common`, `registry` and `guardrails`), the tool-server library and one package per service, each with its own dependencies and version; the runtime's image installs the graphs' package; the jobs ship with the service that owns their data; one build file makes six images; the chart takes a tag per service and `make deploy` builds and loads all six; `make demo` and `make smoke` pass on kind with six images on one database. First checkpoint: the images half of the owner's choice. Designed | todo | S082 |
 | S084 | The tool servers take the binding from the caller; two reads become calls | A tool server takes a call's run, agent, tenant and claim from the Agent Runtime's authenticated call and reads neither `runtime.runs` nor `claims.claims`; a call without a binding is refused; the knowledge server asks the policy server for a policy's wording version and the policy server asks the claims tool server for a policy's other claims, each over mutual TLS under a registry entry, a chart value and a NetworkPolicy; ADR 4's one-caller rule is changed for the two paths and the change recorded; T-22 is rewritten with the accepted risk, stating what the double check caught and what is left. Designed | todo | S082 |
 | S085 | The audit outbox, the relay and the central trail | Each service writes its audit row into an audit table of its own in the transaction of its business write, with the insert-only and stamp triggers; a relay copies the rows into a central audit table that owns retention and serves the adjuster's trail by claim; a relay that lags or stops is seen by an alert, and the services keep writing; the gateway's audit row is settled in the design and said (in the ledger's transaction, or kept apart); built inside the one database, as a table per schema (the owner's decision, Part D's question 7). Designed | todo | S082 |
@@ -20648,7 +20648,8 @@ reviewer's report recorded here.
    remove), S021 (`pyproject.toml`) and an `ignore_imports` line for the
    sweep's import of the runtime until S086.
 
-**Open, for the owner** (two questions on Move D; **not answered**; the map's
+**Asked of the owner, and answered on 2026-10-08** (two questions on Move D;
+the answer is below the table; the map's
 section 5 has the evidence, and the table is the map's reading of what each
 shape breaks, inferred and not run):
 
@@ -20671,9 +20672,18 @@ The session's recommendation, which is the session's and the owner's to
 overturn: shape (i), with the second question answered yes. It is the smaller
 move (about 25 import lines against most of 123 files), it leaves the Claims
 API's log lines and the chart untouched, and it meets the row's intent: the
-graph is no longer in the Claims API's package. It asks the owner when Move D
-is the next thing to build, with a small table in the owner's two frames, and
-before S021's routes contract.
+graph is no longer in the Claims API's package.
+
+**The owner's answer (2026-10-08, asked with this table in the two frames the
+owner asks for): "Triage graph moves (Recommended)".** Shape (i): the triage
+graph goes to a sibling package under `meridian.workloads.`, and the Claims
+API, the sweep and the tool server keep their paths. The option as offered
+carried the second question's answer with it: a test that pins a dotted path
+as a string may change, and the pull request lists each such assertion; the
+row's "no assertion of an existing test changed" holds for every other test.
+The other shape (the Claims API, the sweep and the tool server move out) was
+offered beside it and not taken. Move D still waits for S071's free half and
+for S021's routes contract to be clear of the files it touches.
 
 **Not seen** (the map's section 10, in short):
 
@@ -21742,7 +21752,9 @@ covers them.
   S071's free half and S072's client certificates are on `main`. The section
   records what a read-only map found (the graphs' move is not a lift, and the
   claim brief's dotted path cannot change), the order of what remains, and two
-  questions for the owner on Move D, not answered. S082's dependency cell now
+  questions for the owner on Move D, answered on 2026-10-08 (the triage graph
+  moves to a sibling package; assertions that pin a dotted path may change,
+  each listed). S082's dependency cell now
   reads S081 and the four steps in flight on 2026-10-07 merged (the session's
   reading of the owner's words, on the advisor's counsel), and the preamble
   of "Toward services" is corrected. S087's row says 32 migration files and 60
