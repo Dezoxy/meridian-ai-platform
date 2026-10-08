@@ -105,6 +105,10 @@ readonly SHARED_README=infra/terraform/aws/README.md
 # What the messages of planguard.sh call the environment this script builds (the
 # refusal when HOME is not set, in prepare_state).
 readonly ENVIRONMENT_WORDS="the AWS environment"
+# Where another workspace's state would be, in the refusal of a workspace other
+# than the default (require_default_workspace, in planguard.sh): the state of
+# this script is a local file, so it would be in the checkout.
+readonly WORKSPACE_WORDS="Terraform would keep the state in terraform.tfstate.d/ in the checkout and not in the state under your home"
 readonly LOCAL_KEYS=(MERIDIAN_AWS_ACCOUNT_ID MERIDIAN_AWS_REGION MERIDIAN_AWS_ENDPOINT_CIDR MERIDIAN_AWS_BUDGET_EMAIL)
 # The Regions of EU member states the module accepts (hard rule 3), the list in
 # the validation of "region" in aws/variables.tf; a test holds the two equal. The

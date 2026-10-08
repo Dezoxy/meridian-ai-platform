@@ -166,7 +166,15 @@ The checks around a saved plan that name no cloud (the default workspace, the
 refusal of a variable or override file, the plan record bound to its commit and
 hash, the tree checks) live in `planguard.sh`, which `aws.sh` sources as it
 sources `common.sh`; a wrapper for the Azure platform module, which does not
-exist yet, would source the same file.
+exist yet, would source the same file. Init is one function there,
+`init_with_backend`, which takes the backend block's settings one `key=value`
+at a time: `aws.sh` gives it the path of a local state file (through
+`init_with_state`), and a wrapper of a module with a remote backend gives it
+that backend's settings. The words that say where another workspace's state
+would be come from a global the wrapper sets (`WORKSPACE_WORDS`), and three
+globals of the local state (`STATE_DIR_UNDER_HOME`, `STATE_FILE_NAME` and
+`ENVIRONMENT_WORDS`) may stay unset in a wrapper that never calls
+`prepare_state` or `init_with_state`.
 
 Its git calls run with the caller's configuration, hooks and file monitor
 switched off, and they do not stop one thing: a `filter.<name>.clean` program

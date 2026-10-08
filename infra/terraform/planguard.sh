@@ -6,21 +6,27 @@
 # What it holds: the Terraform and git calls (tf_plain, tf_signed, tf_validating,
 # tf_state_list, git_here), the git version they need, the refusal of a variable
 # or an override file, the state's directory under home, the default workspace,
-# init with the local state, the checks of the tree (the commit, the changes, the
-# untracked .tf files), the saved plan and its record (drop_plan, file_sha256 and
-# the check that the plan is this tree's and fresh) and the directory validate
-# keeps the providers in.
+# init with the backend settings the wrapper gives (init_with_backend) or with the
+# local state (init_with_state), the checks of the tree (the commit, the changes,
+# the untracked .tf files), the saved plan and its record (drop_plan, file_sha256
+# and the check that the plan is this tree's and fresh) and the directory
+# validate keeps the providers in.
 #
 # What it needs from the wrapper, which defines all of it before any function
-# here runs. The environment each program is given is the cloud's own, so the
-# one function is run_clean; the globals are the selected module's row, the
-# words of two sentences and the README those sentences cite. The functions of
-# common.sh (die, log, redact) are the other shared file's. A test holds these
-# two lists equal to what the code below calls and reads.
+# here runs. The environment each program is given is the wrapper's own, so the
+# one function is run_clean ("plain" is its least environment); the globals are
+# the selected module's row, the words of some sentences and the README those
+# sentences cite. The functions of common.sh (die, log, redact) are the other
+# shared file's. A test holds these lists equal to what the code below calls and
+# reads.
 #   functions: run_clean
 #   globals:   MODULE_DIR, MODULE_REL, MODULE_NAME, PLAN_FILE, PLAN_RECORD_FILE,
 #              MODULE_README, CMD_PLAN, STATE_DIR_UNDER_HOME, STATE_FILE_NAME,
-#              SHARED_README, ENVIRONMENT_WORDS
+#              SHARED_README, ENVIRONMENT_WORDS, WORKSPACE_WORDS
+# Three of the globals are read only by prepare_state, the local state's function:
+# a wrapper whose state is remote, and which never calls prepare_state or
+# init_with_state, may leave them unset. A second test holds that list too.
+#   local-state globals: STATE_DIR_UNDER_HOME, STATE_FILE_NAME, ENVIRONMENT_WORDS
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   printf 'planguard.sh is sourced by a Terraform wrapper; it is not run\n' >&2
   exit 1
@@ -33,8 +39,10 @@ readonly PLAN_MAX_AGE_SECONDS=1800
 
 # terraform in the module's directory, without colour. -chdir also makes the
 # plan file path relative to that directory. The sub-command comes first because
-# -no-color is an option of the sub-command. "plain" has no cloud credential:
-# format, init, validate and the state's list need none.
+# -no-color is an option of the sub-command. "plain" is the wrapper's least
+# environment, the one for format, init, validate and the state's list. Whether it
+# holds a credential is the wrapper's to say: with a remote backend, init and the
+# state's list use the sign-in.
 tf_plain() {
   local sub="$1"
   shift
@@ -154,11 +162,13 @@ prepare_state() {
 # is named in .terraform/environment and stays selected across inits; Terraform
 # then keeps its state in terraform.tfstate.d/<name>/ in the module's directory (a
 # checkout), not at the path given at init, and a removal would find the state
-# empty. TF_WORKSPACE and TF_DATA_DIR are not passed on (run_clean), so this file
-# is the one Terraform reads. Selecting the default workspace again leaves the
-# file in place, with the word default in it: the content is read, not the
-# file's existence. This reads the file rather than asking `terraform workspace
-# show`: no further call, and nothing for a stand-in to imitate.
+# empty. That is the local state's case: the wrapper says where another
+# workspace's state would be (WORKSPACE_WORDS), and the sentence takes its words.
+# TF_WORKSPACE and TF_DATA_DIR are not passed on (run_clean), so this file is the
+# one Terraform reads. Selecting the default workspace again leaves the file in
+# place, with the word default in it: the content is read, not the file's
+# existence. This reads the file rather than asking `terraform workspace show`:
+# no further call, and nothing for a stand-in to imitate.
 #
 # The whole file is the name, as Terraform reads it: the content with leading and
 # trailing white space trimmed (observed with `terraform workspace show` on
@@ -175,21 +185,34 @@ require_default_workspace() {
     if [[ -z "${name}" ]]; then name=default; fi
   fi
   [[ "${readable}" == yes && "${name}" == default ]] ||
-    die "the module's directory is not on Terraform's default workspace, or .terraform/environment cannot be read: Terraform would keep the state in terraform.tfstate.d/ in the checkout and not in the state under your home, and a removal would find it empty. Get back with: terraform -chdir=${MODULE_REL} workspace select default (${MODULE_README}, State)"
+    die "the module's directory is not on Terraform's default workspace, or .terraform/environment cannot be read: ${WORKSPACE_WORDS}, and a removal would find it empty. Get back with: terraform -chdir=${MODULE_REL} workspace select default (${MODULE_README}, State)"
 }
 
-# init with the local state's path, and with the committed lock file as the
-# only authority on the provider. -reconfigure: the path is always this script's
-# own, so an init made earlier with another path (by hand) is replaced instead of
-# stopping with "Backend configuration changed". It copies no state and asks no
-# question (with -input=false): a state at the other path is left where it is
-# and this one's is read from the new path. Then the workspace must be the default.
-init_with_state() {
+# init with the backend settings the caller gives, one key=value of the backend
+# block in each argument, and with the committed lock file as the only authority
+# on the provider. -reconfigure: the settings are always this script's own, so an
+# init made earlier with other settings (by hand) is replaced instead of stopping
+# with "Backend configuration changed". It copies no state and asks no question
+# (with -input=false): a state at the other place is left where it is and this
+# one's is read from the new place. Then the workspace must be the default. No
+# setting is refused here, and none is built here: the words come from the
+# wrapper, which knows its backend.
+init_with_backend() {
+  (($# > 0)) ||
+    die "internal error: init_with_backend needs at least one backend setting"
+  local setting
+  local -a settings=()
+  for setting in "$@"; do
+    settings+=("-backend-config=${setting}")
+  done
   log "terraform init"
-  tf_plain init -input=false -reconfigure -lockfile=readonly -backend-config="path=${STATE_PATH}" 2>&1 | redact ||
+  tf_plain init -input=false -reconfigure -lockfile=readonly "${settings[@]}" 2>&1 | redact ||
     die "terraform init failed"
   require_default_workspace
 }
+
+# init with the local state's path (prepare_state made it).
+init_with_state() { init_with_backend "path=${STATE_PATH}"; }
 
 # The names of what the state holds, without data sources, one a line.
 count_state() {

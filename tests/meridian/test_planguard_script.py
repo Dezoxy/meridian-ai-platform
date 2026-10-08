@@ -404,8 +404,8 @@ def test_every_function_the_wrapper_calls_is_defined_in_a_file_it_reads() -> Non
 # What a wrapper must provide before it sources a function of planguard.sh runs.
 # The functions: run_clean alone, because the environment a program is given
 # (the names it keeps, the variables it is handed) is the cloud's own. The
-# globals: the selected module's row, the two sentences' words and the README the
-# sentences cite. The header of planguard.sh lists the same names.
+# globals: the selected module's row, the words of some sentences and the README
+# the sentences cite. The header of planguard.sh lists the same names.
 WRAPPER_FUNCTIONS = {"run_clean"}
 WRAPPER_GLOBALS = {
     "MODULE_DIR",
@@ -419,7 +419,13 @@ WRAPPER_GLOBALS = {
     "STATE_FILE_NAME",
     "SHARED_README",
     "ENVIRONMENT_WORDS",
+    "WORKSPACE_WORDS",
 }
+# The globals only the local state's function reads (prepare_state). A wrapper
+# whose state is remote never calls prepare_state or init_with_state, so it may
+# leave these three unset; the rest of WRAPPER_GLOBALS it must set.
+LOCAL_STATE_GLOBALS = {"STATE_DIR_UNDER_HOME", "STATE_FILE_NAME", "ENVIRONMENT_WORDS"}
+LOCAL_STATE_FUNCTIONS = {"prepare_state", "init_with_state"}
 
 VARIABLE_REFERENCE = re.compile(r"\$\{?[!#]?([A-Z][A-Z0-9_]*)\b")
 ASSIGNED_NAME = re.compile(r"^\s*(?:readonly |local )?([A-Z][A-Z0-9_]*)=", re.MULTILINE)
@@ -483,6 +489,59 @@ def test_the_header_of_planguard_lists_the_same_functions_and_globals() -> None:
 
     assert listed_in_header(moved, "functions") == WRAPPER_FUNCTIONS
     assert listed_in_header(moved, "globals") == WRAPPER_GLOBALS
+    assert listed_in_header(moved, "local-state globals") == LOCAL_STATE_GLOBALS
+
+
+def function_bodies(text: str) -> dict[str, str]:
+    """Each function's text, from its ``name() {`` line to the first ``}`` that
+    stands alone at the start of a line (the style of these files)."""
+    bodies: dict[str, str] = {}
+    for match in FUNCTION_DEFINITION.finditer(text):
+        end = re.compile(r"^\}", re.MULTILINE).search(text, match.end())
+        # A one-line function ends on its own line.
+        line_end = text.index("\n", match.start())
+        one_line = text[match.start() : line_end].rstrip().endswith("}")
+        bodies[match.group(1)] = (
+            text[match.start() : line_end]
+            if one_line
+            else text[match.start() : end.end() if end else len(text)]
+        )
+    return bodies
+
+
+def test_the_function_splitter_cuts_a_long_and_a_one_line_function() -> None:
+    text = "one() {\n  echo ${A}\n}\ntwo() { echo ${B}; }\nthree() {\n  echo ${C}\n}\n"
+
+    bodies = function_bodies(text)
+
+    assert set(bodies) == {"one", "two", "three"}
+    assert "A" in bodies["one"] and "B" not in bodies["one"]
+    assert "B" in bodies["two"] and "C" not in bodies["two"]
+    assert "C" in bodies["three"]
+
+
+@pytest.mark.parametrize("name", sorted(LOCAL_STATE_GLOBALS))
+def test_a_local_state_global_is_read_only_inside_the_local_state_functions(
+    name: str,
+) -> None:
+    moved = PLANGUARD_SH.read_text(encoding="utf-8")
+    reading = re.compile(r"\$\{?[!#]?" + name + r"\b")
+    bodies = function_bodies(moved)
+    outside_the_functions = moved
+    for body in bodies.values():
+        outside_the_functions = outside_the_functions.replace(body, "")
+
+    readers = {
+        function for function, body in bodies.items() if reading.search(code_of(body))
+    }
+
+    assert readers == {"prepare_state"}
+    assert readers <= LOCAL_STATE_FUNCTIONS
+    assert reading.search(code_of(outside_the_functions)) is None
+
+
+def test_the_local_state_globals_are_among_the_wrapper_globals() -> None:
+    assert LOCAL_STATE_GLOBALS < WRAPPER_GLOBALS
 
 
 def test_the_wrapper_defines_every_function_and_global_planguard_needs() -> None:
@@ -515,6 +574,46 @@ def test_the_wrapper_names_the_environment_in_one_read_only_variable() -> None:
     code = code_of(AWS_SH.read_text(encoding="utf-8"))
 
     assert 'readonly ENVIRONMENT_WORDS="the AWS environment"' in code.splitlines()
+
+
+# The two things the wrapper of a remote backend changes, held byte for byte for
+# the wrapper of the local state before anything moves: the whole sentence of the
+# refusal of another workspace, and the whole argument list of the init call.
+@pytest.mark.parametrize("module", MODULES, ids=MODULE_IDS)
+def test_another_workspace_is_refused_with_this_whole_sentence(
+    module: Module, tmp_path: Path
+) -> None:
+    tree = with_local_file(make_tree(tmp_path, module))
+    (tree.module / ".terraform").mkdir()
+    (tree.module / ".terraform" / "environment").write_text("w1")
+
+    done = tree.run("plan")
+
+    assert done.returncode == 1
+    assert done.stderr.splitlines()[-1] == (
+        "error: the module's directory is not on Terraform's default workspace, "
+        "or .terraform/environment cannot be read: Terraform would keep the state "
+        "in terraform.tfstate.d/ in the checkout and not in the state under your "
+        "home, and a removal would find it empty. Get back with: terraform "
+        f"-chdir=infra/terraform/{module.directory} workspace select default "
+        f"({module.readme}, State)"
+    )
+
+
+@pytest.mark.parametrize("subcommand", ["plan", "destroy"])
+@pytest.mark.parametrize("module", MODULES, ids=MODULE_IDS)
+def test_the_init_call_has_exactly_these_arguments_in_this_order(
+    module: Module, subcommand: str, tmp_path: Path
+) -> None:
+    tree = with_local_file(make_tree(tmp_path, module))
+
+    done = tree.run(subcommand, terminal=subcommand == "destroy")
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert tree.terraform_calls("init") == [
+        f"terraform -chdir={tree.module} init -no-color -input=false "
+        f"-reconfigure -lockfile=readonly -backend-config=path={tree.state_path}"
+    ]
 
 
 # ── a move, not a copy ───────────────────────────────────────────────────────
