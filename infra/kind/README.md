@@ -2541,8 +2541,9 @@ decide it on the adjuster's pages (S016): open
 `http://claims.meridian.localhost:8088/adjuster/claims` in a browser on the
 laptop, which lists the claims that wait for an adjuster and those whose
 triage failed; a claim's page shows its proposal, citations and audit trail
-and records the decision. The pages have no sign-in yet (threat model
-T-69), and the edge serves them only to the laptop.
+and records the decision. The pages have no sign-in unless it is switched on
+("The sign-in issuer", below: off by default, because `make demo` carries no
+token yet; threat model T-69), and the edge serves them only to the laptop.
 
 ### Filling the pages with claims: `make demo-seed` (S098)
 
@@ -3013,7 +3014,8 @@ annotation, read as the gateway of the telemetry stack reads its certificate's;
 the content is never printed): a changed realm rolls the pod on any run, also a
 plain run after a rotation that was interrupted before the Deployment was
 applied. The Claims API's own
-copy of its client secret is Y3's and Y4's to make.
+copy of its client secret is a third Secret, made only with the sign-in switch
+on (below).
 
 **The cast (Y2e).** The realm holds seven test people of one fictional
 insurer, to sign in with (the owner, 2026-10-08: "Users, one organisation"),
@@ -3113,6 +3115,180 @@ kubectl delete namespace identity
 kubectl -n meridian delete networkpolicy identity-claims-api-egress
 kubectl -n envoy-gateway-system delete networkpolicy identity-edge-egress
 ```
+
+**The staff sign-in of the Claims API: turning it on and off (S021, Y4b).**
+Status: **tested without a cluster (the chart's render, the scripts against
+stand-ins) and seen on kind twice (runs KR5 and KR5b, 2026-10-08, below), by a
+script through the edge and never in a browser.** The issuer above is one
+switch; this is a
+second, **off by default**: `MERIDIAN_SIGNIN` is empty or `off`, or `staff`, and
+any other word stops `make up`, `make deploy`, `make smoke` and `identity.sh`
+with a usage line, before they do anything. `staff` needs the issuer:
+`make deploy` refuses it without `MERIDIAN_IDENTITY=keycloak`, before it
+changes anything, and `make up` with `staff` and no add-on does everything else
+it does and says in its last lines that the Secret below was not made. The
+app's side (its own switch, the routes `/auth/start`,
+`/auth/callback`, `/auth/failed` and `/auth/sign-out`) is another contract's
+(Y4a): the chart only sets the variables that code reads, and until an image
+holds that code the smoke line below fails.
+
+```sh
+# on: the Secret first (make up keeps the cluster as it is), then the release
+MERIDIAN_IDENTITY=keycloak MERIDIAN_SIGNIN=staff make up
+MERIDIAN_IDENTITY=keycloak MERIDIAN_SIGNIN=staff make deploy
+MERIDIAN_IDENTITY=keycloak MERIDIAN_SIGNIN=staff make smoke
+# off again: a deploy without the switch; the release then carries none of it
+make deploy
+```
+
+What the switch makes or sets:
+
+| Object | Where | What it is |
+|---|---|---|
+| Secret `claims-api-signin` | `meridian`, made by `identity.sh up` when both switches are on, after the two Secrets of the issuer | `client-credential`: the pages client's secret, copied (base64, never decoded) from `keycloak-credentials`; `session-key`: 32 random bytes as base64, the cookie's key. Kept when it carries the generation of `keycloak-credentials`, made anew when not; it goes from kubectl through jq to kubectl on pipes (the key from openssl on a descriptor), and no value is on a command line, in a file or in any output. `identity.sh status` lists it by name |
+| `values/signin.yaml` | added by `deploy.sh` with `staff` and nothing else | The issuer, the authorization and end-session addresses on the front URL; the token and key addresses on the Service's name and port 8080; audience `meridian-claims-api`; client `meridian-claims-web`; token type `Bearer`; authorised parties `meridian-claims-web,meridian-scripts`; the redirect address `identity.sh` gives the realm (`/auth/callback`) and the return after sign-out, `/adjuster/claims`; plain HTTP at the edge. A test ties each to the realm, the discovery document of run KR1 and the smoke line |
+| The Claims API's container and pod | the chart's `signin.*` | Only with `staff`, only the Claims API: `MERIDIAN_SIGNIN`, the `MERIDIAN_SIGNIN_STAFF_*` variables, `MERIDIAN_SESSION_EDGE_PLAIN_HTTP`, and the credential and the key as `secretKeyRef`s of the Secret; a pod annotation that holds the Secret's generation, so a Secret made anew rolls the pod; and a resolver of timeout 1 second, 2 attempts and `ndots` 3 |
+| `MERIDIAN_ENVIRONMENT=kind` | `values/meridian.yaml`, always, on the Claims API | What lets the app accept the plain-HTTP key address and edge on kind; it refuses them in any other environment. A values list replaces the chart's, so the two items the chart sets are repeated beside it (a test holds them equal) |
+
+With the switch off the chart renders what it did before, byte for byte, apart
+from that one variable (checked against the render before the change).
+
+**After a rotation, deploy again.** `MERIDIAN_IDENTITY_ROTATE=1
+MERIDIAN_IDENTITY=keycloak MERIDIAN_SIGNIN=staff make up` makes new credentials,
+so the Secret `claims-api-signin` is made anew with the pages client's new
+secret and a new cookie key (every session ends), and the pod does not know: a
+pod reads its variables when it starts.
+`MERIDIAN_IDENTITY=keycloak MERIDIAN_SIGNIN=staff make deploy` must follow,
+because it passes the Secret's new generation to the chart and the changed pod
+annotation rolls the Claims API's pod. A plain `make up` keeps the Secret of one
+generation, and so the cookie key and the sessions. Nothing makes this Secret
+without both switches: `make deploy` with `staff` and no Secret refuses, names
+the command that makes it, and has changed nothing. It also refuses when the
+Secret's generation is not the one `keycloak-credentials` carries now (it reads
+the annotation of each, never the data): a rotation without the switch
+(`MERIDIAN_IDENTITY_ROTATE=1 MERIDIAN_IDENTITY=keycloak make up`) makes new
+credentials and leaves `claims-api-signin` with the old client's secret, and a
+deploy that carried it would start a healthy-looking pod on which every sign-in
+fails. The refusal names the `make up` that makes the Secret anew.
+
+**What a deploy says about the switch.** A deploy without it prints one line:
+the staff sign-in is OFF for this release, so the adjuster's pages are open to
+whoever reaches them, and the command that turns it on. If the rollout of a
+deploy with `staff` fails, the message gains a sentence: the previous pod,
+without the sign-in, may still be serving the pages.
+
+**What smoke proves with it on.** The adjuster-queue line (still one of the
+three) follows the queue's 303 to the start and its 303 to the issuer, and then
+posts a decision twice with no session: the page's own form with the page's own
+`Origin` (`decision=approve`) must answer 401, and the JSON route's post of
+`{"decision": "approve"}` must answer 401 with `WWW-Authenticate: Bearer`. A
+cross-site post is refused by the origin check before the guard runs, so only
+the page's own `Origin` shows the guard. Neither post changes a claim: both
+are refused before any lookup, and CLM-9999 need not exist.
+
+**An edge that adds an `Authorization` header.** The guard reads an
+`Authorization` header as a bearer token and nothing else. An edge or proxy that
+adds one of its own (Basic authentication in front of the cluster, say) makes
+every page answer 401, and the browser loops between the page and the issuer.
+Such an edge must not add the header to the Claims API's host.
+
+**The resolver.** With `staff` the Claims API's pod calls the issuer by name to
+fetch its keys and to exchange a code, and "a name lookup that hangs holds the
+fetching caller for the resolver's time" (the step's second re-check). The pod
+gets a one-second timeout, two attempts and `ndots` 3 instead of Kubernetes'
+five. `ndots` must stay above the two dots of `<service>.<namespace>.svc`: at 2
+or less such a name is asked as it is first, which leaves the cluster's zone for
+the node's resolver before the search list is tried. The names the pod resolves
+(`agent-runtime.meridian.svc`, `keycloak.identity.svc`,
+`platform-db-rw.meridian.svc` and the collector's full name) are checked in the
+tests against a model of the resolver's rule, not against a resolver.
+
+**What does not work while it is on.** `make demo` and the evaluation client
+do not work while the sign-in is on: they carry no sign-in, and Y7 is the
+contract that gives them one. Turn the switch off (a plain `make deploy`) to
+use them. The claimant's pages are not part of this switch (S093 is theirs).
+
+**Not seen, and open.** (1) A browser: the runs below drove the flow with an
+HTTP client that sent the issuer's cookies by hand, because Keycloak marks them
+`Secure` on a plain-HTTP front name and a client does not send those. Whether a
+browser keeps them on a `*.localhost` name, whether it follows the sign-out
+form's redirect to the issuer (the pages' `form-action` names the issuer's
+origin for that; by reasoning, not by a run), and what the issuer's confirm
+page looks like to a person are the owner's to see. (2) Removal: the Secret
+lives in `meridian`, so the recipe above (which deletes the namespace
+`identity`) does not remove it; `make down` does, with the rest of the cluster.
+(3) The refusal of a staff deploy whose Secret is of another generation than
+the issuer's (a rotation made without the switch): tested with stand-ins, not
+met on the cluster, where every Secret was of one generation. (4) A session
+that ends: no run waited the 300 seconds. (5) A decision recorded by a
+signed-in adjuster: the runs posted none, so that the seeded claims stay as
+`make demo-seed` left them.
+
+**The return after sign-out, and a cluster made before it.** The pages client
+used to list `+` for `post.logout.redirect.uris`, which Keycloak reads as the
+client's redirect addresses, and the only one is `/auth/callback`; the app
+returns from sign-out to `/adjuster/claims`, which the issuer would refuse.
+`identity-realm.sh` now takes the exact address as an optional fourth argument,
+`identity.sh` passes `IDENTITY_POST_LOGOUT_URI` (`/adjuster/claims` on the
+Claims API's origin; a test ties it to `values/signin.yaml`), and the client
+lists that address and no other. A realm is imported once, so a cluster whose
+realm was made before this change needs one `MERIDIAN_IDENTITY_ROTATE=1
+MERIDIAN_IDENTITY=keycloak MERIDIAN_SIGNIN=staff make up` (new passwords, new
+secrets, every session ended) before sign-out can return, then
+`MERIDIAN_IDENTITY=keycloak MERIDIAN_SIGNIN=staff make deploy`. A call of the
+generator with three arguments, as the rig makes, still writes `+`.
+
+**Seen on kind, runs KR5 and KR5b (2026-10-08, 17:04 to 17:29 UTC).** KR5, from
+the commit before the security review's fixes: `MERIDIAN_IDENTITY_ROTATE=1
+MERIDIAN_IDENTITY=keycloak MERIDIAN_SIGNIN=staff make up` ended 0 in 50
+seconds, made `keycloak-realm`, `keycloak-credentials` and `claims-api-signin`
+of one generation and rolled Keycloak onto the new realm;
+`MERIDIAN_IDENTITY=keycloak MERIDIAN_SIGNIN=staff make deploy` ended 0 in 98
+seconds, and the Claims API's pod was Ready with no restart, the sign-in
+variables, the two `secretKeyRef`s and the resolver options. KR5b, from the
+final commit (no `make up`; the Secret was kept): the same deploy ended 0 in
+103 seconds, and the pod logged its one line, "the staff sign-in is on". Then
+a script drove the flow through the edge, printing statuses and paths and no
+query, cookie value or password (it read two test passwords from the cluster's
+Secret into memory and posted each once to the issuer's form):
+
+- the queue with no session answered 303 to `/auth/start`, which answered 303
+  to the issuer's authorization address and set the transaction cookie
+  (`HttpOnly`, `SameSite=lax`, `Max-Age=600`, `Path=/auth/callback`);
+- the issuer's form answered 200, and a post of an adjuster's name and
+  password answered 302 to `/auth/callback`; the callback exchanged the code
+  at the Service's name and answered 303 to the queue with `Referrer-Policy:
+  no-referrer`, setting the session cookie (`HttpOnly`, `SameSite=lax`,
+  `Max-Age=300`, `Path=/`) and clearing the transaction;
+- with the session the queue answered 200 with the banner and one sign-out
+  form, and the proposal's JSON route 200; with nothing the JSON route
+  answered 401 with `WWW-Authenticate: Bearer`; a decision posted with the
+  session and another site's Origin answered 403;
+- a second start while the issuer's own session lived came back from the
+  issuer with a 302 and no form: no password is asked again;
+- sign-out answered 303 to the issuer's end-session address with both cookies
+  cleared and no `id_token_hint`, and 403 from another origin; the issuer
+  answered that address with a page that asks to confirm (one form), and the
+  form, posted, answered 302 to `/adjuster/claims` and cleared the issuer's
+  own session cookies;
+- the session cookie taken before the sign-out still opened the queue after
+  it (200): the app keeps no list of sessions, and a cookie works until its
+  own five minutes end (T-116);
+- the person in no group signed in and got the 403 page with one sign-out
+  form.
+
+Smoke with both switches on passed 62 lines and failed none (in KR5b its
+queue line also posted a decision twice with no session and got the guard's
+401 each time). A plain `make deploy` then ended 0 in 15 seconds and the queue
+answered 200 with no session; smoke with the issuer's switch alone passed 62,
+and with nothing set 56 with the issuer's line skipped. In KR5 the script's
+client kept the app's cookie between steps, so its checks "with nothing"
+carried a session, and it posted the issuer's confirm form without the form's
+hidden field (a 500 from the issuer): both were faults of the script and were
+corrected for KR5b. The cluster was left with the sign-in off. The opt-in rig
+ran once in a container after the last change to the realm generator (6 passed
+in 119.70 seconds): each of the seven people's ID token carries the role of
+the person's group, and the person in no group has no `roles` claim.
 
 **Seen on kind, run KR1 (2026-10-08).** `make up` with the switch on ended 0 in
 54 seconds. The scheduler accepted the pod, and the pod was Ready at its first

@@ -2,12 +2,12 @@
 
 import os
 from collections.abc import Mapping
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from meridian.platform.common.db import DATABASE_URL_ENV
-from meridian.platform.common.env import HttpUrl, require_env
+from meridian.platform.common.env import HttpUrl, SettingsError, require_env
 from meridian.platform.common.tls import ClientTls
 from meridian.workloads.claims_triage.file_download import (
     DOWNLOADS_ENABLED_ENV,
@@ -44,6 +44,21 @@ from meridian.workloads.claims_triage.uploads import (
 RUNTIME_URL_ENV = "MERIDIAN_RUNTIME_URL"
 TENANT_ENV = "MERIDIAN_TENANT"
 DEFAULT_TENANT = "claims-triage"
+# Whether the staff routes and pages demand a sign-in (S021, D3): off unless the
+# variable says ``staff``. Off, every route is as open as it was.
+SIGNIN_ENV = "MERIDIAN_SIGNIN"
+
+
+def signin_of(raw: str | None) -> Literal["off", "staff"]:
+    """The sign-in switch from the variable's value: off when it is unset, else
+    exactly ``off`` or ``staff``; any other word (a typo among them) stops the
+    start rather than leaving the pages open or closed by guess. The message
+    names the variable and never the value."""
+    if raw is None or raw == "off":
+        return "off"
+    if raw == "staff":
+        return "staff"
+    raise SettingsError(f"{SIGNIN_ENV} must be off or staff")
 
 
 class ClaimsSettings(BaseModel):
@@ -82,6 +97,10 @@ class ClaimsSettings(BaseModel):
     # Whether the adjuster's route that serves a stored file back exists (S070
     # F4b): off unless the chart says so, and it needs the uploads on.
     downloads_enabled: bool = False
+    # Whether the staff routes and pages demand a sign-in (S021, Y4): ``off`` is
+    # every route as open as it was; ``staff`` needs the sign-in settings too,
+    # which the app reads when it builds (``staff_signin``).
+    signin: Literal["off", "staff"] = "off"
 
     @model_validator(mode="after")
     def downloads_need_uploads(self) -> Self:
@@ -106,4 +125,5 @@ class ClaimsSettings(BaseModel):
             uploads_ceiling_rows=ceiling_rows_of(environ.get(UPLOADS_ROWS_ENV)),
             uploads_rate_per_minute=rate_per_minute_of(environ.get(UPLOADS_RATE_ENV)),
             downloads_enabled=downloads_enabled_of(environ.get(DOWNLOADS_ENABLED_ENV)),
+            signin=signin_of(environ.get(SIGNIN_ENV)),
         )

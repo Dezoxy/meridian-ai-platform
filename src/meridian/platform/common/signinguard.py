@@ -1,7 +1,8 @@
 """The FastAPI side of sign-in: a dependency that returns the principal, one
 that also needs a role, and the walk that reports what guards each route (S021,
-T-05). Designed for S021 and wired to no route: no service uses it yet, and the
-switch that would turn sign-in on is off.
+T-05). The Claims API wires it to the staff routes and pages when
+``MERIDIAN_SIGNIN`` is ``staff`` (``staff_signin``), off by default; no other
+service uses it.
 
 ``Signin`` holds one population's settings and key set. Its dependencies are
 plain ``def`` functions, which FastAPI runs in a worker thread: the key fetch
@@ -23,8 +24,8 @@ when the issuer's keys cannot be had. The body is the same for every cause: it
 never says whether the signature, the audience or the expiry failed. A 401 for
 the JSON form carries ``WWW-Authenticate: Bearer``; a page's does not, because a
 browser would answer it with a login box, and the 403 and the 503 carry none.
-Turning a 401 into a redirect to the issuer belongs to the page flow, which
-does not exist yet.
+Turning a 401 into a redirect to the issuer belongs to the page flow; the Claims
+API's wiring turns a page's 401 into a redirect to its start route.
 
 What a refusal leaves. The reason (never the subject, a role or a header) goes
 to the log through a throttle, one line per reason per window with the count of

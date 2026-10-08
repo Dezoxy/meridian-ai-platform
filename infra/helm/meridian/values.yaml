@@ -716,3 +716,59 @@ rateStore:
     limits:
       memory: 64Mi
   maxmemory: 32mb
+
+# The staff sign-in of the Claims API (S021, Y4b, templates/_signin.tpl). Off
+# unless a cluster's values turn it on (kind's is infra/kind/values/signin.yaml,
+# which deploy.sh adds only when MERIDIAN_SIGNIN=staff). Nothing here is a
+# secret: the two secret values are read from keys of a Secret.
+#   mode         off or staff; anything else, an empty value too, fails the
+#                render. With staff the Claims API's container, and no other,
+#                gets the MERIDIAN_SIGNIN* and MERIDIAN_SESSION* variables below,
+#                and its pod a dnsConfig (a one-second timeout, two attempts,
+#                ndots 3) and the generation as a pod annotation.
+#   secret       the Secret in the release's namespace that holds the keys
+#                `client-credential` (the pages client's secret at the issuer)
+#                and `session-key` (base64 of random bytes, the cookie's key).
+#                The name is a default, as rateStore.secret's is; an empty one
+#                fails the render with staff. The chart reads both through
+#                secretKeyRef and holds neither.
+#   generation   text, the pod annotation meridian.local/signin-generation: a
+#                Secret made anew gets a new one, and the pod rolls. Required
+#                with staff; deploy.sh reads it from the Secret and passes it.
+#   edgePlainHttp
+#                true when the edge speaks plain HTTP to the browser, so the
+#                session cookie is not Secure. The app accepts it only when
+#                MERIDIAN_ENVIRONMENT is kind.
+#   staff        each is required with staff, and the variable the modules read
+#                is MERIDIAN_SIGNIN_STAFF_ plus the value's name in capitals
+#                with an underscore between words (keysUrl is KEYS_URL):
+#                  issuer, audience, keysUrl      the token check's settings
+#                  clientId, authorizationUrl, tokenUrl, endSessionUrl,
+#                  appOrigin, redirectUri, postLogoutRedirectUri
+#                                                 the page flow's settings
+#                  requiredTyp, allowedAzp        what tells an access token from
+#                                                 an ID token or a refresh token
+#                                                 (allowedAzp: comma separated);
+#                                                 set from a live token of the
+#                                                 issuer before the switch is on
+#                The front-channel addresses (issuer, authorizationUrl,
+#                endSessionUrl, appOrigin, redirectUri, postLogoutRedirectUri)
+#                are the browser's; tokenUrl and keysUrl are the pod's.
+signin:
+  mode: "off" # quoted: a bare off is the boolean false in YAML 1.1
+  secret: claims-api-signin
+  generation: ""
+  edgePlainHttp: false
+  staff:
+    issuer: ""
+    audience: ""
+    keysUrl: ""
+    clientId: ""
+    authorizationUrl: ""
+    tokenUrl: ""
+    endSessionUrl: ""
+    appOrigin: ""
+    redirectUri: ""
+    postLogoutRedirectUri: ""
+    requiredTyp: ""
+    allowedAzp: ""
