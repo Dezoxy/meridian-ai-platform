@@ -123,7 +123,7 @@ EVAL_INPUTS         := src config/registry data/synthetic data/evaluation/record
 
 STRUCTURIZR := docker run --rm -v "$(CURDIR)/$(ARCH_DIR):/w:ro"
 
-.PHONY: help validate inspect check docs test secret-scan view export mermaid-views mermaid-render mermaid pdf clean lint pytest coverage-floor pytest-db alerts eval eval-tests eval-compare eval-baseline eval-record eval-injection-record synthetic up deploy images helm-lint demo smoke gateway-upkeep grafana grafana-password cert-renew cluster-holder down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry aws-validate aws-scan aws-plan aws-apply aws-destroy gcp-validate gcp-scan aws-kubeadm-validate aws-kubeadm-scan gcp-kubeadm-validate gcp-kubeadm-scan azure-platform-validate azure-platform-scan
+.PHONY: help validate inspect check docs test secret-scan view export mermaid-views mermaid-render mermaid pdf pdf-brief clean lint pytest coverage-floor pytest-db alerts eval eval-tests eval-compare eval-baseline eval-record eval-injection-record synthetic up deploy images helm-lint demo smoke gateway-upkeep grafana grafana-password cert-renew cluster-holder down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry aws-validate aws-scan aws-plan aws-apply aws-destroy gcp-validate gcp-scan aws-kubeadm-validate aws-kubeadm-scan gcp-kubeadm-validate gcp-kubeadm-scan azure-platform-validate azure-platform-scan
 .DEFAULT_GOAL := help
 
 ## help            list the targets
@@ -195,6 +195,10 @@ mermaid: mermaid-views mermaid-render
 ## pdf             the Documentation tab and every view as one PDF, named <project>-architecture-<date>-<edition>.pdf
 pdf:
 	STRUCTURIZR_IMAGE=$(STRUCTURIZR_IMAGE) PANDOC_IMAGE=$(PANDOC_IMAGE) MERMAID_IMAGE=$(MERMAID_IMAGE) ARCH_DIR=$(ARCH_DIR) scripts/architecture-pdf.sh
+
+## pdf-brief       the brief: without the documents pdf-brief.txt lists, the decisions as an index; named <project>-architecture-brief-<date>-<edition>.pdf
+pdf-brief:
+	BRIEF=1 STRUCTURIZR_IMAGE=$(STRUCTURIZR_IMAGE) PANDOC_IMAGE=$(PANDOC_IMAGE) MERMAID_IMAGE=$(MERMAID_IMAGE) ARCH_DIR=$(ARCH_DIR) scripts/architecture-pdf.sh
 
 ## clean           delete the generated folder (exports and PDFs; all gitignored)
 clean:

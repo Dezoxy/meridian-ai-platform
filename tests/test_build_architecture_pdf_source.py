@@ -357,5 +357,248 @@ class Edition(unittest.TestCase):
         self.assertFalse(dirty)
 
 
+class Tables(unittest.TestCase):
+    """body() prints tables through pdf_tables; its own tests have the rules."""
+
+    def test_a_table_with_a_long_cell_reaches_the_pdf_as_records(self):
+        long = ("word " * 80).strip()
+        table = ["| ID | Threat |", "|---|---|", f"| T-01 | {long} |"]
+        lines = ["## Threats", "", *table]
+        with tempfile.TemporaryDirectory() as tmp:
+            text, _ = build.body(lines, {}, Path(tmp))
+        self.assertIn("**T-01**", text.splitlines())
+        self.assertNotIn("|---|---|", text)
+
+    def test_a_link_in_a_record_is_still_made_plain(self):
+        long = ("word " * 80).strip()
+        row = f"| T-01 | [guide](docs/g.md) {long} |"
+        lines = ["| ID | Threat |", "|---|---|", row]
+        with tempfile.TemporaryDirectory() as tmp:
+            text, _ = build.body(lines, {}, Path(tmp))
+        self.assertIn("*Threat.* guide word", text)
+
+
+class Brief(unittest.TestCase):
+    """The brief: the full edition's source with some documents left out, the
+    decisions as an index, and a first page that says what is not in it."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.arch = Path(self.tmp.name) / "docs" / "architecture"
+        (self.arch / "overview").mkdir(parents=True)
+        (self.arch / "security").mkdir()
+        (self.arch / "overview" / "01-overview.md").write_text("## Overview\n\nText.\n")
+        (self.arch / "security" / "threat-model.md").write_text(
+            "## Threat model\n\nRows.\n"
+        )
+        (self.arch / "overview" / "20-threat-model.md").symlink_to(
+            "../security/threat-model.md"
+        )
+        self.pages = sorted((self.arch / "overview").glob("*.md"))
+
+    def listing(self, text):
+        (self.arch / build.BRIEF_OMIT).write_text(text)
+
+    def test_without_a_listing_every_page_stays(self):
+        kept, left_out = build.brief_pages(self.pages, self.arch)
+        self.assertEqual(kept, self.pages)
+        self.assertEqual(left_out, [])
+
+    def test_a_listed_register_is_left_out_through_its_symlink(self):
+        self.listing("# what the brief leaves out\nsecurity/threat-model.md\n")
+        kept, left_out = build.brief_pages(self.pages, self.arch)
+        self.assertEqual([page.name for page in kept], ["01-overview.md"])
+        self.assertEqual([page.name for page in left_out], ["20-threat-model.md"])
+
+    def test_a_register_symlinked_in_from_outside_can_be_left_out(self):
+        outside = self.arch.parent / "operations"
+        outside.mkdir()
+        (outside / "runbooks.md").write_text("## Runbooks\n\nSteps.\n")
+        (self.arch / "overview" / "30-runbooks.md").symlink_to(
+            "../../operations/runbooks.md"
+        )
+        pages = sorted((self.arch / "overview").glob("*.md"))
+        self.listing("overview/30-runbooks.md\n")
+        kept, left_out = build.brief_pages(pages, self.arch)
+        self.assertEqual([page.name for page in left_out], ["30-runbooks.md"])
+        self.assertEqual(len(kept), 2)
+
+    def test_a_listed_path_that_leaves_the_directory_stops_the_build(self):
+        (self.arch.parent / "secret.md").write_text("## Secret\n")
+        self.listing("../secret.md\n")
+        with self.assertRaises(SystemExit):
+            build.brief_pages(self.pages, self.arch)
+
+    def test_a_page_can_be_listed_by_its_own_path(self):
+        self.listing("overview/01-overview.md\n")
+        kept, _ = build.brief_pages(self.pages, self.arch)
+        self.assertEqual([page.name for page in kept], ["20-threat-model.md"])
+
+    def test_a_listed_file_that_no_page_shows_stops_the_build(self):
+        # A typo would otherwise leave the document in the brief unnoticed.
+        self.listing("security/threats.md\n")
+        with self.assertRaises(SystemExit) as stop:
+            build.brief_pages(self.pages, self.arch)
+        self.assertIn("security/threats.md", str(stop.exception))
+
+    def test_a_brief_that_leaves_every_page_out_stops_the_build(self):
+        self.listing("overview/01-overview.md\nsecurity/threat-model.md\n")
+        with self.assertRaises(SystemExit):
+            build.brief_pages(self.pages, self.arch)
+
+    def test_the_title_of_a_page_is_its_first_heading(self):
+        self.assertEqual(build.page_title(self.pages[1]), "Threat model")
+
+    def test_the_decisions_become_an_index_in_number_order(self):
+        workspace = {
+            "documentation": {
+                "decisions": [
+                    {
+                        "id": "10",
+                        "title": "Split it",
+                        "status": "Proposed",
+                        "date": "2026-10-07T00:00:00Z",
+                        "format": "Markdown",
+                        "content": "# 10. Split it\n\nA long text.\n",
+                    },
+                    {
+                        "id": "2",
+                        "title": "Use a | pipe",
+                        "status": "Accepted",
+                        "date": "2026-09-29T00:00:00Z",
+                        "format": "Markdown",
+                        "content": "# 2. Use a pipe\n",
+                    },
+                ]
+            }
+        }
+        text, count = build.decision_index(workspace)
+        lines = text.splitlines()
+        self.assertEqual(count, 2)
+        self.assertIn("# Decisions", lines)
+        rows = [line for line in lines if line.startswith("| ")]
+        self.assertEqual(rows[1], "| 2 | Use a \\| pipe | Accepted | 2026-09-29 |")
+        self.assertEqual(rows[2], "| 10 | Split it | Proposed | 2026-10-07 |")
+        self.assertNotIn("A long text.", text)
+
+    def test_a_decision_with_a_missing_or_odd_field_still_gives_one_row(self):
+        workspace = {
+            "documentation": {
+                "decisions": [
+                    {
+                        "id": "3",
+                        "title": "Two\nlines",
+                        "status": "Accepted | superseded",
+                        "date": None,
+                        "format": "Markdown",
+                        "content": "# 3. Two lines\n",
+                    }
+                ]
+            }
+        }
+        text, _ = build.decision_index(workspace)
+        rows = [line for line in text.splitlines() if line.startswith("| ")]
+        self.assertEqual(rows[1], "| 3 | Two lines | Accepted \\| superseded |  |")
+
+    def test_no_decisions_means_no_index(self):
+        self.assertEqual(build.decision_index({}), ("", 0))
+
+    def test_the_first_page_says_what_the_brief_leaves_out(self):
+        note = build.brief_note(["Threat model", "Azure platform"], 11)
+        self.assertIn("Threat model", note)
+        self.assertIn("Azure platform", note)
+        self.assertIn("11 decisions", note)
+        self.assertIn("full edition", note)
+
+    def test_the_first_page_of_a_brief_that_leaves_nothing_out_says_so(self):
+        note = build.brief_note([], 0)
+        self.assertIn("full edition", note)
+        self.assertNotIn("0 decisions", note)
+
+    def test_the_brief_has_its_own_file_name_with_the_same_edition_at_the_end(self):
+        day = build.dt.date(2026, 10, 8)
+        full = build.pdf_name("Payment Platform", day, "af49b21", False)
+        brief = build.pdf_name("Payment Platform", day, "af49b21", False, brief=True)
+        self.assertEqual(full, "payment-platform-architecture-2026-10-08-af49b21.pdf")
+        self.assertEqual(
+            brief, "payment-platform-architecture-brief-2026-10-08-af49b21.pdf"
+        )
+
+    def test_the_cover_of_the_brief_says_brief(self):
+        day = build.dt.date(2026, 10, 8)
+        brief = build.header("P", "af49b21", day, brief=True)
+        self.assertIn("Architecture brief", brief)
+        self.assertIn("Architecture documentation", build.header("P", "af49b21", day))
+
+
+class BriefFromTheCommandLine(unittest.TestCase):
+    """The script itself, with --brief, on a workspace of one page and one ADR."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.arch = self.root / "docs" / "architecture"
+        (self.arch / "overview").mkdir(parents=True)
+        (self.arch / "generated").mkdir()
+        (self.arch / "workspace.dsl").write_text("workspace {\n    !docs overview\n}\n")
+        (self.arch / "overview" / "01-overview.md").write_text("## Overview\n\nText.\n")
+        (self.arch / "overview" / "20-threats.md").write_text("## Threats\n\nRows.\n")
+        (self.arch / "pdf-brief.txt").write_text("overview/20-threats.md\n")
+        workspace = {
+            "name": "Demo",
+            "views": {},
+            "documentation": {
+                "decisions": [
+                    {
+                        "id": "1",
+                        "title": "Use it",
+                        "status": "Accepted",
+                        "date": "2026-01-15T00:00:00Z",
+                        "format": "Markdown",
+                        "content": "# 1. Use it\n\nThe whole text of the decision.\n",
+                    }
+                ]
+            },
+        }
+        (self.arch / "generated" / "workspace.json").write_text(json.dumps(workspace))
+        subprocess.run(["git", "init", "--quiet"], cwd=self.root, check=True)
+
+    def build(self, *extra):
+        output = self.arch / "generated" / "out.md"
+        result = subprocess.run(
+            ["python3", str(SCRIPT), "docs/architecture", "docs/architecture/generated"]
+            + [str(output), *extra],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return result, output.read_text() if output.exists() else ""
+
+    def test_the_brief_leaves_the_listed_page_and_the_decisions_text_out(self):
+        result, text = self.build("--brief")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("-architecture-brief-", result.stdout)
+        self.assertIn("# About this brief", text)
+        self.assertIn("- Threats", text)
+        self.assertNotIn("Rows.", text)
+        self.assertIn("| 1 | Use it | Accepted | 2026-01-15 |", text)
+        self.assertNotIn("The whole text of the decision.", text)
+
+    def test_without_the_flag_the_full_edition_holds_everything(self):
+        result, text = self.build()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("-brief-", result.stdout)
+        self.assertNotIn("About this brief", text)
+        self.assertIn("Rows.", text)
+        self.assertIn("The whole text of the decision.", text)
+
+    def test_an_argument_it_does_not_know_is_refused(self):
+        result, _ = self.build("--short")
+        self.assertNotEqual(result.returncode, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

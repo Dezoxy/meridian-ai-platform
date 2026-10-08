@@ -1,0 +1,12 @@
+# Documents the brief leaves out. The brief is the PDF to hand to someone who
+# will not read a register: `make pdf-brief`. See
+# scripts/build_architecture_pdf_source.py.
+#
+# One path per line, relative to this directory: a page of the Documentation
+# tab, or the file its symlink in overview/ points at. The brief's first page
+# names each document left out, so nobody reads its absence as "there is
+# none"; the full edition (`make pdf`) always holds everything.
+#
+# A path that is no page of the Documentation tab stops the build.
+security/threat-model.md
+deployment/azure-platform.md
