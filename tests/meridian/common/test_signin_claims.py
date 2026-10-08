@@ -5,6 +5,7 @@ the kind of token (``typ`` and ``azp``), the subject claim, the 503, what
 test; the key URL is a mock transport; the time is given."""
 
 import base64
+import logging
 from typing import Any
 
 import pytest
@@ -418,6 +419,114 @@ def test_an_https_key_url_is_accepted_in_every_environment() -> None:
     for environment in ("azure", "kind", "local"):
         env = {**GOOD_ENV, "MERIDIAN_ENVIRONMENT": environment}
         assert SigninSettings.from_env(env, "staff").keys_url.startswith("https://")
+
+
+# The rule is the model's: no way of building the settings skips it.
+PLAIN_URL = "http://canary-keys.identity.svc:8080/certs"
+
+
+def plain(**extra: Any) -> SigninSettings:
+    return SigninSettings(
+        population="staff",
+        issuer="https://id.example.test/realms/staff",
+        audience="meridian-api",
+        keys_url=PLAIN_URL,
+        **extra,
+    )
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {},
+        {"environment": ""},
+        {"environment": "azure"},
+        {"environment": "Kind"},
+        {"environment": "kind "},
+    ],
+)
+def test_settings_built_directly_refuse_a_plain_http_key_url_outside_kind(
+    extra: dict[str, str],
+) -> None:
+    with pytest.raises(ValidationError) as refused:
+        plain(**extra)
+
+    assert [error["loc"] for error in refused.value.errors()] == [("keys_url",)]
+    assert PLAIN_URL not in str(refused.value) + repr(refused.value)
+    # The text and the repr hide the input (``hide_input_in_errors``); a caller
+    # that asks ``errors()`` for it gets it, as for every field of the model.
+    assert "canary" not in str(refused.value) + repr(refused.value)
+    assert "canary" not in repr(refused.value.errors(include_input=False))
+
+
+def test_settings_built_directly_accept_a_plain_http_key_url_on_kind() -> None:
+    assert plain(environment="kind").keys_url == PLAIN_URL
+
+
+def test_settings_built_directly_accept_an_https_key_url_with_no_environment() -> None:
+    settings = SigninSettings(
+        population="staff",
+        issuer="https://id.example.test/realms/staff",
+        audience="meridian-api",
+        keys_url="https://id.example.test/realms/staff/certs",
+    )
+
+    assert settings.environment == ""
+
+
+def test_the_environment_the_settings_were_read_in_is_kept() -> None:
+    assert SigninSettings.from_env(KIND_ENV, "staff").environment == "kind"
+    assert SigninSettings.from_env(GOOD_ENV, "staff").environment == ""
+
+
+# ── M2 is open by default, and the start says so ────────────────────────────
+LOGGER = "meridian.platform.common.signin"
+
+
+def warnings_of(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == LOGGER and r.levelno == logging.WARNING
+    ]
+
+
+@pytest.mark.parametrize("environment", ["azure", "local", "", "Kind"])
+def test_empty_token_kind_settings_outside_kind_log_one_fixed_warning(
+    environment: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    env = {**GOOD_ENV, "MERIDIAN_ENVIRONMENT": environment}
+
+    with caplog.at_level(logging.DEBUG):
+        SigninSettings.from_env(env, "staff")
+
+    (line,) = warnings_of(caplog)
+    assert "no token type and no authorized party are required" in line
+    for value in filter(None, env.values()):
+        assert value not in line  # fixed text; no setting's value
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {ENV_PREFIX + "REQUIRED_TYP": "Bearer"},
+        {ENV_PREFIX + "ALLOWED_AZP": "web-client"},
+    ],
+)
+def test_one_token_kind_setting_is_enough_to_be_quiet(
+    extra: dict[str, str], caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.DEBUG):
+        SigninSettings.from_env({**GOOD_ENV, **extra}, "staff")
+
+    assert warnings_of(caplog) == []
+
+
+def test_kind_is_not_warned_about(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.DEBUG):
+        SigninSettings.from_env(KIND_ENV, "staff")
+
+    assert warnings_of(caplog) == []
 
 
 CANARY = "pw-CANARY-8d41"

@@ -29,9 +29,12 @@ error, so the library's text, which can quote a claim, is not chained to it.
 The roles claim must be a list of strings; anything else means no roles.
 Whatever a token holds, ``check_bearer`` returns a ``Principal`` or raises one
 of these classes, never another exception (a 500 would say that a token can
-break the service).
+break the service). The one exception to that is not about a token:
+``CalledFromEventLoop``, from a caller that runs ``check_bearer`` on an event
+loop, a mistake in the code that must be found and not answered as an outage.
 """
 
+import logging
 import math
 import re
 from collections.abc import Mapping
@@ -42,7 +45,15 @@ from urllib.parse import urlsplit
 
 import jwt
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    ValidationInfo,
+    field_validator,
+)
 
 from meridian.platform.common.env import (
     HttpUrl,
@@ -55,6 +66,8 @@ from meridian.platform.common.signinkeys import (
     KeySetUnavailable,
     UnknownKeyId,
 )
+
+logger = logging.getLogger(__name__)
 
 type Population = Literal["staff", "claimant"]
 type Via = Literal["bearer", "cookie"]
@@ -212,6 +225,12 @@ class SigninSettings(BaseModel):
     # Compared with the token's ``iss`` character for character.
     issuer: Annotated[str, AfterValidator(_issuer)]
     audience: Word
+    # The environment this process runs in (``MERIDIAN_ENVIRONMENT``), as the
+    # text it has; ``from_env`` fills it. Only ``kind`` lets ``keys_url`` be
+    # plain HTTP, and the model decides that, so no way of building the settings
+    # skips the rule: the default, an empty text, is no environment at all. It
+    # is declared before ``keys_url`` because the rule reads it.
+    environment: str = ""
     # Its own setting: on kind the browser reaches the issuer by one name and the
     # pods by another, and ``iss`` carries the first.
     keys_url: Annotated[str, HttpUrl]
@@ -230,20 +249,41 @@ class SigninSettings(BaseModel):
     # must be one of these.
     allowed_azp: Annotated[tuple[Word, ...], Field(max_length=MAX_ALLOWED_AZP)] = ()
 
+    @field_validator("keys_url")
+    @classmethod
+    def _plain_http_only_on_kind(cls, value: str, info: ValidationInfo) -> str:
+        # Over plain HTTP, whoever is on the path supplies the keys, and with
+        # them every token. The value is left out of the message.
+        plain = urlsplit(value).scheme != "https"
+        if plain and info.data.get("environment") != KIND_ENVIRONMENT:
+            raise ValueError(
+                f"must be an https URL unless the environment is {KIND_ENVIRONMENT}"
+            )
+        return value
+
     @classmethod
     def from_env(cls, environ: Mapping[str, str], population: Population) -> Self:
         """Read ``MERIDIAN_SIGNIN_<POPULATION>_ISSUER``, ``_AUDIENCE``,
         ``_KEYS_URL`` and, optionally, ``_ROLES_CLAIM``, ``_SUBJECT_CLAIM``,
-        ``_REQUIRED_TYP`` and ``_ALLOWED_AZP`` (comma separated). Raise
-        ``SettingsError`` naming the variable that is missing or not valid,
-        never the value. An ``http`` key URL is accepted only when
-        ``MERIDIAN_ENVIRONMENT`` is ``kind``: over plain HTTP, whoever is on the
-        path supplies the keys, and with them every token."""
+        ``_REQUIRED_TYP`` and ``_ALLOWED_AZP`` (comma separated), and
+        ``MERIDIAN_ENVIRONMENT``. Raise ``SettingsError`` naming the variable
+        that is missing or not valid, never the value. An ``http`` key URL is
+        accepted only when ``MERIDIAN_ENVIRONMENT`` is exactly ``kind``, by
+        every way of building the settings, not this one alone.
+
+        ``_REQUIRED_TYP`` and ``_ALLOWED_AZP`` are NOT enforced when empty,
+        which is their default: an ID token or a refresh token with the right
+        issuer and audience then passes as an access token. They are the only
+        thing that tells the kinds apart, so they are set from a live token of
+        the issuer before sign-in is turned on. When both are empty and the
+        environment is not ``kind``, one WARNING says so (a fixed text, no
+        value)."""
         prefix = f"{SIGNIN_ENV_PREFIX}{population.upper()}_"
         azp = environ.get(prefix + "ALLOWED_AZP") or ""
         outcome = cls._built(
             prefix,
             population=population,
+            environment=environ.get(ENVIRONMENT_ENV) or "",
             issuer=require_env(environ, prefix + "ISSUER"),
             audience=require_env(environ, prefix + "AUDIENCE"),
             keys_url=require_env(environ, prefix + "KEYS_URL"),
@@ -256,11 +296,14 @@ class SigninSettings(BaseModel):
         )
         if isinstance(outcome, str):
             raise SettingsError(outcome)
-        plain = urlsplit(outcome.keys_url).scheme != "https"
-        if plain and environ.get(ENVIRONMENT_ENV) != KIND_ENVIRONMENT:
-            raise SettingsError(
-                f"{prefix}KEYS_URL must be an https URL unless "
-                f"{ENVIRONMENT_ENV} is {KIND_ENVIRONMENT}"
+        if not (outcome.required_typ or outcome.allowed_azp) and (
+            outcome.environment != KIND_ENVIRONMENT
+        ):
+            logger.warning(
+                "sign-in for %s: no token type and no authorized party are "
+                "required, so an ID token with the right issuer and audience "
+                "is accepted as an access token",
+                population,
             )
         return outcome
 

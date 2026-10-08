@@ -27,8 +27,13 @@ Every key is tried on every cookie, whichever matches, so the time taken does
 not say which key signed it.
 
 A key is given as base64 of at least ``MIN_SESSION_KEY_BYTES`` random bytes (see
-``SessionKeys.from_env``): a key of characters picked by a person is rejected
-at the start.
+``SessionKeys.from_env``). What the start checks is the form and two floors: the
+text is base64 (one alphabet), it decodes to at least ``MIN_SESSION_KEY_BYTES``
+bytes, and those bytes hold at least ``MIN_DISTINCT_KEY_BYTES`` different values.
+That refuses a short key and a repeated pattern (``aaaa...``, ``password``
+repeated). It is a floor, not a proof of randomness: a phrase of 64 different
+letters, or ``bytes(range(32))`` in base64, passes. Make the key with a random
+source (``openssl rand -base64 48``).
 
 The cookie's attributes are a function of one setting (``SessionSettings``):
 ``HttpOnly``, ``SameSite=Lax``, ``Path=/`` and ``Secure``, unless the edge is

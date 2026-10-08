@@ -25,11 +25,22 @@ does not exist yet.
 
 What a refusal leaves. The reason (never the subject, a role or a header) goes
 to the log through a throttle, one line per reason per window with the count of
-the refusals the window held back, and to ``on_refusal`` when one is given: it
-is called with the reason and the request before the answer is made, and when it
-raises the request is refused all the same (a hook that fails, such as an audit
-write, must not turn a refusal into an answer) and its failure is logged by
-class name only.
+the refusals the window held back, and to ``on_refusal`` when one is given. The
+hook is called on the same terms as the line, which is the shape of
+``identity.py``'s audit throttle: only when the throttle says a line is due for
+that reason, with the reason, the request and the count of refusals of that
+reason since the last call (0 at the first), and before the answer is made. A
+flood of one reason calls it once per window, so a hook that writes (an audit
+row) is not a write per request; the first refusal of another reason calls it
+again. The hook is a plain function and runs in the worker thread of the
+request: a slow one holds that thread, only that thread, and only for the
+refusals the throttle lets through. It receives the whole request, so it must
+not log its headers (the credential is in them). It cannot change the answer:
+when it raises, the request is refused all the same (a hook that fails, such as
+an audit write, must not turn a refusal into an answer), the count it was given
+is not given again, and its failure is logged by class name only. A hook that
+raises something that is not an ``Exception`` is its own fault: the request gets
+a 500 and nothing is granted.
 
 What the walk reports. ``route_reports`` lists every route of an app with its
 methods, whether a sign-in dependency made by ``Signin.principal`` guards it,
@@ -93,8 +104,9 @@ ANY_LABEL = "ANY"
 OVERRIDE_LABEL = "DEPENDENCY_OVERRIDE"
 
 type Dependency = Callable[..., Principal]
-# Called with the reason and the request of every refusal, before the answer.
-type OnRefusal = Callable[[Reason, Request], None]
+# Called with the reason, the request and the count of refusals of that reason
+# since the last call, when the throttle says a line is due; before the answer.
+type OnRefusal = Callable[[Reason, Request, int], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,30 +213,40 @@ class Signin:
     def _refuse(
         self, refusal: SigninRefusal, request: Request, json_form: bool
     ) -> HTTPException:
-        """Log the refusal, tell the hook, and make the answer. The hook cannot
+        """Log the refusal and tell the hook, both only when the throttle says a
+        line is due for this reason (one ``due`` call, so the line and the hook
+        share the window and the count), and make the answer. The hook cannot
         stop the answer: whatever it raises, the request is refused."""
-        self._log(logging.WARNING, refusal.reason.value, "sign-in refused: %s")
-        if self._on_refusal is not None:
-            try:
-                self._on_refusal(refusal.reason, request)
-            except Exception as error:
-                # The class and nothing else: the text can quote what the hook
-                # was working with.
-                self._log(
-                    logging.ERROR,
-                    type(error).__name__,
-                    "the hook of a sign-in refusal failed: %s",
-                    key="hook-failed",
-                )
+        reason = refusal.reason
+        carried = self._throttle.due(None, reason.value)
+        if carried is not None:
+            self._say(logging.WARNING, reason.value, "sign-in refused: %s", carried)
+            self._tell(reason, request, carried)
         return _answer(refusal, json_form)
+
+    def _tell(self, reason: Reason, request: Request, carried: int) -> None:
+        if self._on_refusal is None:
+            return
+        try:
+            self._on_refusal(reason, request, carried)
+        except Exception as error:
+            # The class and nothing else: the text can quote what the hook was
+            # working with.
+            self._log(
+                logging.ERROR,
+                type(error).__name__,
+                "the hook of a sign-in refusal failed: %s",
+                key="hook-failed",
+            )
 
     def _log(self, level: int, word: str, message: str, *, key: str = "") -> None:
         """One line per key per window, with the count of the lines held back.
-        The key is the reason by default; the word is the reason's code or an
-        exception's class, never a subject, a role or a header."""
+        The word is an exception's class, never a subject, a role or a header."""
         carried = self._throttle.due(None, key or word)
-        if carried is None:
-            return
+        if carried is not None:
+            self._say(level, word, message, carried)
+
+    def _say(self, level: int, word: str, message: str, carried: int) -> None:
         extra = f" (and {carried} more since the last line)" if carried else ""
         logger.log(level, message + extra, word)
 

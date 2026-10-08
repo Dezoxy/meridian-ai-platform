@@ -10,7 +10,7 @@ import base64
 import hashlib
 import hmac
 import json
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable, Iterator
 from typing import Any
 
 import httpx
@@ -21,7 +21,7 @@ from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from jwt.algorithms import RSAAlgorithm
 
 from meridian.platform.common.signin import SigninSettings
-from meridian.platform.common.signinkeys import KeySet, key_client
+from meridian.platform.common.signinkeys import KeySet
 
 ISSUER = "https://id.example.test/realms/meridian-staff"
 AUDIENCE = "meridian-api"
@@ -53,10 +53,30 @@ class FakeClock:
         self.now += seconds
 
 
+class ChunkStream(httpx.SyncByteStream, httpx.AsyncByteStream):
+    """A response body served in chunks, read when the client asks: a response
+    built from ``content=bytes`` is read (and, when it names a content encoding,
+    decoded) the moment it is made, so a test of what the client holds would
+    measure the fake. Sync and async, for whichever transport reads it."""
+
+    def __init__(self, body: bytes, chunk_size: int) -> None:
+        self._body = body
+        self._size = chunk_size
+
+    def __iter__(self) -> Iterator[bytes]:
+        for start in range(0, len(self._body), self._size):
+            yield self._body[start : start + self._size]
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for chunk in self:
+            yield chunk
+
+
 class FakeIssuer:
     """An issuer: signing keys by key id, a key URL behind a mock transport that
-    counts its requests, and a way to mint tokens. The constants are attributes,
-    because a test file cannot import this one."""
+    counts its requests, and a way to mint tokens. The body is served as a
+    stream, ``chunk_size`` bytes at a time. The constants are attributes, because
+    a test file cannot import this one."""
 
     name = ISSUER
     audience = AUDIENCE
@@ -71,6 +91,7 @@ class FakeIssuer:
         self.down = False
         self.status = 200
         self.body: bytes | None = None
+        self.chunk_size = 16 * 1024
         self.requests: list[httpx.Request] = []
         self.transport = httpx.MockTransport(self._handle)
 
@@ -84,7 +105,7 @@ class FakeIssuer:
         if self.down:
             raise httpx.ConnectError("the key URL is down", request=request)
         body = json.dumps(self.jwks()).encode() if self.body is None else self.body
-        return httpx.Response(self.status, content=body)
+        return httpx.Response(self.status, stream=ChunkStream(body, self.chunk_size))
 
     def restart(self, keys: dict[str, rsa.RSAPrivateKey]) -> None:
         """New keys under new ids, as a restarted development issuer has."""
@@ -153,8 +174,7 @@ def signin_settings() -> SigninSettings:
 
 @pytest.fixture
 def signin_keys(signin_issuer: FakeIssuer, signin_clock: FakeClock) -> KeySet:
-    client = key_client(transport=signin_issuer.transport)
-    return KeySet(KEYS_URL, client, signin_clock)
+    return KeySet(KEYS_URL, clock=signin_clock, transport=signin_issuer.transport)
 
 
 @pytest.fixture

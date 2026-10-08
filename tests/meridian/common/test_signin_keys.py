@@ -21,7 +21,6 @@ from meridian.platform.common.signinkeys import (
     KeySet,
     KeySetUnavailable,
     UnknownKeyId,
-    key_client,
     parse_key_set,
 )
 
@@ -453,8 +452,7 @@ def test_a_redirect_is_not_followed(signin_rsa_pool: list) -> None:
         return httpx.Response(302, headers={"location": "https://elsewhere.test/"})
 
     keys = KeySet(
-        "https://id.example.test/keys",
-        key_client(transport=httpx.MockTransport(handler)),
+        "https://id.example.test/keys", transport=httpx.MockTransport(handler)
     )
 
     with pytest.raises(KeySetUnavailable):
@@ -469,7 +467,7 @@ def test_the_errors_carry_fixed_text(signin_issuer: Any, signin_keys: KeySet) ->
         signin_keys.key_for("kid-canary-marker")
     signin_issuer.down = True
     cold = KeySet(
-        signin_issuer.url, key_client(transport=signin_issuer.transport), lambda: 0.0
+        signin_issuer.url, clock=lambda: 0.0, transport=signin_issuer.transport
     )
     with pytest.raises(KeySetUnavailable) as unavailable:
         cold.key_for("kid-canary-marker")

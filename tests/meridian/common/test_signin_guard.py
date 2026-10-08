@@ -5,6 +5,7 @@ route table (the walk's reports: test_signin_routes.py)."""
 
 import logging
 import secrets
+import time
 from typing import Annotated, Any
 
 import pytest
@@ -495,7 +496,7 @@ def hooked(
     return TestClient(build(signin))
 
 
-def test_the_hook_is_called_for_every_refusal_with_the_reason_and_the_request(
+def test_the_hook_is_called_for_a_new_reason_with_the_reason_and_the_request(
     signin_settings: SigninSettings,
     signin_keys: KeySet,
     sessions: SessionSettings,
@@ -504,7 +505,8 @@ def test_the_hook_is_called_for_every_refusal_with_the_reason_and_the_request(
 ) -> None:
     calls: list[tuple[Reason, str, str]] = []
 
-    def hook(reason: Reason, request: Request) -> None:
+    def hook(reason: Reason, request: Request, carried: int) -> None:
+        assert carried == 0  # the first of its reason: nothing was held back
         calls.append((reason, request.method, request.url.path))
 
     client = hooked(signin_settings, signin_keys, sessions, signin_issuer, hook)
@@ -532,7 +534,7 @@ def test_the_hook_is_not_called_for_a_request_that_is_let_through(
 ) -> None:
     calls: list[Reason] = []
 
-    def hook(reason: Reason, request: Request) -> None:
+    def hook(reason: Reason, request: Request, carried: int) -> None:
         calls.append(reason)
 
     client = hooked(signin_settings, signin_keys, sessions, signin_issuer, hook)
@@ -551,7 +553,7 @@ def test_a_hook_that_raises_leaves_the_request_refused_and_logs_only_its_class(
     signin_clock: Any,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    def hook(reason: Reason, request: Request) -> None:
+    def hook(reason: Reason, request: Request, carried: int) -> None:
         raise RuntimeError("hook-canary-6 subject-canary-5")
 
     client = hooked(signin_settings, signin_keys, sessions, signin_issuer, hook)
@@ -586,17 +588,94 @@ def test_a_hook_that_keeps_failing_is_logged_once_per_window(
     signin_issuer: Any,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    def hook(reason: Reason, request: Request) -> None:
+    def hook(reason: Reason, request: Request, carried: int) -> None:
         raise ValueError("text")
 
     client = hooked(signin_settings, signin_keys, sessions, signin_issuer, hook)
+    wrong_audience = bearer(signin_issuer.mint(aud="elsewhere"))
 
     with caplog.at_level(logging.DEBUG):
+        # Two reasons, so the hook is called twice and fails twice: one line.
         statuses = [client.get("/me").status_code for _ in range(4)]
+        statuses.append(client.get("/me", headers=wrong_audience).status_code)
 
-    assert statuses == [401] * 4
+    assert statuses == [401] * 5
     errors = [r for r in caplog.records if r.levelno == logging.ERROR]
     assert len(errors) == 1
+
+
+def throttled_client(
+    signin_settings: SigninSettings,
+    signin_keys: KeySet,
+    clock: MovingClock,
+    hook: Any,
+) -> TestClient:
+    signin = Signin(signin_settings, signin_keys, None, clock, on_refusal=hook)
+    return TestClient(build(signin))
+
+
+def test_a_flood_of_one_reason_calls_the_hook_once_and_a_second_reason_once_more(
+    signin_settings: SigninSettings, signin_keys: KeySet, signin_issuer: Any
+) -> None:
+    calls: list[tuple[Reason, int]] = []
+
+    def hook(reason: Reason, request: Request, carried: int) -> None:
+        calls.append((reason, carried))
+
+    clock = MovingClock(signin_issuer.now)
+    client = throttled_client(signin_settings, signin_keys, clock, hook)
+
+    statuses = {client.get("/me").status_code for _ in range(120)}
+    assert statuses == {401}  # every one of them is refused, called or not
+    assert calls == [(Reason.NO_CREDENTIAL, 0)]
+
+    wrong_audience = bearer(signin_issuer.mint(aud="elsewhere"))
+    assert client.get("/me", headers=wrong_audience).status_code == 401
+    assert client.get("/me", headers=wrong_audience).status_code == 401
+    assert calls == [(Reason.NO_CREDENTIAL, 0), (Reason.AUDIENCE, 0)]
+
+    clock.now += REFUSAL_AUDIT_SECONDS  # the next window: the count comes with it
+    client.get("/me")
+    assert calls[2:] == [(Reason.NO_CREDENTIAL, 119)]
+
+
+def test_a_hook_that_sleeps_does_not_slow_the_refusals_after_the_first(
+    signin_settings: SigninSettings, signin_keys: KeySet, signin_issuer: Any
+) -> None:
+    def slow(reason: Reason, request: Request, carried: int) -> None:
+        time.sleep(1.0)
+
+    clock = MovingClock(signin_issuer.now)
+    client = throttled_client(signin_settings, signin_keys, clock, slow)
+    began = time.perf_counter()
+    client.get("/me")
+    first = time.perf_counter() - began
+    assert first >= 1.0  # the hook ran, and it is as slow as it is
+
+    began = time.perf_counter()
+    statuses = {client.get("/me").status_code for _ in range(40)}
+    rest = time.perf_counter() - began
+
+    assert statuses == {401}
+    assert rest < 1.0  # forty refusals did not call it once
+
+
+def test_a_hook_is_not_called_again_for_the_count_it_was_given_when_it_failed(
+    signin_settings: SigninSettings, signin_keys: KeySet, signin_issuer: Any
+) -> None:
+    calls: list[int] = []
+
+    def failing(reason: Reason, request: Request, carried: int) -> None:
+        calls.append(carried)
+        raise ValueError("text")
+
+    clock = MovingClock(signin_issuer.now)
+    client = throttled_client(signin_settings, signin_keys, clock, failing)
+
+    statuses = {client.get("/me").status_code for _ in range(10)}
+
+    assert statuses == {401}
+    assert calls == [0]  # not retried at the next request
 
 
 # ── the route walk ──────────────────────────────────────────────────────────

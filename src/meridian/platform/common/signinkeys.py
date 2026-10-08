@@ -15,15 +15,35 @@ no usable key is a failed fetch, so a cached set is never replaced by an empty
 one.
 
 What it accepts from the wire. The request asks for ``Accept-Encoding:
-identity``, and nothing is decoded: the answer is read as it came. An answer that
-carries a ``Content-Encoding`` other than ``identity`` is a failed fetch, decided
-from the header before a body byte is read: a small compressed body can expand
-to hundreds of megabytes. ``MAX_KEY_SET_BYTES`` bounds the bytes received and is
-checked before a chunk is kept. A fetch has a total deadline too
-(``FETCH_DEADLINE_SECONDS``), checked after every chunk against the clock, so a
-key URL that drips a byte at a time under the per-read timeout is cut. A read
-that has begun is not interrupted, so the worst case for one fetch is the
-deadline plus one read timeout.
+identity``, and nothing is decoded: the body is read RAW (``aiter_raw``), as it
+came. An answer that carries a ``Content-Encoding`` other than ``identity`` is a
+failed fetch, decided from the header before a body byte is read: a small
+compressed body can expand to hundreds of megabytes. The bound does not rest on
+that header alone: ``MAX_KEY_SET_BYTES`` bounds the bytes received, counted as
+they come and checked before a chunk is kept, so a compressed body that does not
+claim to be (or whose header check were gone) is held to the bound too.
+
+The deadline. A fetch is ONE asynchronous request, run by ``asyncio.run`` in the
+thread that makes the fetch, under ONE deadline (``FETCH_DEADLINE_SECONDS``,
+``asyncio.timeout``) that covers the connection, the TLS handshake, the response
+headers and the body. A library's per-read timeout starts again at every byte,
+so a key URL that drips its status line, a header line or a body byte every few
+seconds would hold the fetch, and the fetch lock with it, for hours; the one
+deadline ends the request, and cancelling it closes the connection. The
+deadline reads the event loop's clock, not the injected one (a test patches the
+constant). No thread is left behind by a deadline: there is none but the
+fetching one.
+
+What the deadline cannot cut: a name lookup. The loop runs ``getaddrinfo`` in a
+helper thread of its own, which cancellation does not stop, and ``asyncio.run``
+joins that thread when it shuts the loop down. So a lookup that hangs holds the
+ONE fetching thread, and the fetch lock with it, for as long as the system's
+resolver takes, not for ``FETCH_DEADLINE_SECONDS``; the join itself gives up
+after ``asyncio.constants.THREAD_JOIN_TIMEOUT`` (300 s in Python 3.13), with a
+warning, and the lookup's thread is then left behind. A caller with a usable
+cache is still served at once; a caller with none waits ``FETCH_WAIT_SECONDS``
+and is answered unavailable. A key URL given as an address has no lookup (the
+loopback tests use one, so they do not exercise this path).
 
 How often it asks. The cached set is fresh for ``KEY_MAX_AGE_SECONDS``. A key
 id it does not know, a set that is no longer fresh and an empty cache each ask
@@ -33,11 +53,15 @@ unknown key ids, or an issuer that is down, costs one request per interval and
 not one per token (T-05). A restart of the issuer that makes new keys is
 therefore followed within one interval.
 
-Who waits for a fetch. The fetch is blocking, so a caller runs it in a worker
-thread (a plain ``def`` FastAPI dependency does), and one slow key URL must not
-hold every request that needs only a cached key. The cache is an immutable
-snapshot swapped by reference: reading it takes no lock. A fetch takes the
-fetch lock. ``key_for`` serves, in this order:
+Who waits for a fetch. ``key_for`` is for SYNC code: a plain ``def`` FastAPI
+dependency, which FastAPI runs in a worker thread. The fetch blocks that thread
+(it starts an event loop of its own), so ``key_for`` refuses to run in a thread
+that already runs an event loop and raises ``CalledFromEventLoop``, before it
+looks at the cache: that is a mistake in the code that calls it, not an outage
+of the issuer, and it must not be read as "key set unavailable". One slow key
+URL must not hold every request that needs only a cached key. The cache is an
+immutable snapshot swapped by reference: reading it takes no lock. A fetch takes
+the fetch lock. ``key_for`` serves, in this order:
 
 1. A FRESH cached key: at once, whatever a fetch is doing. No lock is taken.
 2. Otherwise, when a fetch is due, the caller that gets the fetch lock without
@@ -51,15 +75,16 @@ fetch lock. ``key_for`` serves, in this order:
    a wait of at most ``FETCH_WAIT_SECONDS`` for the fetch lock, so that at a
    cold start the callers behind the first are not refused but share its fetch;
    then one more look at the snapshot; then ``KeySetUnavailable``.
-The wait is a lock timeout in real time; the deadline and the cache's age read
-the injected clock (``time.monotonic`` in service).
+The wait is a lock timeout in real time; the cache's age and the fetch schedule
+read the injected clock (``time.monotonic`` in service).
 
 When the fetch fails. A key that is cached still verifies, up to
 ``KEY_STALE_LIMIT_SECONDS`` after the last good fetch, so that a short outage of
 the issuer does not sign everyone out. With nothing cached, or nothing younger
 than that, the answer is ``KeySetUnavailable``: fail closed. Only
-``KeySetUnavailable`` and ``UnknownKeyId`` leave ``key_for``, whatever the key
-URL answers.
+``KeySetUnavailable`` and ``UnknownKeyId`` leave ``key_for`` whatever the key
+URL answers; ``CalledFromEventLoop`` is the one other, and it is the caller's
+mistake.
 
 What it says. The module logger writes one WARNING per failed fetch and one per
 interval while a stale key is served, so a flood of requests cannot flood the
@@ -69,6 +94,7 @@ identifier), a header, a body byte, a key id from a token or an exception's
 text. Errors carry fixed text for the same reason.
 """
 
+import asyncio
 import json
 import logging
 import threading
@@ -112,12 +138,13 @@ MAX_KEY_ID_LENGTH = 128
 # The key URL is inside the cluster or Microsoft's: connecting is quick, and the
 # request that waits for it must not wait long.
 FETCH_TIMEOUT = httpx.Timeout(3.0, connect=1.0)
-# The most one fetch may take to read its answer. The per-read timeout above is
-# met again by every chunk, so a key URL that sends a byte every two seconds
-# holds a thread for as long as it likes (64 KiB of them: hours). The real
-# answers come in well under a second; the Claims API serves requests from a
-# pool of about forty threads, and five seconds is the most that a pool can lend
-# to one slow URL, once per interval.
+# The most one fetch may take from the first connection attempt to the last body
+# byte. The per-phase timeouts above start again at every byte, so a key URL
+# that sends a byte of its status line, a header line or its body every two
+# seconds would hold a thread for as long as it likes (hours). The real answers
+# come in well under a second; the Claims API serves requests from a pool of
+# about forty threads, and five seconds is the most that a pool can lend to one
+# slow URL, once per interval. Read when a fetch starts, so a test can patch it.
 FETCH_DEADLINE_SECONDS = 5.0
 # How long a caller with no usable cache waits for the fetch in flight: the
 # deadline and no longer, since a fetch that is still running after that has
@@ -150,6 +177,16 @@ class KeySetUnavailable(KeySetError):
         super().__init__("the issuer's key set is unavailable")
 
 
+class CalledFromEventLoop(Exception):
+    """``key_for`` was called in a thread that runs an event loop. Not a
+    ``KeySetError``: it is a mistake in the caller, to be found and fixed (call
+    it from a plain ``def``), and it says nothing about the issuer. The text is
+    fixed."""
+
+    def __init__(self) -> None:
+        super().__init__("key_for blocks: call it from a thread with no event loop")
+
+
 class FetchFailure(Exception):
     """A fetch that did not give a usable set. Its subclasses' class names are
     the words the log uses for the cause; they carry no text of their own."""
@@ -168,27 +205,21 @@ class BodyTooLarge(FetchFailure):
 
 
 class DeadlineExceeded(FetchFailure):
-    """The answer was still coming after ``FETCH_DEADLINE_SECONDS``."""
+    """The fetch was not finished ``FETCH_DEADLINE_SECONDS`` after it began, in
+    whichever phase it was: connecting, TLS, the headers or the body."""
 
 
 class NoUsableKey(FetchFailure):
     """The body is not a key set, or holds no usable key."""
 
 
-def key_client(
-    tls: ClientTls | None = None, transport: httpx.BaseTransport | None = None
-) -> httpx.Client:
-    """The HTTP client of a ``KeySet``: no proxy or certificate setting from the
-    environment, no redirect followed, the timeout above. ``tls`` is the CA the
-    issuer is trusted by when its key URL is ``https`` (the library's default
-    verification when none); ``transport`` is for a test."""
-    return httpx.Client(
-        verify=verify_of(tls),
-        trust_env=False,
-        follow_redirects=False,
-        timeout=FETCH_TIMEOUT,
-        transport=transport,
-    )
+def _refuse_an_event_loop() -> None:
+    """Raise ``CalledFromEventLoop`` when this thread runs an event loop."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return  # no loop in this thread: the case the module is for
+    raise CalledFromEventLoop
 
 
 def _may_verify(item: dict[object, object]) -> bool:
@@ -262,11 +293,26 @@ class _Cache:
 
 
 class KeySet:
-    """The signing keys of one issuer, behind ``key_for``."""
+    """The signing keys of one issuer, behind ``key_for``.
 
-    def __init__(self, url: str, client: httpx.Client, clock: Clock = time.monotonic):
+    Each fetch builds its own HTTP client (no proxy or certificate setting from
+    the environment, no redirect followed, the per-phase timeouts above).
+    ``tls`` is the CA the issuer is trusted by when its key URL is ``https``
+    (the library's default verification when none); it is read here, so that a
+    CA file that cannot be used stops the start and is not taken for an outage.
+    ``transport`` is for a test."""
+
+    def __init__(
+        self,
+        url: str,
+        *,
+        tls: ClientTls | None = None,
+        clock: Clock = time.monotonic,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ):
         self._url = url
-        self._client = client
+        self._verify = verify_of(tls)
+        self._transport = transport
         self._clock = clock
         self._fetch_lock = threading.Lock()  # held for the length of a fetch
         self._log_lock = threading.Lock()  # held for the length of a comparison
@@ -277,7 +323,10 @@ class KeySet:
     def key_for(self, kid: str) -> RSAPublicKey:
         """The public key with this id. Raise ``UnknownKeyId`` when the set is
         known and does not hold it, ``KeySetUnavailable`` when there is no set
-        to ask. The precedence is in the module's docstring."""
+        to ask. Raise ``CalledFromEventLoop`` in a thread that runs an event
+        loop, whatever the cache holds. The precedence is in the module's
+        docstring."""
+        _refuse_an_event_loop()
         key = self._fresh_key(self._cache, kid, self._clock())
         if key is not None:
             return key
@@ -347,33 +396,48 @@ class KeySet:
         self._cache = _Cache(keys=keys, fetched_at=now)
 
     def _fetch(self) -> bytes:
-        """The key set's body as received. Raise ``FetchFailure`` for an answer
-        that is not to be used, or the transport's own error."""
-        began = self._clock()
+        """The key set's body as received, from one request in an event loop of
+        its own that is run here and closed here. Raise ``FetchFailure`` for an
+        answer that is not to be used, or the transport's own error."""
+        return asyncio.run(self._fetch_within_deadline())
+
+    async def _fetch_within_deadline(self) -> bytes:
+        try:
+            async with asyncio.timeout(FETCH_DEADLINE_SECONDS) as deadline:
+                return await self._fetch_body()
+        except TimeoutError:
+            if deadline.expired():  # ours, and not one a library raised
+                raise DeadlineExceeded from None
+            raise
+
+    async def _fetch_body(self) -> bytes:
         body = bytearray()
-        with self._client.stream(
-            "GET",
-            self._url,
-            headers={"Accept": "application/json", "Accept-Encoding": "identity"},
-            timeout=FETCH_TIMEOUT,
+        client = httpx.AsyncClient(
+            verify=self._verify,
+            trust_env=False,
             follow_redirects=False,
-        ) as response:
+            timeout=FETCH_TIMEOUT,
+            transport=self._transport,
+        )
+        headers = {"Accept": "application/json", "Accept-Encoding": "identity"}
+        async with client, client.stream("GET", self._url, headers=headers) as response:
             if response.status_code != httpx.codes.OK:
                 raise BadStatus
-            encoding = response.headers.get("content-encoding", "identity")
-            if encoding.strip().lower() != "identity":
-                raise ContentEncodingRefused
-            # With no content encoding (checked above) ``iter_bytes`` decodes
-            # nothing, so a chunk is the bytes as they came. ``iter_raw`` would
-            # say the same and fail on a response a mock transport has already
-            # read.
-            for chunk in response.iter_bytes():
+            self._refuse_an_encoding(response)
+            # RAW: nothing is decoded, whatever the headers said, so the bytes
+            # counted are the bytes received.
+            async for chunk in response.aiter_raw():
                 if len(body) + len(chunk) > MAX_KEY_SET_BYTES:
                     raise BodyTooLarge
                 body.extend(chunk)
-                if self._clock() - began > FETCH_DEADLINE_SECONDS:
-                    raise DeadlineExceeded
         return bytes(body)
+
+    def _refuse_an_encoding(self, response: httpx.Response) -> None:
+        """A failed fetch for an answer that claims a ``Content-Encoding`` other
+        than ``identity``, before a body byte is read."""
+        encoding = response.headers.get("content-encoding", "identity")
+        if encoding.strip().lower() != "identity":
+            raise ContentEncodingRefused
 
     def _warn_failed(self, failure: str, now: float) -> None:
         age = self._age(self._cache, now)

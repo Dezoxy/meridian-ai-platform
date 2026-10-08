@@ -46,7 +46,7 @@ from meridian.platform.common.signin import (
     SigninSettings,
     check_bearer,
 )
-from meridian.platform.common.signinkeys import KeySet, key_client, parse_key_set
+from meridian.platform.common.signinkeys import KeySet, parse_key_set
 
 OPT_IN = "MERIDIAN_KEYCLOAK_RIG"
 OUT_ENV = "MERIDIAN_KEYCLOAK_RIG_OUT"
@@ -489,6 +489,7 @@ def settings_for(
         population="staff",
         issuer=issuer,
         audience=API_AUDIENCE,
+        environment="kind",  # the key URL is plain HTTP on the loopback
         keys_url=connect_url(container, endpoint("certs")),
         required_typ=typ,
         allowed_azp=azp,
@@ -638,7 +639,7 @@ def observe_verdicts(
     issuer = jwt.decode(pages["access_token"], options={"verify_signature": False})[
         "iss"
     ]
-    keys = KeySet(connect_url(container, endpoint("certs")), key_client())
+    keys = KeySet(connect_url(container, endpoint("certs")))
     azp = (PAGES, SCRIPTS)
     cases = {
         "access_token_pages": (pages["access_token"], settings_for(container, issuer)),
@@ -708,7 +709,7 @@ def observe_restart(
     new_scripts = scripts_token(container, scripts_secret, FRONT_HOST)["access_token"]
     password = secrets_by_name["MERIDIAN_STAFF_USER_TEST_ADJUSTER_PASSWORD"]
     code_flow(container, "test-adjuster", password, pages_secret, FRONT_HOST)
-    fresh = KeySet(connect_url(container, endpoint("certs")), key_client())
+    fresh = KeySet(connect_url(container, endpoint("certs")))
     record[f"after_{how}"] = {
         "token_from_before_with_a_new_key_set": verdict(old, settings, fresh),
         "scripts_subject_is_the_one_from_before": unverified(new_scripts)["sub"]
