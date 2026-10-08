@@ -65,12 +65,13 @@
 
 ## Part A — How a session works
 
-One step per branch and per worktree, and up to five steps side by side
-in one session whenever that many are ready and do not meet ("Five
-steps side by side", below). A session that grows long is
-compacted by the harness when its context fills (step 7 says how that is
-made safe): the advisor re-reads the whole transcript on every call,
-uncached, and a long context blurs what a step was for.
+One step per branch and per worktree, and one step at a time in one
+session since 2026-10-08 ("One step at a time, again", below; up to five
+ran side by side before that). A session that grows long is compacted:
+by the owner between steps, on the session's word, and by the harness
+when its context fills (step 7 says how that is made safe): the advisor
+re-reads the whole transcript on every call, uncached, and a long
+context blurs what a step was for.
 
 1. **Start small.** Read `CLAUDE.md`, the step table below and the detail
    section of the step you take. Read other files only when the step needs
@@ -155,11 +156,14 @@ uncached, and a long context blurs what a step was for.
    branch and what comes next. The harness compacts the conversation by
    itself when the context is full, and after a checkpoint that loses
    nothing (the owner, 2026-10-06: "we should optimalise the conversation
-   but it should be a routine"). The session does not ask the owner to
-   compact by hand: on 2026-10-06 a compact that ended interrupted stopped
-   every background agent, the harness would not start them again
-   without the owner's word, and the owner decided against compacting by
-   hand that day.
+   but it should be a routine"). On 2026-10-06 a compact by hand that ended
+   interrupted stopped every background agent, the harness would not
+   start them again without the owner's word, and the owner decided
+   against compacting by hand that day. Since 2026-10-08 the owner
+   compacts between steps ("after every step you should say, compact and
+   we can go on"): the session says so when a step is merged and
+   verified and this checkpoint is written, never in the middle of a
+   step and never while an agent or a background command is out.
 
 **The contract.** One concern per contract and about a page, in a scratch
 file the `implementer` reads. A long contract gets worked around with
@@ -225,9 +229,29 @@ Worktree and branch. Do not commit, push, switch branches or stash.
 - Read every source file a subagent changed. A green suite does not show a
   value that was hard-coded to match the one fixture.
 
-**Five steps side by side.** This is the default, not an
-allowance: when a session starts, and whenever a step closes, it fills up to
-five slots with steps whose dependencies are `done` (three until the
+**One step at a time, again (the owner, 2026-10-08).** "Okay so we
+should go back only one step and then archive and start a new step, it
+will save a lot of token i guess", and half an hour later, having
+compacted the session instead of archiving it: "So can we continue here?
+I compacted and after every step you should say, compact and we can go
+on". Three days of five steps side by side had used 86 % of the
+account's weekly limit. So a session carries ONE step to a merged pull
+request, or to its written stop, writes the checkpoint of step 7 and
+tells the owner to compact; then it takes the next. Inside the step
+contracts go out one after another, and a read-only reviewer may run
+beside an implementer. The same day the owner set the order: what can be
+built on kind comes before the paid cloud steps ("before we go to the
+azure payable thing we should go and do a lot of things, like seperated
+images, fake tenant and groups, users, roles and i think we have much
+more to solve before cloud"), and the owner means one tenant by that
+("I meant one tenant not multi-tenant arch"). What follows is the rule
+of 2026-10-06 to 2026-10-08, kept for when the owner asks for steps side
+by side again; its lanes and limits hold then.
+
+**Five steps side by side (2026-10-06 to 2026-10-08; not in force).**
+This was the default, not an allowance: when a session starts, and
+whenever a step closes, it fills up to five slots with steps whose
+dependencies are `done` (three until the
 afternoon of 2026-10-06, when the owner wrote "Okay can you start 5 steps
 in total so we can go quicker on the steps"; a step the owner names on top
 of the five is started too, as S077 was that day). The owner's decisions:
