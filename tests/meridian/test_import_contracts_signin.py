@@ -170,7 +170,7 @@ def test_a_new_platform_package_or_module_is_reported_missing_from_the_jwt_contr
         pytest.param("meridian.platform.knowledge_mcp", id="knowledge-mcp"),
         pytest.param("meridian.platform.policy_mcp", id="policy-mcp"),
         pytest.param("meridian.workloads.claim_brief", id="claim-brief"),
-        pytest.param(f"{CLAIMS_TRIAGE}.mcp_server", id="claims-triage-tool-server"),
+        pytest.param("meridian.platform.claims_mcp", id="claims-mcp"),
     ],
 )
 def test_a_service_or_graph_package_importing_the_guard_breaks_the_contract(

@@ -335,6 +335,7 @@ type = "forbidden"
 source_modules = [
     "meridian.workloads",
     "meridian.runtime",
+    "meridian.platform.claims_mcp",
     "meridian.platform.cli",
     "meridian.platform.common",
     "meridian.platform.evaluation",
