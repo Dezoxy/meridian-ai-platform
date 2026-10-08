@@ -21,7 +21,10 @@ jobs:
   docs:
     name: docs consistency
     runs-on: ubuntu-26.04
-    timeout-minutes: 5
+    # The guard's cases run one after another, one start of the hook each: 4 min
+    # 17 s for 2,889 cases on 2026-10-08, and the 3,824 of S020's rules passed
+    # the old limit of 5. A parallel loop would bring it back under two minutes.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # The mechanical half of docs-sync, then the checker's and the harness's
