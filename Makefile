@@ -167,7 +167,7 @@ docs:
 	python3 scripts/check_docs_consistency.py
 	python3 scripts/check_plan_files.py
 
-## plan-progress   rewrite the plan's Part F (finished steps, steps in flight) from the step files' status lines
+## plan-progress   rewrite the plan's Part E (finished steps, steps in flight, steps not started) from the step files' status lines
 plan-progress:
 	python3 scripts/check_plan_files.py --write
 

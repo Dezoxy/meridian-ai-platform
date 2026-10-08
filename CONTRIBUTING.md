@@ -94,8 +94,12 @@ names the README to read for each.
   run.
 - **Checks:** five must be green before a merge: `docs consistency`,
   `architecture model`, `derived diagrams`, `secret scan` and `python`.
-- **The plan's files:** if your change is a step, update its row and its
-  file under `docs/plan/steps/`. The plan keeps no change log: the pull
+- **The plan's files:** if your change is a step, update its file under
+  `docs/plan/steps/`; CI refuses a pull request titled `S0NN:` that leaves
+  that file unchanged. Change the step's row in the plan only when the plan
+  itself changed: a row is one plan sentence, and `make docs` refuses one
+  with a date, a quote or a word on what is built so far (those belong in
+  the step's file). The plan keeps no change log: the pull
   request's description is the record, and the squash commit carries it.
   A new step's number is the owner's to give; do not pick one yourself.
 

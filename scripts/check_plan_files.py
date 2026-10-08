@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail when the plan's step folders and backlog files contradict it (S097, S100, S101).
+"""Fail when the plan's step folders and backlog files contradict it (S097-S102).
 
 Each step's section is a file, ``docs/plan/steps/S0NN.md``, kept in a folder of 20
 steps (``steps/S020-S039/S021.md``), and the follow-up backlog is two files,
@@ -14,25 +14,29 @@ the part of ``make docs`` that keeps them and ``docs/meridian-plan.md`` one stor
   ``**Status:** <word> · **Started:** <date|—> · **Finished:** <date|—>`` and an
   optional `` · <note>``; the word is one of ``todo``, ``doing``, ``done``,
   ``blocked`` and ``dropped``; ``done`` has a Finished date and the others a dash;
-- Part F, the plan's last part, holds two marker lines; the lines between them are
-  generated from the step files ("Finished steps", "In flight") and a block that
-  differs from what they say is a finding. ``--write`` (``make plan-progress``)
-  rewrites those lines and nothing else in the plan;
+- Part E, the plan's last part, holds two marker lines; the lines between them are
+  generated from the step files ("Finished steps", "In flight", "Not started") and
+  a block that differs from what they say is a finding. ``--write``
+  (``make plan-progress``) rewrites those lines and nothing else in the plan;
 - the backlog table is not in the plan; each backlog file has the table's header
   once, rows of at least four cells (status the cell before the last, home the
   last), no closed row in ``backlog.md`` and no open row in
   ``backlog-closed.md``, and every open row names a step as its home;
-- the plan has its Part B to F headings, in that order (a renamed one would switch
-  a check off), holds no step section (a heading ``S0NN`` with a dash, at level two
-  to four) and, in Part E, no entry of any label; ``docs/plan/changelog`` does not
-  exist, because the change log ended with S100;
+- the plan has its Part B to E headings, in that order, with no part after Part E
+  (a renamed heading would switch a check off), and holds no step section (a
+  heading ``S0NN`` with a dash, at level two to four); ``docs/plan/changelog``
+  does not exist, because the change log ended with S100;
+- the plan keeps its history out (S102, ``plan_gate.py``): a step row is one plan
+  sentence, no status is typed by hand, Part D holds open questions only (the
+  answered ones are ``docs/plan/questions-closed.md``) and the text outside the
+  rows stays under a ceiling;
 - the plan, a step file and a backlog file hold no conflict marker;
 - an odd file (not UTF-8, a directory, a broken link) is a finding, not a
   traceback.
 
 The line-width and link rules need nothing here: they read every Markdown file
 under ``docs/``. A missing plan is skipped, as with the other checks, and so is a
-missing backlog file (the link check reports a dead link to it).
+missing backlog file or questions file (the link check reports a dead link to it).
 
 Python 3 standard library only. Run from anywhere:
 python3 scripts/check_plan_files.py [--write]
@@ -46,11 +50,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+from plan_gate import SEPARATOR, UNESCAPED_PIPE, cells_of, plan_findings  # noqa: E402
+
 PLAN = "docs/meridian-plan.md"
 STEPS = "docs/plan/steps"
 CHANGELOG = "docs/plan/changelog"
 BACKLOG = "docs/plan/backlog.md"
 BACKLOG_CLOSED = "docs/plan/backlog-closed.md"
+QUESTIONS_CLOSED = "docs/plan/questions-closed.md"
 BACKLOG_HEADER = "| Item | Raised in | Status | Home |"
 BACKLOG_COLUMNS = ["Item", "Raised in", "Status", "Home"]
 
@@ -72,22 +81,17 @@ STATUS_LINE = re.compile(
     r"^\*\*Status:\*\* (?P<word>\w+) · \*\*Started:\*\* (?P<started>" + _DATE + r")"
     r" · \*\*Finished:\*\* (?P<finished>" + _DATE + r")(?: · \S.*)?$"
 )
-# The two lines Part F is generated between.
+# The two lines Part E is generated between.
 BEGIN_MARKER = (
     '<!-- plan-progress: begin (written by "make plan-progress", never by hand) -->'
 )
 END_MARKER = "<!-- plan-progress: end -->"
 USAGE = "usage: check_plan_files.py [--write]"
-# Any list item that opens like an entry, whatever its label: v0.NN, #N,
-# PLAN-VERSION, #XXXX.
-ANY_ENTRY = re.compile(r"^- \*\*[^,*\n]+, \d{4}-\d{2}-\d{2}:\*\*")
 # A step heading left in the old place: level two to four, a dash of any kind.
 OLD_SECTION = re.compile(r"^#{2,4} S\d{3}\s+[—\N{EN DASH}-]\s")
 CONFLICT = re.compile(r"^(?:<{7}|>{7})(?: |$)")
 STEP_ID = re.compile(r"S\d{3}")
 STRUCK = re.compile(r"^~~.*?~~\s*")
-SEPARATOR = re.compile(r"^\|\s*:?-{3,}")
-UNESCAPED_PIPE = re.compile(r"(?<!\\)\|")
 ITEM_WIDTH = 40
 CHANGELOG_ENDED = "the change log ended with S100 (2026-10-08)"
 
@@ -112,7 +116,7 @@ class Findings(list):
 
 @dataclass(frozen=True)
 class Step:
-    """What a step file says of itself, for the plan's Part F."""
+    """What a step file says of itself, for the plan's Part E."""
 
     step: str
     word: str
@@ -201,27 +205,32 @@ def listing(folder: Path, found: Findings, root: Path) -> list[Path]:
 
 
 def regions(text: str, found: Findings) -> dict[str, str]:
-    """Part B, Part C, Part E and Part F of the plan, each from its heading.
+    """Part B, Part C, Part D and Part E of the plan, each from its heading.
 
     A missing heading is a finding: the checks that read the part would
-    otherwise pass on nothing. Part E ends where Part F starts, and Part F is
-    the last part.
+    otherwise pass on nothing. Part E is the last part and runs to the end of
+    the plan; a part heading after it is a finding.
     """
     try:
         parts = heading_offsets(text)
     except PlanError as error:
         found.block(f"the plan: {error}")
         return {}
-    missing = [k for k in "BCDEF" if k not in parts]
+    missing = [k for k in "BCDE" if k not in parts]
     for letter in missing:
         found.block(f"the plan has no '## Part {letter} — ' heading")
     if missing:
         return {}
-    if not parts["B"] < parts["C"] < parts["D"] < parts["E"] < parts["F"]:
-        found.block("the plan's Parts B, C, D, E and F are not in that order")
+    if not parts["B"] < parts["C"] < parts["D"] < parts["E"]:
+        found.block("the plan's Parts B, C, D and E are not in that order")
         return {}
-    ends = {"B": parts["C"], "C": parts["D"], "E": parts["F"], "F": len(text)}
-    return {k: text[parts[k] : ends[k]] for k in "BCEF"}
+    for letter in sorted(k for k in parts if parts[k] > parts["E"]):
+        found.append(
+            f"the plan has a '## Part {letter} — ' heading after Part E; Part E is "
+            f"the last part (the generated tables)"
+        )
+    ends = {"B": parts["C"], "C": parts["D"], "D": parts["E"], "E": len(text)}
+    return {k: text[parts[k] : ends[k]] for k in "BCDE"}
 
 
 def unfenced(text: str) -> list[str]:
@@ -291,7 +300,7 @@ def is_range_folder(path: Path) -> bool:
 def check_step_file(
     root: Path, path: Path, rows: set[str], found: Findings
 ) -> Step | None:
-    """Check one step file; its facts for Part F, or None when it has a finding
+    """Check one step file; its facts for Part E, or None when it has a finding
     that leaves them unknown (an unreadable file, a heading or status line wrong)."""
     name = relative(root, path)
     step = path.stem
@@ -369,22 +378,6 @@ def check_old_places(text: str, plan: dict[str, str], found: Findings) -> None:
             f"{PLAN}: the follow-up table left the plan (S100); a follow-up is a "
             f"row of {BACKLOG}"
         )
-    for line in unfenced(plan.get("E", "")):
-        if ANY_ENTRY.match(line):
-            found.append(
-                f"Part E of the plan holds an entry ('{line[:40]}'): "
-                f"{CHANGELOG_ENDED}; put the entry's text into the pull "
-                f"request's description, which the squash commit carries"
-            )
-
-
-def cells_of(line: str) -> list[str]:
-    """A table row's cells, split on pipes that no backslash escapes."""
-    # A pipe inside a code span is a cell boundary here: no status or home holds one.
-    body = line.strip()[1:]
-    if body.endswith("|") and not body.endswith("\\|"):
-        body = body[:-1]
-    return [cell.strip() for cell in UNESCAPED_PIPE.split(body)]
 
 
 def is_header(line: str) -> bool:
@@ -452,11 +445,11 @@ def check_backlog(root: Path, name: str, closed_file: bool, found: list[str]) ->
 def progress_span(
     text: str, plan: dict[str, str], found: Findings
 ) -> tuple[int, int] | None:
-    """The line numbers (from 0) of Part F's two marker lines, or None with a
+    """The line numbers (from 0) of Part E's two marker lines, or None with a
     finding. Only an unfenced line equal to a marker is a marker."""
     lines = scan(text)
-    part_f = len(text) - len(plan["F"])
-    inside = [i for i, x in enumerate(lines) if x.start >= part_f and not x.fenced]
+    part_e = len(text) - len(plan["E"])
+    inside = [i for i, x in enumerate(lines) if x.start >= part_e and not x.fenced]
     begin = [i for i in inside if lines[i].text == BEGIN_MARKER]
     end = [i for i in inside if lines[i].text == END_MARKER]
     for name, marker, hits in (
@@ -465,14 +458,14 @@ def progress_span(
     ):
         if len(hits) != 1:
             found.block(
-                f"the plan's Part F: the {name} marker line '{marker}' must be there "
+                f"the plan's Part E: the {name} marker line '{marker}' must be there "
                 f"exactly once outside a code fence, not {len(hits)} times"
             )
     if len(begin) != 1 or len(end) != 1:
         return None
     if begin[0] > end[0]:
         found.block(
-            "the plan's Part F: the begin marker must come before the end marker"
+            "the plan's Part E: the begin marker must come before the end marker"
         )
         return None
     return begin[0], end[0]
@@ -483,18 +476,20 @@ def _sort_key(date: str, step: str) -> tuple[bool, str, int]:
     return date == NO_DATE, date, int(step[1:])
 
 
-def _row(step: Step, *cells: str) -> str:
+def _row(step: Step, *before: str, after: tuple[str, ...] = ()) -> str:
     link = f"[{step.step}.md]({step_path(step.step)})"
     title = UNESCAPED_PIPE.sub(r"\\|", step.title)
-    return "| " + " | ".join([cells[0], step.step, title, *cells[1:], link]) + " |"
+    return "| " + " | ".join([*before, step.step, title, *after, link]) + " |"
 
 
 def build_block(steps: list[Step]) -> list[str]:
-    """The lines between Part F's markers, from the step files alone (S101)."""
+    """The lines between Part E's markers, from the step files alone (S101, S102)."""
     done = [s for s in steps if s.word == "done"]
-    flight = [s for s in steps if s.word != "done"]
+    todo = [s for s in steps if s.word == "todo"]
+    flight = [s for s in steps if s.word not in ("done", "todo")]
     done.sort(key=lambda s: _sort_key(s.finished, s.step))
     flight.sort(key=lambda s: _sort_key(s.started, s.step))
+    todo.sort(key=lambda s: int(s.step[1:]))
     return [
         "",
         "### Finished steps",
@@ -507,7 +502,13 @@ def build_block(steps: list[Step]) -> list[str]:
         "",
         "| Started | Step | Title | Status | File |",
         "|---|---|---|---|---|",
-        *[_row(s, s.started, s.word) for s in flight],
+        *[_row(s, s.started, after=(s.word,)) for s in flight],
+        "",
+        "### Not started",
+        "",
+        "| Step | Title | File |",
+        "|---|---|---|",
+        *[_row(s) for s in todo],
         "",
     ]
 
@@ -521,9 +522,34 @@ class Examined:
 
 
 STALE = (
-    'the plan\'s Part F: "Finished steps" and "In flight" are not what the step '
-    "files say; run make plan-progress"
+    'the plan\'s Part E: "Finished steps", "In flight" and "Not started" are not '
+    "what the step files say; run make plan-progress"
 )
+
+
+def check_gate(
+    root: Path,
+    text: str,
+    plan: dict[str, str],
+    span: tuple[int, int] | None,
+    found: Findings,
+) -> None:
+    """The row, status, question and size rules of ``plan_gate.py`` (S102)."""
+    closed = None
+    path = root / QUESTIONS_CLOSED
+    if exists(path) and (body := read_file(root, path, found)) is not None:
+        closed = (unfenced(body), scan(body + "\n")[-1].fenced)
+    between = text.split("\n")[span[0] + 1 : span[1]] if span else None
+    found.extend(
+        plan_findings(
+            text,
+            unfenced(text),
+            unfenced(plan["B"]),
+            unfenced(plan["D"]),
+            between,
+            closed,
+        )
+    )
 
 
 def examine(root: Path) -> Examined:
@@ -538,6 +564,7 @@ def examine(root: Path) -> Examined:
         if plan:
             check_old_places(text, plan, found)
             span = progress_span(text, plan, found)
+            check_gate(root, text, plan, span, found)
     blocked = len(found.blocking)
     steps = check_steps(root, plan, found)
     check_backlog(root, BACKLOG, False, found)
@@ -569,7 +596,7 @@ def report(found: list[str]) -> None:
 
 
 def write_progress(root: Path) -> int:
-    """Regenerate the lines between Part F's markers; touch nothing else."""
+    """Regenerate the lines between Part E's markers; touch nothing else."""
     if not exists(root / PLAN):
         report([f"{PLAN}: the plan does not exist"])
         return 1
@@ -587,8 +614,12 @@ def write_progress(root: Path) -> int:
             report([f"{PLAN}: cannot be written ({error.strerror})"])
             return 1
     finished = sum(1 for s in result.steps if s.word == "done")
-    flying = len(result.steps) - finished
-    print(f"plan progress: {finished} finished, {flying} in flight")
+    unstarted = sum(1 for s in result.steps if s.word == "todo")
+    flying = len(result.steps) - finished - unstarted
+    print(
+        f"plan progress: {finished} finished, {flying} in flight, "
+        f"{unstarted} not started"
+    )
     return 0
 
 
