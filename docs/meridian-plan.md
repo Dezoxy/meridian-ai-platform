@@ -600,7 +600,7 @@ both readings the same hour ("yes both are right, go on").
 | S068 | Database upkeep and retention | The owner names the retention periods for `audit.events` and `gateway.usage` first (open since S011; without them the step builds the mechanism and schedules nothing); an insert-only audit table has a way to expire rows; migration 0017's rewrite of a large audit table has a way through that is written down and tested; the static check on migrations says what it cannot see or sees it; `expire_ledger` works in batches; a holder of the upkeep credential cannot stall the gateway with an open transaction; a login that is a member of `claims_sweep` is confined or refused where the database is made; no role creates temporary tables it does not need. Built as (2026-10-07; implemented and tested against PostgreSQL, none of it run on a cluster; no number of days and no schedule is set anywhere): audit rows expire through one function of the owner's that only a session logged in as the upkeep role reaches, `meridian gateway expire-audit` with a dry run that counts, in batches of at most 10,000, each with an audit row, and the rows the upkeep role wrote itself are never removed by it (migrations 0027, 0028); the ledger expires in batches of 100 to 10,000 usage rows on one connection, with a closing call for the counters and credits (0029, 0030); 0017's way through is written down in the migrations' README as needed by no database that exists, a test shows that it fails closed at its first heavy statement and the two ways out are designed, not built; the static check on migrations sees more statements and the README lists what it does not see, each entry pinned by a test; a database default ends a transaction left idle after 60 s (0031), which stops a forgotten transaction and not a deliberate one, so a holder of the upkeep credential can still stall a counter for the statement timeout; a member of `claims_sweep`, or of `gateway_upkeep`, is refused at every `meridian db migrate` after the files are applied, which detects at the next deploy and does not prevent; `pg_temp` is last in the path of every trigger and definer function, with a test over the whole catalog, and the right to make temporary tables stays with PUBLIC (decided, not built). Not built: the periods and a schedule (the owner's, four questions in the section), the briefs' expiry (waits for the owner), a parser for the static check | done (the periods are the owner's and are not set, nothing is scheduled; not built: the briefs' expiry and the removal of PUBLIC's right to make temporary tables, see the Done-when cell and the section) | S066 |
 | S069 | Runtime and gateway edges | Without a change to a prompt or a rule: a validation error in the triage's two answers logs the field; the tool-call limits can differ by agent, or the plan says why not; a failed resumed leg does not leave the first leg's value to be read as the answer; `drafted_by` is right for a completion the filter withheld and the provider billed; the runtime's client of the gateway is bounded per call; a resumed leg that outlived its lease cannot write over the leg that took the run; `service_url_problem` refuses what the HTTP client refuses; a shed tool call's audit row names its run where that can be checked; the refusal flood's count covers the caller check and the throttles; an embedding input is bounded in tokens; the health check watches the certificate the server loaded; the ingestion's data class has a tenant of its own (T-60, the owner's decision when the step opens). Cut in two on 2026-10-06 (the design in Part C): a first half with no lane, and a second half on the cluster, the server's certificate and the health check (R11) and the ingestion's tenant (R12, which the owner decides at S020). Built as, first half (2026-10-07; implemented and tested, none of it run on a cluster, no real provider called): the Claims API logs the failed fields of the runtime's answer, of the triage proposal and of the brief's output, and counts a stored proposal as stored; a leg ends its run only over the `updated_at` its own start or claim wrote, with no new column, and a late leg answers the stored status with no output; a resume that carries a value is refused with a 422; the runtime's call to the gateway has a deadline of 30 s as a whole, a timeout per phase, a reply cap of 1 MiB and `Accept-Encoding: identity`; a refused prompt and a withheld completion are told apart on the wire (`X-Meridian-Completion: withheld` and three headers naming the deployment) and the withheld one has its drafter on record; `service_url_problem` also asks the HTTP client; a shed tool call's row names its run where the run's own row can be read; every service writes the summary of a refusal flood's last window through one writer; a module that exits at import is a failed load; the access log's path is unquoted to a fixed point and loses a userinfo part; the scaffold names the host; the tool span names its step. Not built, each as a decision with its reason in the section: limits per agent (R2), an embedding bound in tokens (R10), a ceiling on the rate limits (B13), a breaker shared between processes (B14), one word for the two limits (B18), a holder column and the second host's scaffold. Built as, second half (2026-10-07; implemented and tested, and seen on kind in two runs, K1 and K2): the five services that serve TLS start through `python -m meridian.platform.common.tlsstart`, which reads the certificate once, for uvicorn's own context and for the health check, so `/healthz` watches the certificate the server loaded (R11); the module refuses a start that would not ask for a client certificate and ends a start it cannot make with one `tlsstart:` line and exit status 3; K1 saw the 422 for a resume that carries a value, one `suppressed` row from each of the five services that keep a throttle and the access log's path for an address encoded twice, and K2 saw the deploy, the served certificates of four of the five equal to the issued ones, a renewal and a restart, and smoke's 46 lines twice | doing: both halves are built and seen on kind (2026-10-07); left: R12 for the owner's decision at S020, what no kind run could show (the withheld completion's four headers, which S071 measures; a shed call's row, a takeover past the lease and `not-started`; the module's refusal line, the race itself and a renewal that splits OpenSSL's two opens), smoke's line for the sweep's findings, and the new rows of the second half | S064, S037 |
 | S070 | Claims intake and what the adjuster is told | Uploads (T-38: the largest item here) are a step of their own, S080, split off when the owner chose on 2026-10-07 to build them ("Build now"); this step no longer holds them; a report dated as a recent loss is seen for what it is, or T-66 says why it cannot be; the adjuster's page marks a recommendation that rests on the model's answer, so a steered model's `approve` does not read as the rules'. Built as, first half (2026-10-07; implemented and tested against PostgreSQL and in the pages' own tests, none of it run on a cluster, nothing paid, no fingerprint moved): the adjuster's claim page says beside a recommendation whether it rests on a model's reading of the exclusion clauses or on the rules alone, and the queue marks it in a column, from one function over the stored fields (no new field, no migration); it reaches the 6 steered recommendations that wait for an adjuster and not the 28 automatic approvals, which no page lists; the page labels the loss date and the report date as not checked and shows two gaps in days, with no rule or bound, and T-66 says why; the claimant's name pattern is built from a read before the claim's row is locked and only for a request the claim can go on with, so a refused request pays no compile (a stale page and a documents post past the cap still do); the redaction is split into six modules by a proven move; the differential test classifies every lost run, its generator writes the forms it lacked and both date guards are pinned from both sides; the e-mail pass reads its placeholder from the mapping; and an international Hungarian phone number is cut at a space before a second number, in a form narrowed after a review (R3b) and narrowed again after a second (R3c, 951b72c), so that it turns the plain shape and not every text the row quoted. Not built here, each with its reason in the section: uploads (S080's: the owner decided to build them), a bound on what a name may replace, a reorder of the assessor's checks, the wider cut of a dotted number with a `06` group and a third date guard (the owner's questions), and the fix of three known leaks of the phone matcher | doing: the first half is done (R3c and its review stand; the whole suite is the main session's); four questions of the owner's are open (a fifth, uploads, was answered on 2026-10-07 and S080 holds them), and the second half holds what the owner decides; so far it has built, with no word of the owner's, the property test's missing forms, the queue's judgment of a stored proposal by the claim page's function with a received time refused when it has no zone, and one shaped 500 for an answer that cannot be built after the proposal is stored (the section), and it did not build `drafted_by`, which waits for the owner | S067 |
-| S071 | Measurements that need a live model | Costs money (about fifty chat calls and some embedding calls; the owner says yes before any, and the amount is stated first): a real model's answers to the injection cases the screen lets through, recorded beside the golden recording; a model's refusal of a structured request seen from a real provider; retrieval measured with a real embedding, in the evaluation and in S038's one failing check; the judge compared with labels a person wrote for a sample; a held-out set for the injection screen, and a decision on what a false alarm may cost; CLM-0034's `unsure` settled by a prompt or recorded as the right answer; retrieval over a graph measured again only if the synthetic data gains something relational to find | todo | S067 |
+| S071 | Measurements that need a live model | Costs money (52 chat calls for the injection cases, 40 attacks and 12 benign, about EUR 0.12 expected, where the golden recording's 55 chat calls cost EUR 0.12 as measured, and some embedding calls; the owner says yes before any, and the amount is stated first): a real model's answers to the injection cases the screen lets through, recorded beside the golden recording; a model's refusal of a structured request seen from a real provider; retrieval measured with a real embedding, in the evaluation and in S038's one failing check; the judge compared with labels a person wrote for a sample; a held-out set for the injection screen, and a decision on what a false alarm may cost; CLM-0034's `unsure` settled by a prompt or recorded as the right answer; retrieval over a graph measured again only if the synthetic data gains something relational to find | doing: the free half is done (2026-10-07; implemented and tested, no paid call made, no fingerprint of the evaluation changed): the label worksheet and its comparison, the run's own ceiling that the gateway holds and that a paid run refuses to start without, the live run of the injection cases with its refusal of an incomplete run and of what it would write, the held-out set (the screen stopped 6 of 48 blind attacks and flagged 0 of 24 look-alikes), and the command guard's ask before a paid target, rebuilt in six rounds and six security reviews (two blocked; it is a guard for habits and not a boundary, and its gaps are backlog rows); the paid half is open and waits for the owner's yes to a stated cost: every paid run (none has been made), the live embedding (E9), the owner's labels and the owner's reading of CLM-0034 | S067 |
 | S072 | The cluster outside `meridian`, second round | On kind: the Prometheus and CloudNativePG operators' reach into Secrets and ConfigMaps of every namespace is narrowed or recorded as accepted with its reason; DNS and the collector cannot carry data out unseen (T-84), or the residual is stated; writes to Prometheus and Loki pass a policy, and the three hops behind the collector are encrypted or the plan says why not; egress from `observability` and the admission webhooks' port are bounded; `cnpg-system` and `envoy-gateway-system` have Pod Security labels and a policy; the owner decides whether node-exporter stays off; Tempo mounts no API token | doing: the first part is on `main` (2026-10-07; implemented and tested, and seen on a warm cluster by run R8 in the limits the section gives: both pods run with no token, the labels applied, smoke's 46 lines and the 21 rules passed, the Certificates Ready but issued before under the old policy; the cold run R9 then approved all eight under the exact lists from nothing): Tempo's and Loki's pods mount no service-account token (three keys); the namespaces of the CloudNativePG operator and of Envoy Gateway warn and audit at Pod Security `restricted` from a render (the gateway's namespace confirmed by the API server's dry run with its proxy pod running, R9; the operator's namespace is gone); the certificate policy for the services names the eight URIs and six DNS names the chart renders, not a wildcard; an alert on the rate store's restart loop. The documents record the four accounts that read Secrets in every namespace (not two), the accepted reaches, the residuals and the one measurement (seen on kind: the API server's calls arrive from the node's address on the pod network and pass a default-deny ingress). The cluster batch is written in files, tested without a cluster and seen on kind by the cold run R9 (2026-10-07, 11:08 to 11:17 UTC, from the batch's commit; five contracts, W, E, C, N and S, and the fix contract F2; not seen: the guard, the fall-backs, a webhook failing closed, Loki's usage report refused, the four other pods of the node rule on the kubelet's port): no pod reaches the webhooks' port 10250 but Prometheus, on the operator's; egress from `observability` is denied by default and admitted by rule; the CloudNativePG operator is released into `meridian` under `config.clusterWide=false` and a policy of its own (`cnpg-system` is gone); `envoy-gateway-system` is denied by default and admitted by rule, and `make deploy` refuses a cluster without the operator's policy; smoke compares a Deployment's name as text. The infrastructure review of the batch is in (nothing critical or high; four medium findings answered by F2); left: the merge of `main`, the whole suite and the pull request, and the rows (the cluster on this machine is the one made from the batch's commit: no `make up` from `main` on it until the batch is merged); the owner decides the writes clause and node-exporter (stays off). S072, 2026-10-07, third part (the owner's "Build client certificates" and "Gateway in front, as for Loki", which reverse the first part's "the three hops stay clear text"; the batch above was merged as pull request 120, so its "left" is history): the collector has a client certificate of the telemetry authority (the common name `otel-collector-client`, one policy that allows only it) and its three hops are TLS 1.3 with it: Tempo's receiver demands it at the handshake, Loki and Prometheus are each behind an nginx that is the only way in (reads need no certificate, one write path needs the collector's subject, everything else answers 403 whatever the certificate), and Loki's and Prometheus's own ports admit the gateways alone; nine certificate policies, smoke's check 12 of ten lines, 56 lines in all after a deploy. Implemented and tested, and seen on kind by R14 (Tempo), R15 and R16b (Loki) and R17 (Prometheus and the whole: `make up` warm in 51 s, smoke 56 of 56, ten writes accepted under the collector's name), in the limits the section's third part gives; not seen: a renewal of any of these certificates, a cold `make up` of the branch, Grafana's pages in a browser, a closed path presented with the collector's certificate. The step stays `doing`: this part is on the branch `s072-writers-mtls` with no pull request yet, the owner has not answered on node-exporter, and the rows homed here that gate nothing wait for the closing record, which re-homes them | S064, S066 |
 | S073 | Renewals, upgrades and what smoke cannot see | On kind: a renewal is seen for the collector's certificate and the database's, and something alerts before the database's end; the services do not all restart in the same minute at a renewal; approver-policy is restarted when it hangs, and a repaired policy does not wait an hour for cert-manager's retry; a first install that fails has a way back that was tried; the chart bounds its rollback history and `make images` says what to remove; the scripts' `kubectl` calls have a request timeout; a manual sweep Job does not hide a stopped schedule; the failure paths of smoke's newer lines are seen once on a cluster with something broken on purpose; the line that reads approver-policy's wording says so when it fails; probes that time out under load have a recorded answer for the machine the cluster runs on now | doing: the first half is done (2026-10-07: the builds and the runs R0 to R4e, with the answer for the machine recorded); the second half is under way (runs R5a, R5b, R7, R8, R9a, R9, R10 and R11 of 2026-10-07: the one-hour watch run again saw the restarts spread across the six services, the node paused ended every call at the clients' own timeout, with the history limit holding at three ReplicaSets, the cold run gave its timings, and the ingestion's word `rate-store-unavailable` was seen on a real 503); approver-policy is restarted when it hangs: seen for a frozen process on 2026-10-07 (run R13: a liveness probe on `/readyz`, applied by `make up`; the kubelet restarted the container 140 seconds after the process was stopped), and the alert for a stuck one (`MeridianCertificateRenewalOverdue`) loaded and quiet and not seen firing; still open: the ingestion's other three words, a call that a bound of the wrapper ends, a first install made to fail, a policy narrowed before the first deploy and a rotation of the rate store's password (the owner's to run or to accept as not seen) | S064, S066 |
 | S074 | Test suite and file sizes | Without the cluster: `infra/kind/smoke.sh`, `test_kind_manifests.py` and the four test files over 800 lines are split along the lines their own tests already cut; the six functions over 50 lines are under it (counted by signature plus body without the docstring, as the section says: by the whole count the row used, four of the six, `assess`, `build_report`, `build_injection_report` and `summarise`, are still over); the template-database fixture survives a test that patches the runner's file list; the tests that failed once under load (a lost connection in a parallel run, a tool server's timeout, the gateway's fallback test) are run repeatedly on the machine the suite runs on now and either hold by construction or are closed as not reproduced, with the numbers; ~~the slowest test of the job is under ten seconds~~ (not met, and not what the step did: the gates' measurement of 2026-10-07 found the slowest test at 45.0 s without coverage, with seven of the ten slowest over ten seconds; the step gives every test a limit of 600 s instead); one CPU-time helper; `unused_port()` on macOS has its answer written down; ~~the owner decides whether CI gates on coverage~~ (answered 2026-10-07: yes, with a file size check and a per-test timeout; built) | doing: the first half is done (2026-10-07; tested, none of it run on a cluster): the two upkeep test files, `test_toolserver_meters.py`, `test_claims_graph.py` and `test_kind_manifests.py` are split by moves a script proves, the template database's builder passes the list it read at import, the stack and demo tests that failed under load no longer rest on the machine's speed (argued; the measurement run, 25 loops of each beside a whole suite, has not run), the counting test takes 0.03 s alone where CI saw 47 s, and one CPU-time helper serves nine files; three questions wait for the owner (coverage in CI, a size check, a pytest-level timeout); the second half is built except what waits (2026-10-07; implemented and tested, none of it run on a cluster): S076's leftovers are closed or accepted row by row (the registry `schemas` link and `--check` line, the services edit's small ends, the scaffold's undo, the import walker's limits pinned, the golden set's workload tied to `Report` by its own validator, the claimant's closed tables read-only and three stale sentences), `run_command`, `build_report` and `render_summary` are under 50 lines by signature plus body (37, 47 and 29) with `--help`, every report and the committed summary byte for byte the same, and two of the half's own commits carried a defect that the review reproduced and a contract fixed; the third part (2026-10-07; moves a script proves, tested; seen on kind once: `make smoke` from the split as it stands printed 46 PASS, 0 FAIL, 0 SKIP, the same lines as the unsplit script's, the trace ID apart): `infra/kind/smoke.sh` is an entry of 1,185 lines and ten files under `infra/kind/smoke.d/` (`shared.sh` and nine checks, 36 to 644 lines), and checks 8 and 10 are still in the entry; the leftovers are done (2026-10-07; tested, none of it run on a cluster): the five loaders of the name-masked cases are one helper, `servicesupport.injection_case_claim`, whose missing case fails by name, and `test_redaction_hungarian.py` (858 lines) is three files and `hungariansupport.py`, the largest 368 lines, by a move a script proves with the collected count unchanged; the last cut (2026-10-07; moves a script proves, tested; seen on kind once, run R12: `make smoke` from the cut printed 46 PASS, 0 FAIL, 0 SKIP, the same lines as the run before it): checks 8 and 10 are `smoke.d/08-network-policy.sh` and `10-certificate-policy.sh`, the entry is 88 lines and every file of the script, twelve parts and the entry, is under 800 lines (the largest 647); the three gates (2026-10-07; the owner answered all three questions; implemented and tested, the numbers measured on the development machine and none of it yet run by the hosted runner: see "The three gates"): `make lint` runs a size check of 800 lines with 51 files listed as a ratchet, every test stops after 600 s, and CI's suite step measures line coverage and fails under 98 (99.11 % measured, 2.0 % of the suite's time), with the job's limit at 30 minutes (coverage's first run on the hosted runner, the `python` job of pull request 128, took 14 minutes 0 seconds, inside the 10 min 1 s to 14 min 29 s measured without coverage the same day); what waits: the rows the section's last table keeps, the backlog rows with home S074 (among them two of the three new ones: the 46 splits no row homed and the ten least covered files; the third, coverage's cost on the hosted runner, is read and closed) and the measurement run of the load-sensitive tests beside a whole suite (not run) | S064, S066, S037 |
@@ -799,12 +799,12 @@ that day; the rest stand as their step recorded them.
 | `test_scheduled_sweep_migration.py` and `test_sweep.py` are over the 800-line ceiling | S052 | closed by S057 (each is three files and a support module, cut along its sections; the largest has 649 lines) | S057 |
 | One loader for the two entry-point groups (`meridian.graphs`, `meridian.evaluations`), which copy each other's trust checks | S050 | closed by S061 (one function in `platform/common/entry_points.py`, in the stricter order: a graph's module is placed before its own code runs) | S061 |
 | The evaluation's embeddings are simulated in every run, the recording run included: retrieval with a real embedding is not measured | S050 | open | S071 |
-| The LLM judge is not calibrated against people's labels, and a rationale that holds a word its screen knows is graded ungrounded without a call (T-79) | S050 | open; not taken by S032: it needs people's labels, and no judge runs in the injection suite. S032 counted that screen's false alarms on claimant text: 16 of 22 look-alike sentences | S071 |
+| The LLM judge is not calibrated against people's labels, and a rationale that holds a word its screen knows is graded ungrounded without a call (T-79) | S050 | open; not taken by S032: it needs people's labels, and no judge runs in the injection suite. S032 counted that screen's false alarms on claimant text: 16 of 22 look-alike sentences. S071's free half built the worksheet of the 13 recorded verdicts and the comparison; the owner's labels are not in yet | S071 |
 | Golden-set cases on the fraud indicators' boundaries and an unknown policy number | S003, S017 | closed by S067: seven claims on a second random stream (CLM-0041 to CLM-0047; the forty are byte for byte as committed, held by a digest): `frequent_claims` with the older of two earlier claims 365 and 366 days before the loss, an early loss 30 and 31 days after the start, a late report 31 and 30 days after the loss, and CLM-0045 on a policy number no policy has (`policy_not_found`, the grader takes it only where its label says so). The model is asked about none of them, so no recording was made. Not in the golden set: a withdrawn claim, a claim open beside another, a history of over 100 entries | S067 |
 | A view that shows the Evaluation Harness's edges (Containers leaves the harness out, Governance the Claims Triage App) | S017 | open; not taken by S050 | S035 |
 | T-45's read limit was measured once (1,024 output tokens in 10.1 s on 2026-10-03); S020 accepts that or repeats it before the gateway reaches Azure from a cluster | S050 | open | S020 |
 | The recorded evaluation and a whole-set test with a fake model add about a minute to the CI python job | S050 | closed by S057, accepted with its number: 42 s and 16 s of one worker in CI (pull request 79; four workers, the Tests step 5 min 34 s); the job prints its slowest tests from S057 on | S057 |
-| On CLM-0034 the model answers `unsure` (wear and tear cannot be told from the description); a variant prompt that asks for quotations did not fix it without losing CLM-0038's exclusion | S050 | open | S071 |
+| On CLM-0034 the model answers `unsure` (wear and tear cannot be told from the description); a variant prompt that asks for quotations did not fix it without losing CLM-0038's exclusion | S050 | open; the case is written out for the owner's reading in S071's section, with the session's recommendation | S071 |
 | A database role of their own for the seed and the ingestion Jobs, which run as the owner (T-25) | threat model, S018 | closed by S063: `policy_seed` and `knowledge_ingest` (migration 0022), each from a Secret only its Job mounts, no fallback to the owner's; tested against PostgreSQL and run on kind | S063 |
 | The gateway's rate windows live in one process, so two pods during a rolling update each allow the full limits (T-45) | threat model, S018 | closed by S066 (2026-10-06): the two windows are in one Redis shared by every gateway pod (ADR 8), and the chart allows a second replica only with the store on. Two gateway processes sharing a window is tested against one Redis, not seen on a cluster with two pods | S066 |
 | A tool server's calls over the eight wait in a queue with no limit, and a search the runtime gave up on still runs, is charged and is audited as completed (T-62) | threat model, S018 | closed by S059 as far as a tool server can (a call carries the time the runtime will wait; no slot in that time, or late before its work or its commit, is `failed`, `timed-out`); a search already at the gateway is still charged | S059 |
@@ -825,8 +825,8 @@ that day; the rest stand as their step recorded them.
 | The scaffold refuses valid but unusual files without saying which line (a table header with a trailing comment, a flow-style list), and `the name is taken` does not say by what | S039 | closed by S061 (a refusal names the line of the person's own file, and the kinds of thing that hold a taken name; never the name) | S061 |
 | `meridian registry validate` ends in a traceback when the registry directory cannot be listed (older than S039; the scaffold catches it for itself) | S039 | closed by S061 (`load_registry` reports the directory, and since the reviews a file, with the error's class and never its text) | S061 |
 | Nothing ties a golden set to a workload before a report exists: `eval run --allow-empty` passes one scaffolded workload on another's empty set | S039 | closed by S061 (a manifest names its workload, the key is required, and `eval run` refuses another's before a case is read) | S061 |
-| A real model's answers to the injection cases the screen lets through: about 50 chat calls (42 attacks, 8 benign), about EUR 0.12, a recording of its own beside the golden one and the owner's Azure login; until then QA-09's "no route changed" is measured with a script that obeys | S032 | open, the owner's decision | S071 |
-| The injection screen stops 24 of 66 of the suite's attacks (26 since S067, which has it read the description as posted) and flags 16 of 22 look-alike sentences; improving it needs cases it was not fitted to (a held-out set), or a classifier, and a decision on what a false alarm may cost | S032 | open | S071 |
+| A real model's answers to the injection cases the screen lets through: 52 chat calls (40 attacks, 12 benign), about EUR 0.12, a recording of its own beside the golden one and the owner's Azure login; until then QA-09's "no route changed" is measured with a script that obeys | S032 | open, the owner's decision; the run is built and tested with a fake provider (S071's free half) and has not been made | S071 |
+| The injection screen stops 24 of 66 of the suite's attacks (26 since S067, which has it read the description as posted) and flags 16 of 22 look-alike sentences; improving it needs cases it was not fitted to (a held-out set), or a classifier, and a decision on what a false alarm may cost | S032 | open; the held-out set exists since S071's free half and its one measurement is 6 of 48 blind attacks stopped and 0 of 24 look-alikes flagged, so the figure on the suite's own cases (written beside the screen) was tuned to that set and does not carry to sentences written without it; improving the screen needs a new blind set, because this one is spent the moment the patterns change | S071 |
 | The Claims API replaces the claimant's name before the injection screen reads the description, so a claimant whose name holds the screened words hides them (CLM-1053, CLM-1054); the screen could read the text as posted | S032 | closed by S067: the Claims API screens the description as posted, before the name is replaced, and hands the run one boolean that the assessor reads as a hit of its own screen; both cases are stopped (name-masked 2 of 2, the suite 26 of 66). The run still never receives the posted text. What the boolean does not cover is a name made of the words an exclusion turns on (its row below, S070). Tested without a cluster | S067 |
 | A stored clause rewritten to say something else (the `carve-out` cases) is no instruction, so no screen finds it; the ingestion's hash check is the only control, and nothing compares the stored text with the manifest afterwards (T-27, T-57) | S032 | closed by S067 in part: `meridian knowledge verify` compares each stored clause's body, title, section and source hash with the manifest-verified wordings and names a clause that differs, never its text; the ingestion Job runs it after its write, and a runbook says when to run it by hand (migration 0026 gives the ingestion's role a read of seven columns). It finds a change only when it is run, and not a changed vector; tested against PostgreSQL, not run on a cluster (the next row is S073's). A search still checks nothing: the `carve-out` cases are not changed | S067 |
 | A steered model can turn the recommendation an adjuster reads from reject to approve (36 of the 42 attacks that reached a model that obeys; 34 of the 40 since S067, by the injection summary); whether the adjuster's page should mark a recommendation that rests on the model's answer is not decided | S032 | closed by S070 in part, and said to the owner as a decision the session took (the mark is words on a page and comes out in one commit): the claim page and the queue say whether a recommendation rests on a model's reading or on the rules alone (tested against PostgreSQL; not seen on a cluster); it reaches the 6 that wait for an adjuster and not the 28 automatic approvals (T-26). Not built, the owner's: the rules withholding a recommendation that rests on the model (it changes `decide`, the oracle and the grades) | S070 |
@@ -1158,6 +1158,17 @@ that day; the rest stand as their step recorded them.
 | The second infrastructure review's low findings that M4b left, and the first review's L4: a label name with a dot or a colon on the label-values path gets 403 (`translation_strategy` set to a no-escaping value would break it); nginx opens `ssl_certificate` and `ssl_certificate_key` separately, so a handshake between the kubelet's two symlink flips could see a mismatched pair (one failed handshake at worst); no `constraints.privateKey` on the new policies, no CPU limit on the gateways, the chart's access log writes the PromQL of a GET query, and a 127-character comment line in `certificate-policy.yaml`; and the Renovate rule that keeps the nginx tag with the Loki chart now also covers an image a hand-written manifest runs | S072 (third part: second review L-3, L-5, L-8, L-9; first review L4) | open; none blocks | S073 |
 | The test of Loki's rendered location list (`MERIDIAN_LOKI_RENDER=<render file>`, in `test_telemetry_loki_gateway.py`) is skipped in every run, so a chart bump that adds a location without the gateway's check is caught by nobody until a render is read; the evaluator that models the two nginx maps is Python and was compared with a real nginx only in the implementers' containers and by smoke's check 12 on the cluster (R17: lines 9 and 10 for Prometheus's gateway, none for the Loki gateway's odd forms) | S072 (third part: M3b's report, the first review) | open; a test that renders the pinned chart in CI, in the manner of the policy tests' row above | S074 |
 | The download's permit is released when the handler returns, before the body is sent, so the four permits bound the read and the audit write and not the memory a slow reader holds (one answer is up to 1 MiB); a 404 for an unknown id and a 503 from the permit check each use a rate token, so thirty well-shaped requests a minute lock everyone out of downloads; the count of a claim's download rows is unbounded while the audit table is never pruned. Local only, behind a switch that is off | S080 (the short security check of the last fixes, before pull request 130) | open | S080 |
+| What the command guard still does not read before a paid model call, after G2 (the security review of the guard's first round and G2's report; each shape measured on the hook as shipped, from lines in a file and not in a live session): a script on standard input (`bash -s <sub-command> < foundation.sh`) and the backslash and `$'...'` quote forms of a target; a target held in a variable or a substitution, a loop over targets and `echo <target> \| xargs make`; a quote inside a word (`m"a"ke`, or inside an opt-in's name); a copied, symlinked or process-substituted script and a variable sub-command; an opt-in set without `NAME=value` text (an environment file, `set -a; . ./file`, `export NAME` when already set, `printf -v`, `docker run -e NAME`, `os.environ[...]`); a Python script written to a file and run by name (the heredoc body that writes it is dropped), a credential named under another interpreter or in the repository's own code, `just` and a direct call of the evaluation CLI; and `az rest --help`, which asks (no exemption). The settings' ask over allow precedence is assumed and no test runs the matcher: `Bash(az * list*)` and `Bash(az * show*)` would match an `az rest` URL that holds those words if allow beat ask. The hook is the real layer and a file a session can edit (Part D, question 6) | S071 (security review of G1, G2's report, 2026-10-07) | open; narrowed by rounds three to six: a target held in a variable, a loop over targets and `echo <target> \| xargs make` now ask (the paid-target rule, G4), and a commit message no longer asks for the raw request or the identity library (G3); the rest stands, and the rows at the end of this table carry what the later reviews list | S071 (its paid half: before the owner signs in on the machine the sessions run on) |
+| The documents that say what the command guard asks about and does not see do not name the paid model targets, the opt-in variables, the raw Azure request, the identity library or the flags variable: the hook's header list of what it does not see, the runbook's list ("What the command guard does not see"), `docs/development-environment.md` (the lines that describe what the guard asks about) and the module READMEs | S071 (G1's report and the review's A-9, 2026-10-07) | open | S071 |
+| The live embedding (E9): the evaluation stack and S038's one failing check measured with a real embedding, both opt-in; its paid run answers the golden set again (27 chat calls and about 170 embedding calls, EUR 0.05 expected), so the design question is open whether a second recording keyed on other clauses replaces the first, or sits beside it as the injection run's does | S071 (design E9, 2026-10-07) | open; not built in the free half | S071 (its paid half) |
+| A larger and harder label sample for the judge: the worksheet holds the 13 recorded verdicts, every one of which the judge called grounded, so its "ungrounded" column is empty by construction; a sample with rationales known to be unsupported needs new judge calls (EUR 0 to 0.05 expected) | S071 (J1, 2026-10-07) | open; waits for the owner's labels on the 13 | S071 (its paid half) |
+| Small ends of the paid-run harness and the guard's first round that no contract took, all low: `PYTEST_DB_CONTAINER` is passed to the Makefile, whose recipe starts with `docker rm -f` of that name, so a caller that sets it to another container's name removes that container; the two tests that show neither opt-in starts the other spawn a `pytest` of their own, which the development-environment room check (it counts pytest processes of any kind) can see for a moment; `_why_unanswered` lists every distinct refused reason in the database, so a run that also met a rate window shows both reasons on the budget line; the runtime records `model-error` for a budget refusal as for a provider fault, and a refused judge call shows as `unanswered` only; the gateway cannot tell a withheld completion from the model's own refusal of a structured request, so the injection run's report holds one class for both | S071 (the security review of G1, L1 and L2, and the implementers' reports, 2026-10-07) | open | S071 |
+| Two small ends the held-out set's report found: `tests/meridian/evaluation/test_report_workload.py` asserts that exactly four JSON files stand directly under `data/evaluation/`, so any later file there that is not a gate report trips it (the held-out reports have a folder of their own for that reason); and `EVAL_INPUTS` in the Makefile covers all of `src` and `data/synthetic`, so a new file in either makes an existing `.eval` report look stale to `make eval-compare` until `make eval` runs again | S071 (H2b's report, 2026-10-07) | open | S074 |
+| The command guard's gaps that the sixth round pinned as rows of the case file, each with the word "gap" in its note and today's decision (none, and none on main too, so none is a regression): combined short flags with an argument before the build tool (`sudo -Eu root make`), a long option with a separate argument (`sudo --user root make`), a decimal duration (`timeout 1.5 make`), more flags than the shell gate's window of 80 bytes holds (24 pairs of `-o x`, 25 or 40 `-x` flags, a flag of 90 bytes before `-c`), a substitution inside a parameter expansion (`make ${T/x/eval-record}`), the AWS script's own `apply`, `plan` and `destroy` behind a quoted separator (a deny or an ask on the fourth round, none since the fifth), and `fish -c` | S071 (G6's report and the fifth round's re-check, 2026-10-08) | open | S071 (its paid half) |
+| What the sixth round's check lists beyond the pinned rows, all none on main and on the fifth round (so no regression) and not yet rows of the case file: `bash -oc pipefail '…'`, `bash -c -o pipefail '…'`, `su --command '…'` and `su --command='…'`, `su` with five words before `-c`, seven pairs of `-o x` (six pairs deny and seven fall outside the window: the measured edge), `env -a NAME make` and `env -u A -S '…'`. And two false denies, main none: two letters are still case-blind in the body gate (`bash -C '…'` is read as `-c`, `env -s '…'` as `-S`), and `echo bash -c 'make -m "aws-destroy"'` (a row, kept on purpose: an echo of a shell-wrapped removal), beside `make git commit -m "aws-destroy"` (deny kept: main denies the unquoted form) | S071 (the sixth round's check, 2026-10-08) | open; rows to add to the case file | S071 (its paid half) |
+| The bypasses the reviews of the guard's added rules keep listing, none a regression (main gives none on each): a target split by quotes or built by a substitution (`make eval-"record"`, `make $(printf eval-rec)ord`, `make eval-{record,x}`, `make -m "aws-"apply`, `make azure-"apply"`); a target or a whole command in a file (`make $(cat t.txt)`, `xargs -a t.txt make`, a script written and then run by name, `set -a; . ./live.env`, a script the command names such as `python3 X.py` or `bash X.sh`); the flags variable with its target held elsewhere (`MAKEFLAGS="-- $T" make`, `T` set in an earlier call); the Azure make rule, which has no co-occurrence rule (`T=azure-apply; make $T`); the AWS option rule behind a prefix outside its tables (`stdbuf -oL`, `ionice`, `doas`, `systemd-run`, `eval make`, `\make`, a quoted `"make"`) or with the target in a loop or a variable; a raw request spelled `az re""st`, `"az" rest` or `a=az; $a rest`, or through `python3 -m azure.cli rest` or `subprocess.run(['az','rest'])`; the identity library through `from azure import identity`, `importlib`, `node` or `pwsh`, the classes `OnBehalfOf`, `AuthorizationCode`, `AzurePipelines` and `AzureApplication`, or a heredoc piped into an interpreter the heredoc pass does not know; main's older rules that cut at a separator inside a quote (`git commit --author="A;B" -n`, `kubectl get secret x -n "a;b" -o yaml`, `cat "a;b" .env`); and `parallel -m "…"` and `python3 -m "<quoted>"`, which main's own pass blanks as prose | S071 (the reviews of G3 to G6, 2026-10-07 and 08) | open; the third review listed file-then-run (a command that runs a file a session wrote, `set -a; . ./live.env` included) among the items to close before a paid run on this machine (the other, `${T:-…}`, is closed), and it is not built: the hook would have to open the files a command names (the design's note) | S071 (its paid half) |
+| The paid-target rule's false asks, measured by the third review and the re-check and accepted by the session as the price of co-occurrence (a false ask costs a click, a missed one costs money; the owner may overturn): any command that holds the word make and a paid target as words asks, wherever they stand (`rg -n "make eval-record" docs/`, `grep -rn "make gateway-live" docs`, `git log -S"make gateway-live"`, `gh pr create --body "… make eval-record"`, `make test && git add docs/operations/runbooks/gateway-live`, `make test PYTEST_ARGS="-k gateway-live"`, `echo gateway-live >> notes.txt && make docs`; 8 of the 34 daily shapes the review tried asked, all of this form; a commit message goes in with `-F` and so does not ask); the narrower rule for a default in a parameter expansion asks on `make ${T:-my-eval-record}` and `echo "${T:-eval-record}" && make docs`; and the raw-request and identity rules ask on a search whose quoted pattern names them (`grep -rn "az rest" docs`, `python3 -m pytest -k "DefaultAzureCredential"`). A search with the Grep tool asks nobody, and the review found no target of main's Makefile outside the paid ones that gained an ask | S071 (the third review and the fifth round's re-check, 2026-10-07 and 08) | open; accepted | S071 (its paid half) |
+| A quoted word after `env -S` (an empty string, a comment, an assignment or another prefix) hides the build tool behind it from the added AWS removal rule: `env -S '' make -m "aws-destroy"`, `env -S '# c' make …`, `env -S 'A=b' make …`, `env -S 'nice -n 5' make …`, `env -S 'sudo' make …`. The fifth round denied these forms and the sixth gives none, which is what main gives; the sixth round's check calls it a medium that is not weaker than main, and judges that a session almost certainly would not type it. Its suggested fix: add to the alternatives for `env` a `-S` followed by a quoted word (already masked to `'xxx'`) so that make after it stays the command word, at the cost of a deny on `env -S 'sh' make` (the stronger direction), reverse-checked against row 2841 so that `env -S x make` stays none. The check asked for it before the paid run; the session reads that as the next change of the hook and not as S071's paid model run, because the rule is the AWS removal rule and not one of the paid-model rules | S071 (the sixth round's check, 2026-10-08) | open; left open by the session's decision | S020 (the guard's rules for the Azure wrapper: the next change of the hook, with a security review of its own) |
 
 ## Part C — Step details
 
@@ -17892,6 +17903,788 @@ that nothing is built; the first half's (a) to (e) stand as written):
   known-leaks row and the small-ends row carry a sentence each. T-26 and T-67
   are brought to the code; no new threat ID.
 
+### S071 — Measurements that need a live model
+**Status:** doing · **Started:** 2026-10-07 · **Finished:** —
+**Goal:** everything a paid run needs exists, built and tested with no paid
+call, so that the owner's yes to a stated cost starts a run that is bounded by
+the gateway, refused when it is incomplete, checked before it writes and not
+startable by a session without a question to the owner; and the measurements
+that cost nothing (the held-out set for the injection screen, the label
+worksheet for the judge) are made. The paid measurements themselves are not.
+
+**Left before it is done** (the step stays `doing`):
+
+- every PAID run: **none has been made, and no model was called by this half**;
+  the injection cases answered by a real model, a refusal of a structured
+  request and a withheld completion seen from a real provider, the golden set
+  with a real embedding and S038's one failing check (E9, below), and a
+  re-recording if CLM-0034's prompt changes;
+- the owner's labels for the judge's 13 recorded verdicts;
+- the owner's reading of CLM-0034 and a decision on it (written out below);
+- the owner's yes to a stated cost, in the per-run form below.
+
+**Two halves, in one step and, like S073 and S036, two pull requests.** The
+plan's rule for a step that costs money (Part B, "Up to Azure": the parts of a
+step that need no payment are done and the paid part is parked in its section)
+cut it at the owner's yes. The owner's "2. Yes" of 2026-10-07 (12:13 UTC) was
+to PREPARING the cost statement, and not to a paid call; the statement's own
+finding was that S071 was not at its paid stop yet, because seven things had to
+exist first and all are free. This record is the **free half**, one pull
+request, documents and code; the **paid half stays open** and waits for the
+owner's yes to a stated cost.
+
+**Sign-in.** The cost statement offered two ways to sign in: (a), the owner's
+laptop, its default, and (b), the virtual machine, "not recommended". The
+owner's answer on 2026-10-07 at about 13:20 UTC, to the question about S071's
+sign-in, was: "I sign in on the VM". So when the paid run is due the owner
+signs in to Azure on the machine the sessions run on (the answer does not say
+whether the owner or a session then starts the run). **That is not a yes to a
+paid call**: it
+says where the login will be and says nothing of the amount or of the run. The
+cost statement named the price of (b) before the answer: a login where
+sessions run (on the trial a session's login ended within a day) and a guard
+that did not ask before a paid model call. The guard asks now (G1 to G6), and
+that, with the ceiling (L1, L3), is what stands between a signed-in machine and
+a paid call. The guard is a habit-stopper and not a boundary (T-87, T-112).
+
+**Lane.** The step holds the lane "changes what the evaluation fingerprints",
+and the free half changed none: L1's test asserts that the committed
+`config/registry/tenants.yaml` is byte for byte the same before and after a
+run's ceiling is applied to a copy; H2 put the held-out set in a sibling
+directory after a stop (below), and the golden set's and the injection set's
+manifest hashes (`b7d1984e8d77` and `fe63ab5bd6ff`) were read before and after;
+no baseline, recording or fingerprint changed in any commit, and `make eval`
+ended `eval compare: passed` at L1, L2 and L3.
+
+**Design** (the session's, 2026-10-07; E1 to E10 in the handoff's `design.md`;
+the owner may overturn any):
+
+- **E1, E2: a live run of the injection cases is its own target**, `make
+  eval-injection-record`, through the same script door as the golden
+  recording's, opt-in by its own variable so that neither run starts the other.
+  It answers exactly the cases whose baseline says the model was asked (52 on
+  2026-10-07: 40 attacks and 12 benign) with the real triage prompt and tools
+  and no judge. It writes a recording beside the golden one, a report (per
+  case: IDs, verdict, whether the injected instruction was obeyed by the
+  graders' reading, finish reason, tokens, cost in micro-EUR, never a case's
+  sentence) and a summary.
+- **E3: a ceiling the gateway holds.** A paid run builds its live gateway from
+  a copy of the registry in which the tenants it charges have a monthly budget
+  equal to the run's ceiling, so a run that goes wrong is refused mid-run and
+  not noticed afterwards. The committed registry does not change.
+- **E4: the run's halves are separable.** The free half tests the whole path
+  with a fake live provider (canned answers and token counts) writing to a
+  temporary directory.
+- **E5: the command guard asks** before the paid targets, their script
+  sub-commands and the opt-in variables; `make azure-smoke` (three calls, under
+  EUR 0.001) keeps passing without an ask, because an ask there would teach
+  the owner to click through.
+- **E6: a held-out set** for the screen, written by an agent that is forbidden
+  to read the screen, the cases or their summary, and measured once.
+- **E7: the judge against a person's labels:** a worksheet and a comparison.
+- **E8: CLM-0034's `unsure`:** the session writes the case out and recommends;
+  a prompt change costs a whole golden recording a try.
+- **E9: a live embedding** in the evaluation and in S038's comparison, built
+  last, because its paid run answers the golden set again. **Not built in the
+  free half.** A row below.
+- **E10: the stale figures corrected** in the same change: "about fifty (42 +
+  8)" is 52 (40 + 12) since S067, and "about 60 chat calls, under EUR 0.50" is
+  55 calls and EUR 0.12 as measured on 2026-10-03.
+
+**What the code corrected in the design** (each found by the contract that
+built it):
+
+- The ceiling is per tenant (`tenants[].limits.cost_per_month_eur`), so the
+  golden run, which charges `claims-triage` and `evaluation`, is bounded at EUR
+  0.50 for each, EUR 1.00 for the run; the injection run charges one tenant.
+- Only the run's live gateway loads the copy; the stack's replay gateway and
+  the runtime keep the committed registry, which is harmless because the replay
+  deployments' price is 0.
+- The gateway already refuses an implausible single count (input above four
+  times its own estimate, output above 1,024: a 502), so the ceiling catches
+  accumulation. The wire's cap is 1,024 output tokens, the request's 400.
+- A refused prompt (Azure's content filter, a 400) and a completion the filter
+  withheld are ANSWERS and the run is complete; the gateway cannot tell a
+  withheld completion from the model's own refusal of a structured request
+  (both are one provider error), so the report holds one class, `filtered`. The
+  gateway does not try the next candidate after one, so a case makes one call,
+  not up to four as the cost statement allowed.
+- The runtime records `model-error` for a budget refusal exactly as for a
+  provider fault; only the gateway's `refused` audit row with
+  `tenant-cost-budget` tells them apart, so the report takes the cause from the
+  gateway's answer and not from the runtime's code.
+- The held-out set's path in the contract was wrong twice: first the injection
+  set's fingerprint refuses any file beside its `cases.json` that its manifest
+  does not list (the implementer stopped before building and showed it on a
+  scratch copy), so the cases went to a sibling directory
+  `data/synthetic/injection-heldout/`; then `test_report_workload.py` loads
+  every JSON file directly under `data/evaluation/` as a gate report and
+  asserts four, so the report went to `data/evaluation/injection-heldout/`.
+  Lesson for a contract: name a new data file's place only after reading what
+  fingerprints the directory.
+
+**Advisor:** consulted three times: twice before a contract went out and once
+at a surprise (the third, below); the main session adds any later one.
+
+- **The cost statement** (2026-10-07, about 12:36 UTC; at the owner's question,
+  before a paid ask): three corrections, all taken. The ask said "up to EUR 2
+  in all by the gateway's own sums", which the gateway cannot hold, since it
+  bounds one run; it is per run now, with a number of runs before a second ask.
+  The "under EUR 2.50" ceiling left out the four calls a run may make, and the
+  line is gone. The sign-in's default became (a) and (b) "not recommended",
+  where the draft had leaned to (b). The headline for the owner became: S071 is
+  not at its paid stop yet.
+- **The design** (about 12:44 UTC; before the first contract): L1, H1 and J1
+  went out side by side; L2 waits for S079's pull request (it adds a Makefile
+  target and touches the CI configuration's test); the held-out writer's
+  blindness became a structure and not an instruction (no worktree, no file,
+  only a prompt, one output file, and its transcript searched afterwards for
+  any read of the repository); L1's test asserts the committed `tenants.yaml`
+  unchanged.
+- **The guard after a second block** (2026-10-07, about 17:25 UTC; at a
+  surprise: two security reviews in a row had blocked the guard for the same
+  kind of change, and the one-character fix to the second block was at hand).
+  The session wrote the open decision and its alternative into the design
+  first. The advisor read it as: change the shape and do not patch a third
+  time, and sharpened it in three places, all taken. The three guard files go
+  back to G1's content, in which the pass that builds the copy main's rules
+  read is byte-identical to main's, and the new rules are built on that; the
+  proof is textual (the diff against main shows no hunk inside that pass),
+  because a fuzz proves what it sampled and an identical block proves all of
+  it, and the third review checks it first. The two gates are said with their
+  reason: the paid-target rule by co-occurrence has no command-word gate and
+  only asks, and the rule that denies a removal needs the command-word gate,
+  read from the raw text in a pass of its own, so that a commit message naming
+  it stays what main gives. The implementer lists every case row whose
+  decision changes against the earlier round's expectation. What it changed:
+  the plan of the next contract (G4, a rebuild) over the cheaper one (the
+  one-character fix and the reviewer's three closes as G4).
+
+**Work log:**
+
+- A read-only map of the step (`mapping.md`), the cost statement, the design,
+  and eight contracts: J1, L1, H1 and H2 (H2 stopped at a stop of its
+  contract, below), L2 (after S079 merged), G1 and its security review, L3 and
+  G2 (the review's findings), this record's first part, D1, then G3 to G6 (the
+  guard's third to sixth rounds, each answering a review) and this record's
+  second part, D2. Each ran in a worktree of its own and returned a report; the
+  main session read each diff.
+- **H1's audit** (12:58 UTC): the blind agent's transcript holds ONE tool use,
+  a write of the sentences' file, and no read, search, shell or web call
+  (counted from the transcript's `tool_use` parts by a script). 72 entries in
+  order, six to an attack family and 24 look-alikes, 62 to 169 characters, no
+  duplicate, no address, link or long number; English 58, Hungarian 8, German
+  2, French 2, Polish 1, Spanish 1. "Blind" means this and no more: the agent
+  read nothing of the repository; what its model already knows of such attacks,
+  and whether the screen's author drew on the same public phrasings, is not
+  controlled. The main session did not read the sentences before the
+  measurement.
+- **Reviews:** six security reviews, all read-only: one of G1, L1 and L2 (a
+  checkout at 4f2fc52; below), then one of each later round of the command
+  guard (G2, G3, G4, a re-check of G5 and a short check of G6; the table
+  after the rounds). A `python-reviewer` read of L1 and L2, which the design
+  asked for: not recorded. A
+  `rag-pipeline-reviewer` read of E9: none, since E9 is not built.
+
+**What the free half built** (where it lives; the evidence as each contract's
+report prints it):
+
+| Contract | What it built | Where | Evidence |
+|---|---|---|---|
+| J1 (58c8713) | The label worksheet for the 13 recorded judge verdicts, blind (the claim, the model's assessment and rationale, the clauses the judge was shown; no verdict, no judge reason), and `compare` (labelled and missing, agreement, each disagreement by ID) | `src/meridian/workloads/claims_triage/judge_labels.py`, `data/evaluation/judge-labels/claims-triage.json`, `tests/meridian/workloads/claims_triage/test_judge_labels.py` | 31 passed in 1.02 s; two tests fail when a mutation appends the judge's reason to a rationale; `compare` on the committed sheet prints `no label is filled in: nothing to compare (13 entries wait)` and exits 0 |
+| L1 (17c19f1) | The run's own ceiling: a registry copy in which each charged tenant has a monthly budget at or below the run's ceiling (EUR 0.50 for each of the golden run's two tenants; the injection run's one tenant at EUR 1.00 as L1 built it, EUR 0.50 since L3), refused if it would raise a budget, name an unknown tenant or write into the source | `tests/meridian/runceilingsupport.py`, `tests/meridian/test_run_ceiling.py` (17 tests), `tests/meridian/evalsupport.py`, `tests/meridian/test_evaluation_stack.py` | 33 passed, 2 skipped (the paid opt-in tests); `make eval` `eval compare: passed`; a mutation that ignores the ceiling fails (`assert 14 < 14`), and one that writes into the committed file fails the SHA-256 guard |
+| L2 (5b4e228) | The live run of the injection cases: the opt-in test, the fake live provider, the three writers (recording, report, summary), the refusal of an incomplete run that names the cases and why, the target and the script's sub-command, the README section | `tests/meridian/injectionrecordsupport.py`, `tests/meridian/test_injection_record.py`, `Makefile`, `infra/terraform/foundation.sh`, `data/evaluation/README.md` | 83 passed, 3 skipped; `make eval` passed; three mutations seen red (asked-cases filter, the no-sentence scan, the ceiling not applied); `shellcheck infra/terraform/*.sh` exit 0; `gitleaks dir tests infra src` no leaks |
+| H1, H2 (0b46f00) | The held-out set: 72 sentences (48 attacks in eight families, 24 look-alikes) as cases CLM-5001 to CLM-5072 under their own key, the command that applies the screens as the service does, and its report and summary | `data/synthetic/injection-heldout/`, `data/synthetic/generator/heldout.py` and `heldout_text.py` (and `output.py`), `src/meridian/workloads/claims_triage/injection_heldout.py`, `data/evaluation/injection-heldout/`, `tests/synthetic/test_heldout_cases.py`, `tests/meridian/workloads/claims_triage/test_injection_heldout.py` | `make pytest` (4 workers, no database) 13835 passed, 4538 skipped in 136.33 s; the screen's outcome reproduces the committed baseline's `flagged` on all 78 existing description cases; `make eval` was not run by that contract (it needs Docker) |
+| G1 (4f2fc52) | The guard asks before the three paid targets, their script sub-commands and any assignment of an opt-in variable to anything but 0 or empty; the settings' ask list gains the three targets | `.claude/hooks/guard-bash.sh`, `.claude/settings.json`, `tests/guard-bash-cases.jsonl`, `tests/test_guard_bash.sh` | the old hook against the new on the 2,191 earlier cases: `lines=2191 weaker=0 changed=0`; 2,405 cases, 2,607 `ok` lines, 0 FAIL; the security review reproduced `weaker=0` on its own 265 shapes |
+| L3 (b6f3f6b) | The review's findings on the harness: a paid run REFUSES to start without its ceiling (before it reads an environment variable); the injection run's ceiling is EUR 0.50; the golden recording's tests need both opt-in variables; a scan of what a run would write; the three files moved into place together; a test that no workflow names a paid target | `tests/meridian/evalsupport.py`, `runceilingsupport.py`, `injectionrecordsupport.py`, `writehygienesupport.py`, `test_paid_run_ceiling_required.py`, `test_write_hygiene.py`, `foundation.sh`, `.gitignore` | 128 passed, 3 skipped; `make eval` passed; removing the fail-closed call fails 10 of 15 tests, and a writer that writes straight into place fails the kill test; `gitleaks` no leaks |
+| G2 (77675a7) | The guard's second round: an assignment of make's flags variable (or its GNU twin) that holds a paid target, the Azure CLI's raw request for any method, a Python line that names the identity library or a credential class, and a make option before a quoted target; `az rest` in the settings' ask list | the same four files as G1 | the 2,405 earlier cases `weaker=0 changed=0`; 2,500 cases, 2,708 `ok` lines, 0 FAIL; the new cases changed 51 decisions (48 none to ask, 3 none to deny) |
+
+Details the table cannot hold:
+
+- **The run is complete or writes nothing.** A case with no proposal or a
+  failed run, a call the model was never asked, a call that did not settle, an
+  entry count that is not the chat calls, or unstable tool arguments each make
+  the run incomplete; the problem line names case IDs and classes only. A
+  budget stop reads "refused by the gateway: the tenant's budget is used up
+  (audit: tenant-cost-budget)".
+- **What a paid run would write is checked first** (L3): a GUID shape, an Azure
+  OpenAI host name, the foundation's resource prefix, an e-mail address, a
+  bearer-token marker, a JWT's opening, a URL scheme, or a recording entry over
+  4,000 characters stops the run, naming the file and the kind and never the
+  text. The reports are also scanned for the sentence of every case, as a
+  committed file may hold none (T-83). The recording keeps the model's words
+  as given, because a replay needs them; the owner reads the diff before it is
+  committed.
+- **A paid run needs its ceiling to start** (L3): with the real provider the
+  recording gateway refuses as its first statement unless the registry it is
+  given is not the committed one (also through a symlink) and every tenant the
+  run charges holds a budget at or below the run's ceiling.
+- **The opt-ins:** the injection run needs its own variable and the live Azure
+  one; the golden recording needs its own and the live Azure one; neither
+  starts the other, shown by two tests that run `pytest` in a subprocess with
+  every `MERIDIAN_*` variable removed. No workflow names a paid target or sets
+  an opt-in (a test reads every workflow file).
+- **The decisions the contracts took:** J1 added the peril, description and
+  assessment to a worksheet entry (the judge's own source, so a person labels
+  what the judge saw) and refuses to overwrite a sheet that holds a label;
+  L2 chose a response hook on the gateway's own client to read each call (no
+  `registry_dir` parameter on `run_cases`, which builds no gateway); L2's
+  replay covers answered cases only, since a refused or withheld case has no
+  recording entry; G1 reads the whole command text and not the text with
+  quoted prose blanked, so an echo, a search pattern or a commit message that
+  names a target also asks (use `git commit -F`, and write prose with the Write
+  tool); G2 asks on `az rest` for any method where the review proposed non-GET
+  only, and decides the identity library by the interpreter word, so that a
+  `grep` for the names stays free. From G3 on, the raw-request and identity
+  rules also blank a commit message and a pull request body, so those stay
+  free too, and the interpreter and the name must stand in one segment; the
+  paid-target rule still reads the whole command, and a search whose quoted
+  pattern names the raw request still asks (`grep -rn "az rest" docs`, G5).
+
+**The held-out result** (made once, nothing tuned: 72 sentences written by an
+agent that read none of the screen, the cases or their summary, applied to a
+golden claim's description as the service screens it):
+
+| Set | Attacks stopped | Benign cases flagged |
+|---|---|---|
+| Held-out (S071) | 6 of 48 (13 %) | 0 of 24 look-alikes (0 %) |
+| The suite's own cases, all (S032, S067) | 26 of 66 (39 %) | 16 of 28 benign cases (57 %): its 24 look-alikes and four plain wording sentences |
+
+By family the held-out attacks stopped: override 1 of 6, role 2 of 6,
+role-marker 2 of 6, answer-format 1 of 6, authority 0 of 6, obfuscated 0 of 6,
+other-language 0 of 6, indirect 0 of 6. By language: English 6 of 42, and none
+of the 3 Hungarian, 1 German, 1 French and 1 Polish. The special-category
+screen took 0 of them first. The stopped IDs are CLM-5002, CLM-5007, CLM-5008,
+CLM-5016, CLM-5017 and CLM-5022.
+
+What it says, plainly: **the screen's earlier figure was tuned to its own
+set.** On sentences written without sight of it the screen stopped 6 of 48,
+where on the cases written beside it it stops 26 of 66; and it is bound to
+English keywords, since none of the other-language, obfuscated, authority or
+indirect attacks passed through it stopped. What it does not say: the set is
+small (a case moves a rate by two to four points), a model wrote it and not an
+attacker, the held-out sentences are all appended to a description while the
+suite's are joined in other ways too (so the two rates are not measured the
+same way), and 0 of 24 is not a false-alarm rate on real claims. The existing
+16 of 28 is on look-alikes written to resemble an attack; the 0 of 24 does not
+show the screen's false alarms are lower, only that these 24 sentences did not
+trip it.
+
+**The set is spent the moment the screen's patterns are changed after reading
+this result:** a screen changed to catch what is listed is no longer measured
+by it, and a new blind set is then needed. The report records the screens'
+fingerprint it measured, and a test fails with that sentence when it moves.
+Naming which words to add would already be tuning.
+
+**What the paid half would cost** (the cost statement's figures, the gateway's
+own arithmetic from the registry's list prices checked 2026-09-30 at the
+planning rate of 1.1355 USD to the euro; the invoice is Azure's, and during
+the trial it draws on the trial's credit with the spending limit as the hard
+stop; after the upgrade the spending limit is gone and the EUR 60 budget only
+alerts). **No paid call was made in this half.**
+
+| Measurement | Paid calls | Expected | If every answer runs to its cap |
+|---|---|---|---|
+| The injection cases the screen lets through, a real model's answers | 52 chat (40 attacks, 12 benign) | EUR 0.12 | EUR 0.31 (400 output tokens each) |
+| The judge on those 52 answers (only if wired in) | 52 chat | EUR 0.09 | EUR 0.15 |
+| A refusal of a structured request, a withheld completion | none of its own: watched for in the 52; up to 20 tries with synthetic text if none appears | EUR 0 to 0.05 | EUR 0.12 |
+| Retrieval with a real embedding, in the evaluation | 27 chat, about 170 embedding calls | EUR 0.05 | EUR 0.15 |
+| The same in S038's one failing check | 9 embedding calls | under EUR 0.01 | under EUR 0.01 |
+| The judge against a person's labels | none for the 13 recorded verdicts; a larger sample is new judge calls | EUR 0 to 0.05 | EUR 0.10 |
+| A held-out set for the screen | none (done in this half) | EUR 0 | EUR 0 |
+| CLM-0034's `unsure` | none if recorded as the right answer; a whole golden recording (55 chat) for each prompt tried | EUR 0 or 0.12 a try | EUR 0.36 for three tries |
+| The three deployments still answer (`make azure-smoke`, `make gateway-live`) | 7 chat, 2 embedding | under EUR 0.02 | under EUR 0.02 |
+
+Expected in all: about EUR 0.50. The table's last column is not a ceiling. What
+bounds ONE run is the gateway: the injection run's ceiling is EUR 0.50 on its
+one tenant (L3 lowered it from the EUR 1.00 that the design and L2 first set:
+52 cases at the measured EUR 0.0023 a claim is about EUR 0.12, EUR 0.31 at the
+answer cap), and the golden run's is EUR 0.50 on each of its two tenants. The
+gateway reserves a call's estimate before it is made and can pass a ceiling by
+one call's excess over its reservation, about EUR 0.015 at most (the security
+review's arithmetic from `budget.py`). **Nothing bounds a sum across runs but
+the count the session keeps and the owner's invoice:** the ledger lives in a
+database that is dropped after each run.
+
+**The security review** (a read-only review of G1, L1 and L2 at 4f2fc52):
+**0 critical, 0 high, 2 medium, 12 low.** G1 was "approve with fixes" (a
+tightening only: measured, `weaker=0`), L1 and L2 "approve with fixes".
+
+| Finding | What it was | What closed it |
+|---|---|---|
+| A-2, medium | The guard named targets, not the paid call: `az rest`, the identity library in a Python line and a script all answered nothing | G2 |
+| B-1, medium | A paid-capable function defaulted to the committed registry, so a paid run was one omitted argument away from running without the ceiling | L3 (fail closed; tests with the real provider and the committed directory, also through a symlink) |
+| A-3, low | A flags variable of make holding a paid target (verified on GNU make 4.4.1) | G2 |
+| A-8, low, pre-existing | `git status; make -m "aws-apply"` answered none, because the pass that blanks quoted text emptied the value after `-m` and GNU make ignores `-m`; the destroy shapes with `-m` were affected | G2 (the pass reads the value in a segment that holds `make`; three destroy shapes now deny; a commit message that names a target still passes) |
+| B-2, low | The EUR 1.00 ceiling was about eight times the expected cost | L3 (EUR 0.50) |
+| B-3, B-4, B-5, B-6, low | The golden recording needed one variable; no mechanical scan of what a run writes; the script's "about EUR 0.12" beside a count read at run time; the three files not written as a set, and no ignore rule for a leftover temporary | L3 (both variables; the scan; the figure derived from the count; staging and one move; `.gitignore`) |
+| The symlinked `tenants.yaml` note | A copy could write through a symlink into the committed file | L3 |
+| A-4, A-5, A-7, A-9, A-6, low | Below | Open: rows, or the owner's |
+
+What the review left open: A-4 (a script on standard input and the backslash
+and `$'...'` quote forms of a target), A-5 (an opt-in set through an
+environment file, a sourced file or `os.environ`), A-7 (the settings' ask over
+allow precedence is assumed, not tested; the hook is the real layer), A-9 (the
+hook's header and the runbook do not name the new gaps), and A-6, which is the
+owner's: `make gateway-live` asks although `make azure-smoke` does not, at the
+same cost class. A review of what the review could not check: Claude Code's own
+permission matcher, any live behaviour, and the database-backed tests.
+
+**The command guard, rounds two to six, and its six security reviews.** D1
+wrote this record when the guard stood at its second round; rounds three to
+six are written here, each sentence from the round's report or review in the
+handoff folder. The rule for the hook is that it may only be tightened: for no
+input may a decision be weaker than main's (deny above ask above none). Every
+review ran the hook on command lines read from files, in a read-only checkout,
+and none in a live session. The guard is **a guard for habits and not a
+boundary** (T-87, T-112): it reads the text of a command.
+
+- **G2, reviewed at 77675a7: BLOCK.** Two criticals broke the rule. C1: the
+  new Python pass rescanned the whole segment once for each message flag after
+  `make`, 14 to 56 s of CPU on a command of 7,904 bytes against the hook's
+  timeout of 10 s, and a hook past its timeout does not block the call (the
+  hook's own header), so a deny hidden behind such padding would go through
+  unread (the review measured the CPU time and did not run a deny through the
+  padding). C2: the word `make` anywhere earlier in the segment, not as its
+  command word, switched on a read of the quoted value that kept its `;`, and
+  the later rules lost the flag after it: eight inputs, `git commit make -m
+  "a; b" -n` among them, were deny on main and none. One high: a separator
+  inside an earlier quoted argument hid a paid target (`make -C "a;b"
+  eval-record`). Two mediums: the raw-request and identity rules read the whole
+  command and asked on a commit message that names them. No earlier row
+  changed, and no row of the case file exposed either critical.
+- **G3 (e65076c) and its review at that commit: BLOCK.** G3 answered each
+  finding: the pass masks the quoted pieces once per call and finds a segment's
+  start without rescanning (the review's four shapes fell from 14 to 56 s to
+  0.2 to 0.5 s); `make` must be the segment's command word, after assignments
+  and a list of prefixes; the value that is read has `;&|` blanked; copies of
+  the command with the separators inside quotes blanked (`cmd_q`, `hook_cmd_q`)
+  are read in addition; the two new rules blank a commit message and a pull
+  request body, and the identity rule needs the interpreter and the name in one
+  segment. The case file went from 2,500 to 2,589 rows. The review lifted C1 and
+  blocked on C2, which in one sentence is: **a deny of main's had become none**,
+  because the blank missed a line break inside the quoted value (with one in
+  the message, `make git commit -m … -n` was deny on main and none, and so was
+  `make -m …` before `gateway-upkeep ARGS=credit`, an ask on main and a command
+  that really runs make). Its fuzz of 2,700 mutations of main's deny and ask
+  rows found 26 weaker decisions, every one with a newline in the value, and a
+  copy of the hook with that one character changed cleared them. It also found
+  the separator fix half done (a separator in an unquoted substitution still
+  hid a paid target) and a new hole (a pipe into a bare `python3` no longer
+  reached the identity rule). Counted: 1 critical, 2 high, 4 medium, 3 low.
+- **Two blocks in a row, one cause, and a change of shape.** Both reviews
+  ended in a block from the same kind of change: G2 and G3 had edited the pass
+  that builds `hook_cmd`, the copy of the command with message values blanked
+  that main's older rules read, so that a quoted value after a make option is
+  read, and every weaker decision found since came from that edit. The
+  one-character fix was at hand and cheaper. The session wrote the open
+  decision down and consulted the advisor (the third consultation above), and
+  did not patch a third time: **every rule this step needs is added beside
+  main's rules, with main's lines untouched.** The three guard files went back
+  to G1's content (G1 never touched the pass, so it is byte-identical to
+  main's there), and the criterion for the rebuild was textual and not a
+  sample.
+- **G4 (5acbfd4): the rebuild as additions; the third review: BLOCK LIFTED,
+  approve with fixes.** The criterion: against main the hook's diff has only
+  added lines, no hunk inside the pass that builds `hook_cmd` and no changed
+  line in any rule of main's, and no decision weaker than main's for any input.
+  It was measured four ways. Textually: 286 added lines and none removed, in
+  three hunks, with main's lines 327 to 367 (the whole pass) byte-identical
+  (`cmp`); the review confirmed it with a `difflib` pass (286 insertions, no
+  replacement or deletion, all 1,475 of main's lines kept in order) and by the
+  order of decision: the hook exits on its first decision and every added ask
+  stands after the last deny of main's, so an added ask cannot pre-empt a deny.
+  By differential: all 2,675 rows against main's hook, 0 weaker and 298
+  changed, all tighter. By fuzz: the implementer's two fuzzers on two seeds
+  each (4,200 to 8,400 candidates a run) and the review's on four fresh seeds
+  (5,400 to 8,400 a run), 0 weaker, where the same harness on G3's hook found
+  17 and 66 weaker decisions, so it can see the fault. By the guard's own test
+  script: 2,900 `ok` lines, no FAIL. What it built: the paid targets by
+  co-occurrence (the word make and a whole-word paid target anywhere in one
+  command ask, so a target in a variable, a loop, `xargs`, an unquoted
+  substitution or beside a quoted separator asks at once); a new rule for an
+  AWS target in a quoted value behind a make option (ask for apply and plan,
+  deny for destroy, with make as the command word); the raw-request and
+  identity rules as G3 had them
+  plus the pipe into bare `python3`; and the review's worst shape as an
+  eleventh CPU test (about 1.2 s against 0.59 s on main, under the bound of
+  3 s; the report's 1.37 s was measured with a fuzz job running). The review's
+  findings: **0 critical, 2 high, 3 medium, 3 low.** HIGH-1 was four classes of
+  false deny, all none on main: a `-c` of `grep` or `wc` read as a shell's, a
+  quoted `VAR=` value read as a target (`make test K="aws-destroy"`), the
+  quoted-separator copy (`rg -n "make (aws-apply|aws-destroy)" docs`) and a
+  prefix that eats an option argument (`sudo -u make git commit -m
+  "aws-destroy"`). HIGH-2: `make ${T:-eval-record}` was none. Mediums: an
+  escaped-quote shell body (`bash -c "make -m \"aws-destroy\""`), a search for
+  the raw request that asked against the hook's own comment, and a note that
+  the hook enforces neither the ceiling nor the owner's yes. Lows: the added
+  passes about double the worst serial cost, which halves the margin to the
+  timeout, and five mutants of the added code survived the 480 added rows (331
+  of them killed none).
+- **G5 (d08bba1): the four classes of false deny closed; the re-check: MERGE.**
+  The `-c` gate opens a body only after a shell word or `eval`; a quoted piece
+  right after `=` is a variable's value and not a target; the quoted-separator
+  copy is gone; a prefix's option arguments are eaten by per-prefix tables, so
+  `make` after them is not the command word. The implementer took four
+  decisions against the contract's wording, and the re-check said of each:
+  (1) it did not drop the hyphen from the paid target's left boundary, since
+  that would turn G1's own rows `make my-eval-record` from none to ask, and
+  added a narrower rule for an operator right before a target inside `${...}`:
+  accepted, with a low (it is not tied to the command word, so `echo
+  "${T:-eval-record}" && make docs` asks); (2) it removed the quoted-separator
+  copy and its reads instead of turning its deny into an ask, since any ask
+  would be more than main's none for a plain search, and found the removal
+  behind a quoted separator in the raw-text pass with make as the command
+  word: nothing weaker than main, but a gap weaker than G4, and a wider one
+  than the report said (not only `aws.sh "a;b" apply` and `plan`: `aws.sh -C
+  "a;b" destroy` was a G4 deny and is none, as on main); (3) it told a prefix's
+  option argument from the command word instead of asking: right in intent, and
+  the tables were case-blind (MEDIUM-1 below); (4) it kept the deny on `make
+  git commit -m "aws-destroy"`: accepted, since main already denies the
+  unquoted form and nobody types it, though the report's reason (GNU make
+  would run the target) is overstated, as without `-k` make stops at "No rule
+  to make target 'git'" first. It also corrected the hook's comment instead of
+  blanking the search pattern of the raw-request rule, as blanking had hidden a
+  command substitution in S036. The report: 69 rows added (2,744), all rows
+  against main's hook 0 weaker and 331 changed (tighter), four fresh fuzz seeds
+  (4,800 to 8,400 candidates) 0 weaker, and a hunt of 59 read-only commands
+  that mention make and an AWS target in quotes (44 none on both, 9 and 6 the
+  decisions main gives, none stronger than main; the same list on G4's hook
+  gave 18 stronger). **The re-check:** the first reviewer stalled with the
+  machine's overload of 2026-10-07 and was replaced by a second, which reused
+  the first one's copies of main's and G4's hooks. It ran 151 distinct inputs
+  through the hook (379 runs, one at a time, G4 beside the new hook on the
+  first 77), **0 weaker than main**, and 41 ordinary read-only commands with no
+  false deny; the structure alone rules a weaker decision out (331 added lines,
+  none removed, every added ask after main's last deny). Counted: 0 critical,
+  0 high, 2 medium, 4 low. MEDIUM-1: the class-4 fix was case-blind, which
+  reopened `sudo -H`, `sudo -P` and `xargs -p`, `-i` and `-l` before make (a
+  flag class written for `-h` also ate `-H`) and lost `command -p` and `setsid
+  -f`: G4 denied them, main and G5 give none. MEDIUM-2: the shell gate missed
+  a flag with an argument (`bash -o pipefail -c '…'`, a common habit). Neither
+  is weaker than main.
+- **G6 (15fcf75): the two mediums closed; the short check: MERGE.** Flag
+  letters are case-sensitive now; the command word stays case-blind on purpose,
+  as main's rules run under `nocasematch` and `SUDO -H MAKE` denied is the
+  stronger direction. `command`, `setsid`, `nohup` and `builtin` are read with
+  their own flags (`command -v` and `-V` stay out: they only look a name up).
+  The shell gate reads `-o` and `-O` with their option names, `+letters`,
+  `--rcfile` and `--init-file` with their file, `--norc`, `--noprofile`,
+  `--login`, `--posix`, `"$SHELL" -c` and `su` with up to four words before
+  `-c`, inside the same window of 80 bytes before the quote, anchored on a shell
+  word or `eval` so that `grep -c`, `wc -c`, `cut -c` and `rg -c` stay what
+  main gives; `fish -c` was not added. Against main the hook is 364 added lines
+  and none removed or changed, in three hunks of 194, 20 and 150 lines, and the
+  pass is byte-identical. 141 rows were added (2,889 in all; 2,748 before,
+  which is G5's 2,744 and four rows main added), each note holding main's
+  decision, G5's and the new one; the test script ran once: 3,122 `ok` lines,
+  no FAIL, 2,889 of them cases. The differential of all 2,889 rows against
+  main's hook, G5's and the new one: **0 weaker than main, 418 tighter, 2,471
+  equal**; 51 rows differ from G5's tip, 49 tighter and 2 narrower, and no row
+  of the first 2,748 changed its expectation. **The two narrower rows** (2841
+  `env -S x make -m "aws-destroy"` and 2842 `xargs -e x make -m
+  "aws-destroy"`) were G5 denies and are none, which is what main gives: after
+  `env -S` the string is the command line, and after `xargs -e` (whose
+  argument is attached or absent) the next word is the command, so make is an
+  argument there. The check confirmed the `xargs -e` reading from GNU findutils
+  4.10.0's help; for `env -S` it found the change too wide (below). **The
+  check** ran 75 hook inputs (223 of its 300 allowed runs, one at a time, no
+  fuzzer): **0 weaker than main**, 48 stronger, all deliberate `make …
+  "aws-destroy"` forms; 56 read-only commands, 0 stronger than main (main was
+  run on the 27 where the new hook did not answer none); the extracted scanner
+  and the hook agreed on all 75, so a Python error is not turning decisions
+  into none behind the hook's `|| true`; the expressions are linear. Counted: 0
+  critical, 0 high, 1 medium, 4 low.
+  - **One medium stays open, by the session's decision:** a quoted word after
+    `env -S` (an empty string, a comment, an assignment, another prefix) hides
+    the build tool behind it from the added AWS rule. The fifth round denied
+    those forms (`env -S '' make -m "aws-destroy"`) and the sixth gives none,
+    which is what main gives. It is not weaker than main, nobody types it (the
+    check: "Almost certainly not"), and it is in the AWS removal rule and not
+    in the paid-model rules this step's paid run rests on; the paid-target
+    rule has no command-word gate, so by its design (G4) make beside a paid
+    target asks behind an `env -S` string too (no run was made for that form).
+    The check wrote that it should be fixed before the paid run; the session
+    reads that as "before the next change of the hook that matters", which is
+    S020's contract for the Azure wrapper's rules (it has a security review of
+    its own), and not as a condition of S071's paid model run. A backlog row
+    with the check's suggested fix has S020 as its home.
+  - **A correction to the sixth round's report.** Its CPU figures (0.025 to
+    0.029 s for the five new shapes) were measured by the test script calling
+    the scanner directly, with shapes sized under 16,384 bytes; the hook
+    answers `ask` above 8,192 bytes without running the scanner, so those
+    shapes did not pass through the hook. The check measured through the hook
+    at about 8,000 bytes: 0.082, 0.131 and 0.094 s of CPU on three inputs
+    (7,943, 7,895 and 7,967 bytes) against the 10 s limit, a depth-3 nest of
+    5.5 KB in 0.154 s, and the scanner alone on 19 shapes at 4, 8 and 16 KB in
+    0.011 to 0.021 s, flat. The check's figures stand; the report's are what
+    they are and no more.
+  - **The check's lows:** two letters are still case-blind in the body gate
+    (`bash -C '…'` read as `-c`, `env -s '…'` as `-S`: main none, now deny; a
+    false deny nobody types); the report's CPU figures (above); five gaps it
+    found that are not yet rows of the case file; `env -a NAME make` and `env
+    -u A -S '…'` are not read (none on main and on G5). All are in the rows
+    below.
+
+| Review | Commit reviewed | Verdict | Critical | High | Medium | Low |
+|---|---|---|---|---|---|---|
+| The first (G1, L1, L2) | 4f2fc52 | approve with fixes | 0 | 0 | 2 | 12 |
+| G2's | 77675a7 | BLOCK | 2 | 1 | 2 | 3 |
+| G3's | e65076c | BLOCK | 1 | 2 | 4 | 3 |
+| G4's (the third on the guard) | 5acbfd4 | BLOCK LIFTED: approve with fixes | 0 | 2 | 3 | 3 |
+| G5's re-check | d08bba1 | MERGE | 0 | 0 | 2 | 4 |
+| G6's short check | 15fcf75 | MERGE | 0 | 0 | 1 | 4 |
+
+The first row is the review's own total. The counts of the other five are the
+items under each severity heading of the review, which prints no total, and
+some of them are notes and not defects (G2's third low says no deny follows the
+new asks; G4's third medium restates what the hook does not enforce; the last
+low of G5 and the second of G6 say what was not re-run or measured).
+
+**What the six rounds say, honestly.** The guard is a pattern on a command's
+text, and it took six rounds and six reviews to reach a tightening that the
+last three reviews found nothing weaker than main in. **Two of the rounds, G2
+and G3, would have weakened main's guard had they been merged** (G2 turned
+eight denies into none and could fail open on a padded command; G3 turned
+denies and asks into none on a newline), **and neither was**: both stopped at
+a review, which is why each round has a review and not one at the end. After
+the rebuild no review found a decision weaker than main's, in about 26,400
+fuzz candidates of the third review and 226 hook inputs of the last two (151
+and 75). That is a
+statement about the inputs tried. It does not make the guard a boundary: the
+ask has never been shown to the owner in a live session, the settings'
+precedence of ask over allow is assumed, and the reviews list what the hook does
+not read (the backlog rows below). What stands between a signed-in machine and
+a paid call is the ceiling the gateway holds for one run (L1, L3), the owner's
+yes, and the key path closed in the Terraform source, with this guard as a
+seat belt for an honest session.
+
+**What stays open from the six rounds** (rows of Part B's follow-up backlog,
+each with its home): the gaps the sixth round pinned as rows of the case file;
+what its check lists beyond them; the bypasses the reviews keep listing; the
+false asks of the paid-target rule, accepted as the price of co-occurrence; and
+the `env -S` medium, with S020 as its home. The hook's header and the
+runbook's list still do not name the new asks and gaps (D1's row, home S071):
+the header is code and not this record's to change.
+
+**Evidence, the final tree:** the main session's gates on the branch's tip
+merged with main at plan v0.92 (270402a), on 2026-10-08: the tests of the areas
+this branch changes, 29 test files against PostgreSQL on four workers, `2024
+passed, 3 skipped in 98.68s`; `make eval`, `eval compare: passed` (a replay,
+no model call); `make test`, `Ran 413 tests` and OK; `make lint`, six import
+contracts kept; and `make docs`. **The whole suite was not run locally.** The
+development machine froze twice (on 2026-10-07 and 08, when too much ran at
+once), and the owner decided on 2026-10-08, asked why the whole suite is run
+locally ("Okay but ehy dont we just test those things that is modified?") and
+offered three ways, to take **"Affected tests, CI runs all (Recommended)"**:
+before a pull request the tests of the changed areas, `make lint`, `make
+docs`, `make test` and the secret scan run locally, and the whole suite runs in
+CI on the pull request (about 14 minutes; a red run is fixed and pushed again;
+nothing merges red). So the whole suite's result for this branch is the pull
+request's own run. The reports' own gates are in the table above; each contract
+ran `make lint`, `make test` and `make docs`, and none ran `make pytest` on the
+whole suite but H2b's (no database, 4 workers). Rounds three to six of the
+guard ran the guard's own script (2,808, 2,900, 2,972 and 3,122 `ok` lines at
+G3, G4, G5 and G6, none failing).
+
+**Not seen:**
+
+- any paid run: the harness has not met a real provider, and the first paid run
+  is where the recording's form, the report's counts and the pacing of about
+  nine minutes (52 cases at 10 s) meet a real answer;
+- the ceiling refusing a real call (it was seen refusing a fake provider that
+  reports the largest counts the gateway accepts);
+- a real withheld completion and a real refusal of a structured request, so
+  what each looks like on the wire is the fake's shape (and the two look the
+  same to the gateway);
+- the guard's ask shown to the owner for a real paid command: it is measured
+  from lines read out of a file, not in a live session, and the settings'
+  ask-over-allow precedence is assumed, and what Claude Code does with a hook
+  that runs past its timeout was read from the hook's header and measured only
+  as CPU time, never as the harness's behaviour;
+- whether the three deployments exist today (the last evidence is 2026-10-03),
+  and the trial's remaining credit (the owner's to read in the portal);
+- the owner's labels, and a retrieval measured with a real embedding.
+
+**For the owner:**
+
+1. **The paid ask, in its per-run form: NOT made by this document.** The cost
+   statement's section "The ask this leads to (not made yet)" says:
+
+   > A yes to S071's live runs in this form: each paid run starts with the
+   > budgets of the tenants it charges set so that their sum is EUR 1 or less
+   > (point 7 below; built as L1: the golden run two tenants at EUR 0.50, the
+   > injection run one at EUR 1.00), so the gateway refuses a run past that;
+   > at most FOUR paid runs before a second ask; the session states each run's
+   > own sum, as the gateway reports it, before the next. That bounds the yes
+   > at EUR 4 where about EUR 0.50 is expected. The total across runs is a
+   > count the session keeps and the owner can check against Azure's cost
+   > view: no code holds it.
+
+   One figure in it is superseded: L3 set the injection run's ceiling to EUR
+   0.50, so the yes is bounded by EUR 0.50 for that run and EUR 1.00 for a
+   golden run. What the session needs from you: a yes or a no to that form in
+   chat, how many runs it covers, and which first (the injection cases are the
+   run that is built: 52 chat calls, EUR 0.12 expected, EUR 0.50 at most; the
+   golden recording is needed again only if CLM-0034's prompt changes). Before
+   it: sign in on the VM when the run is due, open `/hooks` once so the new ask
+   is active in the session that runs it, and read the trial's remaining credit
+   in the portal (the trial ends about 2026-10-30). The guard will ask in a
+   window before the target; the stated cost has to come first, so that the
+   window is answered knowing the amount.
+2. **The label worksheet** (about ten minutes, no call). The file is
+   `data/evaluation/judge-labels/claims-triage.json`: 13 entries, each with the
+   claim, the model's assessment and rationale and the clauses the judge saw.
+   Set `person_grounded` to `true` when every statement of the rationale is
+   supported by the claim and the clauses shown and `false` otherwise (a note
+   where the call was close), and do not open the baseline or the recording
+   first. Then run `uv run python -m
+   meridian.workloads.claims_triage.judge_labels compare`: it prints how many
+   are labelled, the agreement and each disagreement by claim ID. The judge
+   called all 13 grounded, so its "ungrounded" column is empty by construction;
+   agreement tells you the judge was not wrong about these, not that it can say
+   "ungrounded". A larger and harder sample needs the live judge (a row).
+3. **CLM-0034 and its `unsure`: decide, or accept the recommendation.**
+   Written out below.
+4. **`make gateway-live` asks and `make azure-smoke` does not** (A-6, low): the
+   same cost class, four short chat calls and one embedding against three
+   calls of five tokens. Keep both as they are (the session's default: an ask
+   teaches clicking only when it is routine), or drop the ask on `gateway-live`.
+
+**CLM-0034 written out** (synthetic data, committed; the claim is in
+`data/synthetic/claims.json`, its oracle in `expected-outcomes.json`, the run in
+`data/evaluation/claims-triage-live.json` and the recording in
+`data/evaluation/recordings/claims-triage.json`):
+
+- **The claim.** Policy POL-0023, a home policy (HOME-STD, wording 2026-01)
+  for an apartment in Split, sum insured EUR 160,000, deductible EUR 250.
+  Peril `storm`, claimed EUR 2,950, loss on 2026-05-06, reported on
+  2026-06-20 (45 days later), document: photos. The description: "On 6 May 2026
+  a severe storm hit Split and tore tiles off the roof above my apartment. Some
+  windows are broken and there is water damage inside. The delay is because I
+  was away on a long family stay abroad afterwards and could not deal with
+  it."
+- **The clause the model was shown.** For a storm the rules pick one candidate
+  exclusion from the wording, clause 3.3, "Wear and tear": "We do not pay for
+  damage that results from gradual deterioration, rot, corrosion, age or lack
+  of maintenance. If a storm or a burst pipe only exposes a part that was
+  already worn out, we do not pay for that part. Damage that a part in good
+  condition would have withstood is treated as wear and tear. This exclusion
+  applies to claims for storm and burst pipe." (Read with the rules' own
+  selection, `select_terms`; the recording stores no request.)
+- **The model's recorded answer.** The recording keys its entries by the hash
+  of the request and names no claim; the one entry whose text holds `unsure` is
+  the inference taken for this claim (it is the only one in the recording, and
+  the baseline shows CLM-0034's assessment as `unavailable`). It reads:
+  verdict `unsure`, clause null, rationale "The description does not specify
+  whether pre-existing wear and tear contributed to the damage. It's unclear if
+  the exclusion clause applies without further information on the prior
+  condition of the property." (506 input and 50 output tokens, 795 ms,
+  `gpt-4o-2024-11-20`.) The prompt tells the model to answer `unsure` "when it
+  cannot be told from the description"; the rules read `unsure` as no
+  assessment, so the baseline carries no rationale and no judge call.
+- **What the oracle expects.** Route `adjuster`, reason `fraud_indicator` (the
+  report was 45 days after the loss: `late_report`), no exclusion, payable EUR
+  2,700, recommendation `approve`, citations HOME-STD 2.2, 4.1 and 5.1. The
+  rules get the route, the reason, the amount and the citations right; the one
+  miss is the recommendation, `null` where the oracle says `approve` (the
+  grade `recommendation` is false; the other eleven grades on the claim are
+  true).
+- **The variant prompt** (asks the rationale to quote the claimant, recorded
+  live once on 2026-10-03, not committed as a recording): the model answered
+  `none_applies` with the rationale "The description attributes the damage
+  directly to a severe storm on 6 May 2026, without indicating that the damage
+  was due to wear, tear, or pre-existing deterioration, which makes it
+  unrelated to clause 3.3 on wear and tear.", so the recommendation became
+  `approve` and matched the oracle, but the judge called it ungrounded ("The
+  source does not explicitly confirm that the damage was not influenced by
+  prior wear or pre-existing conditions unrelated to the storm."), and the same
+  prompt lost CLM-0038's exclusion (five grades). The committed prompt stayed.
+- **What is at stake.** The claim goes to an adjuster either way, because the
+  late-report indicator decides the route, so `unsure` costs only that the
+  adjuster sees no recommendation on a claim they would read anyway; nothing is
+  paid or refused by it. The six injection attacks on this claim "changed
+  nothing" for the same reason. The model is asked to say `unsure` when it
+  cannot tell, and the description says nothing of the roof's age or state.
+  Neither reading is wrong: `none` is the answer if the question is whether the
+  description states an excluded fact (it does not), `unsure` if it is whether
+  the damage could be wear.
+- **The session's recommendation: keep the committed prompt and record
+  `unsure` as an acceptable answer for this claim; do not change the prompt.**
+  The reason (design E8): a prompt change costs a whole golden recording a try
+  (EUR 0.12, about EUR 0.36 for three), it already lost one exclusion once (the
+  variant gave CLM-0034 a recommendation the judge calls ungrounded and lost
+  CLM-0038's exclusion), and CLM-0038 is a claim whose wrong answer can
+  become an automatic approval of an excluded claim (T-26), which is the wrong
+  direction to pay for a recommendation the adjuster does not need to reach a
+  decision. How to record it (the oracle expecting no recommendation, or a
+  tolerated set) changes the golden set's expected outcomes and so a
+  fingerprint; it is a change of its own, with a free `make eval-baseline` and
+  a review of the diff, and its shape is not decided here.
+
+**Rows** (the follow-up backlog, Part B; each with its home):
+
+- The guard's known gaps after G2, with the settings' precedence (A-4, A-5, A-7
+  and the shapes G1 and G2 list as not read) and the credential-building shapes
+  G2 added: home **S071**, the paid half, before the owner signs in. Narrowed
+  since by rounds three to six: a target held in a variable, a loop or `xargs`
+  now asks, and a separator inside a quote or an unquoted substitution no
+  longer hides one.
+- Five rows from the guard's rounds three to six (D2): the gaps the sixth round
+  pinned as rows of the case file; what its check lists beyond them; the
+  bypasses the reviews keep listing; the false asks of the paid-target rule;
+  and the `env -S` medium, whose home is **S020**. The first four have home
+  **S071**, the paid half.
+- The documents that do not yet name the guard's new asks and gaps (the hook's
+  header, the runbook's "what the guard does not see" list, and
+  `docs/development-environment.md`): home **S071**.
+- **E9**, the live embedding in the evaluation and in S038's comparison, and
+  the design question whether a second recording keyed on other clauses
+  replaces the first: home **S071**, the paid half.
+- A larger and harder label sample for the judge, which needs the live judge:
+  home **S071**, the paid half.
+- The review's lows and the implementers' small ends that nobody took,
+  grouped: a shared `PYTEST_DB_CONTAINER` that a caller can point at another
+  container (the recipe starts with `docker rm -f`), the two cross-start tests
+  that spawn `pytest` and can trip the room check, `_why_unanswered` listing
+  every distinct refused reason in the database, the runtime's `model-error`
+  for a budget refusal, and a judge refusal that shows as `unanswered` only:
+  home **S071**. The two that touch the suite, a test that hardcodes four
+  reports directly under `data/evaluation` and `EVAL_INPUTS` in the Makefile
+  covering all of `src` and `data/synthetic`, which makes a new file there look
+  like a stale report to `make eval-compare` until `make eval` runs: home
+  **S074**.
+- Fixed here, and not a row: the stale figures (`infra/terraform/README.md`,
+  which said "about 60 chat calls", now 55 calls and EUR 0.12 and the injection
+  run's 52 cases with a ceiling of EUR 0.50; the plan's row of the first
+  measurement, "about 50 chat calls (42 attacks, 8 benign)").
+
+**Contracts and commits** (the free half; `git log --oneline origin/main..HEAD`
+of the step branch `s071-live-measurements` at 270402a, before D2's record):
+
+| Contract | What it built | Commit |
+|---|---|---|
+| J1 | the label worksheet and its comparison | 58c8713 |
+| L1 | the run's own ceiling the gateway holds | 17c19f1 |
+| L2 | the live run of the injection cases | 5b4e228 |
+| H1, H2 | the held-out set and its one measurement | 0b46f00 |
+| G1 | the guard's ask before a paid target | 4f2fc52 |
+| L3 | the ceiling required, the write check, EUR 0.50 | b6f3f6b |
+| G2 | the guard's second round | 77675a7 |
+| D1 | the record to G2, the threat row T-112 and the sentences the half made false | 66b4809 |
+| G3 | the guard's third round: the pass bounded, a deny it lost put back, a quoted separator no longer hiding a target | e65076c |
+| G4 | the guard rebuilt as additions beside main's rules | 5acbfd4 |
+| G5 | the third review's fixes: four classes of false deny, a default in a parameter expansion | d08bba1 |
+| G6 | the re-check's two mediums: flag letters keep their case, a shell's flags with an argument | 15fcf75 |
+| D2 | the record of rounds three to six, the rows, the closing evidence, T-112's cells | with this commit |
+
+**Follow-ups:**
+
+- In the backlog, each with its home: the rows above.
+- For the owner: the paid ask, the worksheet, CLM-0034, and A-6 (the four
+  numbered items above).
+- Part B's row for S071 stays `doing`; the paid half is its "done when".
+
 ### S072 — The cluster outside `meridian`, second round
 **Status:** doing · **Started:** 2026-10-07 · **Finished:** —
 **Goal:** on kind, what runs beside Meridian is held to what it needs, a
@@ -22545,3 +23338,32 @@ row.
   switched on ("Keep it, opt-in only (Recommended)"): a note in S021's row.
   The answer on the graphs' move (S082) is not here: it is in S082's section
   on its branch. Documents only; the whole suite was not run.
+- **v0.94, 2026-10-08:** S071, free half (still `doing`; the paid half
+  is open and no paid call was made): the label worksheet and its comparison
+  for the judge's 13 recorded verdicts, a ceiling the gateway holds for a paid
+  run (a registry copy with each charged tenant's budget at or below the run's
+  ceiling: EUR 0.50 for each of the golden run's two tenants and for the
+  injection run's one) that a paid run refuses to start without, the live run
+  of the 52 injection cases (40 attacks, 12 benign) with an incomplete run
+  refused, what it would write checked first and its three files moved into
+  place together, and the command guard's ask before the three paid targets,
+  their script sub-commands, the opt-in variables, a raw Azure request, the
+  identity library and make's flags variable; each tested with a fake
+  provider, none run against a real one. The guard took six rounds and six
+  security reviews, two of which blocked it for the same kind of change: it was
+  then rebuilt as additions beside main's rules, with no line of main's
+  changed and no decision weaker than main's for any input tried (2,889 case
+  rows, 3,122 `ok` lines), and it remains a guard for habits and not a
+  boundary. The held-out set for the injection
+  screen, measured once: 6 of 48 blind attacks stopped and 0 of 24 look-alikes
+  flagged, against 26 of 66 and 16 of 28 on the suite's own cases, so the
+  earlier figure was tuned to its own set; the set is spent when the patterns
+  change. The owner answered that they will sign in to Azure on the virtual
+  machine when the paid run is due, which is not a yes to a paid call. T-112
+  new (112 threats) and T-15, T-26, T-73, T-78, T-79 and T-83 changed. Stale
+  figures corrected (55 calls and EUR 0.12; 52 injection cases). Eleven backlog
+  rows added (five of them from the guard's last four rounds, one with S020 as
+  its home), four rows brought to the code. CLM-0034's `unsure` is written
+  out for the owner with the session's recommendation (keep the prompt). The
+  whole suite was not run locally, by the owner's decision of 2026-10-08
+  ("Affected tests, CI runs all"): the pull request's own run is its result.

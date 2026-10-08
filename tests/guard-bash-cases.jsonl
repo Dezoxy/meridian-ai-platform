@@ -2188,8 +2188,702 @@
 {"expect":"deny","note":"K7 (S079): false alarm by design, measured: a writer verb in a line that holds meridian-aws anywhere is denied, a file of that name outside the state directory included; the repository's scripts, Makefile and documents tell nobody to write such a path","command":"true > /tmp/meridian-aws-notes.log"}
 {"expect":"deny","note":"K7 (S079): false alarm by design, as the line above","command":"mv docs/old.md docs/meridian-aws-notes.md"}
 {"expect":"deny","note":"K7 (S079): false alarm by design, as the line above (git mv is the verb mv)","command":"git mv docs/old.md docs/meridian-aws-notes.md"}
+{"expect":"ask","note":"S071 G1: the make targets that call a live model and spend money","command":"make eval-record"}
+{"expect":"ask","command":"make eval-injection-record"}
+{"expect":"ask","command":"make gateway-live"}
+{"expect":"ask","command":"make -C . eval-record"}
+{"expect":"ask","command":"make -C . eval-injection-record"}
+{"expect":"ask","command":"make -C . gateway-live"}
+{"expect":"ask","command":"make --directory=. eval-record"}
+{"expect":"ask","command":"make --directory . gateway-live"}
+{"expect":"ask","command":"make -j2 eval-injection-record"}
+{"expect":"ask","command":"make eval-record EXTRA=x"}
+{"expect":"ask","command":"make EXTRA=x gateway-live"}
+{"expect":"ask","command":"EXTRA=x make eval-record"}
+{"expect":"ask","command":"EXTRA=\"a b\" make eval-injection-record"}
+{"expect":"ask","command":"env EXTRA=x make eval-injection-record"}
+{"expect":"ask","command":"MAKEFLAGS=-j2 make eval-record"}
+{"expect":"ask","command":"make 'eval-record'"}
+{"expect":"ask","command":"make \"eval-injection-record\""}
+{"expect":"ask","command":"make 'gateway-live'"}
+{"expect":"ask","command":"make \"gateway-live\""}
+{"expect":"ask","command":"make eval-baseline eval-record"}
+{"expect":"ask","command":"make eval-record eval-baseline"}
+{"expect":"ask","command":"make azure-smoke gateway-live"}
+{"expect":"ask","command":"make -- eval-record"}
+{"expect":"ask","command":"make\teval-record"}
+{"expect":"ask","command":"bash -c \"make eval-record\""}
+{"expect":"ask","command":"sh -c 'make eval-injection-record'"}
+{"expect":"ask","command":"bash -c \"make gateway-live\""}
+{"expect":"ask","command":"time make eval-record"}
+{"expect":"ask","command":"nohup make eval-injection-record &"}
+{"expect":"ask","command":"xargs make gateway-live"}
+{"expect":"ask","command":"/usr/bin/make eval-record"}
+{"expect":"ask","command":"gmake gateway-live"}
+{"expect":"ask","command":"cd data/evaluation && make -C ../.. eval-record"}
+{"expect":"ask","command":"make eval-record>run.log 2>&1"}
+{"expect":"ask","command":"make gateway-live;echo done"}
+{"expect":"ask","command":"(make eval-injection-record)"}
+{"expect":"ask","command":"echo $(make eval-record)"}
+{"expect":"ask","command":"echo `make gateway-live`"}
+{"expect":"ask","command":"make eval-baseline && make eval-record"}
+{"expect":"ask","command":"make eval-baseline\nmake eval-injection-record"}
+{"expect":"ask","command":"make eval-baseline | tee x.log; make gateway-live"}
+{"expect":"ask","note":"S071 G1: false alarm by design, as the AWS rules: a dry run names the target and asks","command":"make -n eval-record"}
+{"expect":"ask","note":"S071 G1: the rules read cmd, as the Azure rules do, so quoted text is a use: an echo that names the target asks (a commit message goes in with -F, which is no command line)","command":"echo \"run make eval-record when the owner says yes\""}
+{"expect":"ask","note":"S071 G1: as the line above: a message on the command line that names the target asks","command":"git commit -m \"S071: make gateway-live asks\""}
+{"expect":"none","note":"S071 G1: a message read from a file is no command line","command":"git commit -F msg.txt"}
+{"expect":"ask","note":"S071 G1: false alarm by design, measured: only a heredoc that cat or tee writes to a file is dropped, so the body of one that git commit reads stays in the text (write the message to a file and commit with -F file)","command":"git commit -F - <<'EOF'\nS071: make eval-record asks\nEOF"}
+{"expect":"none","command":"cat > notes.md <<'EOF'\nrun make eval-injection-record\nEOF"}
+{"expect":"none","note":"S071 G1: a target that merely begins or ends with the words","command":"make eval-recorder"}
+{"expect":"none","command":"make eval-records"}
+{"expect":"none","command":"make eval-record-x"}
+{"expect":"none","command":"make eval-record.bak"}
+{"expect":"none","command":"make my-eval-record"}
+{"expect":"none","command":"make xeval-record"}
+{"expect":"none","command":"make eval_record"}
+{"expect":"none","command":"make eval-injection-recorder"}
+{"expect":"none","command":"make eval-injection-record2"}
+{"expect":"none","command":"make eval-injection-record-x"}
+{"expect":"none","command":"make my-eval-injection-record"}
+{"expect":"none","command":"make gateway-live2"}
+{"expect":"none","command":"make gateway-lives"}
+{"expect":"none","command":"make gateway-live-x"}
+{"expect":"none","command":"make gateway-liv"}
+{"expect":"none","command":"make my-gateway-live"}
+{"expect":"none","command":"make xgateway-live"}
+{"expect":"none","command":"make gateway_live"}
+{"expect":"none","command":"make 'eval-recorder'"}
+{"expect":"none","command":"make \"gateway-lives\""}
+{"expect":"none","command":"make eval-baseline gateway-live2"}
+{"expect":"none","command":"my-make eval-record"}
+{"expect":"none","note":"S071 G1: the free targets, pinned so that a later change cannot make the replay ask; make azure-smoke (three calls, well under a cent) passes on purpose","command":"make azure-smoke"}
+{"expect":"none","command":"make -C . azure-smoke"}
+{"expect":"none","command":"make eval"}
+{"expect":"none","command":"make eval-baseline"}
+{"expect":"none","command":"make eval-compare"}
+{"expect":"none","command":"make -C . eval-baseline eval-compare"}
+{"expect":"none","command":"make eval-baseline && make eval-compare"}
+{"expect":"none","command":"make eval-injection"}
+{"expect":"none","command":"make test"}
+{"expect":"none","command":"grep -n eval-record Makefile"}
+{"expect":"none","command":"cat Makefile"}
+{"expect":"ask","note":"S071 G1: the scripts behind the targets: the sub-commands that call a live model","command":"infra/terraform/foundation.sh eval-record"}
+{"expect":"ask","command":"infra/terraform/foundation.sh eval-injection-record"}
+{"expect":"ask","command":"infra/terraform/foundation.sh gateway-live"}
+{"expect":"ask","command":"cd infra/terraform && ./foundation.sh eval-record"}
+{"expect":"ask","command":"cd infra/terraform && ./foundation.sh gateway-live"}
+{"expect":"ask","command":"bash infra/terraform/foundation.sh eval-injection-record"}
+{"expect":"ask","command":"sh infra/terraform/foundation.sh gateway-live"}
+{"expect":"ask","command":"bash -x foundation.sh eval-record"}
+{"expect":"ask","command":"bash -o errexit foundation.sh eval-record"}
+{"expect":"ask","command":"EXTRA=x infra/terraform/foundation.sh eval-record"}
+{"expect":"ask","command":"env EXTRA=x bash foundation.sh gateway-live"}
+{"expect":"ask","command":"sh -c './foundation.sh eval-injection-record'"}
+{"expect":"ask","command":"bash -c \"infra/terraform/foundation.sh eval-record\""}
+{"expect":"ask","command":"\"infra/terraform/foundation.sh\" eval-record"}
+{"expect":"ask","command":"infra/terraform/foundation.sh 'eval-record'"}
+{"expect":"ask","command":"infra/terraform/foundation.sh \"gateway-live\""}
+{"expect":"ask","command":"time infra/terraform/foundation.sh eval-injection-record"}
+{"expect":"ask","command":"/srv/x/infra/terraform/foundation.sh eval-record"}
+{"expect":"ask","command":"infra/terraform/foundation.sh gateway-live 2>&1 | tee run.log"}
+{"expect":"ask","command":"infra/terraform/foundation.sh smoke && infra/terraform/foundation.sh eval-record"}
+{"expect":"ask","note":"S071 G1: false alarm by design: a search for the call, quoted, is read as a use of it","command":"grep -n \"foundation.sh eval-record\" docs/development-environment.md"}
+{"expect":"none","command":"infra/terraform/foundation.sh eval-recorder"}
+{"expect":"none","command":"infra/terraform/foundation.sh eval-record-x"}
+{"expect":"none","command":"infra/terraform/foundation.sh eval-injection-recorder"}
+{"expect":"none","command":"infra/terraform/foundation.sh gateway-lives"}
+{"expect":"none","command":"infra/terraform/foundation.sh xgateway-live"}
+{"expect":"none","command":"infra/terraform/foundation.sh smoke"}
+{"expect":"none","command":"infra/terraform/foundation.sh plan"}
+{"expect":"none","command":"infra/terraform/foundation.sh outputs"}
+{"expect":"none","command":"infra/terraform/foundation.sh init"}
+{"expect":"none","command":"bash infra/terraform/foundation.sh smoke"}
+{"expect":"none","command":"cat infra/terraform/foundation.sh"}
+{"expect":"none","command":"shellcheck infra/terraform/foundation.sh"}
+{"expect":"none","command":"bash -n infra/terraform/foundation.sh"}
+{"expect":"none","command":"grep -n eval-record infra/terraform/foundation.sh"}
+{"expect":"ask","note":"S071 G1: the paid tests' opt-ins, set in front of a command, with env, or by export on the same line","command":"MERIDIAN_LIVE_AZURE=1 pytest tests/meridian/gateway/test_live_azure.py"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=1 uv run pytest tests/meridian/gateway"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=1 python -m pytest tests/meridian/gateway"}
+{"expect":"ask","command":"MERIDIAN_EVAL_RECORD=1 pytest tests/meridian/test_evaluation_stack.py"}
+{"expect":"ask","command":"MERIDIAN_EVAL_RECORD=1 uv run python -m pytest tests/meridian"}
+{"expect":"ask","command":"MERIDIAN_EVAL_INJECTION_RECORD=1 pytest tests/meridian/test_injection_record.py"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=1 MERIDIAN_EVAL_INJECTION_RECORD=1 uv run pytest -x tests/meridian/test_injection_record.py"}
+{"expect":"ask","command":"env MERIDIAN_LIVE_AZURE=1 pytest tests/meridian/gateway"}
+{"expect":"ask","command":"env -i MERIDIAN_EVAL_RECORD=1 uv run pytest tests/meridian"}
+{"expect":"ask","command":"export MERIDIAN_LIVE_AZURE=1; uv run pytest tests/meridian/gateway"}
+{"expect":"ask","command":"export MERIDIAN_EVAL_RECORD=1 && uv run pytest tests/meridian"}
+{"expect":"ask","command":"export MERIDIAN_LIVE_AZURE=1 MERIDIAN_EVAL_INJECTION_RECORD=1; pytest"}
+{"expect":"ask","command":"(export MERIDIAN_LIVE_AZURE=1; pytest tests/meridian/gateway)"}
+{"expect":"ask","command":"cd tests && MERIDIAN_LIVE_AZURE=1 pytest meridian/gateway"}
+{"expect":"ask","command":"time MERIDIAN_LIVE_AZURE=1 pytest tests/meridian/gateway"}
+{"expect":"ask","command":"PYTEST_ADDOPTS=-x MERIDIAN_LIVE_AZURE=1 pytest"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=\"1\" pytest"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE='1' pytest"}
+{"expect":"ask","note":"S071 G1: the paid tests read the value 1 and nothing else; the rule asks for any value that is not 0 or empty, so that a form of 1 it did not think of still asks","command":"MERIDIAN_LIVE_AZURE=true pytest"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=yes pytest"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=$ONE pytest"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=$(echo 1) pytest"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=\"\"1 pytest"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=0x1 pytest"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=01 pytest"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=0 MERIDIAN_LIVE_AZURE=1 pytest"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=1 MERIDIAN_EVAL_RECORD=0 pytest"}
+{"expect":"ask","command":"MERIDIAN_EVAL_RECORD=0 MERIDIAN_LIVE_AZURE=1 pytest"}
+{"expect":"ask","command":"MERIDIAN_EVAL_INJECTION_RECORD=0; MERIDIAN_EVAL_INJECTION_RECORD=1 pytest"}
+{"expect":"ask","command":"bash -c 'MERIDIAN_LIVE_AZURE=1 pytest'"}
+{"expect":"ask","command":"sh -c \"export MERIDIAN_EVAL_RECORD=1; pytest\""}
+{"expect":"ask","command":"echo a\nMERIDIAN_LIVE_AZURE=1 pytest"}
+{"expect":"ask","command":"docker run -e MERIDIAN_LIVE_AZURE=1 img pytest"}
+{"expect":"ask","command":"docker run --env=MERIDIAN_EVAL_RECORD=1 img pytest"}
+{"expect":"ask","note":"S071 G1: the rule reads the variable, not the word pytest: make test passes the environment to pytest","command":"MERIDIAN_LIVE_AZURE=1 make test"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=1 MERIDIAN_EVAL_RECORD=1 make pytest"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=1"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=1\tpytest"}
+{"expect":"ask","note":"S071 G1: quoted text is a use, as for the make targets: an echo that holds the assignment asks","command":"echo \"MERIDIAN_LIVE_AZURE=1 pytest\""}
+{"expect":"ask","command":"git commit -m \"docs: MERIDIAN_EVAL_RECORD=1 opts in\""}
+{"expect":"none","note":"S071 G1: the opt-ins set to 0 or to nothing do not start a paid test","command":"MERIDIAN_LIVE_AZURE=0 pytest tests/meridian/gateway"}
+{"expect":"none","command":"MERIDIAN_LIVE_AZURE= pytest tests/meridian/gateway"}
+{"expect":"none","command":"MERIDIAN_LIVE_AZURE=\"\" pytest tests/meridian/gateway"}
+{"expect":"none","command":"MERIDIAN_LIVE_AZURE='' pytest tests/meridian/gateway"}
+{"expect":"none","command":"MERIDIAN_LIVE_AZURE=\"0\" pytest tests/meridian/gateway"}
+{"expect":"none","command":"MERIDIAN_LIVE_AZURE='0' pytest tests/meridian/gateway"}
+{"expect":"none","command":"MERIDIAN_EVAL_RECORD=0 uv run pytest tests/meridian"}
+{"expect":"none","command":"MERIDIAN_EVAL_INJECTION_RECORD= uv run python -m pytest tests/meridian"}
+{"expect":"none","command":"env MERIDIAN_LIVE_AZURE=0 pytest tests/meridian/gateway"}
+{"expect":"none","command":"export MERIDIAN_LIVE_AZURE=0; pytest tests/meridian/gateway"}
+{"expect":"none","command":"MERIDIAN_LIVE_AZURE=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_INJECTION_RECORD=0 uv run pytest tests/meridian"}
+{"expect":"none","command":"MERIDIAN_LIVE_AZURE=0;MERIDIAN_EVAL_RECORD=0 pytest"}
+{"expect":"none","command":"(MERIDIAN_LIVE_AZURE=0)"}
+{"expect":"none","command":"MERIDIAN_LIVE_AZURE=\tpytest"}
+{"expect":"none","note":"S071 G1: names that only begin or end like an opt-in, and commands that do not set one","command":"MERIDIAN_LIVE_AZURE_X=1 pytest"}
+{"expect":"none","command":"XMERIDIAN_LIVE_AZURE=1 pytest"}
+{"expect":"none","command":"MERIDIAN_EVAL_RECORDING=1 pytest"}
+{"expect":"none","command":"MERIDIAN_EVAL_INJECTION_RECORD_X=1 pytest"}
+{"expect":"none","command":"unset MERIDIAN_LIVE_AZURE; pytest tests/meridian/gateway"}
+{"expect":"none","command":"echo $MERIDIAN_LIVE_AZURE"}
+{"expect":"none","command":"grep -rn MERIDIAN_LIVE_AZURE tests"}
+{"expect":"none","command":"uv run pytest tests/meridian/gateway"}
+{"expect":"none","command":"pytest -x tests/meridian"}
+{"expect":"none","command":"python -m pytest tests/meridian/test_injection_record.py"}
+{"expect":"none","command":"PYTEST_WORKERS=0 make pytest"}
+{"expect":"ask","note":"S071 G1: shapes found by reading the rules against hostile spellings","command":"'make' eval-record"}
+{"expect":"ask","command":"\"make\" gateway-live"}
+{"expect":"ask","command":"sudo make eval-record"}
+{"expect":"ask","command":"exec make eval-injection-record"}
+{"expect":"ask","command":"command make gateway-live"}
+{"expect":"ask","command":"\\make eval-record"}
+{"expect":"ask","command":"{ make eval-record; }"}
+{"expect":"ask","command":"if true; then make eval-injection-record; fi"}
+{"expect":"ask","command":"env -S 'make eval-record'"}
+{"expect":"ask","command":"make -f Makefile eval-record"}
+{"expect":"ask","note":"S071 G1: false alarm by design: a comment on the line is read as text of the command","command":"make eval-baseline # make eval-record"}
+{"expect":"ask","note":"S071 G1: false alarm by design: a search for the literal asks (tests/meridian/test_ci_config.py holds one)","command":"grep -rn 'MERIDIAN_LIVE_AZURE=1' tests"}
+{"expect":"ask","command":"$(command -v make) eval-record"}
+{"expect":"ask","command":"$(which make) gateway-live"}
+{"expect":"ask","command":"`which make` eval-injection-record"}
+{"expect":"ask","command":"MAKE=make; ${MAKE} eval-record"}
+{"expect":"ask","command":"make -s gateway-live"}
+{"expect":"ask","command":"make \\\neval-record"}
+{"expect":"ask","command":"bash <<'EOF'\nmake eval-injection-record\nEOF"}
+{"expect":"ask","command":"bash <<'EOF'\nMERIDIAN_LIVE_AZURE=1 pytest\nEOF"}
+{"expect":"ask","command":": \"${MERIDIAN_LIVE_AZURE:=1}\"; pytest"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE+=1 pytest"}
+{"expect":"ask","command":"declare -x MERIDIAN_LIVE_AZURE=1; pytest"}
+{"expect":"ask","command":"env \"MERIDIAN_LIVE_AZURE=1\" pytest"}
+{"expect":"ask","command":"export \"MERIDIAN_EVAL_INJECTION_RECORD=1\"; pytest"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=1 MERIDIAN_LIVE_AZURE=0 pytest"}
+{"expect":"ask","command":"MERIDIAN_LIVE_AZURE=0\\1 pytest"}
+{"expect":"deny","note":"S071 G1: order: a deny elsewhere in the command still wins over the new asks, which stand after every deny","command":"make eval-record && git push --force"}
+{"expect":"deny","command":"make gateway-live; make aws-destroy"}
+{"expect":"deny","command":"infra/terraform/foundation.sh eval-injection-record; terraform destroy"}
+{"expect":"deny","command":"MERIDIAN_LIVE_AZURE=1 pytest; make aws-kubeadm-destroy"}
+{"expect":"ask","command":"make eval-record; make azure-apply"}
+{"expect":"ask","note":"S071 G2 (A-3): MAKEFLAGS and GNUMAKEFLAGS are read by GNU make 4.4.1 and run a target given after --, measured on a scratch Makefile","command":"MAKEFLAGS=\"-- eval-record\" make"}
+{"expect":"ask","command":"MAKEFLAGS='-j2 -- gateway-live' make"}
+{"expect":"ask","command":"GNUMAKEFLAGS=\"-- eval-injection-record\" make"}
+{"expect":"ask","command":"GNUMAKEFLAGS=' -- gateway-live' make"}
+{"expect":"ask","command":"export MAKEFLAGS=\"-- eval-record\"; make"}
+{"expect":"ask","command":"env MAKEFLAGS=\"-s -- gateway-live\" make"}
+{"expect":"ask","command":"MAKEFLAGS+=\" -- eval-record\" make"}
+{"expect":"ask","command":"MAKEFLAGS=\"-- eval-baseline eval-record\" make"}
+{"expect":"ask","command":"bash -c 'MAKEFLAGS=\"-- gateway-live\" make'"}
+{"expect":"ask","note":"S071 G3: pinned, cannot fail on the MAKEFLAGS rule: a command-line variable is an argument of make and the make rule already read it before G2","command":"make MAKEFLAGS=\"-- eval-record\""}
+{"expect":"none","note":"S071 G2 (A-3): a MAKEFLAGS that names no paid target, or a target that only looks like one","command":"MAKEFLAGS=-j4 make eval-baseline"}
+{"expect":"none","command":"MAKEFLAGS=\"-- eval-baseline\" make"}
+{"expect":"none","command":"GNUMAKEFLAGS=--no-print-directory make test"}
+{"expect":"none","command":"MAKEFLAGS=\"-- eval-recorder\" make"}
+{"expect":"none","command":"MAKEFLAGS=\"-- my-gateway-live\" make"}
+{"expect":"none","command":"MAKEFLAGS=-s make azure-smoke"}
+{"expect":"none","command":"export MAKEFLAGS=-j2; make eval-compare"}
+{"expect":"ask","note":"S071 G2 (A-2): az rest, any method, asks by the command word (a quoted search for the words asks too, as the other az rules do)","command":"az rest --method post --url https://x.openai.azure.com/openai/deployments/d/chat/completions"}
+{"expect":"ask","command":"az rest -m post --url https://x --body @b.json"}
+{"expect":"ask","command":"az rest --url https://x"}
+{"expect":"ask","command":"az rest"}
+{"expect":"ask","command":"az --debug rest --url https://x"}
+{"expect":"ask","command":"az \"rest\" --url https://x"}
+{"expect":"ask","command":"az 'rest' --url https://x"}
+{"expect":"ask","command":"AZURE_CORE_ONLY_SHOW_ERRORS=1 az rest --url https://x"}
+{"expect":"ask","command":"sudo az rest --url https://x"}
+{"expect":"ask","command":"time az rest --url https://x"}
+{"expect":"ask","command":"/usr/bin/az rest --url https://x"}
+{"expect":"ask","command":"bash -c \"az rest --url https://x\""}
+{"expect":"ask","command":"echo x && az rest --url https://x"}
+{"expect":"ask","command":"az rest --resource https://cognitiveservices.azure.com --url https://x"}
+{"expect":"ask","command":"docker run --rm mcr.microsoft.com/azure-cli az rest --url https://x"}
+{"expect":"ask","note":"S071 G2: false alarm by design, as the other az rules: a quoted search for the words is read as a use","command":"grep -rn \"az rest\" docs"}
+{"expect":"none","note":"S071 G2 (A-2): other az commands and words that only hold rest","command":"az account show"}
+{"expect":"none","command":"az group show -n forest"}
+{"expect":"none","command":"az vm restart -n x -g y"}
+{"expect":"none","command":"az webapp restart -n x -g y"}
+{"expect":"none","command":"az resource list --query '[].name' -o tsv"}
+{"expect":"none","command":"grep -rn rest docs"}
+{"expect":"none","command":"cat docs/az-rest.md"}
+{"expect":"none","command":"echo az-rest"}
+{"expect":"ask","note":"S071 G2 (A-2): the Azure identity library in an interpreter line mints the token a direct call to a model needs","command":"python3 -c \"from azure.identity import AzureCliCredential; print(AzureCliCredential().get_token('https://cognitiveservices.azure.com/.default'))\""}
+{"expect":"ask","command":"python -c \"import azure.identity\""}
+{"expect":"ask","command":"uv run python -c \"from azure.identity import DefaultAzureCredential\""}
+{"expect":"ask","command":"uv run --with azure-identity python -c \"from azure.identity import ManagedIdentityCredential\""}
+{"expect":"ask","command":".venv/bin/python3.13 -c \"from azure.identity import AzureCliCredential\""}
+{"expect":"ask","command":"python3 - <<'EOF'\nfrom azure.identity import DefaultAzureCredential\nprint(DefaultAzureCredential())\nEOF"}
+{"expect":"ask","command":"uv run python - <<'EOF'\nimport azure.identity\nEOF"}
+{"expect":"ask","command":"uv run python scripts/probe.py --credential DefaultAzureCredential"}
+{"expect":"ask","command":"uv run python -c \"from meridian.platform.gateway.providers.azure_openai import azure_cli_token_provider\""}
+{"expect":"ask","command":"uvx python -c \"import azure.identity\""}
+{"expect":"ask","command":"bash <<'EOF'\npython3 -c 'import azure.identity'\nEOF"}
+{"expect":"ask","command":"cd src && python -c \"from azure.identity import get_bearer_token_provider\""}
+{"expect":"ask","command":"python3 -c \"from azure.identity import ClientSecretCredential\""}
+{"expect":"none","note":"S071 G2 (A-2): a search for the words in the source tree is a read: no interpreter word, so no ask","command":"grep -rn AzureCliCredential src"}
+{"expect":"none","command":"rg DefaultAzureCredential src tests"}
+{"expect":"none","command":"grep -rn \"azure.identity\" pyproject.toml"}
+{"expect":"none","command":"git grep DefaultAzureCredential"}
+{"expect":"none","command":"git log -S AzureCliCredential --oneline"}
+{"expect":"none","command":"cat src/meridian/platform/gateway/providers/azure_openai.py"}
+{"expect":"none","command":"sed -n 1,40p src/meridian/platform/gateway/providers/azure_openai.py"}
+{"expect":"none","command":"echo AzureCliCredential"}
+{"expect":"none","command":"uv run pytest tests/meridian/gateway -k test_azure_identity"}
+{"expect":"none","command":"uv run ruff check src/meridian/platform/gateway"}
+{"expect":"none","command":"python3 --version"}
+{"expect":"none","command":"uv run python -m pytest tests/meridian/gateway"}
+{"expect":"none","command":"python3 -c \"import json; print(json.dumps({}))\""}
+{"expect":"none","note":"S071 G2 (A-2): a script written to a file is the header's file-then-run gap, unchanged: the body is dropped","command":"cat > probe.py <<'EOF'\nfrom azure.identity import AzureCliCredential\nEOF"}
+{"expect":"ask","note":"S071 G2 (A-8): a make option that takes no argument, then a quoted target: the AWS rules read hook_cmd, which emptied the quoted value after -m; make is read as a command word and the value is kept","command":"git status; make -m \"aws-apply\""}
+{"expect":"ask","command":"git status; make -m \"aws-kubeadm-plan\""}
+{"expect":"ask","command":"make -m \"aws-apply\""}
+{"expect":"ask","command":"make -im \"aws-kubeadm-apply\""}
+{"expect":"ask","command":"git status; make -sm \"aws-plan\""}
+{"expect":"ask","command":"make --message \"aws-apply\""}
+{"expect":"ask","command":"time make -m \"aws-apply\""}
+{"expect":"ask","command":"git status && make -j2 -m \"aws-plan\""}
+{"expect":"ask","command":"bash -c \"make -m 'aws-apply'\""}
+{"expect":"ask","command":"make -m 'aws-kubeadm-plan'"}
+{"expect":"deny","command":"make -m \"aws-destroy\""}
+{"expect":"deny","command":"git status; make -m \"aws-kubeadm-destroy\""}
+{"expect":"deny","command":"make -sm \"aws-destroy\""}
+{"expect":"ask","note":"S071 G2 (A-8): the Azure and paid-model rules read cmd and already asked; pinned so that a later change cannot open the shape","command":"git status; make -m \"azure-apply\""}
+{"expect":"ask","command":"make -m \"azure-state\""}
+{"expect":"ask","command":"git status; make -m \"eval-record\""}
+{"expect":"ask","command":"make -m \"eval-injection-record\""}
+{"expect":"ask","command":"make -im \"gateway-live\""}
+{"expect":"ask","command":"git status; make -sm 'gateway-live'"}
+{"expect":"none","note":"S071 G2 (A-8): a commit message that names a target still passes in the AWS rules: it is the value of git's -m, not make's","command":"git commit -m \"make aws-apply\""}
+{"expect":"none","command":"git commit -m \"x\" -m \"make aws-kubeadm-apply\""}
+{"expect":"none","command":"make aws-validate && git commit -m \"make aws-apply\""}
+{"expect":"none","command":"make docs; git commit -am \"run make aws-destroy\""}
+{"expect":"none","command":"git tag -m \"make aws-apply\" v1"}
+{"expect":"none","command":"git commit -m \"make docs\" -m \"make aws-apply\""}
+{"expect":"none","command":"git status; make -m \"aws-validate\""}
+{"expect":"none","command":"make -m \"aws-scan\""}
+{"expect":"deny","note":"S071 G3 (C2): make is read as the command word only; a make earlier in a segment is no reason to read a message with its separators, and the review's eight inputs are denied again","command":"git commit make -m \"a; b\" -n"}
+{"expect":"deny","command":"git commit --author=make -m \"a; b\" --no-verify"}
+{"expect":"deny","command":"git commit -a make.sh -m \"a; b\" -n"}
+{"expect":"deny","command":"git commit scripts/make -am \"a; b\" -n"}
+{"expect":"deny","command":"VER=$(make v) git commit -m \"x; y\" -n"}
+{"expect":"deny","command":"echo make git commit -m \"x; y\" -n"}
+{"expect":"deny","command":"git -c core.editor=make commit -m \"x; y\" -n"}
+{"expect":"deny","command":"git commit -F make -m \"x;y\" -n"}
+{"expect":"deny","note":"S071 G3 (C2): the plain forms, as they were","command":"git commit -m \"a; b\" -n"}
+{"expect":"deny","command":"git commit -m \"x; y\" --no-verify"}
+{"expect":"none","command":"git commit -m \"a; b\""}
+{"expect":"none","command":"make docs && git commit -m \"a; b\""}
+{"expect":"deny","note":"S071 G3 (C2): the separators of a value that is read are blanked, so a flag after it is still in its segment","command":"make -m \"a; b\" git commit -n"}
+{"expect":"ask","note":"S071 G3 (C2): make is the command word after assignments, env, time, nohup, command, exec, sudo, nice, a path, a keyword or a bracket, and the A-8 asks hold","command":"env VAR=1 make -m \"aws-apply\""}
+{"expect":"ask","command":"VAR=x make -m \"aws-apply\""}
+{"expect":"ask","command":"sudo make -m \"aws-apply\""}
+{"expect":"ask","command":"sudo -E make -m \"aws-apply\""}
+{"expect":"ask","command":"nohup make -m \"aws-apply\" &"}
+{"expect":"ask","command":"command make -m \"aws-apply\""}
+{"expect":"ask","command":"exec make -m \"aws-apply\""}
+{"expect":"ask","command":"nice -n 5 make -m \"aws-apply\""}
+{"expect":"ask","command":"timeout 60 make -m \"aws-kubeadm-plan\""}
+{"expect":"ask","command":"/usr/bin/make -m \"aws-apply\""}
+{"expect":"ask","command":"if true; then make -m \"aws-apply\"; fi"}
+{"expect":"ask","command":"(make -m \"aws-apply\")"}
+{"expect":"ask","command":"echo $(make -m \"aws-apply\")"}
+{"expect":"ask","command":"$MAKE -m \"aws-kubeadm-apply\""}
+{"expect":"deny","command":"sudo make -m \"aws-destroy\""}
+{"expect":"deny","command":"env X=1 make -sm \"aws-kubeadm-destroy\""}
+{"expect":"deny","command":"git status && sudo -E env X=1 make -k -m \"aws-destroy\""}
+{"expect":"ask","note":"S071 G3 (H1): a separator inside an earlier quoted argument no longer hides the target from the Azure, paid-model and AWS rules","command":"make -C \"a;b\" eval-record"}
+{"expect":"ask","command":"make FOO=\"x|y\" gateway-live"}
+{"expect":"ask","command":"make -C \"a;b\" -- eval-record"}
+{"expect":"ask","command":"make -C \"a&b\" eval-injection-record"}
+{"expect":"ask","command":"make -C 'a;b' gateway-live"}
+{"expect":"ask","command":"make -C \"a\nb\" eval-record"}
+{"expect":"ask","command":"make -C \"a;b\" azure-apply"}
+{"expect":"ask","command":"make -C 'a|b' azure-state"}
+{"expect":"ask","command":"make -C 'a;b' aws-apply"}
+{"expect":"ask","command":"make -C \"a|b\" aws-kubeadm-plan"}
+{"expect":"deny","command":"make -f \"a&b.mk\" aws-destroy"}
+{"expect":"deny","command":"make -f \"a&b.mk\" -m \"aws-destroy\""}
+{"expect":"deny","command":"make -C \"a;b\" aws-kubeadm-destroy"}
+{"expect":"ask","command":"MAKEFLAGS=\"-C a;b -- eval-record\" make"}
+{"expect":"ask","command":"echo \"a;b\" && MERIDIAN_LIVE_AZURE=1 pytest"}
+{"expect":"ask","command":"echo 'a|b' MERIDIAN_EVAL_RECORD=1 pytest"}
+{"expect":"none","note":"S071 G3 (H1): the same shapes with a free target, and a separator that is not inside quotes","command":"make -C \"a;b\" eval-baseline"}
+{"expect":"none","command":"make -C \"a;b\" aws-validate"}
+{"expect":"none","command":"make -C \"a;b\" azure-plan"}
+{"expect":"none","command":"make -C \"a;b\" eval-recorder"}
+{"expect":"ask","note":"S071 G4: false ask by design, as G3 expected none: the co-occurrence rule asks for the word make and a paid target anywhere in the command (a false ask costs a click, a missed one costs money)","command":"make -C \"a b\"; echo eval-record"}
+{"expect":"ask","note":"S071 G4: false ask by design, as the line above","command":"make -C \"a;b\"; echo gateway-live"}
+{"expect":"none","note":"S071 G3: negative controls that reach the paid regexes (the word record or gateway-live is on the line) and still pass","command":"MAKEFLAGS=\"-j2 -- eval-baseline eval-record-notes\" make"}
+{"expect":"none","command":"MAKEFLAGS=-j4 make eval-recorder"}
+{"expect":"none","command":"MAKEFLAGS=\"-- eval-baseline\" make -C data/record"}
+{"expect":"none","note":"S071 G3 (M1): the interpreter word and a credential name in different segments, a message that names it, a search piped to python: none","command":"uv run pytest -q && git commit -m \"fix: azure_cli_token_provider asks for the scope\""}
+{"expect":"none","command":"uv run ruff check src && rg -n \"ManagedIdentityCredential\" src"}
+{"expect":"none","command":"git grep -n AzureCliCredential | python3 -c \"import sys\""}
+{"expect":"none","command":"rg DefaultAzureCredential | python3 -m json.tool"}
+{"expect":"none","command":"uv run pytest -k \"not DefaultAzureCredential\""}
+{"expect":"none","command":"python3 -c 'print(1)' && grep -rn DefaultAzureCredential src"}
+{"expect":"none","command":"git commit -m \"python3 DefaultAzureCredential\""}
+{"expect":"none","command":"git commit -am \"uv run python azure.identity\""}
+{"expect":"none","command":"gh pr create --title t --body \"python3 -c DefaultAzureCredential\""}
+{"expect":"none","command":"uv run pytest -q; git tag -m \"AzureCliCredential\" v1"}
+{"expect":"ask","note":"S071 G3 (M1): the real shapes keep asking: the same segment, a later segment, a heredoc, a separator inside the quoted program, upper and mixed case","command":"git commit -m \"x\" && python3 -c \"from azure.identity import AzureCliCredential\""}
+{"expect":"ask","command":"python3 -c \"import os; from azure.identity import AzureCliCredential; print(1)\""}
+{"expect":"ask","command":"python3 -c \"import os\nfrom azure.identity import AzureCliCredential\""}
+{"expect":"ask","command":"uv run python -c \"a=1 && b=2 | c\" ; uv run python -c \"import azure.identity\""}
+{"expect":"ask","command":"python3 - <<'EOF'\nimport os; import azure.identity\nEOF"}
+{"expect":"ask","command":"uv run scripts/probe.py DefaultAzureCredential"}
+{"expect":"ask","command":"uvx python -c \"import azure.identity\""}
+{"expect":"ask","command":"PYTHON3 -c \"from AZURE.IDENTITY import X\""}
+{"expect":"ask","command":"python3 -c \"DEFAULTAZURECREDENTIAL\""}
+{"expect":"ask","command":"Python3 -c \"defaultazurecredential\""}
+{"expect":"ask","command":"uv run python -c \"from azure.identity import DefaultAzureCredential\" | cat"}
+{"expect":"none","note":"S071 G3 (M2): a commit message or a PR body that names the raw request is none; the command itself asks with options before the sub-command, in a later segment, under sudo, by path, with an assignment in front","command":"git commit -m \"docs: az rest asks\""}
+{"expect":"none","command":"gh pr create --body \"az rest asks before a paid call\""}
+{"expect":"none","command":"gh pr comment 3 --body \"run az rest\""}
+{"expect":"none","command":"git commit -am \"az rest\""}
+{"expect":"none","command":"git tag -m \"az rest\" v1"}
+{"expect":"none","command":"gh pr create --title \"az rest\" --body x"}
+{"expect":"ask","command":"git commit -m \"x\" && az rest --url https://x"}
+{"expect":"ask","command":"git commit -m \"az rest\"; az rest --url https://x"}
+{"expect":"ask","command":"az --query \"a;b\" rest --url https://x"}
+{"expect":"ask","command":"AZ REST --url https://x"}
+{"expect":"ask","command":"Az Rest --url https://x"}
+{"expect":"ask","command":"AZURE_X=1 az rest --url https://x"}
+{"expect":"ask","command":"sudo -E /usr/bin/az --debug rest --url https://x"}
+{"expect":"deny","note":"S071 G4: the second review's rows for the newline in a value after a make word: the prose pass is main's, byte for byte, so these are what main gives","command":"make git commit -m \"a\nb\" -n"}
+{"expect":"deny","command":"sudo -u make git commit -m \"a\nb\" -n"}
+{"expect":"deny","command":"env -u make git commit -m \"a\nb\" --no-verify"}
+{"expect":"deny","command":"FOO=1 env -u make git commit -a -m \"multi\nline\" --no-verify"}
+{"expect":"ask","command":"make -m \"a\nb\" gateway-upkeep ARGS=credit"}
+{"expect":"ask","command":"make -m \"a\nb\" aws-kubeadm-scan TRIVY_IMAGE=stand-in/trivy:1"}
+{"expect":"deny","command":"make -m \"a\nb\" aws-destroy"}
+{"expect":"ask","note":"S071 G4: the added rule for an AWS target as a QUOTED word behind a make option (the first review's A-8), read from the raw text with make as the command word; apply and plan ask, destroy denies","command":"make -m \"aws-apply\""}
+{"expect":"ask","command":"git status; make -m \"aws-kubeadm-plan\""}
+{"expect":"ask","command":"make -sm 'aws-plan'"}
+{"expect":"ask","command":"make -j2 -m \"aws-kubeadm-apply\""}
+{"expect":"ask","command":"make -m \"aws-apply\nx\" -n; make -m \"aws-apply\""}
+{"expect":"deny","command":"make -m \"aws-destroy\""}
+{"expect":"deny","command":"git status; make -sm \"aws-kubeadm-destroy\""}
+{"expect":"deny","command":"make -m \"aws-destroy\n\""}
+{"expect":"deny","command":"make -m \" aws-destroy \""}
+{"expect":"deny","command":"VAR=1 make -m 'aws-destroy'"}
+{"expect":"deny","command":"env X=1 sudo make -m \"aws-destroy\""}
+{"expect":"deny","command":"nohup make -m \"aws-kubeadm-destroy\" &"}
+{"expect":"deny","command":"if true; then make -m \"aws-destroy\"; fi"}
+{"expect":"deny","command":"(make -m \"aws-destroy\")"}
+{"expect":"deny","command":"echo $(make -m \"aws-destroy\")"}
+{"expect":"deny","command":"bash -c \"make -m 'aws-destroy'\""}
+{"expect":"deny","command":"sh -lc 'make -m \"aws-kubeadm-destroy\"'"}
+{"expect":"ask","command":"eval \"make -m 'aws-apply'\""}
+{"expect":"deny","command":"make -m \"x\" -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G4: a separator inside an earlier quoted argument does not hide the AWS target (hook_cmd_q)","command":"make -f \"a&b.mk\" aws-destroy"}
+{"expect":"deny","command":"make -f \"a&b.mk\" -m \"aws-destroy\""}
+{"expect":"deny","command":"make -C \"a;b\" aws-kubeadm-destroy"}
+{"expect":"ask","command":"make -C \"a;b\" aws-apply"}
+{"expect":"ask","command":"make -C 'a|b' aws-kubeadm-plan"}
+{"expect":"none","note":"S071 G4: the command-word gate: a message or an echo that holds the words is not read by the added rule, and the free AWS targets stay free","command":"git commit -m \"make aws-destroy\""}
+{"expect":"none","command":"git commit -m \"make -m 'aws-destroy'\""}
+{"expect":"none","command":"git commit -m \"x\" -m \"aws-destroy\""}
+{"expect":"none","command":"git tag -m \"aws-apply\" v1"}
+{"expect":"none","command":"git commit -am \"aws-kubeadm-plan\""}
+{"expect":"none","command":"make -m \"aws-validate\""}
+{"expect":"none","command":"make -m \"aws-scan\" aws-validate"}
+{"expect":"none","command":"git status; make -m \"aws-validate\""}
+{"expect":"none","command":"make -m \"aws-destroy-notes\""}
+{"expect":"none","command":"make -m \"my aws-destroy\""}
+{"expect":"ask","note":"S071 G4: the paid targets by co-occurrence (make anywhere, a whole-word target anywhere), no command-word gate","command":"T=eval-record; make $T"}
+{"expect":"ask","command":"for t in eval-record gateway-live; do make $t; done"}
+{"expect":"ask","command":"T=eval-record; MAKEFLAGS=\"-- $T\" make"}
+{"expect":"ask","command":"echo eval-record | xargs make"}
+{"expect":"ask","command":"echo gateway-live | xargs -n1 make"}
+{"expect":"ask","command":"make -C $(cd x; pwd) eval-injection-record"}
+{"expect":"ask","command":"make -C `echo a;b` eval-record"}
+{"expect":"ask","command":"make FOO=$(a|b) eval-record"}
+{"expect":"ask","command":"make -C ${X:-a;b} eval-record"}
+{"expect":"ask","command":"make -C a\\;b eval-record"}
+{"expect":"ask","command":"make VAR=$(date +%s | cut -c1-3) gateway-live"}
+{"expect":"ask","command":"$MAKE eval-record"}
+{"expect":"ask","command":"${MAKE} gateway-live"}
+{"expect":"ask","command":"\"${MAKE}\" eval-injection-record"}
+{"expect":"ask","command":"gmake -C . eval-record"}
+{"expect":"ask","command":"/usr/local/bin/make --jobs=2 gateway-live"}
+{"expect":"ask","command":"make -C \"a;b\" eval-record"}
+{"expect":"ask","command":"make -C \"a;b\" -- eval-record"}
+{"expect":"ask","command":"MAKEFLAGS=\"-C a;b -- eval-record\" make"}
+{"expect":"ask","command":"export MAKEFLAGS=\"-- eval-record\""}
+{"expect":"ask","command":"GNUMAKEFLAGS=' -- gateway-live'; env | head"}
+{"expect":"ask","note":"S071 G4: false asks by design, ordinary commands of this repository that name make and a paid target in different places: a click, not a missed paid run","command":"make eval-baseline && grep -n eval-record docs/meridian-plan.md"}
+{"expect":"ask","command":"make docs && git log --oneline -- data/evaluation | grep gateway-live"}
+{"expect":"ask","command":"make lint && rg -n gateway-live src"}
+{"expect":"ask","command":"make test && grep -c eval-injection-record Makefile"}
+{"expect":"ask","command":"git commit -m \"docs: make eval-record asks\""}
+{"expect":"none","note":"S071 G4: negatives that reach the co-occurrence regexes (record or gateway-live is on the line) and still pass: no make word, or a target that only looks like one","command":"grep -n eval-record Makefile"}
+{"expect":"none","command":"echo eval-record"}
+{"expect":"none","command":"ls docs/gateway-live"}
+{"expect":"none","command":"cat data/evaluation/eval-record-notes.md"}
+{"expect":"none","command":"make eval-baseline && cat data/evaluation/my-eval-record"}
+{"expect":"none","command":"make docs; ls data/evaluation/eval-record.log"}
+{"expect":"none","command":"make eval-baseline | tee eval-recorder.log"}
+{"expect":"none","command":"cat make.sh eval-record-x"}
+{"expect":"none","command":"git commit -F msg-eval-record.txt"}
+{"expect":"ask","note":"S071 G4: the identity library behind a pipe into bare python (the second review's H2); a pipe into python with a module or a program of its own stays none","command":"echo \"from azure.identity import DefaultAzureCredential\" | python3"}
+{"expect":"ask","command":"printf 'from azure.identity import AzureCliCredential' | python3 -"}
+{"expect":"ask","command":"cat probe_AzureCliCredential.txt | /usr/bin/python3.13"}
+{"expect":"ask","command":"echo DefaultAzureCredential | env X=1 python3 -"}
+{"expect":"none","command":"echo DefaultAzureCredential | python3 -m json.tool"}
+{"expect":"none","command":"echo DefaultAzureCredential | python3 -c \"import sys\""}
+{"expect":"none","command":"echo DefaultAzureCredential | python3 report.py"}
+{"expect":"none","command":"echo hello | python3"}
+{"expect":"none","note":"S071 G4: the raw request and the identity library: a case whose pre-check is true and whose regex is reached","command":"python3 -m pytest -q tests/test_rest_api.py; echo credential done"}
+{"expect":"ask","note":"S071 G4: false ask, kept: python3 -m pytest -k with the name is a Python line that holds a credential name","command":"python3 -m pytest -k \"DefaultAzureCredential\""}
+{"expect":"none","note":"S071 G5 (review HIGH-1, class 1): a -c is a shell's -c only behind a shell or eval; grep -c, wc -c, cut -c and rg -c are counts and options of their own and open no body (main gives none)","command":"grep -c \"make -m 'aws-destroy'\" docs/x.md"}
+{"expect":"deny","note":"S071 G5: main's own rule reads the quoted text, make then a quoted target, and denies this search; the -c of rg opens no body, and the decision is main's","command":"rg -c \"make 'aws-destroy'\" docs"}
+{"expect":"none","command":"wc -c \"aws-destroy.md\" && make docs"}
+{"expect":"none","command":"cut -c1-80 \"make aws-destroy.md\""}
+{"expect":"none","command":"grep -c \"aws-destroy\" docs/x.md && make docs"}
+{"expect":"deny","note":"S071 G5: behind a shell, with flags, a path, sudo or a pipe, a -c body is still scanned","command":"bash -x -lc 'make -m \"aws-destroy\"'"}
+{"expect":"deny","command":"/bin/bash -c 'make -m \"aws-kubeadm-destroy\"'"}
+{"expect":"deny","command":"sudo sh -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","command":"echo x | dash -c 'make -m \"aws-destroy\"'"}
+{"expect":"none","note":"S071 G5 (review HIGH-1, class 2): a quoted piece that is the VALUE of a variable (the character before it is =) is not a target: make test K=\"aws-destroy\" runs test with K set (main gives none); the same cause gave three false asks","command":"make test K=\"aws-destroy\""}
+{"expect":"none","command":"make test PATTERN='aws-destroy'"}
+{"expect":"none","command":"make test O=\"aws-destroy\""}
+{"expect":"none","command":"make aws-scan NOTE=\"aws-destroy\""}
+{"expect":"none","command":"make -n docs K=\"aws-destroy\""}
+{"expect":"none","command":"make AWS_PROFILE=\"aws-plan\" docs"}
+{"expect":"none","command":"make test ARGS=\"aws-apply\""}
+{"expect":"none","command":"make aws-validate FOO=\"aws-plan\""}
+{"expect":"none","command":"make docs MSG=\"aws-apply\""}
+{"expect":"none","note":"S071 G5 (review HIGH-1, class 3): the quoted-separator copy is read only when make is the command word of a segment, so a search or an echo that holds a separator or an alternation inside quotes is what main gives","command":"echo \"make; aws-destroy\""}
+{"expect":"none","command":"echo \"make | aws-destroy\""}
+{"expect":"none","command":"rg -n \"make (aws-apply|aws-destroy)\" docs"}
+{"expect":"none","command":"grep -rnE \"make (aws-plan|aws-apply|aws-destroy)\" docs"}
+{"expect":"none","command":"rg -n \"(make|gmake) (aws-apply|aws-destroy)\" docs"}
+{"expect":"none","command":"rg -n \"(make|gmake) aws-(apply|destroy)\" docs"}
+{"expect":"none","command":"sed -n '1,5p' x.md | grep \"make; aws-destroy\""}
+{"expect":"none","command":"awk '/make aws-destroy/' docs/x.md"}
+{"expect":"none","command":"grep \"make\" Makefile | grep \"aws-destroy\""}
+{"expect":"none","command":"make aws-validate | grep -c \"aws-apply\""}
+{"expect":"none","command":"make docs && grep -n \"aws-destroy\" docs/x.md"}
+{"expect":"none","command":"make docs; echo \"aws-apply\""}
+{"expect":"none","note":"S071 G5 (review HIGH-1, class 4): an option of a prefix takes an argument, and make as that argument is not the command word (main gives none: it is a commit)","command":"sudo -u make git commit -m \"aws-destroy\""}
+{"expect":"none","command":"env -u make git commit -m \"aws-destroy\""}
+{"expect":"none","command":"timeout -s make git commit -m \"aws-destroy\""}
+{"expect":"none","command":"xargs -I make git commit -m \"aws-destroy\""}
+{"expect":"none","command":"nice -n make git commit -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G5: make IS the command word here, and make runs aws-destroy as a target (GNU make ignores -m), so the deny stands though main gives none; it is the review's class 4 row that is not a false deny","command":"make git commit -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G5: with the argument eaten, make behind each prefix is the command word and the quoted target denies","command":"sudo -u root make -m \"aws-destroy\""}
+{"expect":"deny","command":"env -u X make -m \"aws-destroy\""}
+{"expect":"deny","command":"timeout -s KILL 60 make -m \"aws-destroy\""}
+{"expect":"deny","command":"xargs -I X make -m \"aws-destroy\""}
+{"expect":"deny","command":"nice -n 5 make -m \"aws-destroy\""}
+{"expect":"deny","command":"time -f %e make -m \"aws-kubeadm-destroy\""}
+{"expect":"deny","command":"sudo -E env -i A=b make -m \"aws-destroy\""}
+{"expect":"ask","note":"S071 G5 (review HIGH-2): a paid target handed to make by a default-value expansion of the shell asks; the hyphen of the operator no longer hides it","command":"make ${T:-eval-record}"}
+{"expect":"ask","command":"make ${T-gateway-live}"}
+{"expect":"ask","command":"make ${T:=eval-record}"}
+{"expect":"ask","command":"make ${T:+eval-injection-record}"}
+{"expect":"ask","command":"make \"${T:-gateway-live}\""}
+{"expect":"ask","command":"gmake ${T:-eval-record}"}
+{"expect":"ask","note":"S071 G5: the false ask this adds, kept as a row: a name that begins with an operator inside braces","command":"make ${T:-my-eval-record}"}
+{"expect":"none","note":"S071 G5: the left boundary still excludes a hyphen outside braces, so G1's near-miss names stay none","command":"make my-eval-record"}
+{"expect":"none","command":"make eval-baseline && cat data/evaluation/my-eval-record"}
+{"expect":"none","command":"make ${T:-eval-baseline}"}
+{"expect":"ask","note":"S071 G5: the gmake and gnumake branches of the make word (a variable holds the target)","command":"T=gateway-live; gmake $T"}
+{"expect":"ask","command":"T=eval-record; gnumake $T"}
+{"expect":"deny","note":"S071 G5 (review MEDIUM): a double-quoted -c body with escaped inner quotes is unescaped and read, to depth three; depth four is the documented bound","command":"bash -c \"make -m \\\"aws-destroy\\\"\""}
+{"expect":"deny","command":"bash -c \"bash -c 'make -m \\\"aws-destroy\\\"'\""}
+{"expect":"deny","command":"bash -c \"bash -c \\\"make -m \\\\\\\"aws-destroy\\\\\\\"\\\"\""}
+{"expect":"deny","command":"bash -c \"bash -c \\\"bash -c \\\\\\\"make -m \\\\\\\\\\\\\\\"aws-destroy\\\\\\\\\\\\\\\"\\\\\\\"\\\"\""}
+{"expect":"none","note":"S071 G5: the documented bound, nesting of four shells is not read (the first rule of the bound is a few scans of the text)","command":"bash -c \"bash -c \\\"bash -c \\\\\\\"bash -c \\\\\\\\\\\\\\\"make -m \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"aws-destroy\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"\\\\\\\\\\\\\\\"\\\\\\\"\\\"\""}
+{"expect":"deny","note":"S071 G5 (review's row 3, the mutant for the rank order in the scan): destroy outranks apply in either order","command":"make -m \"aws-apply\"; make -m \"aws-destroy\""}
+{"expect":"deny","command":"make -m \"aws-destroy\"; make -m \"aws-apply\""}
+{"expect":"deny","command":"make -m \"aws-plan\" && make -m \"aws-kubeadm-apply\" && make -m \"aws-kubeadm-destroy\""}
+{"expect":"ask","note":"S071 G5 (review's row 2, the mutant for the prose pass of its own): a message whose value holds a command substitution is kept, and a raw request inside it asks","command":"git commit -m \"$(az rest --url x)\""}
+{"expect":"ask","command":"gh pr create --body \"$(az rest --url x)\""}
+{"expect":"ask","note":"S071 G5 (review's row 4, the mutant for the flags rule on cmd_q): a separator inside the value of MAKEFLAGS cuts the plain read, and the copy sees the target","command":"export MAKEFLAGS=\"-- a;b eval-record\""}
+{"expect":"ask","command":"GNUMAKEFLAGS='-- x|y gateway-live'; true"}
+{"expect":"none","note":"S071 G5: the comment of the raw-request rule says what it does: a search with the name quoted asks (quoted text is read as a use) and a search with the module name unquoted stays free","command":"grep -rn DefaultAzureCredential src docs"}
+{"expect":"ask","command":"grep -rn \"az rest\" docs"}
+{"expect":"none","note":"S071 G1: the loop reads sixteen assignments, all of them off: sixteen pass","command":"MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 pytest"}
+{"expect":"ask","note":"S071 G1: a seventeenth assignment is not read and asks, though all are off","command":"MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 MERIDIAN_EVAL_RECORD=0 pytest"}
 {"expect":"ask","command":"gh issue list\nmerge --admin aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
 {"expect":"none","note":"S020 (Z5): the Azure platform module has two doors that check and nothing else","command":"make azure-platform-validate"}
 {"expect":"none","note":"S020 (Z5): as the line above","command":"make azure-platform-scan"}
 {"expect":"none","command":"make -C . azure-platform-validate azure-platform-scan"}
 {"expect":"none","command":"infra/terraform/aws.sh validate azure"}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: the flag classes are case-sensitive and the flags of command, setsid, nohup and builtin are read. main none, G5 none, now deny","command":"sudo -H make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: the flag classes are case-sensitive and the flags of command, setsid, nohup and builtin are read. main none, G5 none, now deny","command":"sudo -P make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: the flag classes are case-sensitive and the flags of command, setsid, nohup and builtin are read. main none, G5 none, now deny","command":"xargs -p make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: the flag classes are case-sensitive and the flags of command, setsid, nohup and builtin are read. main none, G5 none, now deny","command":"xargs -i make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: the flag classes are case-sensitive and the flags of command, setsid, nohup and builtin are read. main none, G5 none, now deny","command":"xargs -l make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: the flag classes are case-sensitive and the flags of command, setsid, nohup and builtin are read. main none, G5 none, now deny","command":"xargs -e make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: the flag classes are case-sensitive and the flags of command, setsid, nohup and builtin are read. main none, G5 none, now deny","command":"command -p make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: the flag classes are case-sensitive and the flags of command, setsid, nohup and builtin are read. main none, G5 none, now deny","command":"setsid -f make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: the flag classes are case-sensitive and the flags of command, setsid, nohup and builtin are read. main none, G5 none, now deny","command":"setsid --fork make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: the flag classes are case-sensitive and the flags of command, setsid, nohup and builtin are read. main none, G5 none, now deny","command":"nohup -- make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: the flag classes are case-sensitive and the flags of command, setsid, nohup and builtin are read. main none, G5 none, now deny","command":"builtin -- make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: env -S is not a prefix option that eats a word (env -S make runs make), and a quoted string after env -S is a body. main none, G5 none, now deny","command":"env -S make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: env -S is not a prefix option that eats a word (env -S make runs make), and a quoted string after env -S is a body. main none, G5 none, now deny","command":"env -S 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: the flag classes are case-sensitive and the flags of command, setsid, nohup and builtin are read. main none, G5 none, now deny","command":"SUDO -H MAKE -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"sudo -h host make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: the flag classes are case-sensitive and the flags of command, setsid, nohup and builtin are read. main none, G5 none, now deny","command":"sudo -H -u root make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: the flag classes are case-sensitive and the flags of command, setsid, nohup and builtin are read. main none, G5 none, now deny","command":"sudo -u root -H make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"sudo -H env -i A=b make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"xargs -P 4 make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"xargs -I X make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"xargs -n1 make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"xargs make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"sudo -E make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"sudo -- make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"sudo -n make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"sudo --user=root make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"sudo -u root make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"env -i make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"env -u X make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"timeout 60 make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"timeout -s KILL 60 make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"nice make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"nice -n 5 make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"time -p make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"time -f %e make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"exec -a x make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: a prefix of the re-check's list that was and stays read. main none, G5 deny, now deny","command":"sudo -E env -i A=b make -m \"aws-destroy\""}
+{"expect":"none","note":"S071 G6, MEDIUM-1: an ordinary command with the same prefixes that must stay none. main none, G5 none, now none","command":"sudo -H git commit -m \"aws-destroy\""}
+{"expect":"none","note":"S071 G6, MEDIUM-1: an ordinary command with the same prefixes that must stay none. main none, G5 none, now none","command":"sudo -u make git commit -m \"aws-destroy\""}
+{"expect":"none","note":"S071 G6, MEDIUM-1: an ordinary command with the same prefixes that must stay none. main none, G5 none, now none","command":"xargs -I make git commit -m \"aws-destroy\""}
+{"expect":"none","note":"S071 G6, MEDIUM-1: command -v only looks a name up and runs nothing, so it is not a prefix. main none, G5 none, now none","command":"command -v make -m \"aws-destroy\""}
+{"expect":"none","note":"S071 G6, MEDIUM-1: an ordinary command with the same prefixes that must stay none. main none, G5 none, now none","command":"env -S git commit -m \"aws-destroy\""}
+{"expect":"none","note":"S071 G6, MEDIUM-1: an ordinary command with the same prefixes that must stay none. main none, G5 none, now none","command":"setsid -f git commit -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a flag that takes an argument between a shell and -c is read. main none, G5 none, now deny","command":"bash -o pipefail -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a flag that takes an argument between a shell and -c is read. main none, G5 none, now deny","command":"bash -O extglob -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a flag that takes an argument between a shell and -c is read. main none, G5 none, now deny","command":"bash +e -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a flag that takes an argument between a shell and -c is read. main none, G5 none, now deny","command":"bash --rcfile x -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a flag that takes an argument between a shell and -c is read. main none, G5 none, now deny","command":"bash --init-file x -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a form the gate read before and still reads. main none, G5 deny, now deny","command":"bash --norc -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a form the gate read before and still reads. main none, G5 deny, now deny","command":"bash --noprofile --norc -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a form the gate read before and still reads. main none, G5 deny, now deny","command":"bash --login -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a form the gate read before and still reads. main none, G5 deny, now deny","command":"bash --posix -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a flag that takes an argument between a shell and -c is read. main none, G5 none, now deny","command":"bash -eo pipefail -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a flag that takes an argument between a shell and -c is read. main none, G5 none, now deny","command":"bash -euo pipefail -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a flag that takes an argument between a shell and -c is read. main none, G5 none, now deny","command":"bash -o pipefail -o errexit -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a flag that takes an argument between a shell and -c is read. main none, G5 none, now deny","command":"bash -O extglob -O nullglob -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a flag that takes an argument between a shell and -c is read. main none, G5 none, now deny","command":"bash +o history -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a flag that takes an argument between a shell and -c is read. main none, G5 none, now deny","command":"bash -o pipefail -x --norc -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a flag that takes an argument between a shell and -c is read. main none, G5 none, now deny","command":"sh -o pipefail -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a flag that takes an argument between a shell and -c is read. main none, G5 none, now deny","command":"/bin/bash -o pipefail -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a flag that takes an argument between a shell and -c is read. main none, G5 none, now deny","command":"sudo bash -o pipefail -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a flag that takes an argument between a shell and -c is read. main none, G5 none, now deny","command":"env bash -o pipefail -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a flag that takes an argument between a shell and -c is read. main none, G5 none, now deny","command":"bash -o pipefail -c \"make -m \\\"aws-destroy\\\"\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a shell named by $SHELL, or su, before -c is read. main none, G5 none, now deny","command":"\"$SHELL\" -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a shell named by $SHELL, or su, before -c is read. main none, G5 none, now deny","command":"$SHELL -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a shell named by $SHELL, or su, before -c is read. main none, G5 none, now deny","command":"\"${SHELL}\" -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a shell named by $SHELL, or su, before -c is read. main none, G5 none, now deny","command":"su -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a shell named by $SHELL, or su, before -c is read. main none, G5 none, now deny","command":"su root -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a shell named by $SHELL, or su, before -c is read. main none, G5 none, now deny","command":"su - deploy -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a shell named by $SHELL, or su, before -c is read. main none, G5 none, now deny","command":"su -s /bin/sh deploy -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a shell named by $SHELL, or su, before -c is read. main none, G5 none, now deny","command":"sudo su -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a form the gate read before and still reads. main none, G5 deny, now deny","command":"bash -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: a form the gate read before and still reads. main none, G5 deny, now deny","command":"eval 'make -m \"aws-destroy\"'"}
+{"expect":"none","note":"S071 G6, MEDIUM-2: a -c that is not a shell's -c (the gate is anchored on a shell word) stays what main gives. main none, G5 none, now none","command":"grep -c \"make -m 'aws-destroy'\" docs/x.md"}
+{"expect":"none","note":"S071 G6, MEDIUM-2: a -c that is not a shell's -c (the gate is anchored on a shell word) stays what main gives. main none, G5 none, now none","command":"wc -c \"aws-destroy.md\" && make docs"}
+{"expect":"none","note":"S071 G6, MEDIUM-2: a -c that is not a shell's -c (the gate is anchored on a shell word) stays what main gives. main none, G5 none, now none","command":"cut -c1-80 \"make aws-destroy.md\""}
+{"expect":"none","note":"S071 G6, MEDIUM-2: a -c that is not a shell's -c (the gate is anchored on a shell word) stays what main gives. main none, G5 none, now none","command":"grep -e x -c \"aws-destroy\" docs/x.md && make docs"}
+{"expect":"none","note":"S071 G6, MEDIUM-2: a -c that is not a shell's -c (the gate is anchored on a shell word) stays what main gives. main none, G5 none, now none","command":"grep -o x -c \"aws-destroy\" docs/x.md && make docs"}
+{"expect":"none","note":"S071 G6, MEDIUM-2: a -c that is not a shell's -c (the gate is anchored on a shell word) stays what main gives. main none, G5 none, now none","command":"sort -o out.txt -c \"aws-destroy\" && make docs"}
+{"expect":"none","note":"S071 G6, MEDIUM-2: a -c that is not a shell's -c (the gate is anchored on a shell word) stays what main gives. main none, G5 none, now none","command":"awk -o x -c \"aws-destroy\" docs/x.md && make docs"}
+{"expect":"none","note":"S071 G6, MEDIUM-2: a -c that is not a shell's -c (the gate is anchored on a shell word) stays what main gives. main none, G5 none, now none","command":"git commit -m \"su -c make aws-destroy\""}
+{"expect":"none","note":"S071 G6, MEDIUM-2: a -c that is not a shell's -c (the gate is anchored on a shell word) stays what main gives. main none, G5 none, now none","command":"echo \"$SHELL\" -c 'make docs'"}
+{"expect":"none","note":"S071 G6, MEDIUM-2: a -c that is not a shell's -c (the gate is anchored on a shell word) stays what main gives. main none, G5 none, now none","command":"rsu -c 'make -m \"aws-destroy\"'"}
+{"expect":"none","note":"S071 G6, MEDIUM-2: a -c that is not a shell's -c (the gate is anchored on a shell word) stays what main gives. main none, G5 none, now none","command":"pip install sudo-su -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, LOW, known, kept: an echo of a shell-wrapped removal is read as the removal; contrived, and telling an echo from a run is what the hook cannot do (S071 G5 review, LOW). main none, G5 deny, now deny","command":"echo bash -c 'make -m \"aws-destroy\"'"}
+{"expect":"none","note":"S071 G6, gap, pinned (G6 does not close it): sudo with a bundled flag that takes an argument (-Eu root) is not read as a prefix. main none, G5 none, now none","command":"sudo -Eu root make -m \"aws-destroy\""}
+{"expect":"none","note":"S071 G6, gap, pinned (G6 does not close it): sudo with a long option and its argument in the next word (--user root) is not read. main none, G5 none, now none","command":"sudo --user root make -m \"aws-destroy\""}
+{"expect":"none","note":"S071 G6, gap, pinned (G6 does not close it): timeout takes whole seconds only (1.5 is not read). main none, G5 none, now none","command":"timeout 1.5 make -m \"aws-destroy\""}
+{"expect":"none","note":"S071 G6, gap, pinned (G6 does not close it): a default-value operator outside - = + ? (here /) is not read as a paid target. main none, G5 none, now none","command":"T=x; make ${T/x/eval-record}"}
+{"expect":"none","note":"S071 G6, gap, pinned (G6 does not close it): the AWS wrapper's own target behind a quoted separator, a copy of the text G5 removed. main none, G5 none, now none","command":"infra/terraform/aws.sh \"a;b\" apply"}
+{"expect":"none","note":"S071 G6, gap, pinned (G6 does not close it): the AWS wrapper's own target behind a quoted separator, a copy of the text G5 removed. main none, G5 none, now none","command":"infra/terraform/aws.sh \"a;b\" plan"}
+{"expect":"none","note":"S071 G6, gap, pinned (G6 does not close it): the AWS wrapper's own target behind a quoted separator, a copy of the text G5 removed. main none, G5 none, now none","command":"infra/terraform/aws.sh \"a;b\" destroy"}
+{"expect":"none","note":"S071 G6, MEDIUM-1, a decision narrower than G5's: env -S takes a string that is the command line, so the word after env -S x is that string's argument and make is not the command word (G5 ate x and denied). main none, G5 deny, now none","command":"env -S x make -m \"aws-destroy\""}
+{"expect":"none","note":"S071 G6, MEDIUM-1, a decision narrower than G5's: xargs -e takes its argument attached or none, so x is the command and make its argument (G5 ate x and denied). main none, G5 deny, now none","command":"xargs -e x make -m \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, MEDIUM-1: xargs -E takes its argument in the next word and is still eaten, so make is the command word. main none, G5 deny, now deny","command":"xargs -E EOF make -m \"aws-destroy\""}
+{"expect":"none","note":"S071 G6, gap, pinned (G6 does not close it): more flags before -c than fit in the gate's window of 80 bytes (24 pairs of -o x here) are not read; G4 read 40 flags. main none, G5 none, now none","command":"bash -o x -o x -o x -o x -o x -o x -o x -o x -o x -o x -o x -o x -o x -o x -o x -o x -o x -o x -o x -o x -o x -o x -o x -o x -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2: ten pairs of -o x are inside the window of 80 bytes and are read. main none, G5 none, now deny","command":"bash -o x -o x -o x -o x -o x -o x -o x -o x -o x -o x -c 'make -m \"aws-destroy\"'"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"bash -o pipefail -c 'make docs'"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"bash -o pipefail -c 'grep -c \"aws-destroy\" docs/x.md'"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"bash -eo pipefail -c 'echo hi' && make lint"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"su -c 'make docs'"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"su root -c 'ls -l'"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"\"$SHELL\" -c 'make docs'"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"env -S 'echo hi'"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"env -S 'make docs'"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"command -p ls"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"sudo -H ls /root"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"find . -name x | xargs -i make docs"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"xargs -p echo \"aws-destroy\""}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"setsid -f sleep 1"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"git log -S\"su -c\" --oneline"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"ssh host su -c 'ls'"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"grep -rc \"aws-plan\" docs/ --include=x.md"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"grep -o pipefail -c \"aws-plan\" docs/x.md"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"rg -o x -c \"aws-plan\" docs"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"git commit -m \"bash -o pipefail -c 'make aws-destroy'\""}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"git commit -F msg.txt && sudo -H make docs"}
+{"expect":"none","note":"S071 G6, an ordinary command with the new flags and gates. main none, G5 none, now none","command":"nohup -- sleep 1 \"aws-apply\""}
+{"expect":"deny","note":"S071 G6, main denies this itself (it reads the quoted target); the exclusion of command -v is shown by the row with -m above. main deny, G5 deny, now deny","command":"command -V make \"aws-destroy\""}
+{"expect":"deny","note":"S071 G6, main denies this itself (it reads the quoted target); the exclusion of command -v is shown by the row with -m above. main deny, G5 deny, now deny","command":"command -pv make \"aws-destroy\""}
+{"expect":"ask","note":"S071 G6, the apply and plan targets behind the same prefixes and gates ask. main none, G5 none, now ask","command":"bash -o pipefail -c 'make -m \"aws-apply\"'"}
+{"expect":"ask","note":"S071 G6, the apply and plan targets behind the same prefixes and gates ask. main none, G5 none, now ask","command":"sudo -H make -m \"aws-apply\""}
+{"expect":"ask","note":"S071 G6, the apply and plan targets behind the same prefixes and gates ask. main none, G5 none, now ask","command":"xargs -i make -m \"aws-plan\""}
+{"expect":"ask","note":"S071 G6, the apply and plan targets behind the same prefixes and gates ask. main none, G5 none, now ask","command":"\"$SHELL\" -c 'make -m \"aws-plan\"'"}
+{"expect":"ask","note":"S071 G6, the apply and plan targets behind the same prefixes and gates ask. main none, G5 none, now ask","command":"su -c 'make -m \"aws-apply\"'"}
+{"expect":"ask","note":"S071 G6, the apply and plan targets behind the same prefixes and gates ask. main none, G5 none, now ask","command":"command -p make -m \"aws-apply\""}
+{"expect":"deny","note":"S071 G6, the shell gate nests (depth two). main none, G5 none, now deny","command":"bash -o pipefail -c \"bash -o pipefail -c 'make -m \\\"aws-destroy\\\"'\""}
+{"expect":"deny","note":"S071 G6, the shell gate nests (depth two). main none, G5 none, now deny","command":"bash -o pipefail -c 'su -c \"make -m \\\"aws-destroy\\\"\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2 table of the G5 re-check: a shell behind busybox is read. main none, G5 deny, now deny","command":"busybox sh -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2 table of the G5 re-check: a shell behind env is read. main none, G5 deny, now deny","command":"env bash -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2 table of the G5 re-check: a shell behind command is read. main none, G5 deny, now deny","command":"command sh -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2 table of the G5 re-check: a shell behind sudo is read. main none, G5 deny, now deny","command":"sudo bash -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2 table of the G5 re-check: a bundled -lc is read. main none, G5 deny, now deny","command":"bash -lc 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2 table of the G5 re-check: a shell behind xargs is read. main none, G5 deny, now deny","command":"xargs sh -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2 table of the G5 re-check: a shell behind docker exec is read. main none, G5 deny, now deny","command":"docker exec c sh -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2 table of the G5 re-check: a double-quoted body with escaped quotes is read. main none, G5 deny, now deny","command":"bash -c \"make -m \\\"aws-destroy\\\"\""}
+{"expect":"none","note":"S071 G6, gap, pinned (G6 does not close it): fish is not in the list of shell words (G4 read it). main none, G5 none, now none","command":"fish -c 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S071 G6, MEDIUM-2 table of the G5 re-check: ten single flags are inside the window of 80 bytes and are read. main none, G5 deny, now deny","command":"bash -x -x -x -x -x -x -x -x -x -x -c 'make -m \"aws-destroy\"'"}
+{"expect":"none","note":"S071 G6, gap, pinned (G6 keeps the window of 80 bytes): 25 flags do not fit in it (G4 read them). main none, G5 none, now none","command":"bash -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -c 'make -m \"aws-destroy\"'"}
+{"expect":"none","note":"S071 G6, gap, pinned (G6 keeps the window of 80 bytes): 40 flags do not fit in it (G4 read them). main none, G5 none, now none","command":"bash -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -c 'make -m \"aws-destroy\"'"}
+{"expect":"none","note":"S071 G6, gap, pinned (G6 keeps the window of 80 bytes): a flag of 90 bytes does not fit in it (G4 read it). main none, G5 none, now none","command":"bash -aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -c 'make -m \"aws-destroy\"'"}
