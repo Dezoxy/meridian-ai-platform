@@ -1142,6 +1142,216 @@ if [[ "$hook_cmd" == *local.env* || "$hook_cmd" == *tfstate* || "$hook_cmd" == *
   done < <(printf '%s\n' "$hook_cmd" | sed -E 's/(&&|\|\||;|\|)/\n/g')
 fi
 
+# ---- S020 (GA1): ADDED denies for the Azure platform wrapper's names ----
+# The names are make azure-platform-plan, azure-platform-apply and
+# azure-platform-destroy, and infra/terraform/azure.sh with the sub-commands
+# plan, apply and destroy; neither exists yet (the rules come first, on purpose).
+# Everything from here to "confirmations" is ADDED, after the last deny of the
+# file above, so it can turn an ask or a none into a deny and cannot weaken a
+# decision of the rules above; no line above is edited and no variable above is
+# assigned again. The foundation's own targets (make azure-plan, azure-apply,
+# azure-smoke, foundation.sh) are not names of this block and do not move.
+#   - s020_azure_py is a COPY of s071_awsmake_py (not an edit of it), with the
+#     Azure names, the script azure.sh as a second command word, eval as a
+#     keyword, a quoted word after env -S as a part of env, and the assignments
+#     found in the same scan. It reads the RAW cmd, with the command-word gate of
+#     the AWS scanner: the name counts only as a word after make (or azure.sh) as
+#     a segment's command word, behind assignments and the prefixes (an option's
+#     argument is not the command word), or as a quoted word that is exactly the
+#     name after a make option, or in the body of bash -c, sh -c, eval, su -c and
+#     env -S. So a commit message, a pull request body, a search, an echo and a
+#     printf that name a target stay what main gives (the quoted pieces are masked
+#     before the segments are cut, so a separator inside a message cuts nothing),
+#     and no copy of the command with its quoted separators blanked is read
+#     (cmd_q, whose use without this gate asked on a search pattern). Two
+#     differences from the copy, both only in the direction of fewer false
+#     alarms: a quoted word counts as a target only when a blank stands before it
+#     (a VAR= value and an option glued to its value do not), and a shell word is
+#     read as a body only when the segment does not start with a printing command
+#     (echo bash -c '...' is an echo). The shell word is otherwise the copy's
+#     (anywhere before the quote, window of 80 bytes), so grep -c and wc -c are
+#     not a shell.
+#   - The open medium of the S071 G6 review: env -S followed by a QUOTED word,
+#     then the build tool (env -S '' make -m "aws-destroy"), hid make from the
+#     scanner of S071. The scanner here reads that shape for BOTH families, the
+#     Azure names and the AWS targets of the old scanner (aws-destroy, aws-apply,
+#     aws-plan and the aws-kubeadm ones), and only in that shape; the AWS plain
+#     forms stay with main's rules. The old scanner is not edited.
+#   - The assignments: a TF_ or ARM_ name (any) in front of the names is a deny, an
+#     AZURE_CONFIG_DIR a question (asked below). "In front of" is read in the same
+#     scan: an assignment that stands unquoted in the text of the scan (or in the
+#     text around the body that holds the names) when the names stand unquoted in
+#     it as well. An echo of both, or a message, is quoted and is not read.
+#   - Pseudo-terminal and trace: aws_pty_re and aws_trace_re are used BY REFERENCE
+#     (not edited, not copied) on the prose-blanked copy (s071_prose_blank, a
+#     message option's value emptied), in a command that holds a name. As the AWS
+#     twins, the word script (or a trace form) anywhere in such a command is
+#     enough, a false alarm by design (grep -n script infra/terraform/azure.sh).
+# A python3 that is missing or fails leaves nothing for the scanner to say, which
+# is what main says: these rules do not weaken anything and do not run without it.
+# shellcheck disable=SC2016  # the Python source below is meant to stay literal
+s020_azure_py='
+import bisect, re, sys
+PIECE = re.compile(r"\x27[^\x27]*\x27|\"(?:[^\"\\]|\\.)*\"")
+ASSIGN = r"[A-Za-z_]\w*=\S*"
+def flag(args):
+    return r"(?-i:-[" + args + r"]\s+\S+|-(?![" + args + r"]\s)\S+)"
+OWN_FLAGS = r"(?:\s+-(?![A-Za-z]*[vV])\S+)*"
+# env -S (or --split-string) followed by a quoted word: the masked word is a quote,
+# x characters and a quote. The word is a command line of its own and make after it
+# is still the command word.
+SPLIT = r"(?:(?-i:-[A-Za-z]*S)|--split-string)\s+[\x27\"]x*[\x27\"]"
+PREFIX = (
+    r"(?:(?:"
+    r"sudo(?:\s+" + flag("ugphCDRTUrt") + r")*"
+    r"|env(?:\s+(?:" + SPLIT + r"|" + flag("uCP") + r"))*"
+    r"|timeout(?:\s+" + flag("sk") + r")*(?:\s+\d+[smhd]?)?"
+    r"|xargs(?:\s+" + flag("InLPsEda") + r")*"
+    r"|nice(?:\s+" + flag("n") + r")*"
+    r"|time(?:\s+" + flag("fo") + r")*"
+    r"|exec(?:\s+" + flag("a") + r")*"
+    r"|(?:nohup|command|builtin|setsid)" + OWN_FLAGS +
+    r")\s+(?:" + ASSIGN + r"\s+)*)*"
+)
+LEAD = r"\s*(?:(?:if|then|do|else|elif|while|until|eval|!)\s+)*(?:" + ASSIGN + r"\s+)*" + PREFIX
+MAKE_WORD = re.compile(LEAD + r"(?:\S*/|\$\{?)?(?:g|gnu)?make(?![\w-])", re.I)
+SHOPTS = r"(?:\s+(?:[-+][A-Za-z]*[oO]\s+[^\s+-]\S*|[-+]\S+))*"
+SCRIPT_WORD = re.compile(
+    LEAD + r"(?:(?:ba|z|da|k|a)?sh" + SHOPTS + r"\s+)?(?:\S*/)?azure\.sh(?![\w.-])", re.I
+)
+VERBS = r"(destroy|apply|plan)"
+AZ_WORD = re.compile(r"(?<!\S)azure-platform-" + VERBS + r"(?![\w.-])", re.I)
+AZ_QUOTED = re.compile(r"\s*azure-platform-" + VERBS + r"\s*$", re.I)
+AWS_WORD = re.compile(r"(?<!\S)aws-(?:kubeadm-)?" + VERBS + r"(?![\w.-])", re.I)
+AWS_QUOTED = re.compile(r"\s*aws-(?:kubeadm-)?" + VERBS + r"\s*$", re.I)
+SUB_WORD = re.compile(r"(?<!\S)" + VERBS + r"(?![\w.-])", re.I)
+SUB_QUOTED = re.compile(r"\s*" + VERBS + r"\s*$", re.I)
+# Searched in the text of the prefixes before make: a -S and a quoted word can stand
+# there only as the split string of env (no other prefix takes them), so a single
+# linear search says whether the AWS targets are to be read.
+SPLITSEEN = re.compile(r"(?:(?-i:-[A-Za-z]*S)\s+[\x27\"]|--split-string(?:\s+[\x27\"]|=))", re.I)
+NAMES = re.compile(r"(?<![\w.-])(?:azure\.sh|azure-platform-(?:destroy|apply|plan))(?![\w.-])", re.I)
+BADASSIGN = re.compile(r"(?<!\w)(?:TF|ARM)_\w+=", re.I)
+CFGASSIGN = re.compile(r"(?<!\w)AZURE_CONFIG_DIR=", re.I)
+NOEXEC = re.compile(
+    r"\s*(?:" + ASSIGN + r"\s+)*(?:echo|printf|rg|grep|egrep|fgrep|ag|ack|cat|head|tail|sed|awk|wc|less|more|tee|diff|ls|stat)(?![\w-])",
+    re.I,
+)
+# The body gate of the copy: a quoted word after the -c of a shell (not grep -c, wc -c
+# or cut -c), after eval, after su [user] -c, or after env -S.
+SHELL_OPTS = (
+    r"(?:\s+(?:--(?:rcfile|init-file)\s+[^\s+-]\S*"
+    r"|[-+][A-Za-z]*[oO]\s+[^\s+-]\S*"
+    r"|[-+]\S+))*"
+)
+BODY = re.compile(
+    r"(?:^|[\s;&|(/])(?:(?:ba|z|da|k|a)?sh|\"?\$\{?SHELL\}?\"?)"
+    + SHELL_OPTS + r"\s+-[A-Za-z]*c\s+$"
+    r"|(?:^|[\s;&|(])eval\s+$"
+    r"|(?:^|[\s;&|(/])su(?:\s+[^\s;&|\"\x27]+){0,4}?\s+-[A-Za-z]*c\s+$"
+    r"|(?:^|[\s;&|(/])env(?:\s+-\S+)*\s+-[A-Za-z]*S\s+$",
+    re.I,
+)
+RANK = {"plan": 1, "apply": 2, "destroy": 3}
+def scan(text, depth, bad, cfg):
+    masked = PIECE.sub(lambda m: m.group(0)[0] + "x" * (len(m.group(0)) - 2) + m.group(0)[-1], text)
+    # A segment is cut at ; & | a newline ( a backtick and at a brace that opens a
+    # group ({ followed by a blank). A brace glued to a word (xargs -I{} make, ${MAKE})
+    # cuts nothing: the copy cut there and lost the command word of xargs -I{} make.
+    cuts = [-1] + [m.start() for m in re.finditer(r"[;&|\n(`]|\{(?=\s)", masked)] + [len(masked)]
+    bad = bad or BADASSIGN.search(masked) is not None
+    cfg = cfg or CFGASSIGN.search(masked) is not None
+    names = NAMES.search(masked) is not None
+    best = (0, "")
+    azure_hit = False
+    for i in range(len(cuts) - 1):
+        start, end = cuts[i] + 1, cuts[i + 1]
+        found = []
+        word = MAKE_WORD.match(masked, start, end)
+        if word is not None:
+            families = [("azure", AZ_WORD, AZ_QUOTED)]
+            if SPLITSEEN.search(word.group(0)):
+                families.append(("aws", AWS_WORD, AWS_QUOTED))
+            for family, wre, qre in families:
+                for piece in PIECE.finditer(text, word.end(), end):
+                    if not text[piece.start() - 1].isspace():
+                        continue
+                    hit = qre.match(piece.group(0)[1:-1])
+                    if hit:
+                        found.append((RANK[hit.group(1).lower()], family))
+                for hit in wre.finditer(masked, word.end(), end):
+                    found.append((RANK[hit.group(1).lower()], family))
+        word = SCRIPT_WORD.match(masked, start, end)
+        if word is not None:
+            for piece in PIECE.finditer(text, word.end(), end):
+                if not text[piece.start() - 1].isspace():
+                    continue
+                hit = SUB_QUOTED.match(piece.group(0)[1:-1])
+                if hit:
+                    found.append((RANK[hit.group(1).lower()], "azure"))
+            for hit in SUB_WORD.finditer(masked, word.end(), end):
+                found.append((RANK[hit.group(1).lower()], "azure"))
+        for rank, family in found:
+            if family == "azure":
+                azure_hit = True
+            if rank > best[0]:
+                best = (rank, family)
+    # An assignment counts when an Azure name stands in the same text: unquoted
+    # anywhere, or found above as a target (a quoted one after a make option is a
+    # name too). The AWS targets read behind env -S do not make it count.
+    flag_bad = bad and (names or azure_hit)
+    flag_cfg = cfg and (names or azure_hit)
+    if depth < 3:
+        for piece in PIECE.finditer(text):
+            if BODY.search(text, max(0, piece.start() - 80), piece.start()):
+                seg = cuts[bisect.bisect_right(cuts, piece.start()) - 1] + 1
+                if NOEXEC.match(masked, seg):
+                    continue
+                body = piece.group(0)[1:-1]
+                if piece.group(0)[0] == "\"":
+                    body = re.sub(r"\\(.)", r"\1", body, flags=re.S)
+                inner = scan(body, depth + 1, bad, cfg)
+                if inner[0][0] > best[0]:
+                    best = inner[0]
+                flag_bad = flag_bad or inner[1]
+                flag_cfg = flag_cfg or inner[2]
+    return best, flag_bad, flag_cfg
+best, flag_bad, flag_cfg = scan(sys.stdin.read(), 0, False, False)
+verb = {1: "plan", 2: "apply", 3: "destroy"}.get(best[0], "-")
+sys.stdout.write("%s %s %d %d" % (best[1] or "-", verb, flag_bad, flag_cfg))
+'
+s020_scan() { # $1=the raw text: "family verb bad cfg" (a "-" where there is none)
+  printf '%s' "$1" | python3 -I -c "$s020_azure_py" 2>/dev/null || true
+}
+s020_removal_deny="make azure-platform-destroy and infra/terraform/azure.sh destroy remove the Azure platform environment (the cluster, the database, the registry and the log workspace, which is purged for good, the audit log with it, with no export) and are the owner's to run (hard rule 8): in a terminal of your own, signed in by the owner, after looking at the log if there was an incident (infra/terraform/azure/README.md, \"Removal\")."
+s020_pty_deny="azure.sh and make azure-platform-plan, azure-platform-apply and azure-platform-destroy are not run under a pseudo-terminal tool (script, unbuffer, expect, socat, setsid, pty): a pseudo-terminal passes any check that reads a terminal, and the owner's confirmation is theirs to give in a terminal of their own."
+s020_trace_deny="azure.sh and make azure-platform-* are not run traced (bash -x, set -x, SHELLOPTS, BASH_XTRACEFD, PS4) or with a start-up file (BASH_ENV, ENV): a trace prints the subscription, the tenant and the operator's address that the script keeps out of its output, and a start-up file runs code before its first line."
+s020_assign_deny="A TF_* or ARM_* assignment in front of make azure-platform-plan, azure-platform-apply, azure-platform-destroy or azure.sh changes what Terraform and the Azure provider run with (a log level, extra arguments, a variable, a workspace, a subscription, a tenant, a client, a token, an endpoint). Set the value in the module or in the local file instead."
+s020_apply_ask="make azure-platform-apply and azure.sh apply create or change the Azure platform environment (the cluster, the database, the registry, the log workspace, the network) and COST MONEY: it bills until make azure-platform-destroy. The owner runs it, after reading the plan, in a terminal of their own and signed in by themselves (infra/terraform/azure/README.md); confirm only if that is where this runs."
+s020_plan_ask="make azure-platform-plan and azure.sh plan sign in to Azure with the owner's account and read the remote state, which holds the operator's address since the foundation's firewall: they create nothing, but they use the sign-in, and the transcript would hold what the plan prints (infra/terraform/azure/README.md). Confirm that this is the owner's own session."
+s020_config_ask="AZURE_CONFIG_DIR= in front of make azure-platform-plan, azure-platform-apply, azure-platform-destroy or azure.sh moves the Azure CLI's sign-in that the wrapper uses to another directory: confirm whose sign-in that is and why it is not the owner's own."
+s020_names_re="(^|[^[:alnum:]_.-])(azure\.sh|azure-platform-(plan|apply|destroy))([^[:alnum:]_.-]|\$)"
+s020_family=""
+s020_verb=""
+s020_bad=""
+s020_cfg=""
+if [[ "$cmd" == *azure-platform* || "$cmd" == *azure.sh* || ( "$cmd" == *aws-* && "$cmd" == *make* && "$cmd" == *-S* ) ]]; then
+  s020_found="$(s020_scan "$cmd")"
+  read -r s020_family s020_verb s020_bad s020_cfg <<<"$s020_found" || true
+  if [[ "$s020_verb" == destroy ]]; then
+    [[ "$s020_family" == aws ]] && decide deny "$s071_aws_removal_deny"
+    decide deny "$s020_removal_deny"
+  fi
+  [[ "$s020_bad" == 1 ]] && decide deny "$s020_assign_deny"
+  if [[ "$cmd" == *azure-platform* || "$cmd" == *azure.sh* ]]; then
+    s020_text="$(s071_prose_blank "$cmd")"
+    if [[ "$s020_text" =~ $s020_names_re ]]; then
+      [[ "$s020_text" =~ $aws_pty_re ]] && decide deny "$s020_pty_deny"
+      [[ "$s020_text" =~ $aws_trace_re ]] && decide deny "$s020_trace_deny"
+    fi
+  fi
+fi
+
 # ---- confirmations ----
 [[ "$cmd" =~ (terraform|tofu)[[:space:]].*apply ]] && \
   decide ask "terraform apply mutates cloud infrastructure; confirm the plan and workspace first."
@@ -1371,6 +1581,25 @@ if [[ "$cmd" == *rest* || "$cmd" == *credential* || "$cmd" == *azure?identity* |
     done < <(printf '%s\n' "$s071_text" | sed -E 's/(&&|\|\||;|\||&)/\n/g')
   fi
 fi
+# ---- S020 (GA1): ADDED asks for the Azure platform wrapper's names ----
+# The scan made in the deny block above (s020_family, s020_verb, s020_cfg) is read
+# here, after every deny of the file, so these can turn a none into an ask and
+# cannot turn a decision of the rules above into a weaker one. make
+# azure-platform-apply and azure.sh apply ask (they cost money), make
+# azure-platform-plan and azure.sh plan ask (they use the sign-in and read the
+# remote state, which holds the operator's address since the foundation's
+# firewall), and the AWS targets found behind env -S and a quoted word ask with
+# the wording of the AWS asks above. An AZURE_CONFIG_DIR assignment in front of
+# the names asks: it moves the sign-in the wrapper uses (asked first, so that this
+# question is the one shown when the verb asks as well). The removal and the TF_
+# and ARM_ assignments were denied above, before this point.
+[[ "$s020_cfg" == 1 ]] && decide ask "$s020_config_ask"
+case "${s020_family}:${s020_verb}" in
+  azure:apply) decide ask "$s020_apply_ask" ;;
+  azure:plan) decide ask "$s020_plan_ask" ;;
+  aws:apply) decide ask "$s071_aws_apply_ask" ;;
+  aws:plan) decide ask "$s071_aws_plan_ask" ;;
+esac
 # The asks for the AWS environment (S036); the denies are above, with the
 # reasoning. `make aws-validate` and `make aws-scan` change nothing in AWS and
 # pass, as `make azure-plan` does. They read hook_cmd (a commit message that

@@ -2886,4 +2886,449 @@
 {"expect":"deny","note":"S071 G6, MEDIUM-2 table of the G5 re-check: ten single flags are inside the window of 80 bytes and are read. main none, G5 deny, now deny","command":"bash -x -x -x -x -x -x -x -x -x -x -c 'make -m \"aws-destroy\"'"}
 {"expect":"none","note":"S071 G6, gap, pinned (G6 keeps the window of 80 bytes): 25 flags do not fit in it (G4 read them). main none, G5 none, now none","command":"bash -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -c 'make -m \"aws-destroy\"'"}
 {"expect":"none","note":"S071 G6, gap, pinned (G6 keeps the window of 80 bytes): 40 flags do not fit in it (G4 read them). main none, G5 none, now none","command":"bash -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -x -c 'make -m \"aws-destroy\"'"}
+{"expect":"ask","note":"S020 GA1 mkb-01-plan: main none","command":"make azure-platform-plan"}
+{"expect":"ask","note":"S020 GA1 mkb-01-apply: main none","command":"make azure-platform-apply"}
+{"expect":"deny","note":"S020 GA1 mkb-01-destroy: main none","command":"make azure-platform-destroy"}
+{"expect":"ask","note":"S020 GA1 mkb-02-plan: main none","command":"cd /srv/projects/meridian-ai-platform && make azure-platform-plan"}
+{"expect":"ask","note":"S020 GA1 mkb-02-apply: main none","command":"cd /srv/projects/meridian-ai-platform && make azure-platform-apply"}
+{"expect":"deny","note":"S020 GA1 mkb-02-destroy: main none","command":"cd /srv/projects/meridian-ai-platform && make azure-platform-destroy"}
+{"expect":"ask","note":"S020 GA1 mkb-03-plan: main none","command":"gmake azure-platform-plan"}
+{"expect":"ask","note":"S020 GA1 mkb-03-apply: main none","command":"gmake azure-platform-apply"}
+{"expect":"deny","note":"S020 GA1 mkb-03-destroy: main none","command":"gmake azure-platform-destroy"}
+{"expect":"ask","note":"S020 GA1 mkb-04-plan: main none","command":"make -C /srv/projects/meridian-ai-platform azure-platform-plan"}
+{"expect":"ask","note":"S020 GA1 mkb-04-apply: main none","command":"make -C /srv/projects/meridian-ai-platform azure-platform-apply"}
+{"expect":"deny","note":"S020 GA1 mkb-04-destroy: main none","command":"make -C /srv/projects/meridian-ai-platform azure-platform-destroy"}
+{"expect":"ask","note":"S020 GA1 mkb-05-plan: main none","command":"make -f Makefile azure-platform-plan"}
+{"expect":"ask","note":"S020 GA1 mkb-05-apply: main none","command":"make -f Makefile azure-platform-apply"}
+{"expect":"deny","note":"S020 GA1 mkb-05-destroy: main none","command":"make -f Makefile azure-platform-destroy"}
+{"expect":"ask","note":"S020 GA1 mkb-06-plan: main none","command":"make --no-print-directory azure-platform-plan"}
+{"expect":"ask","note":"S020 GA1 mkb-06-apply: main none","command":"make --no-print-directory azure-platform-apply"}
+{"expect":"deny","note":"S020 GA1 mkb-06-destroy: main none","command":"make --no-print-directory azure-platform-destroy"}
+{"expect":"ask","note":"S020 GA1 mkb-07-plan: main none","command":"make \"azure-platform-plan\""}
+{"expect":"ask","note":"S020 GA1 mkb-07-apply: main none","command":"make \"azure-platform-apply\""}
+{"expect":"deny","note":"S020 GA1 mkb-07-destroy: main none","command":"make \"azure-platform-destroy\""}
+{"expect":"ask","note":"S020 GA1 mkb-08-plan: main none","command":"make -s azure-platform-plan 2>&1 | tail -20"}
+{"expect":"ask","note":"S020 GA1 mkb-08-apply: main none","command":"make -s azure-platform-apply 2>&1 | tail -20"}
+{"expect":"deny","note":"S020 GA1 mkb-08-destroy: main none","command":"make -s azure-platform-destroy 2>&1 | tail -20"}
+{"expect":"ask","note":"S020 GA1 mkb-09-apply: main none","command":"time make azure-platform-apply"}
+{"expect":"deny","note":"S020 GA1 mkb-09-destroy: main none","command":"time make azure-platform-destroy"}
+{"expect":"ask","note":"S020 GA1 mkb-10-apply: main none","command":"make azure-platform-apply && echo done"}
+{"expect":"deny","note":"S020 GA1 mkb-10-destroy: main none","command":"make azure-platform-destroy && echo done"}
+{"expect":"ask","note":"S020 GA1 mkb-11-apply: main none","command":"make -n azure-platform-apply"}
+{"expect":"deny","note":"S020 GA1 mkb-12-destroy: main none","command":"make -k azure-platform-destroy"}
+{"expect":"ask","note":"S020 GA1 mkw-01-plan: main none","command":"bash -c 'make azure-platform-plan'"}
+{"expect":"ask","note":"S020 GA1 mkw-01-apply: main none","command":"bash -c 'make azure-platform-apply'"}
+{"expect":"deny","note":"S020 GA1 mkw-01-destroy: main none","command":"bash -c 'make azure-platform-destroy'"}
+{"expect":"ask","note":"S020 GA1 mkw-02-plan: main none","command":"sh -c \"make azure-platform-plan\""}
+{"expect":"ask","note":"S020 GA1 mkw-02-apply: main none","command":"sh -c \"make azure-platform-apply\""}
+{"expect":"deny","note":"S020 GA1 mkw-02-destroy: main none","command":"sh -c \"make azure-platform-destroy\""}
+{"expect":"ask","note":"S020 GA1 mkw-03-plan: main none","command":"env make azure-platform-plan"}
+{"expect":"ask","note":"S020 GA1 mkw-03-apply: main none","command":"env make azure-platform-apply"}
+{"expect":"deny","note":"S020 GA1 mkw-03-destroy: main none","command":"env make azure-platform-destroy"}
+{"expect":"ask","note":"S020 GA1 mkw-04-apply: main none","command":"env -i HOME=$HOME PATH=$PATH make azure-platform-apply"}
+{"expect":"deny","note":"S020 GA1 mkw-04-destroy: main none","command":"env -i HOME=$HOME PATH=$PATH make azure-platform-destroy"}
+{"expect":"ask","note":"S020 GA1 mkw-05-apply: main none","command":"sudo make azure-platform-apply"}
+{"expect":"deny","note":"S020 GA1 mkw-05-destroy: main none","command":"sudo make azure-platform-destroy"}
+{"expect":"ask","note":"S020 GA1 mkw-06-apply: main none","command":"nohup make azure-platform-apply &"}
+{"expect":"deny","note":"S020 GA1 mkw-06-destroy: main none","command":"nohup make azure-platform-destroy &"}
+{"expect":"ask","note":"S020 GA1 mkw-07-apply: main none","command":"(cd /srv/projects/meridian-ai-platform; make azure-platform-apply)"}
+{"expect":"deny","note":"S020 GA1 mkw-07-destroy: main none","command":"(cd /srv/projects/meridian-ai-platform; make azure-platform-destroy)"}
+{"expect":"ask","note":"S020 GA1 mkw-08-apply: main none","command":"bash -lc 'cd /srv/projects/meridian-ai-platform && make azure-platform-apply'"}
+{"expect":"deny","note":"S020 GA1 mkw-08-destroy: main none","command":"bash -lc 'cd /srv/projects/meridian-ai-platform && make azure-platform-destroy'"}
+{"expect":"none","note":"S020 GA1 ind-01-destroy, gap, pinned: a variable builds the target; not read (the header's list). main none, now none","command":"T=azure-platform-destroy; make $T"}
+{"expect":"none","note":"S020 GA1 ind-02-destroy, gap, pinned: a substitution builds the target; not read. main none, now none","command":"make $(echo azure-platform-destroy)"}
+{"expect":"none","note":"S020 GA1 ind-03-destroy, gap, pinned: the target is in another segment than make (xargs); not read. main none, now none","command":"echo azure-platform-destroy | xargs make"}
+{"expect":"none","note":"S020 GA1 ind-04-destroy, gap, pinned: a loop variable builds the target; not read. main none, now none","command":"for t in azure-platform-destroy; do make $t; done"}
+{"expect":"none","note":"S020 GA1 ind-05-destroy, gap, pinned: printf builds the target; not read. main none, now none","command":"make $(printf 'azure-platform-%s' destroy)"}
+{"expect":"ask","note":"S020 GA1 ind-06-apply: main none","command":"${MAKE} azure-platform-apply"}
+{"expect":"deny","note":"S020 GA1 ind-06-destroy: main none","command":"${MAKE} azure-platform-destroy"}
+{"expect":"ask","note":"S020 GA1 ind-07-apply: main none","command":"$(MAKE) azure-platform-apply"}
+{"expect":"none","note":"S020 GA1 ind-08-destroy, gap, pinned: a variable ends the target word; not read. main none, now none","command":"X=destroy; make azure-platform-$X"}
+{"expect":"none","note":"S020 GA1 ind-09, gap, pinned: brace expansion builds the target; not read (the header's list). main none, now none","command":"make azure-platform-{plan,apply,destroy}"}
+{"expect":"none","note":"S020 GA1 ind-10, gap, pinned: a quote in the middle of the target word; not read (the header's list). main none, now none","command":"make \"azure-platform-\"apply"}
+{"expect":"none","note":"S020 GA1 ind-11, gap, pinned: the target sits in MAKEFLAGS; the paid targets' co-occurrence rule has no Azure twin. main none, now none","command":"export MAKEFLAGS='-- azure-platform-apply'; make"}
+{"expect":"none","note":"S020 GA1 ind-12, gap, pinned: the target is in another segment than make (printf | xargs); not read. main none, now none","command":"printf 'azure-platform-apply\\n' | xargs -n1 make"}
+{"expect":"none","note":"S020 GA1 ind-13, gap, pinned: the target sits in MAKEFLAGS; no Azure twin of the co-occurrence rule. main none, now none","command":"MAKEFLAGS=\"-- azure-platform-destroy\" make"}
+{"expect":"ask","note":"S020 GA1 sd-01-plan: main none","command":"infra/terraform/azure.sh plan"}
+{"expect":"ask","note":"S020 GA1 sd-01-apply: main none","command":"infra/terraform/azure.sh apply"}
+{"expect":"deny","note":"S020 GA1 sd-01-destroy: main none","command":"infra/terraform/azure.sh destroy"}
+{"expect":"ask","note":"S020 GA1 sd-02-plan: main none","command":"./infra/terraform/azure.sh plan"}
+{"expect":"ask","note":"S020 GA1 sd-02-apply: main none","command":"./infra/terraform/azure.sh apply"}
+{"expect":"deny","note":"S020 GA1 sd-02-destroy: main none","command":"./infra/terraform/azure.sh destroy"}
+{"expect":"ask","note":"S020 GA1 sd-03-plan: main none","command":"bash infra/terraform/azure.sh plan"}
+{"expect":"ask","note":"S020 GA1 sd-03-apply: main none","command":"bash infra/terraform/azure.sh apply"}
+{"expect":"deny","note":"S020 GA1 sd-03-destroy: main none","command":"bash infra/terraform/azure.sh destroy"}
+{"expect":"ask","note":"S020 GA1 sd-04-apply: main none","command":"sh infra/terraform/azure.sh apply"}
+{"expect":"deny","note":"S020 GA1 sd-04-destroy: main none","command":"sh infra/terraform/azure.sh destroy"}
+{"expect":"ask","note":"S020 GA1 sd-05-plan: main none","command":"cd infra/terraform && ./azure.sh plan"}
+{"expect":"ask","note":"S020 GA1 sd-05-apply: main ask","command":"cd infra/terraform && ./azure.sh apply"}
+{"expect":"deny","note":"S020 GA1 sd-05-destroy: main deny","command":"cd infra/terraform && ./azure.sh destroy"}
+{"expect":"ask","note":"S020 GA1 sd-06-plan: main none","command":"cd infra/terraform && bash azure.sh plan"}
+{"expect":"ask","note":"S020 GA1 sd-06-apply: main ask","command":"cd infra/terraform && bash azure.sh apply"}
+{"expect":"deny","note":"S020 GA1 sd-06-destroy: main deny","command":"cd infra/terraform && bash azure.sh destroy"}
+{"expect":"ask","note":"S020 GA1 sd-07-apply: main none","command":"/srv/projects/meridian-ai-platform/infra/terraform/azure.sh apply"}
+{"expect":"deny","note":"S020 GA1 sd-07-destroy: main none","command":"/srv/projects/meridian-ai-platform/infra/terraform/azure.sh destroy"}
+{"expect":"ask","note":"S020 GA1 sd-08-apply: main none","command":"bash -c 'infra/terraform/azure.sh apply'"}
+{"expect":"deny","note":"S020 GA1 sd-08-destroy: main none","command":"bash -c 'infra/terraform/azure.sh destroy'"}
+{"expect":"ask","note":"S020 GA1 sd-09-apply: main none","command":"env infra/terraform/azure.sh apply"}
+{"expect":"deny","note":"S020 GA1 sd-09-destroy: main none","command":"env infra/terraform/azure.sh destroy"}
+{"expect":"ask","note":"S020 GA1 sd-10-apply: main none","command":"cd infra/terraform/azure && ../azure.sh apply"}
+{"expect":"deny","note":"S020 GA1 sd-10-destroy: main none","command":"cd infra/terraform/azure && ../azure.sh destroy"}
+{"expect":"ask","note":"S020 GA1 sd-11-apply: main none","command":"cd infra/terraform; ./azure.sh apply"}
+{"expect":"deny","note":"S020 GA1 sd-11-destroy: main none","command":"cd infra/terraform; ./azure.sh destroy"}
+{"expect":"none","note":"S020 GA1 sd-12: main none","command":"infra/terraform/azure.sh"}
+{"expect":"none","note":"S020 GA1 sd-13: main none","command":"infra/terraform/azure.sh validate"}
+{"expect":"none","note":"S020 GA1 sd-14: main none","command":"infra/terraform/azure.sh --help"}
+{"expect":"ask","note":"S020 GA1 sd-15: main none","command":"infra/terraform/azure.sh plan 2>&1 | tee /tmp/plan.log"}
+{"expect":"deny","note":"S020 GA1 sd-16: main none","command":"nohup infra/terraform/azure.sh destroy > /tmp/d.log 2>&1 &"}
+{"expect":"deny","note":"S020 GA1 as-tf-m-apply: main none","command":"TF_VAR_x=1 make azure-platform-apply"}
+{"expect":"deny","note":"S020 GA1 as-tf-s-apply: main none","command":"TF_VAR_x=1 infra/terraform/azure.sh apply"}
+{"expect":"deny","note":"S020 GA1 as-arm-m-apply: main none","command":"ARM_SUBSCRIPTION_ID=00000000-0000-0000-0000-000000000000 make azure-platform-apply"}
+{"expect":"deny","note":"S020 GA1 as-arm-s-apply: main none","command":"ARM_SUBSCRIPTION_ID=00000000-0000-0000-0000-000000000000 infra/terraform/azure.sh apply"}
+{"expect":"ask","note":"S020 GA1 as-cfg-m-plan: main none","command":"AZURE_CONFIG_DIR=/tmp/azcfg make azure-platform-plan"}
+{"expect":"ask","note":"S020 GA1 as-cfg-m-apply: main none","command":"AZURE_CONFIG_DIR=/tmp/azcfg make azure-platform-apply"}
+{"expect":"deny","note":"S020 GA1 as-cfg-m-destroy: main none","command":"AZURE_CONFIG_DIR=/tmp/azcfg make azure-platform-destroy"}
+{"expect":"ask","note":"S020 GA1 as-cfg-s-plan: main none","command":"AZURE_CONFIG_DIR=/tmp/azcfg infra/terraform/azure.sh plan"}
+{"expect":"ask","note":"S020 GA1 as-cfg-s-apply: main none","command":"AZURE_CONFIG_DIR=/tmp/azcfg infra/terraform/azure.sh apply"}
+{"expect":"deny","note":"S020 GA1 as-cfg-s-destroy: main none","command":"AZURE_CONFIG_DIR=/tmp/azcfg infra/terraform/azure.sh destroy"}
+{"expect":"deny","note":"S020 GA1 as-benv-m-apply: main none","command":"BASH_ENV=/tmp/rc make azure-platform-apply"}
+{"expect":"deny","note":"S020 GA1 as-benv-s-apply: main none","command":"BASH_ENV=/tmp/rc infra/terraform/azure.sh apply"}
+{"expect":"deny","note":"S020 GA1 as-ps4-m-apply: main none","command":"PS4='+ ' make azure-platform-apply"}
+{"expect":"deny","note":"S020 GA1 as-ps4-s-apply: main none","command":"PS4='+ ' infra/terraform/azure.sh apply"}
+{"expect":"deny","note":"S020 GA1 as-x1: main deny","command":"TF_LOG=trace terraform -chdir=infra/terraform/azure plan"}
+{"expect":"deny","note":"S020 GA1 as-x2: main none","command":"ARM_CLIENT_SECRET=x make azure-platform-apply"}
+{"expect":"deny","note":"S020 GA1 as-x3: main none","command":"TF_CLI_ARGS=-auto-approve make azure-platform-destroy"}
+{"expect":"deny","note":"S020 GA1 as-x4: main none","command":"export TF_VAR_x=1 && make azure-platform-apply"}
+{"expect":"deny","note":"S020 GA1 as-x5: main none","command":"env TF_VAR_x=1 make azure-platform-apply"}
+{"expect":"deny","note":"S020 GA1 as-x6: main none","command":"env -i ARM_USE_OIDC=true make azure-platform-plan"}
+{"expect":"deny","note":"S020 GA1 as-x7: main deny","command":"TF_VAR_x=1 terraform -chdir=infra/terraform/azure validate"}
+{"expect":"deny","note":"S020 GA1 pty-01: main none","command":"script -qc 'make azure-platform-apply' /dev/null"}
+{"expect":"deny","note":"S020 GA1 pty-02: main none","command":"script -qec 'make azure-platform-destroy' /dev/null"}
+{"expect":"deny","note":"S020 GA1 pty-03: main none","command":"script -c 'infra/terraform/azure.sh destroy' /dev/null"}
+{"expect":"deny","note":"S020 GA1 pty-04: main none","command":"script -q /dev/null -c 'infra/terraform/azure.sh apply'"}
+{"expect":"deny","note":"S020 GA1 pty-05: main none","command":"unbuffer make azure-platform-apply"}
+{"expect":"deny","note":"S020 GA1 pty-06: main none","command":"unbuffer infra/terraform/azure.sh destroy"}
+{"expect":"deny","note":"S020 GA1 pty-07: main none","command":"expect -c 'spawn make azure-platform-apply; interact'"}
+{"expect":"deny","note":"S020 GA1 pty-08: main none","command":"expect -c 'spawn infra/terraform/azure.sh destroy; interact'"}
+{"expect":"deny","note":"S020 GA1 pty-09: main none","command":"python3 -c 'import pty; pty.spawn([\"make\",\"azure-platform-apply\"])'"}
+{"expect":"deny","note":"S020 GA1 pty-10: main none","command":"python3 -c 'import pty; pty.spawn([\"infra/terraform/azure.sh\",\"destroy\"])'"}
+{"expect":"deny","note":"S020 GA1 pty-11: main none","command":"socat - EXEC:'make azure-platform-destroy',pty"}
+{"expect":"deny","note":"S020 GA1 pty-12: main none","command":"setsid make azure-platform-apply"}
+{"expect":"deny","note":"S020 GA1 pty-13: main none","command":"setsid -w infra/terraform/azure.sh apply"}
+{"expect":"none","note":"S020 GA1 pty-14, gap, pinned: ssh -tt is not in aws_pty_re, which GA1 reuses by reference (GM1 wanted deny); main none, now none","command":"ssh -tt localhost make azure-platform-destroy"}
+{"expect":"deny","note":"S020 GA1 pty-15: main none","command":"python3 - <<'PYEOF'\nimport pty\npty.spawn(['make', 'azure-platform-apply'])\nPYEOF"}
+{"expect":"deny","note":"S020 GA1 pty-16: main none","command":"script -qc 'make azure-platform-plan' /dev/null"}
+{"expect":"none","note":"S020 GA1 pty-17, gap, pinned: tmux is not in aws_pty_re, which GA1 reuses by reference (GM1 wanted deny); main none, now none","command":"tmux new-session -d 'make azure-platform-apply'"}
+{"expect":"none","note":"S020 GA1 pty-18, gap, pinned: screen is not in aws_pty_re, which GA1 reuses by reference (GM1 wanted deny); main none, now none","command":"screen -dmS x make azure-platform-destroy"}
+{"expect":"deny","note":"S020 GA1 tr-01: main none","command":"bash -x infra/terraform/azure.sh apply"}
+{"expect":"deny","note":"S020 GA1 tr-02: main none","command":"sh -x infra/terraform/azure.sh plan"}
+{"expect":"deny","note":"S020 GA1 tr-03: main none","command":"bash -xv infra/terraform/azure.sh destroy"}
+{"expect":"deny","note":"S020 GA1 tr-04: main none","command":"bash -o xtrace infra/terraform/azure.sh apply"}
+{"expect":"deny","note":"S020 GA1 tr-05: main none","command":"set -x; make azure-platform-apply"}
+{"expect":"deny","note":"S020 GA1 tr-06: main none","command":"SHELLOPTS=xtrace make azure-platform-apply"}
+{"expect":"deny","note":"S020 GA1 tr-07: main none","command":"BASH_XTRACEFD=2 SHELLOPTS=xtrace infra/terraform/azure.sh plan"}
+{"expect":"deny","note":"S020 GA1 tr-08: main none","command":"PS4='+ ' bash -x infra/terraform/azure.sh apply"}
+{"expect":"deny","note":"S020 GA1 tr-09: main none","command":"bash --xtrace infra/terraform/azure.sh apply"}
+{"expect":"deny","note":"S020 GA1 tr-10: main none","command":"make SHELL='bash -x' azure-platform-apply"}
+{"expect":"ask","note":"S020 GA1 tr-11, make --trace is not in aws_trace_re, reused by reference (GM1 wanted deny); the target still asks. main none, now ask","command":"make --trace azure-platform-plan"}
+{"expect":"ask","note":"S020 GA1 tr-12, make -d is not in aws_trace_re, reused by reference (GM1 wanted deny); the target still asks. main none, now ask","command":"make -d azure-platform-plan"}
+{"expect":"deny","note":"S020 GA1 tr-13: main none","command":"bash -c 'set -x; make azure-platform-apply'"}
+{"expect":"deny","note":"S020 GA1 tr-14: main none","command":"env BASH_ENV=/tmp/rc bash infra/terraform/azure.sh apply"}
+{"expect":"deny","note":"S020 GA1 tr-15: main none","command":"ENV=/tmp/rc sh infra/terraform/azure.sh plan"}
+{"expect":"deny","note":"S020 GA1 tr-16: main none","command":"bash -x -c 'make azure-platform-apply'"}
+{"expect":"ask","note":"S020 GA1 control ca-01: as main gives (ask)","command":"make azure-apply"}
+{"expect":"ask","note":"S020 GA1 control ca-02: as main gives (ask)","command":"make azure-state"}
+{"expect":"none","note":"S020 GA1 control ca-03: as main gives (none)","command":"make azure-plan"}
+{"expect":"none","note":"S020 GA1 control ca-04: as main gives (none)","command":"make azure-smoke"}
+{"expect":"ask","note":"S020 GA1 control ca-05: as main gives (ask)","command":"infra/terraform/foundation.sh apply"}
+{"expect":"none","note":"S020 GA1 control ca-06: as main gives (none)","command":"infra/terraform/foundation.sh plan"}
+{"expect":"none","note":"S020 GA1 control ca-07: as main gives (none)","command":"infra/terraform/foundation.sh smoke"}
+{"expect":"ask","note":"S020 GA1 control ca-08: as main gives (ask)","command":"bash infra/terraform/foundation.sh apply"}
+{"expect":"ask","note":"S020 GA1 control ca-09: as main gives (ask)","command":"cd infra/terraform && ./foundation.sh apply"}
+{"expect":"ask","note":"S020 GA1 control ca-10: as main gives (ask)","command":"infra/terraform/state.sh"}
+{"expect":"ask","note":"S020 GA1 control ca-11: as main gives (ask)","command":"make -C /srv/projects/meridian-ai-platform azure-apply"}
+{"expect":"ask","note":"S020 GA1 control ca-12: as main gives (ask)","command":"bash -c 'make azure-apply'"}
+{"expect":"ask","note":"S020 GA1 control ca-13: as main gives (ask)","command":"env make azure-apply"}
+{"expect":"ask","note":"S020 GA1 control ca-14: as main gives (ask)","command":"TF_VAR_x=1 make azure-apply"}
+{"expect":"ask","note":"S020 GA1 control ca-15: as main gives (ask)","command":"script -qc 'make azure-apply' /dev/null"}
+{"expect":"ask","note":"S020 GA1 control ca-16: as main gives (ask)","command":"bash -x infra/terraform/foundation.sh apply"}
+{"expect":"ask","note":"S020 GA1 control ca-17: as main gives (ask)","command":"make eval-record"}
+{"expect":"none","note":"S020 GA1 control ca-18: as main gives (none)","command":"make eval-baseline"}
+{"expect":"none","note":"S020 GA1 control pr-01: as main gives (none)","command":"git commit -m \"docs: make azure-platform-plan reads the account\""}
+{"expect":"none","note":"S020 GA1 control pr-02: as main gives (none)","command":"git commit -m \"docs: make azure-platform-apply spends money\""}
+{"expect":"none","note":"S020 GA1 control pr-03: as main gives (none)","command":"git commit -m \"docs: make azure-platform-destroy removes the environment\""}
+{"expect":"none","note":"S020 GA1 control pr-04: as main gives (none)","command":"git commit -m \"feat: infra/terraform/azure.sh plan, apply and destroy\""}
+{"expect":"none","note":"S020 GA1 control pr-05: as main gives (none)","command":"git commit -m \"S020\" -m \"make azure-platform-apply and infra/terraform/azure.sh destroy\""}
+{"expect":"deny","note":"S020 GA1 control pr-06: as main gives (deny), by the word terraform followed by destroy","command":"git commit -m \"docs: terraform azure-platform-destroy removes it\""}
+{"expect":"ask","note":"S020 GA1 control pr-07: as main gives (ask), by the word terraform followed by apply","command":"git commit -m \"docs: terraform plan then apply with the wrapper\""}
+{"expect":"none","note":"S020 GA1 control pr-08: as main gives (none)","command":"gh pr create --title \"S020: azure-platform targets\" --body \"Run make azure-platform-apply, then make azure-platform-destroy.\""}
+{"expect":"none","note":"S020 GA1 control pr-09: as main gives (none)","command":"gh pr create --title \"S020\" --body \"The owner runs infra/terraform/azure.sh apply in a terminal.\""}
+{"expect":"ask","note":"S020 GA1 control pr-10: as main gives (ask), by the word terraform followed by apply","command":"gh pr create --title \"S020\" --body \"terraform apply is run by make azure-platform-apply\""}
+{"expect":"none","note":"S020 GA1 control pr-11: as main gives (none)","command":"grep -rn azure-platform-apply docs"}
+{"expect":"none","note":"S020 GA1 control pr-12: as main gives (none)","command":"grep -rn \"make azure-platform-apply\" docs"}
+{"expect":"none","note":"S020 GA1 control pr-13: as main gives (none)","command":"rg \"azure-platform-(plan|apply|destroy)\" docs"}
+{"expect":"none","note":"S020 GA1 control pr-14: as main gives (none)","command":"rg -n azure.sh infra"}
+{"expect":"none","note":"S020 GA1 control pr-15: as main gives (none)","command":"grep -n \"azure.sh destroy\" README.md"}
+{"expect":"none","note":"S020 GA1 control pr-16: as main gives (none)","command":"rg 'make (azure-platform-apply|azure-platform-destroy)' docs"}
+{"expect":"none","note":"S020 GA1 control pr-17: as main gives (none)","command":"echo \"make azure-platform-destroy\""}
+{"expect":"none","note":"S020 GA1 control pr-18: as main gives (none)","command":"echo 'run infra/terraform/azure.sh apply'"}
+{"expect":"none","note":"S020 GA1 control pr-19: as main gives (none)","command":"printf '%s\\n' azure-platform-apply"}
+{"expect":"none","note":"S020 GA1 control pr-20: as main gives (none)","command":"git log --oneline --grep azure-platform-apply"}
+{"expect":"none","note":"S020 GA1 control pr-21: as main gives (none)","command":"git grep -n azure-platform-destroy"}
+{"expect":"none","note":"S020 GA1 control pr-22: as main gives (none)","command":"sed -n '1,20p' infra/terraform/azure.sh"}
+{"expect":"none","note":"S020 GA1 control pr-23: as main gives (none)","command":"shellcheck infra/terraform/azure.sh"}
+{"expect":"none","note":"S020 GA1 control pr-24: as main gives (none)","command":"bash -n infra/terraform/azure.sh"}
+{"expect":"none","note":"S020 GA1 control pr-25: as main gives (none)","command":"cat infra/terraform/azure.sh"}
+{"expect":"none","note":"S020 GA1 control pr-26: as main gives (none)","command":"wc -l infra/terraform/azure.sh"}
+{"expect":"none","note":"S020 GA1 control pr-27: as main gives (none)","command":"git diff -- infra/terraform/azure.sh"}
+{"expect":"none","note":"S020 GA1 control pr-28: as main gives (none)","command":"git add infra/terraform/azure.sh"}
+{"expect":"none","note":"S020 GA1 control pr-29: as main gives (none)","command":"chmod +x infra/terraform/azure.sh"}
+{"expect":"none","note":"S020 GA1 control pr-30: as main gives (none)","command":"cat > docs/notes.md <<'EOF'\nRun make azure-platform-apply, then make azure-platform-destroy.\nEOF"}
+{"expect":"ask","note":"S020 GA1 control pr-31: as main gives (ask), by the word terraform followed by apply","command":"echo \"terraform apply happens in infra/terraform/azure.sh apply\""}
+{"expect":"none","note":"S020 GA1 control pr-32: as main gives (none)","command":"echo \"azure.sh destroy\""}
+{"expect":"deny","note":"S020 GA1 control pr-33: as main gives (deny), by the word terraform followed by destroy","command":"grep -rn \"terraform destroy\" docs"}
+{"expect":"none","note":"S020 GA1 control pr-34: as main gives (none)","command":"gh issue create --title x --body \"make azure-platform-apply\""}
+{"expect":"none","note":"S020 GA1 control pr-35: as main gives (none)","command":"git commit -m \"fix: make azure-platform-apply asks\" -m \"also infra/terraform/azure.sh destroy\" -m \"x\""}
+{"expect":"none","note":"S020 GA1 control pr-36: as main gives (none)","command":"cat docs/runbook.md | grep azure-platform-destroy"}
+{"expect":"none","note":"S020 GA1 control pr-37: as main gives (none)","command":"python3 -c \"print('make azure-platform-apply')\""}
+{"expect":"none","note":"S020 GA1 control pr-38: as main gives (none)","command":"awk '/azure-platform/ {print}' Makefile"}
+{"expect":"none","note":"S020 GA1 control pr-39: as main gives (none)","command":"git commit -F /tmp/msg.txt"}
+{"expect":"none","note":"S020 GA1 control pra-01: as main gives (none)","command":"git commit -m \"docs: make aws-destroy removes the environment\""}
+{"expect":"none","note":"S020 GA1 control pra-02: as main gives (none)","command":"git commit -m \"docs: make aws-apply spends money\""}
+{"expect":"none","note":"S020 GA1 control pra-03: as main gives (none)","command":"gh pr create --title t --body \"Run make aws-apply, then make aws-destroy.\""}
+{"expect":"deny","note":"S020 GA1 control pra-04: as main gives (deny), false alarm by design","command":"echo \"make aws-destroy\""}
+{"expect":"ask","note":"S020 GA1 control pra-05: as main gives (ask), false alarm by design","command":"echo 'run infra/terraform/aws.sh apply'"}
+{"expect":"deny","note":"S020 GA1 control pra-06: as main gives (deny), false alarm by design","command":"rg \"make aws-destroy\" docs"}
+{"expect":"none","note":"S020 GA1 control pra-07: as main gives (none)","command":"grep -rn aws-apply docs"}
+{"expect":"deny","note":"S020 GA1 control pra-08: as main gives (deny), false alarm by design","command":"grep -n \"aws.sh destroy\" README.md"}
+{"expect":"none","note":"S020 GA1 control pra-09: as main gives (none)","command":"rg 'make (aws-apply|aws-destroy)' docs"}
+{"expect":"none","note":"S020 GA1 control pra-10: as main gives (none)","command":"git log --grep aws-destroy"}
+{"expect":"none","note":"S020 GA1 control pra-11: as main gives (none)","command":"cat infra/terraform/aws.sh"}
+{"expect":"deny","note":"S020 GA1 control pra-12: as main gives (deny), by the word terraform followed by destroy","command":"git commit -m \"docs: terraform aws-destroy removes it\""}
+{"expect":"ask","note":"S020 GA1 es-01: main none","command":"env -S 'make azure-platform-apply'"}
+{"expect":"deny","note":"S020 GA1 es-02: main none","command":"env -S \"make azure-platform-destroy\""}
+{"expect":"deny","note":"S020 GA1 es-03: main none","command":"env -S '' make azure-platform-destroy"}
+{"expect":"deny","note":"S020 GA1 es-04: main none","command":"env -S 'nice -n 5' make azure-platform-destroy"}
+{"expect":"ask","note":"S020 GA1 es-05: main none","command":"env -S ' ' make azure-platform-apply"}
+{"expect":"ask","note":"S020 GA1 es-06: main none","command":"env -S '# c' make azure-platform-apply"}
+{"expect":"deny","note":"S020 GA1 es-07: main none","command":"env -S 'A=b' infra/terraform/azure.sh destroy"}
+{"expect":"none","note":"S020 GA1 es-08, env -S with an unquoted word x runs x as the command, not make (G6 review, section 3); GM1 wanted ask. main none, now none","command":"env -S x make azure-platform-apply"}
+{"expect":"none","note":"S020 GA1 es-09, env -S with an unquoted word x runs x as the command, not make (G6 review, section 3); GM1 wanted deny. main none, now none","command":"env -i -S x make azure-platform-destroy"}
+{"expect":"deny","note":"S020 GA1 es-10, the open medium of the S071 G6 review (a quoted word after env -S hid make): closed by an addition. main none","command":"env -S '' make -m \"aws-destroy\""}
+{"expect":"deny","note":"S020 GA1 es-11, the open medium of the S071 G6 review. main none","command":"env -S 'A=b' make -m \"aws-destroy\""}
+{"expect":"deny","note":"S020 GA1 es-12, the open medium of the S071 G6 review. main none","command":"env -S '# c' make -m \"aws-destroy\""}
+{"expect":"deny","note":"S020 GA1 es-13: main deny","command":"env -S 'make -m \"aws-destroy\"'"}
+{"expect":"deny","note":"S020 GA1 es-14: main deny","command":"env -S nice make -m \"aws-destroy\""}
+{"expect":"ask","note":"S020 GA1 es-15: main ask","command":"env -S 'make -m \"aws-apply\"'"}
+{"expect":"ask","note":"S020 GA1 es-16, the open medium of the S071 G6 review, apply asks. main none","command":"env -S '' make -m \"aws-apply\""}
+{"expect":"ask","note":"S020 GA1 qt-01: main none","command":"make -m \"azure-platform-apply\""}
+{"expect":"deny","note":"S020 GA1 qt-02: main none","command":"make -m \"azure-platform-destroy\""}
+{"expect":"ask","note":"S020 GA1 qt-03: main none","command":"make -m \"azure-platform-plan\""}
+{"expect":"deny","note":"S020 GA1 qt-04: main none","command":"make -C \"a;b\" azure-platform-destroy"}
+{"expect":"ask","note":"S020 GA1 qt-05: main none","command":"make -f \"a&b.mk\" azure-platform-apply"}
+{"expect":"deny","note":"S020 GA1 qt-06: main none","command":"bash -c \"make -m \\\"azure-platform-destroy\\\"\""}
+{"expect":"ask","note":"S020 GA1 qt-07: main none","command":"sudo -H make -m \"azure-platform-apply\""}
+{"expect":"none","note":"S020 GA1 qt-08: a quoted VAR= value is not a target (G4 HIGH-1). main none","command":"make test K=\"azure-platform-destroy\""}
+{"expect":"ask","note":"S020 GA1 qt-09: main ask","command":"make -m \"azure-apply\""}
+{"expect":"ask","note":"S020 GA1 qt-10: main ask","command":"make -C \"a;b\" azure-apply"}
+{"expect":"ask","note":"S020 GA1 control x-01: as main gives (ask), false alarm by design","command":"grep -rn \"make aws-apply\" docs"}
+{"expect":"none","note":"S020 GA1 control x-02: as main gives (none)","command":"rg \"aws-(plan|apply|destroy)\" docs"}
+{"expect":"ask","note":"S020 GA1 control x-03: as main gives (ask), false alarm by design","command":"echo \"make aws-plan\""}
+{"expect":"ask","note":"S020 GA1 control x-04: as main gives (ask), false alarm by design","command":"echo \"make aws-apply\""}
+{"expect":"none","note":"S020 GA1 control x-05: as main gives (none)","command":"printf '%s\\n' aws-destroy"}
+{"expect":"none","note":"S020 GA1 control x-06: as main gives (none)","command":"git grep -n aws-destroy"}
+{"expect":"deny","note":"S020 GA1 control x-07: as main gives (deny), false alarm by design","command":"cat docs/runbook.md | grep \"make aws-destroy\""}
+{"expect":"none","note":"S020 GA1 control x-08: as main gives (none)","command":"gh issue create --title x --body \"make aws-apply\""}
+{"expect":"ask","note":"S020 GA1 control x-09: as main gives (ask), false alarm by design","command":"python3 -c \"print('make aws-apply')\""}
+{"expect":"none","note":"S020 GA1 control x-10: as main gives (none)","command":"awk '/aws-apply/ {print}' Makefile"}
+{"expect":"none","note":"S020 GA1 control x-11: as main gives (none)","command":"cat > docs/notes.md <<'EOF'\nRun make aws-apply, then make aws-destroy.\nEOF"}
+{"expect":"deny","note":"S020 GA1 control x-12: as main gives (deny), the heredoc on -F - stays in the text","command":"git commit -F - <<'EOF'\nS020: make aws-destroy\nEOF"}
+{"expect":"none","note":"S020 GA1 control x-13: as main gives (none)","command":"git commit -m \"$(cat <<'EOF'\nS020: make aws-destroy\nEOF\n)\""}
+{"expect":"none","note":"S020 GA1 control x-14: as main gives (none)","command":"git commit -F - <<'EOF'\nS020: make azure-platform-destroy and infra/terraform/azure.sh destroy\nEOF"}
+{"expect":"none","note":"S020 GA1 control x-15: as main gives (none)","command":"git commit -m \"$(cat <<'EOF'\nS020: make azure-platform-destroy\nEOF\n)\""}
+{"expect":"none","note":"S020 GA1 control x-16: as main gives (none)","command":"echo \"make azure-platform-plan\""}
+{"expect":"ask","note":"S020 GA1 control x-17: as main gives (ask), the old Azure rule reads a quoted search","command":"grep -rn \"make azure-apply\" docs"}
+{"expect":"ask","note":"S020 GA1 control x-18: as main gives (ask), the old Azure rule reads an echo","command":"echo \"make azure-apply\""}
+{"expect":"ask","note":"S020 GA1 control x-19: as main gives (ask), the old Azure rule reads a commit message","command":"git commit -m \"docs: make azure-apply asks\""}
+{"expect":"ask","note":"S020 GA1 control x-20: as main gives (ask), the old Azure rule reads an alternation after a blank","command":"rg 'make (azure-apply|azure-state)' docs"}
+{"expect":"deny","note":"S020 GA1 x-21: main none","command":"bash <<'EOF'\nmake azure-platform-destroy\nEOF"}
+{"expect":"deny","note":"S020 GA1 x-22: main deny","command":"bash <<'EOF'\nterraform -chdir=infra/terraform/azure destroy\nEOF"}
+{"expect":"deny","note":"S020 GA1 x-23: main deny","command":"bash <<'EOF'\nmake aws-destroy\nEOF"}
+{"expect":"ask","note":"S020 GA1 x-24: main ask","command":"bash <<'EOF'\nmake azure-apply\nEOF"}
+{"expect":"ask","note":"S020 GA1 control y-01: as main gives (ask), the old Azure rule reads an alternation after a blank","command":"rg 'make (azure-plan|azure-apply)' docs"}
+{"expect":"none","note":"S020 GA1 control y-02: as main gives (none)","command":"rg 'make (azure-apply|azure-plan)' docs"}
+{"expect":"ask","note":"S020 GA1 control y-03: as main gives (ask), the old Azure rule reads an alternation after a blank","command":"rg 'make (azure-state|azure-apply)' docs"}
+{"expect":"none","note":"S020 GA1 control y-04: as main gives (none); the new target in an alternation is not read","command":"rg 'make (azure-platform-apply|azure-platform-destroy)' docs"}
+{"expect":"none","note":"S020 GA1 control y-05: as main gives (none); the new target in an alternation is not read","command":"rg \"make (azure-platform-plan|azure-platform-apply)\" docs"}
+{"expect":"none","note":"S020 GA1 control y-06: as main gives (none)","command":"grep -E 'make (aws-plan|aws-apply)' docs/x.md"}
+{"expect":"none","note":"S020 GA1 control y-07: as main gives (none)","command":"rg 'azure.sh (plan|apply|destroy)' docs"}
+{"expect":"none","note":"S020 GA1 control y-08: as main gives (none)","command":"rg 'azure-platform-(plan|apply|destroy)|azure.sh' docs"}
+{"expect":"none","note":"S020 GA1 control y-09: as main gives (none)","command":"rg 'make azure-platform-apply|docs' infra"}
+{"expect":"ask","note":"S020 GA1 control y-10: as main gives (ask), the old Azure rule reads an alternation after a blank","command":"rg 'make azure-apply|docs' infra"}
+{"expect":"ask","note":"S020 GA1 control z-01: as main gives (ask), a rule of main reads hook_cmd, which blanks a message only when a trigger word is in the command","command":"gh pr create --title t --body \"never run gh pr merge --admin\""}
+{"expect":"none","note":"S020 GA1 control z-02: as main gives (none)","command":"git commit -m \"never run gh pr merge --admin\""}
+{"expect":"none","note":"S020 GA1 control z-03: as main gives (none)","command":"gh pr create --title t --body \"never run gh pr merge --admin on terraform\""}
+{"expect":"ask","note":"S020 GA1 control z-04: as main gives (ask)","command":"gh issue comment 5 --body \"never run gh pr merge --admin\""}
+{"expect":"none","note":"S020 GA1 control z-05: as main gives (none)","command":"gh pr create --title t --body \"never run gh pr merge --admin on kubectl\""}
+{"expect":"none","note":"S020 GA1 control e-ctl-01: the foundation's targets do not move (point 5)","command":"TF_VAR_operator_addresses='[\"203.0.113.5\"]' make azure-plan"}
+{"expect":"none","note":"S020 GA1 control e-ctl-02: the foundation script does not move (point 5)","command":"TF_VAR_operator_addresses='[\"203.0.113.5\"]' infra/terraform/foundation.sh plan"}
+{"expect":"ask","note":"S020 GA1 control e-ctl-03: the foundation's apply asks as it did","command":"TF_VAR_operator_addresses='[\"203.0.113.5\"]' make azure-apply"}
+{"expect":"none","note":"S020 GA1 control e-ctl-04: ARM_ in front of the foundation's smoke does not move","command":"ARM_SUBSCRIPTION_ID=00000000-0000-0000-0000-000000000000 make azure-smoke"}
+{"expect":"none","note":"S020 GA1 control e-ctl-05: AZURE_CONFIG_DIR in front of the foundation's plan does not move","command":"AZURE_CONFIG_DIR=/tmp/azcfg make azure-plan"}
+{"expect":"none","note":"S020 GA1 control e-ctl-06: as main gives (none)","command":"make azure-plan && make azure-smoke"}
+{"expect":"none","note":"S020 GA1 control e-pr-01: as main gives (none)","command":"git commit -m \"docs: make azure-platform-destroy removes the platform and azure.sh destroy does the same\""}
+{"expect":"none","note":"S020 GA1 control e-pr-02: as main gives (none)","command":"git commit -F msg.txt"}
+{"expect":"none","note":"S020 GA1 control e-pr-03: as main gives (none)","command":"gh pr create --title t --body \"Run make azure-platform-apply, then make azure-platform-destroy.\""}
+{"expect":"none","note":"S020 GA1 control e-pr-04: as main gives (none)","command":"rg -n \"azure-platform-destroy\" docs"}
+{"expect":"none","note":"S020 GA1 control e-pr-05: as main gives (none)","command":"echo make azure-platform-destroy"}
+{"expect":"none","note":"S020 GA1 control e-pr-06: as main gives (none)","command":"grep -c azure.sh README.md"}
+{"expect":"none","note":"S020 GA1 control e-pr-07: as main gives (none); a path that only holds the word","command":"ls infra/terraform/azure"}
+{"expect":"none","note":"S020 GA1 control e-pr-08: as main gives (none); a path that only holds the word","command":"cat infra/terraform/azure/README.md"}
+{"expect":"none","note":"S020 GA1 control e-pr-09: as main gives (none); a message is blanked before the assignment is looked for","command":"git commit -m \"TF_VAR_x=1 make azure-platform-apply\""}
+{"expect":"none","note":"S020 GA1 control e-pr-10: as main gives (none); an echo of an assignment and a target is not an assignment in front of one","command":"echo \"TF_VAR_x=1 make azure-platform-apply\""}
+{"expect":"none","note":"S020 GA1 control e-pr-11: as main gives (none); a message that names a pseudo-terminal tool, a trace and the wrapper","command":"git commit -m \"azure.sh destroy under script, bash -x and BASH_ENV=x\""}
+{"expect":"none","note":"S020 GA1 control e-pr-12: as main gives (none); a body that names a trace, a start-up variable and a terminal tool","command":"gh pr create --title t --body \"make azure-platform-plan with PS4 and set -x under expect\""}
+{"expect":"none","note":"S020 GA1 control e-pr-13: as main gives (none); a message with a real newline before the target","command":"git commit -m \"line one\nmake azure-platform-destroy\nline three\""}
+{"expect":"none","note":"S020 GA1 control e-pr-14: as main gives (none); a second -m with a separator","command":"git commit -m \"a\" -m \"make azure-platform-apply; azure.sh destroy\""}
+{"expect":"none","note":"S020 GA1 control e-pr-15: as main gives (none)","command":"printf '%s\\n' 'make azure-platform-destroy'"}
+{"expect":"none","note":"S020 GA1 control e-pr-16: as main gives (none)","command":"echo \"make azure-platform-destroy\""}
+{"expect":"none","note":"S020 GA1 control e-pr-17: as main gives (none)","command":"echo 'run infra/terraform/azure.sh apply'"}
+{"expect":"none","note":"S020 GA1 control e-pr-18: as main gives (none)","command":"grep -rn \"azure.sh destroy\" docs"}
+{"expect":"none","note":"S020 GA1 control e-pr-19: as main gives (none)","command":"git log --grep=\"azure-platform-destroy\" --oneline"}
+{"expect":"none","note":"S020 GA1 control e-pr-20: as main gives (none)","command":"cat docs/runbook.md | grep \"make azure-platform-apply\""}
+{"expect":"none","note":"S020 GA1 control e-pr-21: as main gives (none)","command":"python3 -c \"print('make azure-platform-apply')\""}
+{"expect":"none","note":"S020 GA1 control e-pr-22: as main gives (none)","command":"git add infra/terraform/azure.sh && git diff --cached --stat"}
+{"expect":"none","note":"S020 GA1 control e-pr-23: as main gives (none); the checks a wrapper's author runs","command":"shellcheck infra/terraform/azure.sh && bash -n infra/terraform/azure.sh"}
+{"expect":"none","note":"S020 GA1 control e-pr-24: as main gives (none)","command":"chmod +x infra/terraform/azure.sh"}
+{"expect":"none","note":"S020 GA1 control e-pr-25: the module's check target is not a platform name","command":"make azure-platform-validate"}
+{"expect":"none","note":"S020 GA1 control e-pr-26: the module's scan target is not a platform name","command":"make azure-platform-scan"}
+{"expect":"none","note":"S020 GA1 control e-pr-27: TF_ in front of the check target does not move","command":"TF_VAR_x=1 make azure-platform-validate"}
+{"expect":"none","note":"S020 GA1 control e-pr-28: as main gives (none)","command":"git commit -m \"x\" && make azure-platform-validate"}
+{"expect":"none","note":"S020 GA1 HIGH-1 class 1 (a -c that is grep's or wc's): the Azure twin of the S071 G4 review's rows. main none","command":"grep -c \"make -m 'azure-platform-destroy'\" docs/x.md"}
+{"expect":"none","note":"S020 GA1 HIGH-1 class 1 (wc -c). main none","command":"wc -c \"make -m 'azure-platform-destroy'\""}
+{"expect":"none","note":"S020 GA1 HIGH-1 class 2 (a quoted VAR= value). main none","command":"make test K=\"azure-platform-destroy\""}
+{"expect":"none","note":"S020 GA1 HIGH-1 class 2 (a quoted VAR= value, single quotes). main none","command":"make test PATTERN='azure-platform-apply'"}
+{"expect":"none","note":"S020 GA1 HIGH-1 class 2 (a quoted VAR= value on the check target). main none","command":"make azure-platform-validate FOO=\"azure-platform-plan\""}
+{"expect":"none","note":"S020 GA1 HIGH-1 class 3 (a quoted separator in an echo). main none","command":"echo \"make; azure-platform-destroy\""}
+{"expect":"none","note":"S020 GA1 HIGH-1 class 3 (a quoted pipe in an echo). main none","command":"echo \"make | azure-platform-destroy\""}
+{"expect":"none","note":"S020 GA1 HIGH-1 class 3 (an alternation inside a search). main none","command":"rg -n \"make (azure-platform-apply|azure-platform-destroy)\" docs"}
+{"expect":"none","note":"S020 GA1 HIGH-1 class 3 (an alternation of three). main none","command":"grep -rnE \"make (azure-platform-plan|azure-platform-apply|azure-platform-destroy)\" docs"}
+{"expect":"none","note":"S020 GA1 HIGH-1 class 3 (an alternation of the make word and the target). main none","command":"rg -n \"(make|gmake) (azure-platform-apply|azure-platform-destroy)\" docs"}
+{"expect":"none","note":"S020 GA1 HIGH-1 class 3 (a search after a pipe). main none","command":"sed -n '1,5p' x.md | grep \"make; azure-platform-destroy\""}
+{"expect":"none","note":"S020 GA1 HIGH-1 class 4 (a prefix's option argument is not the command word: sudo -u). main none","command":"sudo -u make git commit -m \"azure-platform-destroy\""}
+{"expect":"none","note":"S020 GA1 HIGH-1 class 4 (env -u). main none","command":"env -u make git commit -m \"azure-platform-destroy\""}
+{"expect":"none","note":"S020 GA1 HIGH-1 class 4 (timeout -s). main none","command":"timeout -s make git commit -m \"azure-platform-destroy\""}
+{"expect":"none","note":"S020 GA1 HIGH-1 class 4 (xargs -I). main none","command":"xargs -I make git commit -m \"azure-platform-destroy\""}
+{"expect":"none","note":"S020 GA1 HIGH-1 class 4 (nice -n). main none","command":"nice -n make git commit -m \"azure-platform-destroy\""}
+{"expect":"deny","note":"S020 GA1 HIGH-1 class 4, the real one: make runs the targets git and commit, and the quoted word after -m is the removal target. main none","command":"make git commit -m \"azure-platform-destroy\""}
+{"expect":"none","note":"S020 GA1 an echo of a shell-wrapped target is not a run (the shell word is read as a body only when the segment does not start with a printing command). main none","command":"echo bash -c 'make azure-platform-plan' > /dev/null"}
+{"expect":"deny","note":"S020 GA1 e-n-01: eval with a quoted body. main none","command":"eval \"make azure-platform-destroy\""}
+{"expect":"deny","note":"S020 GA1 e-n-02: eval is read as a prefix word, so the unquoted form is a removal. main none","command":"eval make azure-platform-destroy"}
+{"expect":"ask","note":"S020 GA1 e-n-03: su -c. main none","command":"su -c \"make azure-platform-apply\""}
+{"expect":"deny","note":"S020 GA1 e-n-04: su with a user. main none","command":"su root -c 'make azure-platform-destroy'"}
+{"expect":"ask","note":"S020 GA1 e-n-05: a body in a body. main none","command":"sh -c 'bash -c \"make azure-platform-plan\"'"}
+{"expect":"deny","note":"S020 GA1 e-n-06: a shell option before -c. main none","command":"bash -o pipefail -c 'make azure-platform-destroy'"}
+{"expect":"deny","note":"S020 GA1 e-n-07: the user's shell. main none","command":"\"$SHELL\" -c 'make azure-platform-destroy'"}
+{"expect":"deny","note":"S020 GA1 e-n-08: the script inside a body. main none","command":"bash -c \"infra/terraform/azure.sh destroy\""}
+{"expect":"deny","note":"S020 GA1 e-n-09: sudo before the script. main none","command":"sudo infra/terraform/azure.sh destroy"}
+{"expect":"ask","note":"S020 GA1 e-n-10: time before the script. main none","command":"time ./infra/terraform/azure.sh apply"}
+{"expect":"deny","note":"S020 GA1 e-n-11: the sub-command in double quotes. main none","command":"infra/terraform/azure.sh \"destroy\""}
+{"expect":"ask","note":"S020 GA1 e-n-12: the sub-command in single quotes. main none","command":"infra/terraform/azure.sh 'apply'"}
+{"expect":"deny","note":"S020 GA1 e-n-13: a newline between two commands. main none","command":"make test\nmake azure-platform-destroy"}
+{"expect":"ask","note":"S020 GA1 e-n-14: a newline between two commands. main none","command":"echo hi\nmake azure-platform-plan"}
+{"expect":"deny","note":"S020 GA1 e-n-15: after then. main none","command":"if true; then make azure-platform-destroy; fi"}
+{"expect":"ask","note":"S020 GA1 e-n-16: after do. main none","command":"for i in 1; do make azure-platform-apply; done"}
+{"expect":"deny","note":"S020 GA1 e-n-17: in a brace group. main none","command":"{ make azure-platform-destroy; }"}
+{"expect":"deny","note":"S020 GA1 e-n-18: after a pipe. main none","command":"echo y | make azure-platform-destroy"}
+{"expect":"deny","note":"S020 GA1 e-n-19: xargs as a prefix. main none","command":"xargs -I{} make azure-platform-destroy"}
+{"expect":"none","note":"S020 GA1 e-n-20: gap, pinned: a command substitution inside a double-quoted word is not read (the old scanner's gap too). main none","command":"echo \"$(make azure-platform-destroy)\""}
+{"expect":"ask","note":"S020 GA1 e-n-21: two targets, the higher one decides. main none","command":"make -j4 azure-platform-plan azure-platform-apply"}
+{"expect":"deny","note":"S020 GA1 e-n-22: the worst of two commands decides. main none","command":"make azure-platform-plan; make azure-platform-destroy"}
+{"expect":"ask","note":"S020 GA1 e-n-23: a body and the check target. main none","command":"bash -c \"make azure-platform-plan\" && make azure-platform-validate"}
+{"expect":"deny","note":"S020 GA1 e-n-24: $MAKE as the command word. main none","command":"MAKE=make; $MAKE azure-platform-destroy"}
+{"expect":"deny","note":"S020 GA1 e-n-25: gnumake. main none","command":"gnumake azure-platform-destroy"}
+{"expect":"deny","note":"S020 GA1 e-n-26: make by a path. main none","command":"/usr/bin/make azure-platform-destroy"}
+{"expect":"deny","note":"S020 GA1 e-n-27: command as a prefix. main none","command":"command make azure-platform-destroy"}
+{"expect":"none","note":"S020 GA1 e-n-28: a target that only starts like the removal. main none","command":"make azure-platform-destroyer"}
+{"expect":"none","note":"S020 GA1 e-n-29: a file name that holds the target. main none","command":"make -f azure-platform-destroy.mk test"}
+{"expect":"none","note":"S020 GA1 e-n-30: a target that only ends like the removal. main none","command":"make my-azure-platform-destroy"}
+{"expect":"ask","note":"S020 GA1 e-n-31: env with an assignment. main none","command":"env FOO=1 make azure-platform-apply"}
+{"expect":"deny","note":"S020 GA1 e-n-32: the words are read without regard to case, as main's are. main none","command":"Make Azure-Platform-DESTROY"}
+{"expect":"deny","note":"S020 GA1 e-n-33: a substitution in an option's value. main none","command":"make -C \"$(git rev-parse --show-toplevel)\" azure-platform-destroy"}
+{"expect":"none","note":"S020 GA1 e-n-34: the script's check sub-command. main none","command":"infra/terraform/azure.sh validate"}
+{"expect":"none","note":"S020 GA1 e-n-35: an option that holds the word plan. main none","command":"infra/terraform/azure.sh --plan"}
+{"expect":"deny","note":"S020 GA1 e-n-36: main denies it by the word terraform followed by destroy; unchanged","command":"bash -c 'cd infra/terraform && ./azure.sh destroy'"}
+{"expect":"deny","note":"S020 GA1 e-n-37: sudo with an option argument, then bash and the script. main none","command":"sudo -u root bash infra/terraform/azure.sh destroy"}
+{"expect":"none","note":"S020 GA1 e-n-38: a syntax check of the script with a file name that holds the word. main none","command":"bash -n infra/terraform/azure.sh destroy-notes.md"}
+{"expect":"deny","note":"S020 GA1 e-as-01: the assignment inside a body. main none","command":"bash -c 'TF_VAR_x=1 make azure-platform-apply'"}
+{"expect":"deny","note":"S020 GA1 e-as-02: the assignment outside a body that holds the target. main none","command":"TF_VAR_x=1 bash -c 'make azure-platform-plan'"}
+{"expect":"deny","note":"S020 GA1 e-as-03: the assignment as a make variable after the target. main none","command":"make azure-platform-plan TF_VAR_x=1"}
+{"expect":"deny","note":"S020 GA1 e-as-04: any ARM_ name, in front of the script's check sub-command. main none","command":"ARM_TENANT_ID=x infra/terraform/azure.sh validate"}
+{"expect":"deny","note":"S020 GA1 e-as-05: the names are read without regard to case. main none","command":"arm_use_oidc=true make azure-platform-plan"}
+{"expect":"deny","note":"S020 GA1 e-as-06: two ARM_ assignments. main none","command":"ARM_CLIENT_ID=x ARM_CLIENT_SECRET=y make azure-platform-apply"}
+{"expect":"ask","note":"S020 GA1 e-as-07: AZURE_CONFIG_DIR exported in an earlier segment. main none","command":"export AZURE_CONFIG_DIR=/tmp/azcfg && make azure-platform-plan"}
+{"expect":"ask","note":"S020 GA1 e-as-08: AZURE_CONFIG_DIR through env. main none","command":"env AZURE_CONFIG_DIR=/tmp/azcfg infra/terraform/azure.sh apply"}
+{"expect":"none","note":"S020 GA1 e-as-09: AZURE_CONFIG_DIR in front of the check target does not move. main none","command":"AZURE_CONFIG_DIR=/tmp/azcfg make azure-platform-validate"}
+{"expect":"none","note":"S020 GA1 e-as-10: AZURE_CONFIG_DIR in front of the cloud CLI is GA2's. main none","command":"AZURE_CONFIG_DIR=/tmp/azcfg az account show"}
+{"expect":"deny","note":"S020 GA1 e-as-11: TF_ in front of the tool is main's rule; unchanged","command":"TF_VAR_x=1 terraform -chdir=infra/terraform/foundation validate"}
+{"expect":"none","note":"S020 GA1 e-as-12: an assignment in an echo segment, the target in another: the check target. main none","command":"echo ARM_CLIENT_ID=x; make azure-platform-validate"}
+{"expect":"deny","note":"S020 GA1 e-pt-01: a terminal tool with a double-quoted body. main none","command":"script -qc \"make azure-platform-plan\" /dev/null"}
+{"expect":"deny","note":"S020 GA1 e-pt-02: a terminal tool before the script's check sub-command (the rule reads the names, not the verb). main none","command":"unbuffer ./infra/terraform/azure.sh validate"}
+{"expect":"none","note":"S020 GA1 e-pt-03: a terminal tool before the check target. main none","command":"unbuffer make azure-platform-validate"}
+{"expect":"deny","note":"S020 GA1 e-pt-04: false alarm by design, as the AWS twin: aws_pty_re reads the word script anywhere in a command that names the wrapper. main none","command":"grep -n script infra/terraform/azure.sh"}
+{"expect":"none","note":"S020 GA1 e-pt-05: scripts is not the word script. main none","command":"grep -n scripts infra/terraform/azure.sh"}
+{"expect":"none","note":"S020 GA1 e-pt-06: as main gives (none)","command":"git diff -- infra/terraform/azure.sh"}
+{"expect":"deny","note":"S020 GA1 e-tr-01: a trace before a relative script. main none","command":"bash -x ./azure.sh validate"}
+{"expect":"none","note":"S020 GA1 e-tr-02: a syntax check is not a trace. main none","command":"bash -n infra/terraform/azure.sh"}
+{"expect":"none","note":"S020 GA1 e-tr-03: set -e is not a trace. main none","command":"bash -c 'set -e; make azure-platform-validate'"}
+{"expect":"deny","note":"S020 GA1 e-tr-04: a start-up file before the script. main none","command":"env BASH_ENV=/tmp/rc infra/terraform/azure.sh validate"}
+{"expect":"deny","note":"S020 GA1 e-s-01: the open medium (G6 review): an empty split string, a quoted word between env -S and make. main none","command":"env -S '' make -m \"aws-destroy\""}
+{"expect":"deny","note":"S020 GA1 e-s-02: the open medium, double quotes. main none","command":"env -S \"\" make -m \"aws-destroy\""}
+{"expect":"deny","note":"S020 GA1 e-s-03: the open medium, a blank. main none","command":"env -S ' ' make -m \"aws-destroy\""}
+{"expect":"deny","note":"S020 GA1 e-s-04: the open medium, a comment. main none","command":"env -S '# c' make -m \"aws-destroy\""}
+{"expect":"deny","note":"S020 GA1 e-s-05: the open medium, an assignment. main none","command":"env -S 'A=b' make -m \"aws-destroy\""}
+{"expect":"deny","note":"S020 GA1 e-s-06: the open medium, a prefix with an argument. main none","command":"env -S 'nice -n 5' make -m \"aws-destroy\""}
+{"expect":"deny","note":"S020 GA1 e-s-07: the open medium, a quoted sudo (the stronger direction: sudo's own arguments are not read inside it). main none","command":"env -S 'sudo' make -m \"aws-destroy\""}
+{"expect":"deny","note":"S020 GA1 e-s-08: the open medium, a quoted sudo -E. main none","command":"env -S 'sudo -E' make -m \"aws-destroy\""}
+{"expect":"deny","note":"S020 GA1 e-s-09: the open medium, a quoted time. main none","command":"env -S 'time' make -m \"aws-destroy\""}
+{"expect":"deny","note":"S020 GA1 e-s-10: the open medium, a quoted env -i. main none","command":"env -S 'env -i' make -m \"aws-destroy\""}
+{"expect":"deny","note":"S020 GA1 e-s-11: the open medium behind env -i. main none","command":"env -i -S '' make -m \"aws-destroy\""}
+{"expect":"deny","note":"S020 GA1 e-s-12: the open medium behind env -u NAME, the self-managed module's target. main none","command":"env -u A -S '' make -m \"aws-kubeadm-destroy\""}
+{"expect":"ask","note":"S020 GA1 e-s-13: the open medium, apply asks. main none","command":"env -S '' make -m \"aws-apply\""}
+{"expect":"ask","note":"S020 GA1 e-s-14: the open medium, plan asks. main none","command":"env -S '' make -m \"aws-plan\""}
+{"expect":"ask","note":"S020 GA1 e-s-15: the open medium, the self-managed module's apply. main none","command":"env -S '' make -m \"aws-kubeadm-apply\""}
+{"expect":"deny","note":"S020 GA1 e-s-16: the open medium with a separator inside an earlier quoted argument. main none","command":"env -S '' make -C \"a;b\" aws-destroy"}
+{"expect":"none","note":"S020 GA1 e-s-17: the check target after the split string. main none","command":"env -S '' make aws-validate"}
+{"expect":"none","note":"S020 GA1 e-s-18: a quoted check target after the split string. main none","command":"env -S '' make -m \"aws-validate\""}
+{"expect":"none","note":"S020 GA1 e-s-19: a quoted VAR= value after the split string. main none","command":"env -S '' make test K=\"aws-destroy\""}
+{"expect":"none","note":"S020 GA1 e-s-20: an echo of the open medium's shape. main none","command":"echo env -S '' make -m \"aws-destroy\""}
+{"expect":"none","note":"S020 GA1 e-s-21: env -S with an unquoted word runs that word as the command (G6 review, section 3). main none","command":"env -S x make -m \"aws-destroy\""}
+{"expect":"deny","note":"S020 GA1 e-s-22: env -S nice make: main denies it already (the prefix list)","command":"env -S nice make -m \"aws-destroy\""}
+{"expect":"deny","note":"S020 GA1 e-s-23: the open medium inside a body. main none","command":"bash -c \"env -S '' make -m \\\"aws-destroy\\\"\""}
+{"expect":"none","note":"S020 GA1 e-s-24: a message that names the open medium. main none","command":"git commit -m \"env -S '' make -m aws-destroy\""}
+{"expect":"deny","note":"S020 GA1 e-s-25: main's AWS rule reads a quoted search (false alarm by design); unchanged","command":"rg \"env -S '' make -m aws-destroy\" docs"}
+{"expect":"deny","note":"S020 GA1 e-s-26: the long option. main none","command":"env --split-string '' make -m \"aws-destroy\""}
+{"expect":"none","note":"S020 GA1 e-s-27: a target that only starts like the removal. main none","command":"env -S '' make -m 'aws-destroy-notes'"}
+{"expect":"none","note":"S020 GA1 e-s-28: the check target changes nothing. main none","command":"env -S '' make -m \"azure-platform-validate\""}
+{"expect":"deny","note":"S020 GA1 e-s-29: the split string before the Azure removal. main none","command":"env -S '' make -m \"azure-platform-destroy\""}
+{"expect":"deny","note":"S020 GA1 e-s-30: the split string before the script's removal. main none","command":"env -S '' infra/terraform/azure.sh destroy"}
+{"expect":"deny","note":"S020 GA1 tfw-12: the harness cwd is the directory of the script; the removal is read all the same. main none","cwd":"/srv/projects/meridian-ai-platform/infra/terraform","command":"./azure.sh destroy"}
+{"expect":"deny","note":"S020 GA1 e-as-13: an assignment in front of a quoted target after make is in front of a name. main none","command":"TF_VAR_x=1 make \"azure-platform-apply\""}
+{"expect":"deny","note":"S020 GA1 e-as-14: the same with ARM_ and a single-quoted target after an option. main none","command":"ARM_TENANT_ID=x make -m 'azure-platform-plan'"}
+{"expect":"ask","note":"S020 GA1 e-as-15: AZURE_CONFIG_DIR in front of a quoted target. main none","command":"AZURE_CONFIG_DIR=/tmp/azcfg make \"azure-platform-plan\""}
+{"expect":"ask","note":"S020 GA1 e-n-39: xargs -I{} (a brace glued to a word cuts nothing). main none","command":"echo x | xargs -I{} make azure-platform-apply {}"}
+{"expect":"none","note":"S020 GA1 gap, pinned: a name piped into a shell (printf of a target is what main gives). main none","command":"printf 'make azure-platform-destroy\\n' | bash"}
+{"expect":"none","note":"S020 GA1 gap, pinned: a name in a here-string given to a shell. main none","command":"bash <<< \"make azure-platform-destroy\""}
+{"expect":"none","note":"S020 GA1 gap, pinned: a prefix outside the list (doas). main none","command":"doas make azure-platform-destroy"}
+{"expect":"none","note":"S020 GA1 gap, pinned: a quoted command word. main none","command":"'make' azure-platform-destroy"}
+{"expect":"none","note":"S020 GA1 gap, pinned: a script read with source or a dot. main none","command":"source infra/terraform/azure.sh destroy"}
+{"expect":"ask","note":"S020 GA1 e-s-31: a TF_ assignment does not make an AWS target behind env -S an Azure name: the AWS apply asks with its own wording. main none","command":"TF_VAR_x=1 env -S '' make -m \"aws-apply\""}
+{"expect":"deny","note":"S020 GA1 e-s-32: the same with the AWS removal, which denies with the AWS wording. main none","command":"TF_VAR_x=1 env -S '' make -m \"aws-destroy\""}
+{"expect":"deny","note":"S020 GA1 e-h1-19: the AWS twin of e-h1-17, for the record: main denies make git commit -m \"aws-destroy\" (G5), so the Azure deny is parity. main deny","command":"make git commit -m \"aws-destroy\""}
+{"expect":"none","note":"S020 GA1 gap, pinned: a quoted remote command after ssh is not a body the scanner opens (main's AWS regex reads through the quote, the command-word gate does not). main none","command":"ssh host \"make azure-platform-destroy\""}
+{"expect":"none","note":"S020 GA1 e-pt-07: a file name that only starts with a target is not a name (the AWS twin has no boundary; the Azure names have one). main none","command":"rg -n \"script\" docs/azure-platform-plan.md"}
+{"expect":"none","note":"S020 GA1 e-pt-08: a file name that only starts with the script's name is not a name. main none","command":"grep -n script docs/azure.sh.md"}
+{"expect":"deny","note":"S020 GA1 e-tr-05: the trace form near a name, in an echo: false alarm by design, as the AWS twin (echo \"bash -x aws.sh\" denies on main). main none","command":"echo \"bash -x infra/terraform/azure.sh plan\""}
+{"expect":"ask","note":"S020 GA1 e-as-16: AZURE_CONFIG_DIR alone decides: the script's check sub-command asks nothing by itself. main none","command":"AZURE_CONFIG_DIR=/tmp/azcfg infra/terraform/azure.sh validate"}
+{"expect":"none","note":"S020 GA1 e-n-40: an option glued to a quoted word is one word, not a target after a blank. main none","command":"make -m\"azure-platform-destroy\""}
 {"expect":"none","note":"S071 G6, gap, pinned (G6 keeps the window of 80 bytes): a flag of 90 bytes does not fit in it (G4 read it). main none, G5 none, now none","command":"bash -aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -c 'make -m \"aws-destroy\"'"}

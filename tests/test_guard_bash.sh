@@ -910,4 +910,60 @@ ask_for "the first review's worst shape followed by a denied part is denied" den
   "git $(repeat "$esc_quote" 1500)$(repeat " -m ''" 700); git push --force"
 ask_for "every trigger word and padding followed by a denied part is denied" deny \
   "git aws rest record azure- credential MERIDIAN_ python3 $(repeat "$esc_quote" 3900)$(repeat '&' 100); git push --force"
+
+# S020 (GA1): the rules added for the Azure platform wrapper's names (make
+# azure-platform-plan, -apply, -destroy and infra/terraform/azure.sh). What each
+# says, and the cost of the passes they add: a scanner that is a copy of the AWS
+# one (the Azure names, the script as a second command word, a quoted word after
+# env -S), run when the command holds azure-platform, azure.sh, or aws-, make and
+# -S together; and the prose pass, run when it holds azure-platform or azure.sh.
+# Each shape is built like the worst one above with the added gates' words in it,
+# and stays under the one CPU bound; a denied part after the worst shape is denied.
+reason_check() { # $1=what $2=the command $3=a glob the reason must match
+  local reason_text
+  reason_text="$(reason_of "$2")"
+  # shellcheck disable=SC2254  # the pattern is a glob given by the caller
+  case "$reason_text" in
+    $3) echo "ok   the reason for ${1} says what it is for" ;;
+    *)
+      echo "FAIL the reason for ${1} does not match ${3}: $reason_text"
+      fail=1
+      ;;
+  esac
+}
+reason_check "the Azure removal" 'make azure-platform-destroy' "*owner's*hard rule 8*terminal of your own*Removal*"
+reason_check "the Azure apply" 'make azure-platform-apply' "*COST MONEY*owner runs it*terminal of their own*"
+reason_check "the Azure plan" 'make azure-platform-plan' "*sign in*remote state*operator's address*foundation's firewall*"
+reason_check "the script's removal" 'infra/terraform/azure.sh destroy' "*owner's*hard rule 8*"
+reason_check "AZURE_CONFIG_DIR in front of a name" 'AZURE_CONFIG_DIR=/tmp/x make azure-platform-plan' "*AZURE_CONFIG_DIR*sign-in*owner's own*"
+reason_check "a TF_ assignment in front of a name" 'TF_VAR_x=1 make azure-platform-plan' "*TF_* or ARM_*"
+reason_check "an ARM_ assignment in front of a name" 'ARM_TENANT_ID=x infra/terraform/azure.sh plan' "*TF_* or ARM_*"
+reason_check "a pseudo-terminal around a name" 'unbuffer make azure-platform-apply' "*pseudo-terminal*owner's confirmation*"
+reason_check "a trace around a name" 'bash -x infra/terraform/azure.sh plan' "*traced*start-up file*"
+reason_check "the AWS removal behind env -S and a quoted word" "env -S '' make -m \"aws-destroy\"" "*AWS environment*hard rule 8*no session holds the credentials*"
+reason_check "the AWS apply behind env -S and a quoted word" "env -S '' make -m \"aws-apply\"" "*AWS environment*COST MONEY*"
+cpu_shape "every trigger word with the Azure names, 3850 escaped quotes and 300 separators" \
+  "git aws rest record azure- credential MERIDIAN_ python3 make aws- azure-platform-apply azure.sh -S env $(repeat "$esc_quote" 3850)$(repeat '&' 300)"
+ask_for "the Azure worst shape followed by a denied part is denied" deny \
+  "git aws rest record azure- credential MERIDIAN_ python3 make aws- azure-platform-apply azure.sh -S env $(repeat "$esc_quote" 3850)$(repeat '&' 100); git push --force"
+ask_for "the Azure worst shape followed by the Azure removal is denied" deny \
+  "git aws rest record azure- credential MERIDIAN_ python3 make aws- azure-platform-apply azure.sh -S env $(repeat "$esc_quote" 3850)$(repeat '&' 100); make azure-platform-destroy"
+cpu_shape "1550 repetitions of make before a near-miss Azure target" \
+  "$(repeat 'make ' 1550)azure-platform-applyx"
+cpu_shape "1600 repetitions of bash before a near-miss script name" \
+  "$(repeat 'bash ' 1600)infra/terraform/azure.shx"
+cpu_shape "800 prefixes with option arguments before make and an Azure target" \
+  "git azure-platform-plan; $(repeat 'sudo -u x env -u y ' 400)make -m \"azure-platform-apply\""
+cpu_shape "1000 sudo -u without an argument-taking end, before an Azure name" \
+  "git azure-platform-plan; $(repeat 'sudo -u ' 1000)git commit"
+cpu_shape "400 repetitions of env -i -S with a quoted word before an AWS target behind it" \
+  "git azure-platform-plan aws- make; $(repeat "env -i -S 'q' " 400)make -m \"aws-apply\""
+cpu_shape "100 shells with a run of -o pairs, each before a quoted piece, then an Azure target" \
+  "git azure-platform-plan; $(repeat "bash $(repeat '-o x ' 12)-c 'q' " 100)make -m \"azure-platform-apply\""
+cpu_shape "1800 quoted pieces before an Azure target" \
+  "git azure-platform-plan; x $(repeat "'a' " 1800)make azure-platform-apply"
+cpu_shape "300 prefixes and 1200 quoted pieces before an Azure target" \
+  "git azure-platform-plan; $(repeat 'sudo -u x ' 300)$(repeat "'a' " 1200)make azure-platform-apply"
+cpu_shape "600 assignments before an Azure target" \
+  "git azure-platform-plan; $(repeat 'TF_VAR_a=1 ' 600)make azure-platform-apply"
 exit "$fail"
