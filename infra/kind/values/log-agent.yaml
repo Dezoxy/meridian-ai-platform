@@ -162,12 +162,42 @@ ports:
   zipkin:
     enabled: false
 
+# Why the limits are these (S073). On the kind cluster, 2026-10-08, this pod
+# sat at its old memory limit (192Mi, 191 of 192 in use), read 2.2 GB/s from disk
+# and used 1.1 to 1.3 cores, minutes after a start and for hours; the node's pod
+# log files are 20 MB, and Prometheus's own series for the pod said 0.001 cores.
+# What a rig of one container showed (the pinned image, the receiver and the
+# processors of this file, a tree of fixture files, 2026-10-08; infra/kind/README.md
+# has the table): the pod is not stuck on a file. The binary of the contrib build
+# is 520 MB and the process needs well over 100 MiB of its pages in the page cache
+# of the container's control group besides its own heap (about 50 MiB idle). At
+# 192Mi it has about 140 MiB of cache while idle and a burst of lines (700 lines
+# began it) grows the heap by 15 to 50 MiB, which the cache pays for: the pages
+# of the mapped executable (inferred: the control group's mapped file pages fell
+# from 110 MiB to 3) are evicted and read again at once, 6 to 7 GB/s of reads and
+# a core of CPU spent in page faults, with the exporter idle, and it does not end
+# when the burst does, because the heap stays. The same burst at 384Mi read
+# nothing. What did not matter: a file removed, its directory removed, a file
+# rotated, no checkpoint, no retry, no memory_limiter. A dead collector (the
+# exporter failing) makes it worse, as the queue is heap too.
+#   - memory limit 384Mi: with 256Mi a burst alone is calm and a burst with the
+#     collector down is not; with 320Mi both are calm; 384Mi keeps 180 MiB of
+#     cache in the second case. It is not a cure for everything: 140,000 lines at
+#     once with the collector down still pushed the pod to 270 MiB of anon and the reads
+#     to 0.3 to 2.9 GB/s. It costs 192Mi more on a node that has room; the
+#     request stays what the idle agent needs. The chart takes the
+#     memory_limiter's thresholds and GOMEMLIMIT from this limit.
+#   - CPU limit 500m: the idle agent uses 0.01 cores and the heaviest burst
+#     measured (140,000 lines at once, 20 s) averaged 0.11. A CPU limit is a
+#     ceiling for a fault and it does not END one: the spinning pod, limited to
+#     0.25 cores, still read 1.7 GB/s. The memory limit is what removes the cause.
 resources:
   requests:
     cpu: 25m
     memory: 64Mi
   limits:
-    memory: 192Mi
+    cpu: 500m
+    memory: 384Mi
 
 # Group root reads the node's files (see the header); fsGroup would not apply to
 # a hostPath.

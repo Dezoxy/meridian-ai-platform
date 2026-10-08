@@ -1960,8 +1960,9 @@ and writing under the directory needs the node. What bounds the pod:
   collector's 4318 alone, so what it reads can go to Loki and nowhere else (the
   cluster's DNS pods answer any name, which a few bytes can ride; the policy
   does not stop that)
-- memory and CPU requests, a memory limit of 192 MiB and the `memory_limiter`
-  first in the pipeline
+- memory and CPU requests, a memory limit of 384 MiB (192 MiB until S073, see
+  "Its resources" below), a CPU limit of 500m and the `memory_limiter` first in
+  the pipeline
 - smoke reads the live DaemonSet on every run (check 4) and fails when a chart
   bump changed one of: the one hostPath and its read-only mount, no host
   network, PID or port, `runAsNonRoot`, no service-account token
@@ -1994,6 +1995,84 @@ line. A flood of lines from one pod shares the limiter with the others and may
 stall or drop theirs (not tried), and kubelet's rotation (five files of 10 MiB
 for each container) loses what the agent had not read before a rename. A
 DaemonSet that does not exist leaves no series, so no alert says so.
+
+**Its resources, and the spin of 2026-10-08 (S073).** On the kind cluster the
+agent used 1.1 to 1.3 cores minutes after a start, sat at its memory limit
+(192 MiB, then 191 in use) and read 2.2 GB/s from disk (read from the pod's
+control group on the host; the node's pod log files are 20 MB). Prometheus's own
+CPU series for the pod said 0.001 cores in the same minute. The pod's output
+held one error before the spin, "Failed to open file ... no such file or
+directory", for a finished CronJob pod's log file that the cluster had just
+removed. A rig of one container (the pinned image, the receiver, processors and
+checkpoint of `values/log-agent.yaml`, a tree of fixture files in the node's
+layout, 192 MiB with no swap and two CPUs, `GOMEMLIMIT` at four fifths of the
+limit, which is what the chart is taken to set: it was not available offline to
+check) showed that the file is not the cause. **The cause measured is
+the memory limit.** The contrib binary is 520 MB; the process wants well over
+100 MiB of its pages in the control group's page cache besides a heap of about
+50 MiB when idle. At 192 MiB there is room for the first only while the heap
+stays small: a burst of lines (700 lines began it) grows the heap by 15 to
+50 MiB and the cache pays; the mapped file pages of the control group fell from
+110 MiB to 3, and the process reads them again as fast as it can evict them (6
+to 7 GB/s of reads, 700,000 page refaults a second, a core spent in page
+faults), with the exporter idle. It does not end when the burst does, because
+the heap stays large. All of this needs the control group to have been charged
+for the binary's pages: a container that finds them resident (in the cache of
+another, deleted control group) looked calm in the same runs, which is how six
+repeats of the first run missed it and why a rig must drop them with
+`posix_fadvise(DONTNEED)` before each start. The executable as the evicted file
+is inferred from the mapped pages, not profiled.
+
+| Case (192 MiB, 2 CPUs, one change at a time) | CPU, cores | Reads |
+| --- | --- | --- |
+| Idle, 6.5 minutes | 0.01 | 0 |
+| A watched file removed; its directory removed | 0.01 | 0 |
+| The checkpoint names a file that is gone at start | 0.01 | 0 |
+| A file rotated (300 new lines) | 0.08 to 0.76 | 0.5 to 5.6 GB/s |
+| 700, 1,400, 2,800, 5,600 lines at once, one after the other | 0.04, 0.08, 0.09, 0.28 | 0.24, 0.6, 0.6, 2 GB/s |
+| 7,000 then 28,000 lines at once | 0.1 to 0.95 | 0.6 to 6.7 GB/s |
+| 28,000 lines, no `memory_limiter` | 1.1 | 7.3 GB/s |
+| 28,000 lines, `retry_on_failure` off | 1.1 | 7.4 GB/s |
+| 28,000 lines, no checkpoint (`storage` off) | 1.0 | 7.5 GB/s |
+| 7,000 lines, the exporter failing (nothing listens) | 1.3 | 7.4 GB/s |
+| 28,000 lines, the CPU limited to 0.25 cores | 0.25 (throttled) | 1.7 GB/s |
+| 28,000 lines, 256 MiB | 0.04 | 0.02 GB/s |
+| 140,000 lines, 256 MiB | 0.14 | 0.05 GB/s |
+| 7,000 then 28,000 lines, the exporter failing, 256 MiB | 1.0 | 7.4 GB/s |
+| 7,000 then 28,000 lines, the exporter failing, 320 MiB | 0.05 | 0.005 GB/s |
+| 28,000 lines, 384 MiB (35,000 in, 35,000 out); 140,000 lines (140,000 in, 140,000 out) | 0.04; 0.11 | 0.002; 0 |
+| 7,000 then 28,000 lines, the exporter failing, 384 MiB | 0.05 | 0.003 GB/s |
+| 28,000 lines, 384 MiB, the CPU limited to 0.5 cores | 0.04 (throttled 0.08) | 0 |
+| 140,000 lines, the exporter failing, 384 MiB | 0.55, then 0.05 to 0.12 | 2.9, then 0.3 to 0.8 GB/s |
+| 28,000 lines, 512 MiB | 0.03 | 0 |
+
+The rig ran 15 to 20 s samples of the container's CPU (from `/proc/<pid>/stat`)
+and reads (the control group's `io.stat`) after each event, with one container
+at a time. A file removed, a directory removed and a checkpoint naming a gone
+file do nothing by themselves, and a rotation does only through its 300 new
+lines; the "Failed to open file" line is therefore consistent with a
+coincidence, and no trigger of its own was found. **What the values do now** (`resources` in
+[`values/log-agent.yaml`](values/log-agent.yaml), tested): a memory limit of
+384 MiB (320 MiB held and 256 MiB did not with the exporter failing; 384 MiB
+keeps 180 MiB of cache then) and a CPU limit of 500m (the idle agent uses 0.01
+cores and the heaviest burst measured averaged 0.11). **A CPU limit throttles
+and does not end a spin**: at 0.25 cores the pod still read 1.7 GB/s, a quarter
+of the rate; the memory limit is what removes the cause. It is not a cure for
+everything: 140,000 lines at once with the exporter failing still pushed the
+pod's anonymous memory to 270 MiB at 384 MiB and the reads to 0.3 to 2.9 GB/s.
+No line was lost or repeated by the larger limit (the rows' counts, from the
+exporter's own count). **Not known:** what raised the
+heap on the cluster's instance (its trigger is not identified, only a
+mechanism that reproduces it); whether the node's cache accounting matches the
+rig's; whether the instance of 8.7 % of a core over a day was calm for the
+same reason; the pod's CPU profile (none was taken). **To see it again on the
+cluster**, measure the agent's process on the node, not Prometheus's series
+(which said 0.001 cores while the process used more than one): read its CPU
+time twice, 30 s apart (`docker top` on the node's container, the `TIME`
+column of `otelcol-contrib`), and the control group's `io.stat` (`rbytes`) and
+`memory.stat` (`workingset_refault_file`, `file_mapped`) for the pod. A
+healthy agent shows a CPU time that moves by under a second in 30 and no
+refaults; the spin shows a core and hundreds of thousands of refaults a second.
 
 Pod Security: `logging` is labelled `privileged` for `warn` and `audit`, as the
 other namespaces are labelled and never enforced. `baseline` forbids a hostPath
@@ -2781,7 +2860,8 @@ that accepts and never answers.
 
 The laptop this was built on gives Docker Desktop 7.65 GiB. The memory limits
 of the components add up to about 4.4 GiB (the log agent of S064 adds a limit
-of 192 MiB, a request of 64 MiB, and no measurement yet). Measured with
+of 192 MiB, a request of 64 MiB, and no measurement yet; S073 raised its limit
+to 384 MiB, which the sum does not include). Measured with
 `docker stats` on the node container on 2026-09-30, after a `make up` from no
 cluster, a second `make up` and one `make smoke`: 3.6 GiB, which includes the
 Kubernetes control plane, the kubelet and containerd. The six Meridian services
