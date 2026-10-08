@@ -370,9 +370,9 @@ source_modules = [
     "meridian.platform.toolserver",
     "meridian.platform.knowledge_mcp",
     "meridian.platform.policy_mcp",
+    "meridian.platform.claims_mcp",
     "meridian.workloads.claim_brief",
     "meridian.workloads.claims_triage.graph",
-    "meridian.workloads.claims_triage.mcp_server",
 ]
 forbidden_modules = [
     "meridian.platform.common.signin",
