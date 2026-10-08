@@ -1,0 +1,116 @@
+# The namespace `identity` and its NetworkPolicies (S021, Y2b): the local sign-in
+# issuer, Keycloak, which is an add-on that is OFF unless MERIDIAN_IDENTITY=keycloak
+# (infra/kind/identity.sh applies this file; `make up` with the switch off applies
+# nothing of it, and no namespace is made). Entra ID is the issuer on Azure; this is
+# its stand-in on kind, and nothing here is for Azure. Written and tested without a
+# cluster, and run on kind once (run KR1, 2026-10-08): the edge's proxy and the
+# Claims API's pod reached Keycloak on 8080 through these policies, and the pod went
+# Ready. A refusal by them (a pod that is not admitted) is untried; the README's
+# list says what else.
+#
+# The namespace is made here and not in namespaces.yaml, which `make up` applies
+# always: a cluster with the switch off has no `identity`. It warns and audits at
+# `restricted` and enforces nothing, as the other namespaces do; the pod meets
+# `restricted` as written (uid 1000, no privilege escalation, every capability
+# dropped, seccomp RuntimeDefault, no host namespace, hostPath or hostPort, and
+# emptyDir and Secret volumes only), which the API server has not confirmed. The
+# label meridian.local/addon lets a person list what the switch made.
+#
+# Three policies in the namespace:
+#   default-deny  selects every pod and allows nothing, in either direction.
+#   egress-dns    gives every pod DNS and nothing else: the cluster's DNS pods,
+#                 UDP and TCP 53. Keycloak in development mode keeps its database in
+#                 its own pod and calls nothing, so DNS is all its egress.
+#   keycloak      selects the Keycloak pod and admits, on its port 8080 and nothing
+#                 else, the edge's proxy pods (the browser's calls: the login page,
+#                 the discovery document, the keys and the token) and the Claims
+#                 API's pods in `meridian` (the keys and the token). The health port
+#                 9000 has no rule: a call that starts on the node passed a
+#                 default-deny policy on this cluster's network plugin (measured on
+#                 kind 2026-10-07, see cert-manager-networkpolicy.yaml, which
+#                 quotes the Kubernetes page and its caveats), and the same was
+#                 seen for this pod on kind 2026-10-08, run KR1: the startup probe
+#                 on 9000 passed (after one refused connection, while the server
+#                 started) and the pod went Ready.
+# Both peers are named by namespace AND pod label. The two OTHER ends of those two
+# connections are policies of their own in identity-peers-networkpolicy.yaml,
+# because the edge's namespace and the chart each deny egress by default and their
+# files do not change with the switch.
+#
+# Plain HTTP between the edge and Keycloak and between the Claims API and Keycloak:
+# said, labelled, accepted on a disposable development cluster (threat model T-117),
+# and a backlog row (S094: TLS to the issuer; a business runs its issuer behind TLS
+# end to end). The policy keys on a pod's labels and not on who the pod is (T-08).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: identity
+  labels:
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+    app.kubernetes.io/part-of: meridian
+    meridian.local/addon: identity
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: identity
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-dns
+  namespace: identity
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: keycloak
+  namespace: identity
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: envoy-gateway-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: proxy
+              gateway.envoyproxy.io/owning-gateway-name: edge
+      ports:
+        - port: 8080
+          protocol: TCP
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: meridian
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: claims-api
+      ports:
+        - port: 8080
+          protocol: TCP

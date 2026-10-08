@@ -253,7 +253,7 @@ make registry   # the registry against its schemas and the tool contracts
 ### 11 to 13: what stops a bad change
 
 ```bash
-make lint       # "Contracts: 6 kept, 0 broken.", then the file size check's line
+make lint       # "Contracts: 9 kept, 0 broken.", then the file size check's line
 ```
 
 The import contracts are the architecture's rules as a failing build: no

@@ -273,6 +273,19 @@
       ]
     },
     {
+      "description": "The mock OIDC issuer on kind (KEYCLOAK_IMAGE in pins.env, S021) is not a chart's image, so Renovate proposes its tag as well as its digest. The sign-in module checks the claims it issues, and a release can rename or move one, so it has a group of its own. This rule comes after the 'kind platform' one so that its group wins.",
+      "matchPackageNames": [
+        "quay.io/keycloak/keycloak"
+      ],
+      "matchDatasources": [
+        "docker"
+      ],
+      "groupName": "identity issuer",
+      "prBodyNotes": [
+        "This image signs the staff in on the kind platform (`KEYCLOAK_IMAGE` in `infra/kind/pins.env`). The sign-in module checks what its tokens carry: `typ`, `azp`, `aud`, `roles` and the `iss` string that the hostname options decide. A green check proves none of it. Run `MERIDIAN_KEYCLOAK_RIG=1 uv run pytest tests/meridian/test_keycloak_rig.py` on this branch (it starts the image in a container and needs 2.5 GB free; it records what the tokens carry), then `make up` and `make smoke`, and put what they printed in a comment."
+      ]
+    },
+    {
       "description": "The test database and the cluster's database carry the same PostgreSQL, pgvector and OS release, so they arrive together.",
       "matchPackageNames": [
         "pgvector/pgvector",

@@ -98,9 +98,11 @@ def test_the_alert_rules_check_runs_after_the_certificate_policy_check() -> None
         "check_certificate_policy",
     ]
     assert calls[10] == "check_alert_rules"
-    # The telemetry stores' check (S072, contract M3b) runs after it, and last.
+    # The telemetry stores' check (S072, contract M3b) runs after it, and then,
+    # since S021 (Y2b), the sign-in issuer's, last: a SKIP unless the add-on is on.
     assert calls[11] == "check_telemetry_stores"
-    assert calls[12].startswith("if ((failures")
+    assert calls[12] == "check_issuer"
+    assert calls[13].startswith("if ((failures")
 
 
 def test_the_cost_panel_still_prints_its_three_lines_through_the_shared_function() -> (

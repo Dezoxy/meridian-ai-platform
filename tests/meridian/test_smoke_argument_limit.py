@@ -293,6 +293,9 @@ ANSWER_VARIABLES = {
     # piped to openssl and never an argument; and the probe's one-word answer.
     "pem",
     "stores_answer",
+    # Check 13 (S021, Y2b): the Keycloak pods' list, read by jq from a here-string
+    # and never an argument (the issuer's documents are read the same way).
+    "pods",
     "policies",
     "policy",
     "primary",
