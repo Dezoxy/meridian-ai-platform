@@ -60,6 +60,10 @@ set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/gateways.sh"
 # A mistyped MERIDIAN_IDENTITY stops here, before anything is done (common.sh).
 identity_switch_check
+# The same for MERIDIAN_SIGNIN (S021, Y4b). With `staff` identity.sh also makes the
+# Secret the Claims API reads; without the add-on nothing does, and identity.sh's
+# `note` says so at the end of this script.
+signin_switch_check
 
 readonly HELM_TIMEOUT=10m
 readonly ROLES_TIMEOUT=300

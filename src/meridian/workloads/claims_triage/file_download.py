@@ -67,10 +67,11 @@ import threading
 import time
 import uuid
 from collections import deque
-from collections.abc import MutableMapping
+from collections.abc import MutableMapping, Sequence
+from functools import partial
 
 import psycopg
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, Request, params
 from fastapi.responses import Response
 from opentelemetry import trace
 from opentelemetry.trace import Tracer
@@ -217,9 +218,11 @@ def download_headers(
     }
 
 
-def refused(status: int, detail: str, retry_after: int) -> Response:
+def refused(
+    status: int, detail: str, retry_after: int, *, signin: bool = False
+) -> Response:
     """The pages' error page for a brake, with the wait."""
-    response = render_error(status, detail)
+    response = render_error(status, detail, signin=signin)
     response.headers["Retry-After"] = str(retry_after)
     return response
 
@@ -237,15 +240,29 @@ def keep_file_id_out_of_server_span(file_id: str) -> None:
             server.set_attribute(key, value.replace(file_id, REDACTED_FILE_ID))
 
 
-def add_download_route(app: FastAPI, *, dsn: str, tenant: str, tracer: Tracer) -> None:
+def add_download_route(
+    app: FastAPI,
+    *,
+    dsn: str,
+    tenant: str,
+    tracer: Tracer,
+    guards: Sequence[params.Depends] = (),
+) -> None:
     """Add the download. Called only when the switch is on: with it off the path
     is no route and answers the framework's 404. A plain ``def``: the read is
-    synchronous, so it runs in the threadpool."""
+    synchronous, so it runs in the threadpool. ``guards`` are the sign-in's
+    dependencies (S021, Y4), after the two checks of the request that need no
+    identity, so a post from another site is a 403 before it is a 401; empty by
+    default."""
     window = RateWindow(DOWNLOAD_RATE_PER_MINUTE, DOWNLOAD_RATE_WINDOW_SECONDS)
     permits = threading.BoundedSemaphore(MAX_CONCURRENT_DOWNLOADS)
 
+    # The pages say there is no sign-in unless one is on, which the guards show.
+    signin = bool(guards)
+    error_page = partial(render_error, signin=signin)
+
     def not_found() -> Response:
-        return render_error(404, NO_SUCH_CLAIM_DETAIL)
+        return error_page(404, NO_SUCH_CLAIM_DETAIL)
 
     def serve(
         claim_id: str, identifier: uuid.UUID, head: bool, scope: MutableMapping
@@ -266,7 +283,7 @@ def add_download_route(app: FastAPI, *, dsn: str, tenant: str, tracer: Tracer) -
                 if found.media_type not in EXTENSIONS:
                     # The table's CHECK keeps a stored type in the list; a type
                     # outside it is a table someone changed, and is not served.
-                    return render_error(500, INTERNAL_ERROR)
+                    return error_page(500, INTERNAL_ERROR)
                 if not head:
                     # Written and committed before the response exists: no row,
                     # no bytes.
@@ -283,10 +300,10 @@ def add_download_route(app: FastAPI, *, dsn: str, tenant: str, tracer: Tracer) -
                     )
             except AuditUnavailable as exc:
                 mark_error(span, exc)
-                return render_error(503, AUDIT_UNAVAILABLE)
+                return error_page(503, AUDIT_UNAVAILABLE)
             except psycopg.Error as exc:
                 mark_error(span, exc)
-                return render_error(*claim_database_failure(exc, claim_id))
+                return error_page(*claim_database_failure(exc, claim_id))
         if isinstance(found, FileHead):
             size, body = found.size_bytes, b""
         else:
@@ -307,7 +324,11 @@ def add_download_route(app: FastAPI, *, dsn: str, tenant: str, tracer: Tracer) -
         DOWNLOAD_PATH,
         methods=["GET", "HEAD"],
         include_in_schema=False,
-        dependencies=[Depends(refuse_encoded_path), Depends(require_same_origin)],
+        dependencies=[
+            Depends(refuse_encoded_path),
+            Depends(require_same_origin),
+            *guards,
+        ],
     )
     def download_file(claim_id: str, file_id: str, request: Request) -> Response:
         # Both ids are parsed here and not by the framework, whose answer to a
@@ -320,9 +341,11 @@ def add_download_route(app: FastAPI, *, dsn: str, tenant: str, tracer: Tracer) -
             return not_found()
         keep_file_id_out_of_server_span(file_id)
         if not window.take():
-            return refused(429, RATE_DETAIL, DOWNLOAD_RATE_WINDOW_SECONDS)
+            return refused(
+                429, RATE_DETAIL, DOWNLOAD_RATE_WINDOW_SECONDS, signin=signin
+            )
         if not permits.acquire(blocking=False):
-            return refused(503, BUSY_DETAIL, BUSY_RETRY_SECONDS)
+            return refused(503, BUSY_DETAIL, BUSY_RETRY_SECONDS, signin=signin)
         try:
             return serve(
                 claim_id, uuid.UUID(file_id), request.method == "HEAD", request.scope

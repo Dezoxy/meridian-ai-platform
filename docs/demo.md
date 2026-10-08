@@ -21,11 +21,13 @@ says so before a viewer asks:
   sends the claim to a person. A real model, `gpt-4o` on Azure OpenAI in
   Sweden Central, answered the first 40 golden claims from a laptop; CI replays
   that recording on every pull request (minutes 10 to 12).
-- **Nothing runs in Azure**, and on kind there is no sign-in and no TLS at
-  the edge. The services do prove which service calls them, by mutual TLS
-  (S055), but the tenant is the calling service's word, bounded by its entry
-  in the registry, and not a person's. Sign-in and TLS at the edge are
-  milestone M2.
+- **Nothing runs in Azure**, and on kind the demo runs with no sign-in and
+  no TLS at the edge. A staff sign-in exists behind a switch that is off
+  (S021: seen on kind against a mock issuer, 2026-10-08; `make demo`
+  carries no token yet, so the demo leaves it off). The services do prove
+  which service calls them, by mutual TLS (S055), but the tenant is the
+  calling service's word, bounded by its entry in the registry, and not a
+  person's. Sign-in on Azure and TLS at the edge are milestone M2.
 - **All data is synthetic**: the policies, the claims, the names.
 
 ## Before the viewer arrives

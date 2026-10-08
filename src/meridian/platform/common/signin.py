@@ -1,6 +1,7 @@
 """Who a person is: the check of a bearer token, and the types the session and
-the routes share (S021, T-05). Designed for S021 and wired to no route: nothing
-in the services calls it, and the switch that would turn sign-in on is off.
+the routes share (S021, T-05). The Claims API uses it for the staff routes and
+pages when ``MERIDIAN_SIGNIN`` is ``staff`` (``staff_signin``), off by default;
+no other service uses it.
 
 ``check_bearer`` turns a raw access token into a ``Principal`` or raises a
 refusal. It trusts one issuer (a realm), pinned by its settings. The order is

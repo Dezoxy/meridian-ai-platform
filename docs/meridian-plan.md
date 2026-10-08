@@ -939,7 +939,11 @@ overdue to an adjuster and cleans up what a failed request left behind, a
 claimant submits a claim (the API stamps its report date, and a decided or still
 open claim counts in the policy's claim history), reads its status, reports
 documents and withdraws it on server-rendered pages that say nothing of the
-proposal (no sign-in yet), `make demo-seed` fills the adjuster's queue and the
+proposal (no sign-in yet), the adjuster's pages and the decision, triage and
+brief routes demand a staff sign-in with the adjuster role when a switch that
+is off by default is turned on (S021: seen on kind against a mock issuer,
+never in a browser, and `make demo` leaves it off),
+`make demo-seed` fills the adjuster's queue and the
 claimant's lookup on kind with the first forty synthetic claims, deciding none
 (S098), CI grades the golden set's proposals with rules and
 an LLM judge against a reviewed baseline (the model's answers recorded from

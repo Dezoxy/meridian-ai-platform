@@ -21,11 +21,14 @@ Mistral. On kind the model is simulated (replay mode); network policies say
 which pod may call which (S019), and since S055 the Agent Runtime, the Model
 Gateway and the three tool servers serve mutual TLS and tell their callers
 apart by certificate (ADR 4). The edge reaches the Claims Triage App over
-plain HTTP and has no TLS, and there is no sign-in for people, so a tenant is
-the calling service's word, bounded by its entry in the registry: TLS at the
-edge and the sign-in (S020, S021) are designed; of the sign-in, S021 has built
-and tested a token check, a session cookie and a route guard that no route
-calls (implemented, not wired), and nothing issues a token on kind or Azure.
+plain HTTP and has no TLS, and by default there is no sign-in for people, so a
+tenant is the calling service's word, bounded by its entry in the registry: TLS
+at the edge (S020) is designed. Of the sign-in, S021 has built a token check, a
+session cookie, a route guard and the pages' flow, and since 2026-10-08 the
+Claims Triage App's staff routes and pages use them behind a switch that is off
+by default (implemented; seen on kind against a mock issuer that is an
+opt-in add-on); the tenant from the token, the actor on a decision and Entra ID
+are designed, and nothing issues a token on Azure.
 Since S037 (2026-10-06) the
 Agent Runtime hosts a second agent framework, Microsoft Agent Framework, behind
 the same `Host` protocol as LangGraph, for a second workload, the claim brief

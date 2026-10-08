@@ -313,7 +313,12 @@ class UnexpectedErrorMiddleware:
         except Exception as exc:
             logger.error("unexpected %s answering a request", type(exc).__name__)
             if started:  # too late for an answer; let the server cut the stream
-                raise
+                # The instrumentation records the text of what leaves here on
+                # the span, and a route's exception can quote a subject: a
+                # fresh one carries the class name and nothing else.
+                raise RuntimeError(
+                    f"unexpected {type(exc).__name__} after the response started"
+                ) from None
             await error_answer(500, INTERNAL_ERROR)(scope, receive, send)
 
 

@@ -2,7 +2,8 @@
 refused, the transaction cookie that carries the sign-in from the redirect to
 the callback, the path a person is sent back to, and the PKCE challenge. The
 flow itself is ``signinflow``; this is its vocabulary, in a module of its own to
-keep both small. Wired to no route.
+keep both small. Used by the Claims API's staff sign-in (``staff_signin``) when
+``MERIDIAN_SIGNIN`` is ``staff``, off by default; by no other service.
 
 The transaction cookie is ``t1.<payload>.<mac>``: compact JSON in base64url and
 an HMAC-SHA-256 of ``t1.<payload>``, compared in constant time under every key

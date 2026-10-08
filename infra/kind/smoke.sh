@@ -57,6 +57,9 @@ set -euo pipefail
 need_tools docker kubectl curl jq base64 openssl timeout
 # A mistyped MERIDIAN_IDENTITY stops here, before the cluster is asked (common.sh).
 identity_switch_check
+# The same for MERIDIAN_SIGNIN (S021, Y4b): with `staff`, check 6 expects the queue to
+# send a person with no session to the issuer (smoke.d/06-adjuster-pages.sh).
+signin_switch_check
 require_local_docker
 need_cluster
 

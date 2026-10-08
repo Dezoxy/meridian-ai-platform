@@ -113,6 +113,26 @@ identity_switch_check() {
 }
 identity_on() { [[ "${MERIDIAN_IDENTITY-}" == keycloak ]]; }
 
+# The switch of the staff sign-in of the Claims API (S021, Y4b): MERIDIAN_SIGNIN is
+# empty or `off` (off, the default: `make deploy` and `make smoke` do what they did
+# before) or `staff` (deploy.sh adds values/signin.yaml and the generation of the
+# Secret claims-api-signin to the release; identity.sh makes that Secret). Any other
+# word is refused with a usage line, as the identity switch's. Only up.sh, deploy.sh,
+# smoke.sh and identity.sh read it, at their start; the other scripts never do.
+signin_switch_check() {
+  case "${MERIDIAN_SIGNIN-}" in
+    "" | off | staff) ;;
+    *) die "usage: MERIDIAN_SIGNIN must be empty or off (the default) or staff (the staff sign-in of the Claims API on kind: infra/kind/README.md, 'The sign-in issuer'); for example MERIDIAN_IDENTITY=keycloak MERIDIAN_SIGNIN=staff make deploy" ;;
+  esac
+}
+signin_on() { [[ "${MERIDIAN_SIGNIN-}" == staff ]]; }
+# The Secret in `meridian` that the Claims API reads the pages client's credential
+# and the cookie's key from (keys client-credential and session-key): identity.sh
+# makes it, deploy.sh reads it by name, and values/signin.yaml names it (a test ties
+# the three).
+# shellcheck disable=SC2034  # read by the scripts that source this file
+readonly SIGNIN_SECRET=claims-api-signin
+
 # kctl_classify ARGS...: sets ${kctl_class} to "request" (add the flag), "outer"
 # (run under timeout), "waits" (wait and rollout status: run under timeout for
 # their own --timeout plus a margin) or "none" (a stream, or a call that has its

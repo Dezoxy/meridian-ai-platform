@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Write the staff realm of the mock issuer (Keycloak) and the credentials that go
-# with it: `identity-realm.sh OUTPUT_DIR REDIRECT_URI WEB_ORIGIN` (S021, Y2a).
+# with it: `identity-realm.sh OUTPUT_DIR REDIRECT_URI WEB_ORIGIN [POST_LOGOUT_URI]`
+# (S021, Y2a).
 # Nothing here touches a cluster or a container; it makes two files:
 #
 #   OUTPUT_DIR/meridian-staff-realm.json   what Keycloak imports at start
@@ -24,6 +25,17 @@
 #                 Claims API's (infra/kind/values/meridian.yaml), so the value
 #                 assumed is http://claims.meridian.localhost:8088/auth/callback*
 #   WEB_ORIGIN    the pages' origin: scheme, host and port, no path
+#   POST_LOGOUT_URI
+#                 optional (S021, Y4b): where the issuer may send a person back to
+#                 after sign-out, written as the pages client's attribute
+#                 post.logout.redirect.uris. An exact absolute http(s) URL under
+#                 WEB_ORIGIN (the origin, a slash and a path), with no space, no
+#                 query, no fragment and no `*`. Without it the attribute is `+`,
+#                 which Keycloak reads as the client's redirect addresses, and the
+#                 realm file is what it was before the argument existed (the rig
+#                 and older callers pass three arguments). An address that is not
+#                 in the realm is refused by the issuer at sign-out, so a different
+#                 one is a new realm.
 #
 # The realm `meridian-staff` (S021 is the staff half; the claimants' realm is
 # step S093's: a second realm is one more spec function and one more call of
@@ -152,7 +164,8 @@ def client($spec; $s): {
   standardFlowEnabled: true, directAccessGrantsEnabled: false,
   serviceAccountsEnabled: false,
   redirectUris: .redirectUris, webOrigins: .webOrigins,
-  attributes: {"pkce.code.challenge.method": "S256", "post.logout.redirect.uris": "+"}
+  attributes: {"pkce.code.challenge.method": "S256",
+               "post.logout.redirect.uris": (.postLogout // "+")}
 } else {
   standardFlowEnabled: false, directAccessGrantsEnabled: false,
   serviceAccountsEnabled: true, redirectUris: [], webOrigins: []
@@ -191,12 +204,13 @@ $spec as $spec | secrets_map as $s
 '
 
 usage() {
-  die "usage: identity-realm.sh OUTPUT_DIR REDIRECT_URI WEB_ORIGIN (see the comment at the top of the script)"
+  die "usage: identity-realm.sh OUTPUT_DIR REDIRECT_URI WEB_ORIGIN [POST_LOGOUT_URI] (see the comment at the top of the script)"
 }
 
-# The spec of the staff realm: what is chosen, no secret in it.
+# The spec of the staff realm: what is chosen, no secret in it. The fourth
+# argument is the exact post-logout address, or empty for the attribute's `+`.
 staff_spec() {
-  jq -n --arg redirect "$1" --arg origin "$2" --arg audience "${API_AUDIENCE}" \
+  jq -n --arg redirect "$1" --arg origin "$2" --arg post "$3" --arg audience "${API_AUDIENCE}" \
     --argjson roles "${STAFF_ROLES}" --argjson scripts_roles "${SCRIPTS_ROLES}" \
     --argjson cast "${STAFF_CAST}" --argjson groups "${STAFF_GROUPS}" \
     --arg email_domain "${STAFF_EMAIL_DOMAIN}" '
@@ -207,7 +221,8 @@ staff_spec() {
       users: $cast,
       clients: [
         {clientId: "meridian-claims-web", flow: "code",
-         redirectUris: [$redirect], webOrigins: [$origin]},
+         redirectUris: [$redirect], webOrigins: [$origin]}
+        + (if $post == "" then {} else {postLogout: $post} end),
         {clientId: "meridian-scripts", flow: "credentials", roles: $scripts_roles}
       ]
     }'
@@ -288,14 +303,20 @@ write_realm() {
 }
 
 main() {
-  (($# == 3)) || usage
-  local out spec redirect=$2 origin=$3 realm_file=meridian-staff-realm.json
+  (($# == 3 || $# == 4)) || usage
+  local out spec redirect=$2 origin=$3 post="" realm_file=meridian-staff-realm.json
   [[ ${redirect} =~ ^https?://[^[:space:]*]+\*?$ ]] ||
     die "REDIRECT_URI must be an http(s) URL with no space, and at most one '*', at its end"
   [[ ${origin} =~ ^https?://[^/[:space:]*]+$ ]] ||
     die "WEB_ORIGIN must be scheme, host and port only: no path, no trailing slash, no '*'"
+  if (($# == 4)); then
+    post=$4
+    # An empty fourth argument is a mistake, not "none": it is refused too.
+    [[ ${post} =~ ^https?://[^[:space:]*?#]+$ && ${post} == "${origin}"/* ]] ||
+      die "POST_LOGOUT_URI must be an http(s) URL under WEB_ORIGIN (the origin, a slash and a path) with no space, no query, no fragment and no '*'"
+  fi
   need_tools jq openssl sort uniq sed
-  spec="$(staff_spec "${redirect}" "${origin}")"
+  spec="$(staff_spec "${redirect}" "${origin}" "${post}")"
   require_distinct_keys "${spec}"
   out="$(absolute_path "$1")"
   [[ ! -e ${out} || -d ${out} ]] || die "${out} exists and is not a directory"
