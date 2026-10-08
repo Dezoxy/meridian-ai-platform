@@ -23,6 +23,9 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 from servicesupport import GATEWAY_REPLY
 from toolsupport import add_run, seed_world, settings_for, tracer_of
 
+from meridian.platform.claims_mcp.app import (
+    create_app as create_claims_app,
+)
 from meridian.platform.common.db import connect
 from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.platform.policy_mcp.app import create_app as create_policy_app
@@ -30,9 +33,6 @@ from meridian.platform.registry import Registry, load_registry
 from meridian.runtime.model_client import ModelClient
 from meridian.runtime.runs import RunIdentity
 from meridian.runtime.tool_client import ToolClient
-from meridian.workloads.claims_triage.mcp_server.app import (
-    create_app as create_claims_app,
-)
 
 AGENT = "claim-brief"
 TENANT = "claims-triage"

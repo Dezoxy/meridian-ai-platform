@@ -21,6 +21,9 @@ from starlette.testclient import TestClient
 from starlette.types import ASGIApp
 from toolsupport import HOSTS, add_run
 
+from meridian.platform.claims_mcp.app import (
+    create_app as create_claims_mcp,
+)
 from meridian.platform.common.env import SettingsError
 from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.platform.common.throttle import REFUSAL_AUDIT_SECONDS
@@ -34,9 +37,6 @@ from meridian.platform.toolserver.settings import ToolServerSettings
 from meridian.runtime import app as runtime_module
 from meridian.runtime.app import create_app as create_runtime
 from meridian.runtime.settings import RuntimeSettings
-from meridian.workloads.claims_triage.mcp_server.app import (
-    create_app as create_claims_mcp,
-)
 
 REFUSED = {"detail": "request refused"}
 UNUSED_DSN = "postgresql://role@db.invalid/meridian"

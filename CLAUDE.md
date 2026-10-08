@@ -9,7 +9,10 @@ views and the decisions.
 ## Start every session with the plan
 
 [docs/meridian-plan.md](docs/meridian-plan.md) is the single living plan: the
-step list (S000…), the session protocol and the open questions.
+step list (S000…), the session protocol and the open questions. Each step's
+section is a file of its own, `docs/plan/steps/S0NN.md`, and each change-log
+entry is a file in `docs/plan/changelog/`; the plan indexes the first and says
+how the second are named.
 
 - Take the next `todo` steps whose dependencies are `done`, unless the owner
   names others: up to five side by side by default, at most one that
@@ -23,7 +26,10 @@ step list (S000…), the session protocol and the open questions.
   [docs/development-environment.md](docs/development-environment.md): what
   things cost there, how each implementer gets a worktree and a test
   database of its own, and which worker counts to pass.
-- Record decisions and evidence in the step's Part C section, not in chat.
+- Record decisions and evidence in the step's file under `docs/plan/steps/`,
+  not in chat. A change-log entry is a file named for the pull request's
+  number, `docs/plan/changelog/pr-NNNN.md`, added once the pull request exists
+  (`pr-XXXX-<step>.md` until then; CI refuses that name).
 - Private context (job targeting, owner notes) is in the gitignored
   `.context/` folder. Read it only when a step needs it; never copy it into
   tracked files.

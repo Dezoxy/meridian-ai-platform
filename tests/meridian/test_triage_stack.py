@@ -43,7 +43,7 @@ from stacksupport import (
 )
 from toolsupport import application_log, holds
 
-from meridian.workloads.claims_triage.mcp_server import tools as claims_tools
+from meridian.platform.claims_mcp import tools as claims_tools
 from meridian.workloads.claims_triage.models import DECISION_NOTES
 from meridian.workloads.claims_triage.proposal import TriageProposal
 
