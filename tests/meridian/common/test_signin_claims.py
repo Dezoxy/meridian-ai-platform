@@ -4,8 +4,10 @@ the kind of token (``typ`` and ``azp``), the subject claim, the 503, what
 ``check_bearer`` may raise and the settings' variables. Keys are made in the
 test; the key URL is a mock transport; the time is given."""
 
+import ast
 import base64
 import logging
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -13,6 +15,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding
 from pydantic import ValidationError
 
+from meridian.platform.common import signinkeys
 from meridian.platform.common.env import SettingsError
 from meridian.platform.common.signin import (
     ALGORITHMS,
@@ -421,7 +424,8 @@ def test_an_https_key_url_is_accepted_in_every_environment() -> None:
         assert SigninSettings.from_env(env, "staff").keys_url.startswith("https://")
 
 
-# The rule is the model's: no way of building the settings skips it.
+# The rule is the model's: the constructor and ``from_env`` cannot skip it
+# (``model_copy`` and ``model_construct`` can: see the end of this file).
 PLAIN_URL = "http://canary-keys.identity.svc:8080/certs"
 
 
@@ -572,3 +576,72 @@ def test_a_bad_setting_stops_the_start_naming_the_variable_and_holding_no_value(
 def test_the_settings_cannot_be_changed(signin_settings: SigninSettings) -> None:
     with pytest.raises(ValidationError):
         signin_settings.audience = "another"  # type: ignore[misc]
+
+
+# ── what skips the plain-HTTP rule ──────────────────────────────────────────
+SKIPS_VALIDATION = ("model_copy", "model_construct")
+SRC = Path(signinkeys.__file__).resolve().parents[2]  # src/meridian
+
+
+def skipping_calls(source: str) -> list[str]:
+    """The calls to ``model_copy`` or ``model_construct`` in a module's code
+    (its docstrings and comments do not count)."""
+    return [
+        node.func.attr
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in SKIPS_VALIDATION
+    ]
+
+
+def uses_signin(path: Path, source: str) -> bool:
+    return (
+        path.stem.startswith("signin")
+        or "SigninSettings" in source
+        or "common.signin" in source
+    )
+
+
+def test_model_copy_and_model_construct_skip_the_plain_http_rule(
+    signin_settings: SigninSettings,
+) -> None:
+    """They skip validation, as they do for every field of a pydantic model, so
+    the class's docstring says the rule holds for ``from_env`` and the
+    constructor only. If pydantic ever validates here, the docstring is stale."""
+    copied = signin_settings.model_copy(update={"keys_url": PLAIN_URL})
+    built = SigninSettings.model_construct(
+        population="staff",
+        issuer=signin_settings.issuer,
+        audience=signin_settings.audience,
+        environment="",
+        keys_url=PLAIN_URL,
+    )
+
+    assert copied.keys_url == built.keys_url == PLAIN_URL
+
+
+def test_the_scan_for_the_calls_that_skip_validation_sees_one() -> None:
+    code = "def f(settings):\n    return settings.model_copy(update={})\n"
+
+    assert skipping_calls(code) == ["model_copy"]
+    assert skipping_calls("x = 'model_construct'  # model_copy\n") == []
+
+
+def test_no_signin_code_under_src_calls_model_copy_or_model_construct() -> None:
+    """Nothing in ``src/`` calls either on these settings, so the rule holds for
+    every settings object the service builds. Read as: no module that has to do
+    with sign-in (by name, by importing it or by naming its settings) calls
+    either on anything. The count of ``model_copy`` calls elsewhere in ``src/``
+    (other models) is not this test's business."""
+    scanned: list[str] = []
+    found: list[str] = []
+    for path in sorted(SRC.rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        if not uses_signin(path, source):
+            continue
+        scanned.append(path.name)
+        found.extend(f"{path.name}: {call}" for call in skipping_calls(source))
+
+    assert {"signin.py", "signinguard.py", "signinkeys.py"} <= set(scanned)
+    assert found == []

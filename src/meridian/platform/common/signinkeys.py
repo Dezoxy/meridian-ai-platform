@@ -41,9 +41,11 @@ ONE fetching thread, and the fetch lock with it, for as long as the system's
 resolver takes, not for ``FETCH_DEADLINE_SECONDS``; the join itself gives up
 after ``asyncio.constants.THREAD_JOIN_TIMEOUT`` (300 s in Python 3.13), with a
 warning, and the lookup's thread is then left behind. A caller with a usable
-cache is still served at once; a caller with none waits ``FETCH_WAIT_SECONDS``
-and is answered unavailable. A key URL given as an address has no lookup (the
-loopback tests use one, so they do not exercise this path).
+cache is still served at once, except the one caller that MAKES the fetch, which
+is held for the resolver's time and then served from the cache; a caller with
+none waits ``FETCH_WAIT_SECONDS`` and is answered unavailable. A key URL given
+as an address has no lookup (the loopback tests use one, so they do not exercise
+this path).
 
 How often it asks. The cached set is fresh for ``KEY_MAX_AGE_SECONDS``. A key
 id it does not know, a set that is no longer fresh and an empty cache each ask
@@ -213,8 +215,11 @@ class NoUsableKey(FetchFailure):
     """The body is not a key set, or holds no usable key."""
 
 
-def _refuse_an_event_loop() -> None:
-    """Raise ``CalledFromEventLoop`` when this thread runs an event loop."""
+def refuse_an_event_loop() -> None:
+    """Raise ``CalledFromEventLoop`` when this thread runs an event loop. The one
+    definition: ``key_for`` calls it, and so does the sign-in guard's entry, so
+    that a guard called on the loop is refused for every request shape and not
+    only for the bearer token that reaches ``key_for``."""
     try:
         asyncio.get_running_loop()
     except RuntimeError:
@@ -326,7 +331,7 @@ class KeySet:
         to ask. Raise ``CalledFromEventLoop`` in a thread that runs an event
         loop, whatever the cache holds. The precedence is in the module's
         docstring."""
-        _refuse_an_event_loop()
+        refuse_an_event_loop()
         key = self._fresh_key(self._cache, kid, self._clock())
         if key is not None:
             return key

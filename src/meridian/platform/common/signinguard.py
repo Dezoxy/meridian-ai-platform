@@ -5,7 +5,10 @@ switch that would turn sign-in on is off.
 
 ``Signin`` holds one population's settings and key set. Its dependencies are
 plain ``def`` functions, which FastAPI runs in a worker thread: the key fetch
-blocks (see ``signinkeys``).
+blocks (see ``signinkeys``). A dependency called in a thread that runs an event
+loop (from an ``async def`` route or wrapper, not declared through ``Depends``)
+raises ``CalledFromEventLoop`` before it reads the request, for every request
+shape, anonymous and cookie included: the answer is a 500, the caller's mistake.
 
 What a request may present. An ``Authorization`` header means a bearer token,
 and only that: a bad token is not rescued by a cookie next to it, and two
@@ -77,7 +80,7 @@ from meridian.platform.common.signin import (
     Unauthenticated,
     check_bearer,
 )
-from meridian.platform.common.signinkeys import Clock, KeySet
+from meridian.platform.common.signinkeys import Clock, KeySet, refuse_an_event_loop
 from meridian.platform.common.signinsession import (
     SessionSettings,
     cookie_name,
@@ -175,6 +178,10 @@ class Signin:
 
     def _make_dependency(self, *, json_form: bool) -> Dependency:
         def authenticated(request: Request) -> Principal:
+            # First, before the request is read: whatever it holds, a guard
+            # called on the event loop is the caller's mistake (a 500), not
+            # only when a bearer token reaches the key client.
+            refuse_an_event_loop()
             outcome = self._outcome(request)
             if isinstance(outcome, SigninRefusal):
                 raise self._refuse(outcome, request, json_form)

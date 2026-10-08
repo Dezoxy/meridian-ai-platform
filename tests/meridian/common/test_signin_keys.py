@@ -12,6 +12,8 @@ from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from jwt.algorithms import ECAlgorithm, RSAAlgorithm
 
 from meridian.platform.common.signinkeys import (
+    FETCH_DEADLINE_SECONDS,
+    FETCH_TIMEOUT,
     KEY_MAX_AGE_SECONDS,
     KEY_STALE_LIMIT_SECONDS,
     MAX_CACHED_KEYS,
@@ -475,3 +477,17 @@ def test_the_errors_carry_fixed_text(signin_issuer: Any, signin_keys: KeySet) ->
     for error in (unknown.value, unavailable.value):
         assert "canary" not in str(error) + repr(error)
         assert signin_issuer.url not in str(error) + repr(error)
+
+
+def test_the_connect_timeout_is_below_the_fetch_deadline() -> None:
+    """The connect timeout covers the TLS handshake, so a handshake that stalls
+    ends as ``ConnectTimeout`` before the deadline. A deadline that landed
+    inside a handshake would cancel it, and a cancelled handshake does not close
+    its socket (the library closes only on ``Exception``, and a cancellation is
+    not one): the socket would stay open until a garbage collection. The real
+    values, which is why this is not in the loopback file, where the deadline is
+    patched."""
+    connect = FETCH_TIMEOUT.connect
+
+    assert connect is not None
+    assert 0 < connect < FETCH_DEADLINE_SECONDS

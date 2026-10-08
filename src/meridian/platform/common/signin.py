@@ -217,7 +217,15 @@ OptionalWord = Annotated[str, AfterValidator(_optional_word), Field(max_length=2
 
 class SigninSettings(BaseModel):
     """One issuer, one realm: the staff's or the claimants'. Nothing here is a
-    secret; none of it is logged."""
+    secret; none of it is logged.
+
+    A plain-HTTP ``keys_url`` is accepted only when ``environment`` is exactly
+    ``kind``. ``from_env`` and direct construction (``SigninSettings(...)``)
+    refuse it. ``model_copy(update=...)`` and ``model_construct`` skip
+    validation, as they do for every field of a pydantic model, so they would
+    accept it: no module under ``src/`` that has to do with sign-in calls
+    either, a test fails if one appears, and a service builds these settings
+    through ``from_env``."""
 
     model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
 
@@ -227,9 +235,10 @@ class SigninSettings(BaseModel):
     audience: Word
     # The environment this process runs in (``MERIDIAN_ENVIRONMENT``), as the
     # text it has; ``from_env`` fills it. Only ``kind`` lets ``keys_url`` be
-    # plain HTTP, and the model decides that, so no way of building the settings
-    # skips the rule: the default, an empty text, is no environment at all. It
-    # is declared before ``keys_url`` because the rule reads it.
+    # plain HTTP, and the model decides that, so the constructor and ``from_env``
+    # cannot skip the rule (``model_copy`` and ``model_construct`` skip every
+    # validator: see the class). The default, an empty text, is no environment
+    # at all. It is declared before ``keys_url`` because the rule reads it.
     environment: str = ""
     # Its own setting: on kind the browser reaches the issuer by one name and the
     # pods by another, and ``iss`` carries the first.
@@ -268,8 +277,8 @@ class SigninSettings(BaseModel):
         ``_REQUIRED_TYP`` and ``_ALLOWED_AZP`` (comma separated), and
         ``MERIDIAN_ENVIRONMENT``. Raise ``SettingsError`` naming the variable
         that is missing or not valid, never the value. An ``http`` key URL is
-        accepted only when ``MERIDIAN_ENVIRONMENT`` is exactly ``kind``, by
-        every way of building the settings, not this one alone.
+        accepted only when ``MERIDIAN_ENVIRONMENT`` is exactly ``kind``, here
+        and in direct construction (the class says what skips validation).
 
         ``_REQUIRED_TYP`` and ``_ALLOWED_AZP`` are NOT enforced when empty,
         which is their default: an ID token or a refresh token with the right
