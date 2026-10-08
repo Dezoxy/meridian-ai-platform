@@ -336,13 +336,12 @@ Cost rules:
 
 - Docker-heavy targets (`make pdf`, `make mermaid-render`) run when their
   inputs changed, not on every step.
-  CI renders every Mermaid block on every pull request (S089). Under
-  rootless Docker, which the virtual machine runs, neither target can
-  write its PNGs, so there the pull request's job is the proof for a
-  diagram. `Docs / Architecture PDF` refuses a start on a branch other
+  CI renders every Mermaid block on every pull request (S089). Both
+  targets run on the virtual machine too, whose Docker is rootless
+  (S092). `Docs / Architecture PDF` refuses a start on a branch other
   than `main` and runs on a pull request only when the scripts, the
-  `Makefile` or the workflow changed, so a PDF of a branch is built by
-  hand there: S089's section has the order of the commands.
+  `Makefile` or the workflow changed, so the PDF of a branch that
+  changed documents alone is built with `make pdf` on the machine.
 - Broad searches go to an Explore subagent, which returns conclusions instead
   of file dumps.
 - The Azure environment exists only on demo days (C-04).
@@ -576,7 +575,7 @@ both readings the same hour ("yes both are right, go on").
 | S089 | Import layering page; Mermaid rendered in CI | A page in the Documentation tab and the PDF says which Python package may import which, as the six import-linter contracts enforce it, with one Mermaid diagram of the layers and the output of a run; the `derived diagrams` job renders every Mermaid block on every pull request and fails on one that does not parse. Built as (2026-10-07, the owner's "okay do it and open pr"): `docs/architecture/code/import-layering.md`, symlinked into `overview/` as `40-import-layering.md`, and one step in `.github/workflows/docs.yml`. Implemented as a document and a gate; it is not a component view, which is S090 | done | — |
 | S090 | Component view of the Agent Runtime | A component view in the Structurizr model answers which responsibilities sit inside the Agent Runtime and which of them is the only way out to a model, a tool and the database: components by responsibility and not one per file, with a register row and a PNG read at full size, and no other view changed. Built as (2026-10-07, the owner's "Component view (Recommended)", which drew it from today's code and took away the wait for S083): `RuntimeComponents`, six components (Run API, Run Records, LangGraph Host, Agent Framework Host, Model Client, Tool Client) in `docs/architecture/model/components.dsl`, 12 boxes and 15 arrows, embedded in the import layering page. Implemented as a view read from the code; nothing was run for it. The render under rootless Docker went to S092, and S082 brings the page and the view to the code it moves (a backlog row). The Model Gateway gets a view only when a question needs one | done | — |
 | S091 | Data ownership views | Who reads and writes which schema of the Platform Database, as views of the model: the six schemas (`audit`, `claims`, `gateway`, `knowledge`, `policy`, `runtime`) as components of the database, each service with its own schema and the reads that cross a schema in one view, and the audit trail in a second if one view does not read; every arrow checked against the grants the migrations leave and compared with ADR 10's table, a difference recorded and not smoothed; register rows and PNGs read at full size. No ER diagram: S085 and S087 rewrite the tables. The owner, 2026-10-07: "should we add db view too?", then "okay" to this. Built as (2026-10-07): `DataOwnership` (11 boxes, 13 arrows, the seven grants on another service's schema drawn thicker) and `AuditTrail` (9 and 8), in `docs/architecture/model/data.dsl`, embedded in the data classification's inventory. The grants were read from the migration files' statements, not from a database's catalog; they agree with ADR 10's table. Implemented as views; nothing was run for them | done | S090 |
-| S092 | Mermaid and PDF render under rootless Docker | `make mermaid-render` and `make pdf` finish on a machine whose Docker is rootless, as the virtual machine's is, and still finish in CI; the fix is made in development-base's copy of `scripts/render-mermaid.sh` first and copied here unchanged; with it, the two notes of S089's review (the render container needs no network; the script passes when it finds no block). Until then the documents say the two targets fail there. Designed | todo | — |
+| S092 | Mermaid and PDF render under rootless Docker | `make mermaid-render` and `make pdf` finish on a machine whose Docker is rootless, as the virtual machine's is, and still finish in CI; the fix is made in development-base's copy of `scripts/render-mermaid.sh` first and copied here unchanged; with it, the two notes of S089's review (the render container needs no network; the script passes when it finds no block). Built as (2026-10-08): under rootless Docker the render and Pandoc containers start as their root, which there is the caller, and elsewhere as the caller, as before; the render container has no network; this repository's `make mermaid-render` fails when no block was extracted. Development-base's pull request 52 first, then the two scripts and a test copied byte for byte. Implemented, and run on the virtual machine: five diagrams rendered and a PDF of 377 pages written | done | — |
 
 ### Toward services: a database each and six images
 
@@ -1109,7 +1108,7 @@ that day; the rest stand as their step recorded them.
 | The multipart parser leans on Starlette internals that are not documented API: the class attribute `spool_max_size`, `UploadFile._max_mem_size` and `_rolled`. Starlette arrives through FastAPI, so a lock refresh can rename one and a part of 1.0 to 1.1 MiB would spill to `/tmp`, which the pod does not have room for. A test with no database feeds a 1,100,000-byte part and fails if the part rolls to disk, and the class's docstring names the coupling; nothing pins the version | S080 (the FastAPI review, L2; F4c) | open; guarded by a test, not pinned | S080, later half |
 | Envoy's handling of an encoded path on the upload route. Run RU1 showed that Envoy normalises the path before the app sees it (`POST /claims/CLM-0001/%66iles` was served as an upload, 201; a GET with the first character of the file identifier encoded was 200; `POST //claims/CLM-0001/files` reached the route, 409), so behind this edge the app's refusal of a raw path with a `%` never fires. What is still not known is whether the normalised request is matched by the uploads route, with its buffer and rate limit, or by the first route: the bodies were under 64 KiB, which either route passes. Run RU2 sent 100 KiB bodies to an encoded and to a double-slashed path: both reached the app, which the first route's 64 KiB would not have let through, and the seventh of seven uploads to the encoded path got the edge's own 429: the uploads route serves the normalised path and its six a minute count it. Not probed: an escaped slash. The app's own brakes do not depend on the answer | S080 (the security review, M-1; F2b; runs RU1 and RU2) | closed for this edge by RU2 (an escaped slash not probed) | S080 |
 | Small ends of S080, none of which changes behaviour: `test_claim_uploads_limits.py::test_the_upload_route_alone_takes_more_than_64_kib` says "alone" and now covers the JSON route only; the shared privilege snapshot (`tests/meridian/sweepmigrationsupport.py`) does not list `MAINTAIN`, which the migration's own test checks for ten roles; the Makefile's help line for `synthetic` does not mention the upload samples; one `UnsupportedFieldAttributeWarning` ('alias' for `claim_id`) appeared once in a directory run of the claims tests, in a test that touches no upload code | S080 (F1, F1b, F4a, F4c, F5 reports) | open | S080, later half |
-| `make mermaid-render` and `make pdf` fail under rootless Docker, which the virtual machine runs: `scripts/render-mermaid.sh` starts the container with the caller's user and group, which rootless Docker maps to another user than the folder's owner, and every PNG ends in "EACCES: permission denied" (five of five, then the PDF's four of four, on 2026-10-07). The same script on a copy of the folder made world-writable rendered all five. CI's Docker is not rootless and renders. The script's canonical copy is development-base's, so the fix goes there first and is copied here. With it, from the review of S089's workflow step (low): the render container needs no network and could run with none, in this job and in the PDF's; and the script passes when it finds no block, which a count in the Makefile's target would catch | S089 (the first local render; the infra review) | open; CI renders, the virtual machine does not | S092 |
+| `make mermaid-render` and `make pdf` fail under rootless Docker, which the virtual machine runs: `scripts/render-mermaid.sh` starts the container with the caller's user and group, which rootless Docker maps to another user than the folder's owner, and every PNG ends in "EACCES: permission denied" (five of five, then the PDF's four of four, on 2026-10-07). The same script on a copy of the folder made world-writable rendered all five. CI's Docker is not rootless and renders. The script's canonical copy is development-base's, so the fix goes there first and is copied here. With it, from the review of S089's workflow step (low): the render container needs no network and could run with none, in this job and in the PDF's; and the script passes when it finds no block, which a count in the Makefile's target would catch | S089 (the first local render; the infra review) | done (S092, 2026-10-08: the container starts as its root under rootless Docker; no network; the Makefile's target fails on an empty extraction) | S092 |
 | The import layering page (`docs/architecture/code/import-layering.md`: its diagram, its table of contracts and its counts) and the `RuntimeComponents` view were read from the code of 2026-10-07. S082 moves the workloads' graphs and the sweep's SQL and adds a contract per service, S083 makes a package per service and S086 cuts the sweep in two: each brings the page, `model/components.dsl` and the view's register row to the code it leaves | S089, S090 | open | S082 |
 | The `DataOwnership` and `AuditTrail` views (`docs/architecture/model/data.dsl`) draw the grants of 2026-10-07, read from the migration files' GRANT and REVOKE statements and not from a catalog. S084 takes the tool servers' reads of runs and claims away, S085 replaces the one audit table by a table per service and a relay, S086 cuts the sweep's reach into the runtime's schema, and S087 makes five databases: each brings the model's arrows, the two views and their register rows to what it leaves, and S087's baselines are where the grants are read from a migrated database's catalog and compared with the views | S091 | open | S085 |
 | Grafana's pages were not exercised in a browser against the Prometheus gateway's read list, and the two gateways' memory was not read under load or on a large answer: smoke's calls through Grafana's datasource (queries and rules, R17) are all that went through it, so the metrics browser's label drop-downs, Explore and the Alerting page, and with them `series`, `labels`, `metadata`, `query_exemplars` and `format_query`, were not seen used, and a path Grafana needs that the list lacks would not have shown (it would answer 403, class `x` in the gateway's log). The gateways' working sets were read once after R17: 4.3 MiB (peak 9.6 MiB) against 64 MiB for Prometheus's, 19.8 MiB at its peak for Loki's | S072 (third part, R17: P7, P10) | open; a hand check in a browser, then the gateway's log searched for `class=x`; the lines that are Grafana's are added to the list once each | S073 |
@@ -21242,6 +21241,111 @@ and without the gateway schema.
 S087 (five databases) change every arrow of these views, and S087's
 baselines are the moment to read the grants from a catalog.
 
+### S092 — Mermaid and PDF render under rootless Docker
+**Status:** done · **Started:** 2026-10-08 · **Finished:** 2026-10-08
+**Goal:** `make mermaid-render` and `make pdf` finish on a machine whose
+Docker is rootless, as the virtual machine's is, and still finish in CI; the
+fix is made in development-base first and copied here unchanged.
+
+**Decisions:**
+
+- **The owner, 2026-10-08:** "Okay merge it when ready and start the next
+  step", after S091's pull request; S092 was the one step of this thread
+  still `todo`.
+- **The session's own (the owner may overturn any):**
+  - Under rootless Docker the render container starts as its root (`0:0`),
+    which there is the caller, so the PNGs and the PDF are the caller's and
+    no folder's permissions change. Elsewhere it starts as the caller, as
+    before. The script asks `docker info` and looks for `name=rootless`; if
+    Docker cannot say, the caller's IDs stand.
+  - Two alternatives were run and not taken. No user flag at all: the
+    image's own user is not root, and the write failed the same way. The
+    folder made world-writable: it rendered, as S089 showed, but left files
+    owned by another user and a folder open to everyone.
+  - Pandoc's run in `architecture-pdf.sh` follows the same rule. The PDF
+    landed before too, because its folder is world-writable for the
+    Structurizr export, but owned by another user.
+  - The render container has no network, in every environment (the low
+    finding of S089's review). A render with and without a network differs
+    by about 560 of 2.4 million pixels, which is what two renders with a
+    network differ by.
+  - "No diagram found" stays a pass in the script, which a repository
+    without Mermaid needs. This repository holds several, so its Makefile's
+    `mermaid-render` now fails when the extractor wrote none (the review's
+    other note).
+  - The render container has no capability, cannot gain a privilege and
+    may hold 512 processes; the Pandoc container gets the first two (the
+    review's medium finding, below).
+  - Not taken from that review, with the reasons: Pandoc keeps its
+    network, because a repository from the base may embed a remote image
+    and without a network Pandoc leaves a hole with a warning, not a
+    failure; and the rule that picks the user stays written twice, in
+    the two scripts, the PDF script's copy proven by real builds on both
+    kinds of Docker and not by a stub.
+  - The two scripts and the new test are copies of development-base's,
+    byte for byte; only the Makefile's line is this repository's own.
+
+**Advisor:** one consultation, 2026-10-08, at the design, before the base's
+script was touched. It changed two things: the session had settled on the
+world-writable folder without trying a container started as its root, and
+the test it asked for decided the other way; and the guard against an empty
+extraction went into this repository's Makefile, where the session had meant
+to leave it out. Not consulted before the pull request: the base's pull
+request ran the unchanged path in CI, and the rest is a copy and documents.
+**Review:** the `infra-reviewer` read the scripts, the Makefile's line and
+the test after the pull request was opened and before it could merge: no
+critical or high finding, one medium (the render container, root under
+rootless Docker and reading text from a pull request, kept its default
+capabilities) and four low (two of the tests prove nothing when the suite
+runs as root; `docker info` answering with nothing had no case; the rule
+written twice; Pandoc's network). The medium and the first two low ones
+were fixed in the base (its pull request 53) and copied here. It found the
+choice of the container's root safe: only the daemon's own answer selects
+it, a failed or empty answer leaves the caller's IDs, and old diagram files
+cannot satisfy the Makefile's guard, because the extractor deletes them
+first.
+
+**Work log:** 2026-10-08. In development-base, a branch off its `main` at
+1d5b4b0: six tests with a stub `docker` on the PATH, three of them failing
+(the rootless user, the network twice), then the change, then all six
+passing; its `make mermaid-render` and `make pdf` run on the virtual machine;
+pull request 52 there, merged as 02dec50 once its five checks were green,
+its `build` job among them (the PDF on a runner whose Docker is not
+rootless), and its content read on that `main`; after the review, pull
+request 53 there for the container's limits and the tests. Here, branch
+`s092-rootless-render` off `main` at 2ce835b, after pull request 133 was
+merged and read on `main`: the three files copied from the base's `main` and
+compared, and one line in the Makefile.
+
+**Result / verification:**
+
+- The three copies are byte for byte the base's (`cmp` on each).
+- `make mermaid-render` on the virtual machine: "5 Mermaid blocks (5
+  distinct) extracted", "rendered 5 Mermaid diagram(s)", exit 0. The folder
+  stayed 775 and the five PNGs are the caller's. On 2026-10-07 the same
+  target failed on all five.
+- The guard: `make mermaid-render` with its folder variable pointed at an
+  empty folder printed "no Mermaid block was extracted" and failed.
+- `make pdf` on the virtual machine: "5 views embedded, 6 in the Views
+  section, 4 Mermaid diagrams to render", "rendered 4 Mermaid diagram(s)",
+  "wrote ... meridian-ai-platform-architecture-2026-10-08-2ce835b.pdf", exit
+  0, the PDF the caller's. Read with a PDF library, as text and images: 377
+  pages; DataOwnership on page 27, on a landscape page, and AuditTrail on
+  page 28; the import layering chapter from page 176, its Mermaid diagram on
+  page 177 and RuntimeComponents on page 180. This is the first PDF with
+  S089's, S090's and S091's pages, which their sections list as not seen.
+- After the review's fixes all of the above ran again with the same
+  results: five diagrams, the guard, and a PDF of 377 pages.
+- `make lint`: exit 0. `make test`: "Ran 413 tests", "OK" (405 and the
+  eight new). `make docs` and `make secret-scan`: in the pull request.
+- Seen in CI: the base's pull request. This repository's `derived diagrams`
+  job and, because `scripts/` and the `Makefile` changed, its
+  `Docs / Architecture PDF` build run on the pull request.
+- Not seen: the PDF's pages drawn (the machine has no tool that draws a PDF
+  page; the owner was sent the file).
+
+**Follow-ups:** none.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -22246,7 +22350,16 @@ baselines are the moment to read the grants from a catalog.
   from the migration files' statements and agree with ADR 10's table. One
   backlog row is new, homed at S085: S084 to S087 change these arrows, and
   S087 reads the grants from a catalog.
-- **v0.91, 2026-10-08:** S072 `doing`, the third part, the writers'
+- **v0.91, 2026-10-08:** S092, the Mermaid and PDF render under rootless
+  Docker (`done`): the render and Pandoc containers start as their root where
+  Docker is rootless, the render container has no network, and
+  `make mermaid-render` fails when no block was extracted; fixed in
+  development-base first (its pull request 52) and copied here. Both targets
+  ran on the virtual machine: five diagrams, and the first PDF with S089's,
+  S090's and S091's pages (377 pages). Part A's cost rule and the
+  architecture README no longer say the targets fail there; S089's backlog
+  row is closed.
+- **v0.92, 2026-10-08:** S072 `doing`, the third part, the writers'
   client certificates (the owner's "Build client certificates", about 13:20
   UTC, and for Prometheus "Gateway in front, as for Loki", about 15:42, which
   reverse the first part's "the three hops stay clear text"): the collector
