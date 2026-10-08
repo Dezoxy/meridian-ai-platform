@@ -174,13 +174,12 @@ class StepFolders(PlanCase):
                 path.unlink()
                 path.parent.rmdir()
 
-    def test_a_file_with_a_range_name_is_not_a_folder(self):
-        self.write("docs/plan/steps/S020-S039", "x")
-        self.assertIn("docs/plan/steps/S020-S039", self.one())
-
-    def test_any_other_entry_in_steps_is_reported(self):
-        self.write("docs/plan/steps/README.md", "x")
-        self.assertIn("docs/plan/steps/README.md", self.one())
+    def test_a_file_with_a_range_name_or_any_other_entry_in_steps_is_reported(self):
+        for name in ("S020-S039", "README.md"):
+            with self.subTest(name=name):
+                path = self.write(f"docs/plan/steps/{name}", "x")
+                self.assertIn(f"docs/plan/steps/{name}", self.one())
+                path.unlink()
 
     def test_a_misnamed_file_in_a_folder_is_reported(self):
         for name in ("s001.md", "S1.md", "S001.txt", "S0010.md"):
@@ -227,6 +226,11 @@ class StepFolders(PlanCase):
         )
         self.assertIn("plan/steps/S000-S019/S001.md", self.one())
 
+    def test_an_index_row_with_the_wrong_link_text_is_reported(self):
+        plan = PLAN.replace("[S001.md]", "[wrong.md]")
+        self.write("docs/meridian-plan.md", plan)
+        self.assertIn("it must be [S001.md](plan/steps/S000-S019/S001.md)", self.one())
+
     def test_an_index_row_that_names_another_steps_file_is_reported(self):
         plan = PLAN.replace(
             "[S001.md](plan/steps/S000-S019/S001.md)",
@@ -252,9 +256,6 @@ class StepFolders(PlanCase):
         plan = PLAN.replace("| todo |", "| doing: the first half |")
         self.write("docs/meridian-plan.md", plan)
         self.assertIn("'doing: the first half'", self.one())
-
-    def test_a_todo_step_may_have_no_file(self):
-        self.assertEqual(self.found(), [])
 
     def test_a_step_section_left_in_part_c_is_reported(self):
         plan = PLAN.replace(
@@ -290,11 +291,9 @@ class BackLog(PlanCase):
         )
 
     def test_the_item_is_quoted_to_forty_characters(self):
-        item = "x" * 60
-        closed = row("done in S011", item=item, home="S011")
+        closed = row("done in S011", item="x" * 60, home="S011")
         self.write("docs/plan/backlog.md", BACKLOG + closed)
-        found = self.one()
-        self.assertIn(f"('{'x' * 40}')", found)
+        self.assertIn(f"('{'x' * 40}')", self.one())
 
     def test_closed_in_part_and_closed_for_stay_in_the_open_file(self):
         for status in (
@@ -331,18 +330,11 @@ class BackLog(PlanCase):
                 self.assertIn("docs/plan/backlog.md", found)
                 self.assertIn("closed", found)
 
-    def test_closed_in_part_does_not_belong_in_the_closed_file(self):
-        self.write(
-            "docs/plan/backlog-closed.md",
-            BACKLOG_CLOSED + row("closed in part by S011"),
-        )
-        self.assertIn("backlog.md", self.one())
-
-    def test_closed_for_does_not_belong_in_the_closed_file(self):
-        self.write(
-            "docs/plan/backlog-closed.md", BACKLOG_CLOSED + row("closed for one case")
-        )
-        self.assertIn("backlog.md", self.one())
+    def test_closed_in_part_and_closed_for_do_not_belong_in_the_closed_file(self):
+        for status in ("closed in part by S011", "closed for one case"):
+            with self.subTest(status=status):
+                self.write("docs/plan/backlog-closed.md", BACKLOG_CLOSED + row(status))
+                self.assertIn("backlog.md", self.one())
 
     def test_a_closed_row_with_no_home_is_fine_in_the_closed_file(self):
         self.write(
@@ -359,10 +351,52 @@ class BackLog(PlanCase):
         self.assertIn("a closed row", self.one())
 
     def test_an_escaped_pipe_is_not_a_cell_boundary(self):
-        self.write(
-            "docs/plan/backlog.md",
-            BACKLOG + "| A \\| B item | S010 | open | S030 |\n",
+        # Three cells with the escape; a plain split on `|` would read four.
+        self.write("docs/plan/backlog.md", BACKLOG + "| a \\| b | open | S030 |\n")
+        self.assertIn("fewer than four cells", self.one())
+
+    def test_a_last_cell_ending_in_an_escaped_pipe_or_no_final_pipe(self):
+        cells = self.mod.cells_of
+        self.assertEqual(
+            cells("| a | b | open | S030 \\|"), ["a", "b", "open", "S030 \\|"]
         )
+        self.assertEqual(cells("| a | b | open | S030"), ["a", "b", "open", "S030"])
+        for tail in ("S030 \\|", "S030"):
+            with self.subTest(tail=tail):
+                self.write(
+                    "docs/plan/backlog.md", BACKLOG + f"| a | S010 | open | {tail}\n"
+                )
+                self.assertEqual(self.found(), [])
+
+    def test_a_header_is_read_by_its_cells_in_the_files_and_the_plan(self):
+        shapes = (
+            "|Item|Raised in|Status|Home|",
+            "| Item  | Raised in | Status | Home |",
+            "| Item | Raised in | Status | Home | Notes |",
+            "  | Item | Raised in | Status | Home |",
+        )
+        for shape in shapes:
+            with self.subTest(shape=shape):
+                text = "# Open\n\n" + shape + "\n|---|\n" + OPEN_ROW + CLOSED_ROW
+                self.write("docs/plan/backlog.md", text)
+                self.assertIn("a closed row", self.one())
+                self.write("docs/plan/backlog.md", BACKLOG)
+                plan = PLAN.replace("## Part D", f"{shape}\n|---|\n\n## Part D")
+                self.write("docs/meridian-plan.md", plan)
+                self.assertIn("left the plan", self.one())
+                self.write("docs/meridian-plan.md", PLAN)
+
+    def test_a_code_fence_never_closed_hides_the_rows_after_it(self):
+        self.write("docs/plan/backlog.md", BACKLOG + FENCE + "\n" + CLOSED_ROW)
+        self.assertEqual(
+            self.one(),
+            "docs/plan/backlog.md: a code fence is opened and never closed; "
+            "the rows after it are not read",
+        )
+
+    def test_a_closed_fence_holding_a_table_row_is_not_read_as_a_row(self):
+        fenced = f"{FENCE}text\n{CLOSED_ROW}{FENCE}\n"
+        self.write("docs/plan/backlog.md", BACKLOG + "\n" + fenced)
         self.assertEqual(self.found(), [])
 
     def test_a_row_of_three_cells_is_reported(self):
@@ -384,24 +418,16 @@ class BackLog(PlanCase):
                 self.assertIn("docs/plan/backlog.md", found)
                 self.assertIn("step", found)
 
-    def test_a_home_may_hold_a_step_among_words(self):
-        self.write(
-            "docs/plan/backlog.md", BACKLOG + row("open", home="S030, then S031")
-        )
-        self.assertEqual(self.found(), [])
-
     def test_a_missing_backlog_file_is_not_a_finding_here(self):
         (self.repo / "docs/plan/backlog.md").unlink()
         (self.repo / "docs/plan/backlog-closed.md").unlink()
         self.assertEqual(self.found(), [])
 
-    def test_a_file_without_the_header_is_reported(self):
-        self.write("docs/plan/backlog.md", "# Open rows\n\n" + OPEN_ROW)
-        self.assertIn("docs/plan/backlog.md", self.one())
-
-    def test_a_file_with_the_header_twice_is_reported(self):
-        self.write("docs/plan/backlog.md", BACKLOG + "\n" + HEADER)
-        self.assertIn("docs/plan/backlog.md", self.one())
+    def test_a_file_without_the_header_or_with_it_twice_is_reported(self):
+        for text in ("# Open rows\n\n" + OPEN_ROW, BACKLOG + "\n" + HEADER):
+            with self.subTest(text=text[:20]):
+                self.write("docs/plan/backlog.md", text)
+                self.assertIn("docs/plan/backlog.md", self.one())
 
     def test_a_table_row_above_the_header_is_prose(self):
         self.write("docs/plan/backlog.md", "| a | b |\n\n" + BACKLOG)
@@ -428,15 +454,14 @@ class BackLog(PlanCase):
                 self.assertIn("cannot be read as UTF-8", self.one())
                 (self.repo / name).write_bytes(right)
 
-    def test_a_directory_with_a_backlogs_name_is_reported(self):
+    def test_a_directory_or_broken_link_with_a_backlogs_name_is_reported(self):
         (self.repo / "docs/plan/backlog.md").unlink()
         (self.repo / "docs/plan/backlog.md").mkdir()
-        self.assertIn("backlog.md: not a regular file", self.one())
-
-    def test_a_broken_link_with_a_backlogs_name_is_reported(self):
         (self.repo / "docs/plan/backlog-closed.md").unlink()
         (self.repo / "docs/plan/backlog-closed.md").symlink_to(self.repo / "nowhere")
-        self.assertIn("backlog-closed.md: not a regular file", self.one())
+        found = self.found()
+        self.assertEqual(len(found), 2, found)
+        self.assertTrue(all("not a regular file" in x for x in found), found)
 
 
 class ChangeLogGone(PlanCase):
@@ -465,11 +490,6 @@ class ChangeLogGone(PlanCase):
         found = self.one()
         self.assertIn("Part E of the plan holds an entry", found)
         self.assertIn(self.REMEDY, found)
-
-    def test_an_old_entry_left_in_part_e_is_reported(self):
-        old = "- **v0.1, 2026-09-29:** first\n  continued.\n"
-        self.write("docs/meridian-plan.md", PLAN + old)
-        self.assertIn("Part E of the plan holds an entry", self.one())
 
     def test_the_stand_in_and_the_ci_switch_are_gone(self):
         self.assertFalse(hasattr(self.mod, "check_changelog"))

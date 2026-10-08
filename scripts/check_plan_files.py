@@ -44,6 +44,7 @@ CHANGELOG = "docs/plan/changelog"
 BACKLOG = "docs/plan/backlog.md"
 BACKLOG_CLOSED = "docs/plan/backlog-closed.md"
 BACKLOG_HEADER = "| Item | Raised in | Status | Home |"
+BACKLOG_COLUMNS = ["Item", "Raised in", "Status", "Home"]
 
 FENCE_OPEN = re.compile(r"^\s*(?P<marker>`{3,}|~{3,})(?P<info>.*)$")
 FENCE_CLOSE = re.compile(r"^\s*(?P<marker>`{3,}|~{3,})\s*$")
@@ -303,7 +304,7 @@ def check_old_places(text: str, plan: dict[str, str], found: list[str]) -> None:
                 f"the plan holds a step section ('{line[:40]}'): it belongs in "
                 f"{STEPS}/, one file a step"
             )
-    if any(line.strip() == BACKLOG_HEADER for line in lines):
+    if any(is_header(line) for line in lines):
         found.append(
             f"{PLAN}: the follow-up table left the plan (S100); a follow-up is a "
             f"row of {BACKLOG}"
@@ -319,10 +320,16 @@ def check_old_places(text: str, plan: dict[str, str], found: list[str]) -> None:
 
 def cells_of(line: str) -> list[str]:
     """A table row's cells, split on pipes that no backslash escapes."""
+    # A pipe inside a code span is a cell boundary here: no status or home holds one.
     body = line.strip()[1:]
     if body.endswith("|") and not body.endswith("\\|"):
         body = body[:-1]
     return [cell.strip() for cell in UNESCAPED_PIPE.split(body)]
+
+
+def is_header(line: str) -> bool:
+    """The backlog table's header: a row whose first four cells are the columns."""
+    return line.lstrip().startswith("|") and cells_of(line)[:4] == BACKLOG_COLUMNS
 
 
 def is_closed(status: str) -> bool:
@@ -342,8 +349,13 @@ def check_backlog(root: Path, name: str, closed_file: bool, found: list[str]) ->
     if text is None:
         return
     found.extend(conflict_markers(name, text))
+    if scan(text + "\n")[-1].fenced:
+        found.append(
+            f"{name}: a code fence is opened and never closed; "
+            f"the rows after it are not read"
+        )
     lines = unfenced(text)
-    headers = [i for i, line in enumerate(lines) if line.strip() == BACKLOG_HEADER]
+    headers = [i for i, line in enumerate(lines) if is_header(line)]
     if len(headers) != 1:
         found.append(
             f"{name}: the table's header '{BACKLOG_HEADER}' must be there exactly "
@@ -352,9 +364,7 @@ def check_backlog(root: Path, name: str, closed_file: bool, found: list[str]) ->
         if not headers:
             return
     for line in lines[headers[0] + 1 :]:
-        if not line.startswith("|") or SEPARATOR.match(line):
-            continue
-        if line.strip() == BACKLOG_HEADER:
+        if not line.startswith("|") or SEPARATOR.match(line) or is_header(line):
             continue
         cells = cells_of(line)
         item = cells[0][:ITEM_WIDTH]
