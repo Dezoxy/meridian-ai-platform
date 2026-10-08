@@ -143,7 +143,24 @@ base64 of those same IDs, appears as `<client-config-id>`. The filter is
 these two shapes and, since S036, the AWS script's (an ARN, an account number,
 an access key, a cluster or database host, an e-mail address, an IPv4 address,
 and a secret key or session token after its label), which the Azure scripts'
-output meets too, and no other, so read a plan before pasting it anywhere.
+output meets too. Since S020 it also knows the shapes an Azure platform module
+would print, tested by `tests/test_terraform_redact_azure.py`: a certificate or
+key in base64 (`<pem>`); the value after a kubeconfig's
+`certificate-authority-data`, `client-certificate-data`, `client-key-data` or
+`token`, the label kept (`<kubeconfig-value>`); a token of three base64url parts that begins `eyJ`
+(`<token>`); a host name under `azmk8s.io`, `postgres.database.azure.com`,
+`azurecr.io`, `oic.prod-aks.azure.com`, `vaultcore.azure.net`,
+`openai.azure.com` or `core.windows.net`, with its port (`<host>`); and the six
+hex digits that end the names `kv-meridian-`, `psql-meridian-`, `crmeridian`,
+`stmeridiantf` and `oai-meridian-<region>-` (`<suffix>`). The fixed private
+link zone names are public and the same for everyone, and are hidden as hosts
+too. A host under `vault.azure.net` is not hidden, because
+`tests/test_terraform_redact.py` holds an example of it unchanged; the name of
+the module's own vault loses its suffix all the same. It does not know a token
+or key without its label or its `eyJ` and `LS0tLS1CRUdJTi` start, a bearer
+token of another form, a host in capital letters, or whatever a real plan and
+the real error messages of Azure print that nobody has seen yet, so read a plan
+before pasting it anywhere.
 
 The checks around a saved plan that name no cloud (the default workspace, the
 refusal of a variable or override file, the plan record bound to its commit and

@@ -72,7 +72,8 @@ export AZURE_CORE_ONLY_SHOW_ERRORS=true
 # A plan of instances (the self-managed cluster's module, S079) prints more, and
 # redact knows it: compressed user data (a gzip stream in base64 starts with
 # H4sI, and holds the boot scripts with the cluster's address in them) becomes
-# <user-data>, first of all so that no other rule cuts into it; the identifier of
+# <user-data>, ahead of every rule but the three of the Azure paragraph below
+# that must come first, so that no other rule cuts into it; the identifier of
 # an instance, an image, a VPC, a subnet, a security group and its rules, a route
 # table and its association, an internet gateway, an Elastic IP's allocation and
 # association, a network interface (and its attachment) and a volume becomes
@@ -82,8 +83,32 @@ export AZURE_CORE_ONLY_SHOW_ERRORS=true
 # (ip- or ec2-, four numbers, an optional domain) becomes <host>, which the
 # dotted-quad rule cannot see. The instance profile's, the role's and the
 # parameter's ARN are <arn> already, with the account inside them.
+#
+# An Azure platform module's plan, outputs and errors show five more shapes (S020),
+# and each rule has its comment, a line of the script, beside it. The labelled
+# values of a kubeconfig run first, so that the label decides the mask; then a
+# certificate or key in base64, and a token of three parts, both before the user
+# data rule (a run of base64 can hold H4sI and be cut short by it, which would
+# leave the start of a key) and before the session token rule (it stops at a
+# dot, which would leave the token's second and third parts). A host is removed
+# whole before the suffix of the name in it is, because with the suffix gone the
+# domain has no label left to start from. The hosts are those of the AKS API
+# server, PostgreSQL, the registry, the cluster's identity issuer, a vault's
+# private link, the model account and storage, each with an optional port, so
+# the fixed private link zone names (privatelink.vaultcore.azure.net) are
+# <host> too. vault.azure.net is not among them: tests/test_terraform_redact.py
+# holds https://example.vault.azure.net/ unchanged, and a vault of the module
+# has kv-meridian-<suffix> in its name, which the suffix rule covers. The suffix
+# is the six hex digits the module's names end with (name_suffix below).
 redact() {
   sed -E \
+    -e '# a kubeconfig value after its label, which stays (not after aws_session_token, the AWS rule masks that)' \
+    -e 's#(^|[^A-Za-z0-9_])((certificate[-_]authority[-_]data|client[-_]certificate[-_]data|client[-_]key[-_]data|token)"?[[:space:]]*[:=][[:space:]]*"?)[A-Za-z0-9+/=._-]{16,}#\1\2<kubeconfig-value>#g' \
+    -e '# a certificate or key in base64: the base64 of five dashes and BEGIN, and the rest of the run' \
+    -e 's#LS0tLS1CRUdJTi[A-Za-z0-9+/]{16,}={0,2}#<pem>#g' \
+    -e '# a token of three base64url parts (an Entra or Kubernetes token) that begins eyJ' \
+    -e 's#eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*#<token>#g' \
+    -e '# compressed user data: a gzip stream in base64 holds the boot scripts' \
     -e 's#H4sI[A-Za-z0-9+/]{40,}={0,2}#<user-data>#g' \
     -e 's#arn:aws[a-z-]*:[A-Za-z0-9-]+:[a-z0-9-]*:[0-9]*:[^][:space:]"'\''<>,()]+(,[^][:space:]"'\''<>,()]+)*#<arn>#g' \
     -e 's#([Ss][Ee][Cc][Rr][Ee][Tt][_-]?[Aa][Cc][Cc][Ee][Ss][Ss][_-]?[Kk][Ee][Yy])([[:space:]=:"'\'']{1,8})[A-Za-z0-9/+=]{16,}#\1\2<secret-access-key>#g' \
@@ -95,6 +120,10 @@ redact() {
     -e 's/(ABIA|ACCA|AGPA|AIDA|AIPA|AKIA|ANPA|ANVA|APKA|AROA|ASCA|ASIA)[A-Z0-9]{16,17}/<access-key-id>/g' \
     -e 's#[A-Za-z0-9.-]+\.(eks|rds)\.amazonaws\.com#<host>#g' \
     -e 's#oidc\.eks\.[a-z0-9-]+\.amazonaws\.com(/id/[A-Za-z0-9]+)?#<host>#g' \
+    -e '# a host under an Azure service the module uses (not vault.azure.net, see above), with its port' \
+    -e 's#[A-Za-z0-9.-]+\.(azmk8s\.io|postgres\.database\.azure\.com|azurecr\.io|oic\.prod-aks\.azure\.com|vaultcore\.azure\.net|openai\.azure\.com|core\.windows\.net)(:[0-9]+)?#<host>#g' \
+    -e '# the six hex digits that end the names of the vault, server, registry, state account and model account' \
+    -e 's#(kv-meridian-|psql-meridian-|crmeridian|stmeridiantf|oai-meridian-[a-z]{2,4}-)[0-9a-f]{6}([^0-9a-f]|$)#\1<suffix>\2#g' \
     -e 's#(^|[^A-Za-z0-9])(ip|ec2)-[0-9]{1,3}(-[0-9]{1,3}){3}(\.[A-Za-z0-9.-]+)?#\1<host>#g' \
     -e 's#(^|[^A-Za-z0-9])(i|ami|vpc|subnet|sgr|sg|rtbassoc|rtb|igw|eipalloc|eipassoc|eni-attach|eni|vol)-[0-9a-f]{8}([0-9a-f]{9})?([^A-Za-z0-9]|$)#\1<resource-id>\4#g' \
     -e 's#(^|[^A-Za-z0-9])(i|ami|vpc|subnet|sgr|sg|rtbassoc|rtb|igw|eipalloc|eipassoc|eni-attach|eni|vol)-[0-9a-f]{8}([0-9a-f]{9})?([^A-Za-z0-9]|$)#\1<resource-id>\4#g' \
