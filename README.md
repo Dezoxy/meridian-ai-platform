@@ -73,7 +73,7 @@ graph LR
     style 3 fill:#ede9fe,stroke:#2563eb,color:#1f2937
     4["Platform Operator<br/>[Person]<br/>Runs the platform: budgets,<br/>cost and traces today; SLOs,<br/>incidents and upgrades as<br/>designed."]
     style 4 fill:#ede9fe,stroke:#2563eb,color:#1f2937
-    5("Microsoft Entra ID<br/>[Software System]<br/>Issues tokens for staff and<br/>workload identities. Sign-in<br/>is designed: no issuer runs<br/>on kind, and the gateway's<br/>live calls use the<br/>developer's own login.")
+    5("Microsoft Entra ID<br/>[Software System]<br/>Issues tokens for staff and<br/>workload identities. Sign-in<br/>is designed: no route checks<br/>a token, a mock issuer runs<br/>on kind only as an opt-in<br/>add-on, and the gateway's<br/>live calls use the<br/>developer's own login.")
     style 5 fill:#f1f3f5,stroke:#8a96a8,color:#1f2937
     6("Azure OpenAI<br/>[Software System]<br/>Hosted OpenAI models on EU<br/>deployments in Sweden<br/>Central, called from a laptop<br/>and replayed on kind; West<br/>Europe is the designed<br/>fallback region.")
     style 6 fill:#f1f3f5,stroke:#8a96a8,color:#1f2937

@@ -3058,6 +3058,16 @@ of the cast signing in on the cluster, or any token issued there (the sign-ins
 are the rig's, in a container); the passwords command (it is for the owner's
 terminal); what the old pod's tokens are worth after the roll.
 
+**Seen on kind, run KR4 (2026-10-08, after the generations were added).** A
+plain `make up` with the switch on found KR3's Secrets "not of one generation"
+(they were made before generations were recorded), made both anew under one
+generation, which its log line names, and the pod rolled and imported the
+realm; `identity.sh users` listed the same cast. A second plain `make up` said
+the Secrets "are of one generation and are kept" and left the pod as it was.
+Smoke passed 62 lines with the switch on, and 56 with one skipped with it
+off. **Not seen:** a rotation stopped on purpose between the two Secrets, and
+the passwords command with its loopback check.
+
 **Untried: what the runs did not show.** Each is a thing to tick off, in this
 order:
 
