@@ -3,7 +3,10 @@
 > **How to use this file:** this is the single living plan. Every step in
   Part B has an ID (`S001`…). When a step starts, add its file under
   `docs/plan/steps/`, in the folder of its twenty numbers (Part C), from
-  the template, flip its status, and fill it in as you go.
+  the template, and fill it in as you go. The step tables hold no
+  status: a step's status is the line under its file's heading, and
+  Part F, at the end, lists the finished steps and the steps in flight
+  from those lines (`make plan-progress` writes it).
   Nothing gets deleted; superseded decisions are struck through with a note.
   The one exception is the change log, which ended on 2026-10-08 and
   whose files left the tree by the owner's decision (Part E).
@@ -35,9 +38,11 @@ context blurs what a step was for.
 2. **One step, one branch.** Branch `sNNN-short-name` off `main`; never stack
    branches. If a step will not fit one session, split it here first.
 3. **Open the step.** Add its file from Part C's template, in the folder
-   of its twenty numbers (`docs/plan/steps/S100-S119/S100.md`), and a row
-   to Part C's index, and set the status to `doing`. Take the step's open
-   rows of `docs/plan/backlog.md` into its "done when".
+   of its twenty numbers (`docs/plan/steps/S100-S119/S100.md`), with the
+   status `doing` and the day it starts, and run `make plan-progress`,
+   which puts it under "In flight" in Part F ("A step's status", below).
+   Take the step's open rows of `docs/plan/backlog.md` into its "done
+   when".
 4. **Plan, delegate, verify.** The main session (Opus) writes a short contract
    with paths, names and what not to touch (the form is below), delegates
    implementation to the `implementer` subagent (Sonnet at high effort), and
@@ -84,7 +89,10 @@ context blurs what a step was for.
 5. **Gates.** Always `make docs` and `make test`. `make check` when the model
    changed, `make mermaid` when views or Mermaid blocks changed, and the
    step's own "done when" criterion.
-6. **Close.** Fill in the work log and verification, set `done`, commit, go
+6. **Close.** Fill in the work log and verification, set `done` and the
+   day it finished in the file's status line, run `make plan-progress`
+   (the step moves to "Finished steps" in Part F, and nothing above
+   Part F changes for a status), commit, go
    through "Before pushing" below, open the PR with a description that
    is the record ("The pull request's description", below), merge it with
    `gh pr merge --squash` as soon as every required check is green, and
@@ -195,6 +203,36 @@ Worktree and branch. Do not commit, push, switch branches or stash.
   failed `make docs` before a push.
 - Read every source file a subagent changed. A green suite does not show a
   value that was hard-coded to match the one fixture.
+
+**A step's status (S101).** It is the line under the heading of the
+step's file (Part C's template has its form), and nowhere else. The
+step tables of Part B hold no status: the owner, 2026-10-08, "it should
+show us the plan itself without any modification so no todo and done
+and other, and at the end it should order the done jobs that is linked
+into the plan steps folder files", and, of the steps that are open,
+"in-flight at the end of the plan would be good under the finished
+job". So:
+
+- **The words** are `todo`, `doing`, `done`, `blocked` and `dropped`.
+  `done` carries the day the step finished; every other word has a dash
+  there. A note may follow the line's third field, after ` · `.
+- **A step is free** when it has no file, or a file that says `todo`,
+  and every step it depends on is `done` by its own file. A step whose
+  file says `doing` is taken.
+- **Part F** ends with two tables, "Finished steps" and under it "In
+  flight", each row linked to the step's file. `make plan-progress`
+  writes them from the status lines, and `make docs` fails when they
+  are not what the files say, when a status line has another form and
+  when a step table gets a Status column again. Nobody types into them.
+- **A conflict between Part F's two markers**, after a merge of `main`
+  into a branch that opened or closed a step, is never resolved by
+  hand: take either side whole, run `make plan-progress`, and `make
+  docs` proves the result. The tables are sorted and hold no date of
+  the run, so two branches produce the same lines from the same files.
+- **What a step leaves open while it is `doing`** is said in its file
+  ("Where it stands", "Left before it is done"), not in a table of the
+  plan. The paragraph "Where the project stands" in Part F is written
+  by hand, by the step that changes what exists.
 
 **The pull request's description (S100).** It is the step's record
 outside its own file. The repository squashes with the pull request's
@@ -463,7 +501,11 @@ Cost rules:
 
 ## Part B — Roadmap and step list
 
-Status legend: `todo` · `doing` · `done` · `blocked` · `dropped`
+The tables below are the plan as it was written, and hold no status
+(S101). A step's status is in its file, as one of `todo` · `doing` ·
+`done` · `blocked` · `dropped`; Part F lists the finished steps and
+those in flight, each with a link to its file. A step with no file has
+not started.
 
 Each step is sized for one focused session of two to four hours. Dependencies
 are the step IDs in the last column. Every capability stays labelled
@@ -684,6 +726,7 @@ both readings the same hour ("yes both are right, go on").
 | S097 | The plan in files | Each step's section and each change-log entry is a file of its own under `docs/plan/`, moved byte for byte and proved so by `scripts/plan_split.py --check`; a new entry is named for its pull request's number and the plan has no version of its own; `make docs` checks the files against Part B and refuses a section or an entry in the old place; `scripts/plan_port.py` carries a branch's edits of the old layout over. Part B's tables are not moved and still collide by rows (the owner, 2026-10-08: "Change log and step sections") | — |
 | S099 | A dispatcher and workers: the test lock and the two briefs | Steps run in worker sessions, one step and one worktree each, handed out by a dispatcher session (the owner, 2026-10-08: "yes and you will be the orchestrator this way"); `make pytest`, `make pytest-db` and `make alerts` take one lock for the machine (`scripts/machine_lock.sh`), so a second session's run waits for the first and says who holds it, and one that waited too long runs nothing; the two roles are skills (`plan-dispatcher`, `plan-worker`) that name no path of the machine; Part A's "A dispatcher and workers" replaces "One step at a time, again"; the same goes into the development base in a pull request there | — |
 | S100 | The plan's layout: step folders, the backlog in files, the change log ended | The step files sit in folders of twenty step numbers under `docs/plan/steps/` (the owner, 2026-10-08: "range the step for at 20, okay"), moved with `git mv`; the follow-up backlog is out of the plan file, its open rows in `docs/plan/backlog.md` and its closed rows in `docs/plan/backlog-closed.md` ("do the backlog seperation"), every row in exactly one of the two, byte for byte, proved by count and by digest; the change log ends and its 105 files leave the tree ("Stop and delete the old"), and Part A says what a pull request's description must hold instead; `make docs` checks the folders, holds each backlog row to its file by its status and refuses a change-log folder, with no import of a migration script (`plan_split.py` and `plan_port.py` are removed); every link resolves; the development base follows in a pull request there | — |
+| S101 | The plan shows no status: a step's status is in its file, and the plan's last part lists the finished steps and those in flight | Part B's step tables have no Status column and their "Done when" cells are as they were (the owner, 2026-10-08: "it should show us the plan itself without any modification so no todo and done and other"): each of the 100 rows equals its old row with the status cell put back, byte for byte; the 15 status cells that held a note are whole in their step's file, as "Where it stands"; the plan ends with Part F, whose "Finished steps" table and, under it, "In flight" table ("in-flight at the end of the plan would be good under the finished job") are written by `make plan-progress` from the status line of each step's file, every step that has a file in exactly one of the two and linked to its file; `make docs` fails on a table that is not what the files say, on a status line of another form and on a Status column put back; the running "Status:" paragraph is in Part F and Part C's hand-kept index is gone, so a step that starts or finishes changes its file and Part F and nothing above; Part A says how a step opens and closes, when a step is free and how a conflict in the two tables is settled; `make docs` and `make test` pass; the development base follows in a pull request there | S100 |
 
 ### Toward services: a database each and six images
 
@@ -789,7 +832,8 @@ step for at 20, okay"): a folder is named for the first and the last
 number it may hold, `S000-S019`, `S020-S039` and so on, so S100's file
 is `docs/plan/steps/S100-S119/S100.md`, and a folder is made when its
 first step starts. A step that starts gets a file from the template
-below and a row in the index after it. Nothing in this part holds a
+below; Part F lists the files by what their status lines say (this part
+held an index kept by hand until S101). Nothing in this part holds a
 step's section, and no step file lies outside its folder: `make docs`
 refuses both and says where the file belongs. Template:
 
@@ -848,8 +892,11 @@ status (S101; the owner, 2026-10-08: "it should show us the plan itself
 without any modification so no todo and done and other, and at the end
 it should order the done jobs that is linked into the plan steps folder
 files"). A step's status is one line in its own file, and this part
-shows it. A step that starts or finishes changes its file and this part,
-and nothing above.
+shows it: the two tables at its end, "Finished steps" and "In flight",
+are written from those lines by `make plan-progress` and held to them
+by `make docs`, so nobody types into them (Part A, "A step's status").
+A step that starts or finishes changes its file and this part, and
+nothing above.
 
 ### Where the project stands
 
@@ -898,5 +945,5 @@ and five runbooks exist as files, applied to the kind cluster and none
 exercised, with service level objectives nobody has measured (S024), and no
 service runs in Azure yet.
 
-<!-- plan-progress: begin (written by "make plan-progress" from the step files; never by hand) -->
+<!-- plan-progress: begin (written by "make plan-progress", never by hand) -->
 <!-- plan-progress: end -->

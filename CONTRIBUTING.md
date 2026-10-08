@@ -11,8 +11,10 @@ purpose: the rules live in the files it links, and it does not repeat them.
   open a pull request.
 - **Anything larger:** open an issue first and say what you want to change
   and why. The roadmap is the step list in
-  [docs/meridian-plan.md](docs/meridian-plan.md), Part B. A step marked
-  `doing` is taken; a `todo` step whose dependencies are `done` is free.
+  [docs/meridian-plan.md](docs/meridian-plan.md), Part B, and its last
+  part lists the finished steps and those in flight. A step listed as
+  `doing` is taken; one that is not listed, or is listed as `todo`, is
+  free once every step it depends on is finished.
   The owner answers whether the change fits and which step it belongs to,
   and assigns the issue to you. Work that starts without that answer may
   be declined.
