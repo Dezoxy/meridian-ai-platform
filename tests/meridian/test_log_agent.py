@@ -373,10 +373,87 @@ def test_the_pod_has_requests_and_a_memory_limit_and_the_limiter_comes_first() -
     logs = found["config"]["service"]["pipelines"]["logs"]
 
     assert set(found["resources"]["requests"]) == {"cpu", "memory"}
-    assert set(found["resources"]["limits"]) == {"memory"}
+    # Both limits since S073 (the next tests say why and how much).
+    assert set(found["resources"]["limits"]) == {"cpu", "memory"}
     # The chart's memory_limiter takes its share of this limit; a pipeline that
     # does not start with it is not limited.
     assert logs["processors"][0] == "memory_limiter"
+
+
+def mebibytes(quantity: str) -> int:
+    """A Kubernetes memory quantity written in Mi, as a number of MiB."""
+    assert quantity.endswith("Mi"), quantity
+    return int(quantity.removesuffix("Mi"))
+
+
+def millicores(quantity: str) -> int:
+    assert quantity.endswith("m"), quantity
+    return int(quantity.removesuffix("m"))
+
+
+def resources_comment() -> str:
+    """The comment block that sits directly above `resources:`, as one line of
+    words: where the values file says why the limits are what they are."""
+    lines = VALUES_FILE.read_text(encoding="utf-8").splitlines()
+    end = lines.index("resources:")
+    start = end
+    while start > 0 and lines[start - 1].startswith("#"):
+        start -= 1
+    return " ".join(line.removeprefix("#").strip() for line in lines[start:end])
+
+
+# The size at which the pinned image, run under a memory limit, kept the pages of
+# its executable in the page cache through a burst of lines with the collector
+# down (S073, 2026-10-08): 320 MiB held and 256 MiB did not. 192 MiB, the size
+# before, spun on any burst.
+MEMORY_THAT_SPUN_WITH_THE_COLLECTOR_DOWN = 256
+MEMORY_THAT_HELD_WITH_THE_COLLECTOR_DOWN = 320
+
+
+def test_the_memory_limit_is_above_the_sizes_the_agent_spun_at() -> None:
+    limits = values()["resources"]["limits"]
+
+    # 192Mi was the limit of the form that spun (a core of CPU and 2 GB/s of
+    # reads, read from the pod's control group on the kind cluster). A value at or
+    # below the size that spun with the collector down brings it back; the value
+    # chosen is above the size that held, with the margin the comment names.
+    assert mebibytes(limits["memory"]) > MEMORY_THAT_HELD_WITH_THE_COLLECTOR_DOWN
+    assert mebibytes(limits["memory"]) > MEMORY_THAT_SPUN_WITH_THE_COLLECTOR_DOWN
+    assert limits["memory"] == "384Mi"
+    # The request is what the idle agent needs, and the limit is not it: a limit
+    # below the request would be refused by the API server.
+    assert mebibytes(limits["memory"]) >= mebibytes(
+        values()["resources"]["requests"]["memory"]
+    )
+
+
+def test_the_cpu_limit_is_a_ceiling_well_above_what_the_calm_agent_uses() -> None:
+    resources = values()["resources"]
+
+    # The idle agent used 0.01 cores and a burst of 140,000 lines averaged 0.11
+    # over 20 s in the rig; 500m is a ceiling for a fault, not a budget. A limit
+    # at the request (25m) would throttle every burst, one at a core and more
+    # would not bound the spin that was seen (1.14 to 1.33 cores).
+    assert resources["limits"]["cpu"] == "500m"
+    assert millicores(resources["limits"]["cpu"]) >= 10 * millicores(
+        resources["requests"]["cpu"]
+    )
+    assert millicores(resources["limits"]["cpu"]) < 1000
+
+
+def test_the_values_say_why_the_limits_are_what_they_are() -> None:
+    text = resources_comment()
+
+    assert "(S073)" in text and "192Mi" in text and "384Mi" in text
+    assert "the page cache" in text and "evicted and read again" in text
+    # What did not matter, so nobody removes a setting for it.
+    assert "a file removed" in text and "no memory_limiter" in text
+    # A CPU limit throttles and does not end the fault.
+    assert "does not END one" in text and "still read 1.7 GB/s" in text
+    # And what the number does not cure, so it is not read as a cure.
+    assert "140,000 lines" in text and "not a cure for everything" in text
+    # The Prometheus series did not show it.
+    assert "0.001 cores" in text
 
 
 def test_the_checkpoint_is_an_empty_dir_with_a_size_limit_the_extension_writes_to() -> (
