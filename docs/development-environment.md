@@ -99,7 +99,7 @@ clone plus the tools above is a working environment. What is not in git:
 | Sign-ins | `gh`, `az`, Docker | Sign in again on the new machine; nothing to copy |
 | The assistant's memory | `~/.claude/projects/<name from the checkout's path>/memory/` | Copy the folder to the name the new path gives, or the next session starts without it |
 | The assistant's saved sessions | `~/.claude/session-data/` | Optional; `/resume-session` reads the latest |
-| Unmerged work | Branches on GitHub | Each open step's branch is pushed at the end of a day, and its section in the plan's Part C says what is left; nothing is only local |
+| Unmerged work | Branches on GitHub | Each open step's branch is pushed at the end of a day, and its file under `docs/plan/steps/` says what is left; nothing is only local |
 
 After a fresh clone open `/hooks` once, as `CLAUDE.md` says, or the edit
 and command hooks do not run.
