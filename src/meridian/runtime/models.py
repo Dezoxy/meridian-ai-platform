@@ -2,16 +2,19 @@
 
 import json
 from datetime import datetime
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 from uuid import UUID
 
 from pydantic import AfterValidator, StringConstraints
 
 from meridian.platform.common.http import BoundedEntityId, ErrorBody
+from meridian.platform.common.runwire import (
+    RunResponse as RunResponse,  # re-exported: defined below the runtime (S082)
+)
+from meridian.platform.common.runwire import RunState as RunState  # re-exported
 from meridian.platform.common.wire import WireModel
 
 MAX_INPUT_BYTES = 32 * 1024
-RunState = Literal["Running", "AwaitingApproval", "Completed", "Failed"]
 Reference = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9._:-]{1,64}$")]
 
 
@@ -57,12 +60,6 @@ class ResumeRequest(WireModel):
     tenant: BoundedEntityId
     reference: Reference
     input: Annotated[dict[str, Any], AfterValidator(_input_is_empty)]
-
-
-class RunResponse(WireModel):
-    run_id: UUID
-    status: RunState
-    output: dict[str, Any] | None
 
 
 class RunErrorBody(ErrorBody):
