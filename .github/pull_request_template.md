@@ -7,8 +7,8 @@ Part A, "The pull request's description"). -->
 ## What
 
 <!-- The step in docs/meridian-plan.md, e.g. S002, and what changed, by
-area. Update the step's status and its file under docs/plan/steps/ in
-this PR. -->
+area. Update the step's file under docs/plan/steps/ in this PR; when its
+status line changes, run make plan-progress. -->
 
 ## Decisions
 

@@ -11,16 +11,20 @@ views and the decisions.
 [docs/meridian-plan.md](docs/meridian-plan.md) is the single living plan: the
 step list (S000…), the session protocol and the open questions. Each step's
 section is a file of its own in a folder of twenty step numbers
-(`docs/plan/steps/S100-S119/S100.md`), which the plan indexes. The follow-up
-backlog is `docs/plan/backlog.md` (open rows) and
-`docs/plan/backlog-closed.md` (history).
+(`docs/plan/steps/S100-S119/S100.md`). A step's status is one line in that
+file and nowhere else: the plan's step tables hold none, and its last part
+lists the finished steps and those in flight, written from the files by
+`make plan-progress` and checked by `make docs`. The follow-up backlog is
+`docs/plan/backlog.md` (open rows) and `docs/plan/backlog-closed.md`
+(history).
 
 - Since 2026-10-08 steps run in worker sessions, one step and one worktree
   each, handed out by a dispatcher session (the plan's Part A, "A
   dispatcher and workers"). A session whose first message says it is a
   worker follows the `plan-worker` skill; one the owner calls the
   dispatcher or the orchestrator follows `plan-dispatcher`. Any other
-  session takes the next `todo` step whose dependencies are `done`, unless
+  session takes the next free step (no file yet, or a file that says
+  `todo`, and every step it depends on `done` by its own file), unless
   the owner names another, one step at a time, and tells the owner to
   compact when it is merged and verified. Each step has its own branch off
   `main` and its own worktree.

@@ -191,6 +191,7 @@ Terraform exists under `infra/terraform/azure/` (written, never applied).
 
 ```bash
 make docs     # documentation gate: twins, mirrors, links, indexes, ADRs, IDs
+make plan-progress  # rewrite the plan's finished and in-flight tables from the step files
 make secret-scan  # scan the commits a push would add for secrets, as CI's secret scan does (needs gitleaks)
 make check    # Structurizr validate + inspect with the pinned image (Docker)
 make view     # browse the model at http://localhost:8080/workspace/1
