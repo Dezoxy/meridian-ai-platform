@@ -77,6 +77,18 @@ COVERAGE_SHARDS_DIR ?= .coverage-shards
 # that runs beside others. On a laptop under Docker Desktop ten dropped
 # connections to the database container (S054): pass PYTEST_WORKERS=4 there.
 PYTEST_WORKERS      ?= 10
+# The machine's test lock (S099, scripts/machine_lock.sh): the recipe's own
+# shell takes one exclusive flock and holds it to its end, so a second
+# session's run on the machine waits for the first and says who holds it
+# (MERIDIAN_LOCK_WAIT seconds, default 1800; then it runs nothing). In front
+# of `make pytest`, `make pytest-db` and each container of `make alerts`, and
+# nowhere else: `make eval` and `make eval-baseline` reach it through
+# `$(MAKE) pytest-db`, and a second lock around them would wait on that one.
+# Not `:=`: the target's name is read where the recipe runs. `exec` behind it
+# where the recipe is one command: make's shell then IS the run, so a
+# SIGTERM to make ends the run and frees the lock, as it did before the
+# line had a `&&` and make started a shell for it.
+MACHINE_LOCK = MACHINE_LOCK_LABEL=$@ . scripts/machine_lock.sh
 # promtool for `make alerts` (S024): the one of the Prometheus that the
 # kube-prometheus-stack chart in infra/kind/pins.env runs (chart 91.8.2 runs
 # v3.15.0), so a rule is checked by the parser that will load it. The digest is
@@ -123,7 +135,7 @@ EVAL_INPUTS         := src config/registry data/synthetic data/evaluation/record
 
 STRUCTURIZR := docker run --rm -v "$(CURDIR)/$(ARCH_DIR):/w:ro"
 
-.PHONY: help validate inspect check docs test secret-scan view export mermaid-views mermaid-render mermaid pdf clean lint pytest coverage-floor pytest-db alerts eval eval-tests eval-compare eval-baseline eval-record eval-injection-record synthetic up deploy images helm-lint demo smoke gateway-upkeep grafana grafana-password identity-passwords cert-renew cluster-holder down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry aws-validate aws-scan aws-plan aws-apply aws-destroy gcp-validate gcp-scan aws-kubeadm-validate aws-kubeadm-scan gcp-kubeadm-validate gcp-kubeadm-scan azure-platform-validate azure-platform-scan
+.PHONY: help validate inspect check docs test secret-scan view export mermaid-views mermaid-render mermaid pdf pdf-brief clean lint pytest coverage-floor pytest-db alerts eval eval-tests eval-compare eval-baseline eval-record eval-injection-record synthetic up deploy images helm-lint demo smoke gateway-upkeep grafana grafana-password identity-passwords cert-renew cluster-holder down azure-state azure-plan azure-apply azure-smoke gateway-live registry-snapshot registry aws-validate aws-scan aws-plan aws-apply aws-destroy gcp-validate gcp-scan aws-kubeadm-validate aws-kubeadm-scan gcp-kubeadm-validate gcp-kubeadm-scan azure-platform-validate azure-platform-scan
 .DEFAULT_GOAL := help
 
 ## help            list the targets
@@ -196,6 +208,10 @@ mermaid: mermaid-views mermaid-render
 pdf:
 	STRUCTURIZR_IMAGE=$(STRUCTURIZR_IMAGE) PANDOC_IMAGE=$(PANDOC_IMAGE) MERMAID_IMAGE=$(MERMAID_IMAGE) ARCH_DIR=$(ARCH_DIR) scripts/architecture-pdf.sh
 
+## pdf-brief       the brief: without the documents pdf-brief.txt lists, the decisions as an index; named <project>-architecture-brief-<date>-<edition>.pdf
+pdf-brief:
+	BRIEF=1 STRUCTURIZR_IMAGE=$(STRUCTURIZR_IMAGE) PANDOC_IMAGE=$(PANDOC_IMAGE) MERMAID_IMAGE=$(MERMAID_IMAGE) ARCH_DIR=$(ARCH_DIR) scripts/architecture-pdf.sh
+
 ## clean           delete the generated folder (exports and PDFs; all gitignored)
 clean:
 	rm -rf $(GENERATED)
@@ -211,25 +227,26 @@ lint:
 	uv run lint-imports
 	uv run python scripts/check_file_sizes.py
 
-## pytest          tests under tests/meridian and tests/synthetic, including the import-contract detection test, run in parallel (PYTEST_WORKERS, default 10; 0 runs them in one process; with COVERAGE=1 a run of a part of the suite fails the coverage floor)
+## pytest          tests under tests/meridian and tests/synthetic, including the import-contract detection test, run in parallel (PYTEST_WORKERS, default 10; 0 runs them in one process; with COVERAGE=1 a run of a part of the suite fails the coverage floor); takes the machine's test lock, so it waits for another session's run
 pytest:
-	uv run pytest -n $(PYTEST_WORKERS) $(PYTEST_COVERAGE_ARGS) $(PYTEST_ARGS)
+	$(MACHINE_LOCK) && exec uv run pytest -n $(PYTEST_WORKERS) $(PYTEST_COVERAGE_ARGS) $(PYTEST_ARGS)
 
 ## coverage-floor  combine the shards' coverage data (COVERAGE_SHARDS_DIR/*.coverage) and fail under the floor of pyproject.toml's [tool.coverage.report], the one place it is written; the shards run with COVERAGE=1 COVERAGE_SHARD=1 and apply none
 coverage-floor:
 	uv run coverage combine --keep $(COVERAGE_SHARDS_DIR)/*.coverage
 	uv run coverage report --skip-covered
 
-## alerts          check Meridian's alert rules (infra/kind/alerts) with promtool and run their unit tests and the cost dashboard's gap tests (needs Docker and uv)
+## alerts          check Meridian's alert rules (infra/kind/alerts) with promtool and run their unit tests and the cost dashboard's gap tests (needs Docker and uv); each container takes the machine's test lock
 alerts:
 	uv run python scripts/alert_rules.py extract .alerts
 	uv run python scripts/cost_dashboard_gap.py write .alerts
-	docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /bin/promtool -v "$(CURDIR)/.alerts:/rules:ro" -w /rules $(PROMTOOL_IMAGE) check rules --lint=all --lint-fatal meridian.rules.yaml
-	docker run --rm --network none --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges --entrypoint /bin/promtool -v "$(CURDIR)/.alerts:/rules:ro" -w /rules $(PROMTOOL_IMAGE) test rules meridian.test.yaml gateway-cost.test.yaml
+	$(MACHINE_LOCK) && exec docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /bin/promtool -v "$(CURDIR)/.alerts:/rules:ro" -w /rules $(PROMTOOL_IMAGE) check rules --lint=all --lint-fatal meridian.rules.yaml
+	$(MACHINE_LOCK) && exec docker run --rm --network none --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges --entrypoint /bin/promtool -v "$(CURDIR)/.alerts:/rules:ro" -w /rules $(PROMTOOL_IMAGE) test rules meridian.test.yaml gateway-cost.test.yaml
 
-## pytest-db       pytest in parallel (PYTEST_WORKERS, default 10; 0 runs them in one process) with a throwaway PostgreSQL 17 on 127.0.0.1:55432 and a throwaway Redis 8 on 127.0.0.1:26379, neither persisted (needs Docker; concurrent runs each need their own PYTEST_DB_CONTAINER, PYTEST_DB_PORT, PYTEST_REDIS_CONTAINER and PYTEST_REDIS_PORT); the database and Redis tests run instead of skipping; with COVERAGE=1 a run of a part of the suite fails the coverage floor
+## pytest-db       pytest in parallel (PYTEST_WORKERS, default 10; 0 runs them in one process) with a throwaway PostgreSQL 17 on 127.0.0.1:55432 and a throwaway Redis 8 on 127.0.0.1:26379, neither persisted (needs Docker; takes the machine's test lock, so a second run waits for the first and both may keep the default container names and ports); the database and Redis tests run instead of skipping; with COVERAGE=1 a run of a part of the suite fails the coverage floor
 pytest-db:
 	@set -e; \
+	$(MACHINE_LOCK); \
 	docker rm -f $(PYTEST_DB_CONTAINER) $(PYTEST_REDIS_CONTAINER) >/dev/null 2>&1 || true; \
 	trap 'docker rm -f $(PYTEST_DB_CONTAINER) $(PYTEST_REDIS_CONTAINER) >/dev/null 2>&1 || true' EXIT; \
 	trap 'exit 130' INT; \

@@ -351,7 +351,10 @@ known.
 - **Each test run has a database of its own**: `PYTEST_DB_CONTAINER` and
   `PYTEST_DB_PORT` per step, and per implementer when several of one
   step run at once. `make pytest-db` removes the container of its name
-  when it starts, so two runs under one name destroy each other. It starts
+  when it starts, so two runs under one name destroyed each other until
+  S099: since then the target takes the machine's test lock before that
+  removal ("The rule for the machine while the cluster is up", below), a
+  second run waits for the first, and the default names serve. It starts
   a throwaway Redis beside the database (S066, the gateway's shared rate
   windows), which needs a name and a port of its own the same way:
   `PYTEST_REDIS_CONTAINER` and `PYTEST_REDIS_PORT`, handed to the tests as
@@ -435,6 +438,25 @@ reason to ask for a larger one.
   says: two do not fit beside the cluster in 12 GB, and the second one
   swapped the machine within three runs (S074's measurement, 2026-10-07, the
   suite's six workers and a loop of three).
+- **The lock that keeps to it (S099).** `make pytest`, `make pytest-db` and
+  each container of `make alerts` take one exclusive lock for the machine
+  (`scripts/machine_lock.sh`, a `flock` on a file under
+  `~/.cache/meridian-locks/`, held by the recipe's own shell to its end);
+  `make eval` and `make eval-baseline` reach it through `make pytest-db`.
+  A second session's run prints who holds the lock (the target, its
+  checkout, since when) and waits up to `MERIDIAN_LOCK_WAIT` seconds
+  (1,800 unless set); after that it runs nothing and fails. It holds
+  whether the cluster is up or not, so two database runs that would have
+  fitted side by side without the cluster now run one after the other.
+  What it does not cover: a test file run by hand (`uv run pytest <file>
+  -n 4`), which is small and takes no lock; a suite started that way,
+  which nothing stops; and the cluster, which has its holder record. It
+  is taken in CI too, where nothing else holds it: `GITHUB_ACTIONS` is
+  set by hand on this machine before a push, so it could not be what
+  turns a lock off. It was written when the owner moved the steps into
+  worker sessions (the plan's Part A, "A dispatcher and workers"): two
+  sessions do not see each other, and a rule they both have to remember
+  is a rule one of them breaks.
 - **Counting pytest containers misses a run.** The count of
   `docker ps` names that contain `pytest` sees only a run with a database. A
   run without one (a script's tests, or `pytest tests/meridian -k "smoke or
@@ -459,7 +481,9 @@ reason to ask for a larger one.
   whole suite in CI (since 2026-10-08, "What runs before a pull request",
   above); a whole local run only by name, with the cluster's node stopped.
 - One run with a test database at a time while the cluster is up (above),
-  with six workers for a whole suite and three for any other run.
+  with six workers for a whole suite and three for any other run. The
+  make targets' lock keeps to it between sessions; inside a session it is
+  still the session's to keep for what it runs by hand.
 - A test database's port outside Linux's ephemeral range (32768 to
   60999). On 2026-10-06 a run on port 55638 failed to bind because another
   process had been given that port as a source port; this session's later

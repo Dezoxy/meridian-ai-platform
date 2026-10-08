@@ -168,6 +168,17 @@ steps cite their IDs instead of inventing them. Add other concern documents
 when there is something true to say: reliability when something runs, and
 the deployment of each cloud when there is something to place.
 
+The PDF comes in two editions, built from the same source at the same commit:
+`make pdf` writes the full one and `make pdf-brief` the brief, the one to hand
+to someone who will not read a register. The brief leaves out the documents
+listed in [pdf-brief.txt](pdf-brief.txt), today the threat model and the
+Azure platform register, prints the decisions as an index of number, title,
+status and date, and says on its first page what only the full edition holds.
+In both, a table with a cell too long for one table row prints as records, one
+block of paragraphs per row. Before S096 a row taller than a page ran past the
+bottom margin and off the sheet, and the PDF lost that text: 117 of 377 pages
+on 2026-10-08. The Markdown, GitHub and the Documentation tab keep the tables.
+
 ## Diagrams
 
 The Structurizr model owns structure; Mermaid owns behaviour and logic (state

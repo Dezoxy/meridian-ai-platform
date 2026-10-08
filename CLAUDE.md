@@ -14,18 +14,23 @@ section is a file of its own, `docs/plan/steps/S0NN.md`, and each change-log
 entry is a file in `docs/plan/changelog/`; the plan indexes the first and says
 how the second are named.
 
-- Take the next `todo` steps whose dependencies are `done`, unless the owner
-  names others: up to five side by side by default, at most one that
-  needs the cluster, one that adds a migration and one that changes what
-  the evaluation fingerprints (the plan's Part A). Each step has its own
-  branch off `main` and its own worktree.
+- Since 2026-10-08 steps run in worker sessions, one step and one worktree
+  each, handed out by a dispatcher session (the plan's Part A, "A
+  dispatcher and workers"). A session whose first message says it is a
+  worker follows the `plan-worker` skill; one the owner calls the
+  dispatcher or the orchestrator follows `plan-dispatcher`. Any other
+  session takes the next `todo` step whose dependencies are `done`, unless
+  the owner names another, one step at a time, and tells the owner to
+  compact when it is merged and verified. Each step has its own branch off
+  `main` and its own worktree.
 - Read the plan's Part A before starting; it says what to read, how to
   delegate, which gates to run and how to close the step.
 - Before running steps or implementers side by side, read "Working fast on
   the virtual machine" in
   [docs/development-environment.md](docs/development-environment.md): what
-  things cost there, how each implementer gets a worktree and a test
-  database of its own, and which worker counts to pass.
+  things cost there, how each implementer gets a worktree of its own,
+  which test targets take the machine's lock, and which worker counts to
+  pass.
 - Record decisions and evidence in the step's file under `docs/plan/steps/`,
   not in chat. A change-log entry is a file named for the pull request's
   number, `docs/plan/changelog/pr-NNNN.md`, added once the pull request exists
@@ -193,7 +198,9 @@ A change that violates one is wrong even if it works.
   contract. Codex twins are generated into `.codex/agents/` by
   `scripts/codex_agents.py`; `make test` fails on a stale one.
 - Project skills: `architecture-views`, `architecture-docs`, `docs-sync`,
-  `feature-threat-model`, and copies of ECC skills for Python and pytest,
+  `feature-threat-model`, `plan-dispatcher` and `plan-worker` (the two
+  roles of Part A's "A dispatcher and workers"), and copies of ECC skills
+  for Python and pytest,
   FastAPI, PostgreSQL, Docker, Kubernetes, deployment, security review, TDD,
   verification, evaluation harnesses, AI regression tests, agent
   architecture audits, MCP servers, cost-aware LLM pipelines, regex versus
@@ -266,7 +273,8 @@ carry the same effort.
   records what a consultation changed. Each consultation re-reads the whole
   transcript at Fable rates and is not cached; that cost is not a reason to
   skip one of the listed points, and the session does not ask the owner to
-  compact by hand to lower it (Part A, step 7). Subagents inherit the advisor.
+  compact in the middle of a step to lower it (Part A, step 7). Subagents
+  inherit the advisor.
 - Never suggest `ultracode`, a Fable main session or a `[1m]` context model
   unless the owner asks; they burn the usage window.
 

@@ -65,12 +65,14 @@
 
 ## Part A — How a session works
 
-One step per branch and per worktree, and up to five steps side by side
-in one session whenever that many are ready and do not meet ("Five
-steps side by side", below). A session that grows long is
-compacted by the harness when its context fills (step 7 says how that is
-made safe): the advisor re-reads the whole transcript on every call,
-uncached, and a long context blurs what a step was for.
+One step per branch and per worktree. Since 2026-10-08 the steps run in
+worker sessions, one step each, handed out by a dispatcher session ("A
+dispatcher and workers", below; up to five ran side by side in one
+session before that). A session that grows long is compacted:
+by the owner between steps, on the session's word, and by the harness
+when its context fills (step 7 says how that is made safe): the advisor
+re-reads the whole transcript on every call, uncached, and a long
+context blurs what a step was for.
 
 1. **Start small.** Read `CLAUDE.md`, the step table below and the detail
    section of the step you take. Read other files only when the step needs
@@ -155,11 +157,16 @@ uncached, and a long context blurs what a step was for.
    branch and what comes next. The harness compacts the conversation by
    itself when the context is full, and after a checkpoint that loses
    nothing (the owner, 2026-10-06: "we should optimalise the conversation
-   but it should be a routine"). The session does not ask the owner to
-   compact by hand: on 2026-10-06 a compact that ended interrupted stopped
-   every background agent, the harness would not start them again
-   without the owner's word, and the owner decided against compacting by
-   hand that day.
+   but it should be a routine"). On 2026-10-06 a compact by hand that ended
+   interrupted stopped every background agent, the harness would not
+   start them again without the owner's word, and the owner decided
+   against compacting by hand that day. Since 2026-10-08 the owner
+   compacts between steps ("after every step you should say, compact and
+   we can go on"): the session says so when a step is merged and
+   verified and this checkpoint is written, never in the middle of a
+   step and never while an agent or a background command is out. A
+   dispatcher says it at the three moments of "A dispatcher and
+   workers"; a worker ends with its status file and is archived.
 
 **The contract.** One concern per contract and about a page, in a scratch
 file the `implementer` reads. A long contract gets worked around with
@@ -225,9 +232,72 @@ Worktree and branch. Do not commit, push, switch branches or stash.
 - Read every source file a subagent changed. A green suite does not show a
   value that was hard-coded to match the one fixture.
 
-**Five steps side by side.** This is the default, not an
-allowance: when a session starts, and whenever a step closes, it fills up to
-five slots with steps whose dependencies are `done` (three until the
+**A dispatcher and workers (the owner, 2026-10-08; S099).** Three days of
+five steps side by side in ONE session had used 86 % of the account's
+weekly limit: a session that runs every step as its own sub-agents
+re-reads its whole history on every turn. The owner first went back to
+one step at a time ("Okay so we should go back only one step and then
+archive and start a new step, it will save a lot of token i guess", and,
+having compacted the session instead of archiving it, "after every step
+you should say, compact and we can go on"), and the same morning asked
+for more: "i want more session once with seperated worktree so i can
+optimalise the context long and we can work quicker ... somehow we
+should apply your policies where two worktree dont try the test in the
+same time", and, to the session's proposal, "Okay, yes and you will be
+the orchestrator this way". So:
+
+- **A worker session carries ONE step** to a merged pull request, or to
+  its written stop, in a worktree of its own; then it writes a status
+  file and ends. The `plan-worker` skill is its brief. Inside the step
+  contracts go out one after another, and a read-only reviewer may run
+  beside an implementer.
+- **One dispatcher session hands the steps out.** The `plan-dispatcher`
+  skill is its brief. It keeps the board, a file outside the repository
+  that it alone writes (a board in the tree would be edited by every
+  branch); it gives a new step its number, chooses steps whose files do
+  not meet, verifies each merge on `main` and puts up the next card. The
+  owner starts each worker; the dispatcher cannot. It does not run a
+  worker's step as its own sub-agents and does not read a worker's
+  conversation. Its own small steps (the harness, the board's tooling)
+  it does itself, to a merged pull request.
+- **Two workers at once, at most**: one that holds the kind cluster and
+  one that does not. The lanes of the table below still say what exists
+  once, and at most one step in flight holds each; a step that rebuilds
+  the images or moves the packages runs alone.
+- **Scripts keep the sessions apart, not their good will.** `make
+  pytest`, `make pytest-db` and `make alerts` take the machine's test
+  lock (`scripts/machine_lock.sh`): a second session's run waits and
+  says who holds it, and one that waited half an hour runs nothing. The
+  cluster has its holder record (S075). A worker runs the tests of the
+  areas it changed through those targets, and CI runs the whole suite.
+  One test file run by hand takes no lock.
+- **Compaction.** The dispatcher tells the owner to compact it after
+  each step of its own, after a round of hand-outs is closed, and when
+  its context has grown long; never while a background command or a
+  sub-agent of its own is out. A worker is archived when its step is
+  done.
+- **The order is the owner's.** What can be built on kind comes before
+  the paid cloud steps ("before we go to the azure payable thing we
+  should go and do a lot of things, like seperated images, fake tenant
+  and groups, users, roles and i think we have much more to solve before
+  cloud"), and the owner means one tenant by that ("I meant one tenant
+  not multi-tenant arch").
+- **One board, not two.** The stop hook `check-lanes.sh` reads a board of
+  sub-agent lanes inside one session (`.claude/lanes.md`). The
+  dispatcher's board is not that file and the hook does not read it.
+
+A session that is neither (the owner opens one and names a step) carries
+that one step as a worker does and tells the owner to compact when it is
+merged and verified. What follows is the rule of 2026-10-06 to
+2026-10-08 for steps side by side in ONE session, kept for when the
+owner asks for that again. Its lanes, and what it says of separate
+sessions ("What is shared", "Numbers are taken late", "Who finishes
+later, merges first"), hold for worker sessions today.
+
+**Five steps side by side (2026-10-06 to 2026-10-08; not in force).**
+This was the default, not an allowance: when a session starts, and
+whenever a step closes, it fills up to five slots with steps whose
+dependencies are `done` (three until the
 afternoon of 2026-10-06, when the owner wrote "Okay can you start 5 steps
 in total so we can go quicker on the steps"; a step the owner names on top
 of the five is started too, as S077 was that day). The owner's decisions:
@@ -293,7 +363,9 @@ sessions; the brief of each step, or of each session, says:
   implementer while the cluster is up; the virtual machine ran the whole
   suite alone with 10 in under two minutes on 2026-10-05, and in 3 min 46 s
   on 2026-10-08 with 22,437 tests and coverage), for `make pytest-db` and
-  `make eval`, so two test runs never meet.
+  `make eval`, so two test runs never meet. Since S099 the machine's test
+  lock keeps two runs apart, one after the other, and the container's
+  name and port may stay the defaults; the worker count is still passed.
 - **Numbers are taken late.** Migration numbers, `T-NN` and ADR numbers are
   taken after merging `main` into the step's branch, right before the pull
   request. A branch whose migration number is not final is not deployed to
@@ -620,7 +692,9 @@ both readings the same hour ("yes both are right, go on").
 | S091 | Data ownership views | Who reads and writes which schema of the Platform Database, as views of the model: the six schemas (`audit`, `claims`, `gateway`, `knowledge`, `policy`, `runtime`) as components of the database, each service with its own schema and the reads that cross a schema in one view, and the audit trail in a second if one view does not read; every arrow checked against the grants the migrations leave and compared with ADR 10's table, a difference recorded and not smoothed; register rows and PNGs read at full size. No ER diagram: S085 and S087 rewrite the tables. The owner, 2026-10-07: "should we add db view too?", then "okay" to this. Built as (2026-10-07): `DataOwnership` (11 boxes, 13 arrows, the seven grants on another service's schema drawn thicker) and `AuditTrail` (9 and 8), in `docs/architecture/model/data.dsl`, embedded in the data classification's inventory. The grants were read from the migration files' statements, not from a database's catalog; they agree with ADR 10's table. Implemented as views; nothing was run for them | done | S090 |
 | S092 | Mermaid and PDF render under rootless Docker | `make mermaid-render` and `make pdf` finish on a machine whose Docker is rootless, as the virtual machine's is, and still finish in CI; the fix is made in development-base's copy of `scripts/render-mermaid.sh` first and copied here unchanged; with it, the two notes of S089's review (the render container needs no network; the script passes when it finds no block). Built as (2026-10-08): under rootless Docker the render and Pandoc containers start as their root, which there is the caller, and elsewhere as the caller, as before; the render container has no network; this repository's `make mermaid-render` fails when no block was extracted. Development-base's pull request 52 first, then the two scripts and a test copied byte for byte. Implemented, and run on the virtual machine: five diagrams rendered and a PDF of 377 pages written | done | — |
 | S095 | Retention and erasure of uploaded files | The owner's decision of 2026-10-08: "Both, as a new step (Recommended)". A retention period for a claim's uploaded files is a setting, and it has no default that deletes anything: a local cluster deletes no file until the operator sets a period; a sweep deletes a file's BYTES once the period has passed, under a database role that may (a grant, so a migration; `claims_api` keeps SELECT and INSERT and no DELETE); an audited command erases one claim's files on request, run by a signed-in person (hence S021) whose name is on the audit row; the metadata row and the audit rows stay and say what was removed and when; a legal hold on a claim stops both the sweep and the command; the download of a file that is gone answers with a clear refusal, not a 404 of no route and not a 500; tested against PostgreSQL and seen once on kind. **Designed: nothing of it is built.** Open for the step's design: how the row keeps its size and hash while its bytes go (the table checks them), and the same bytes in the write-ahead log and in every backup, which the step's erasure does not reach and its design must say how long they live (T-111) | todo | S080, S021 |
+| S096 | The PDF: no row lost, and a brief edition | The architecture PDF loses no text where a table row is taller than a page, and a second, brief edition exists to hand to someone who will not read a register. Built as (2026-10-08; the owner's "do it" and "Records (Recommended)"): a table with a cell of more than 300 characters prints as records, one block of paragraphs per row, and any other wide table gets its column widths from its text (`scripts/pdf_tables.py`); `make pdf-brief` writes the brief, without the documents `docs/architecture/pdf-brief.txt` lists (the threat model and the Azure platform register), with the decisions as an index and a first page that says what it leaves out; the workflow builds both and attaches both to the release. Measured on the virtual machine: the full edition from 377 pages to 274 and from 117 pages with text past the bottom margin to none; the brief is 34 pages. The code is development-base's (its pull request 54), copied. Landscape pages for the threat model, the session's first proposal, were built and saved nothing (379 pages). Implemented; no release was published | done | S092 |
 | S097 | The plan in files | Each step's section and each change-log entry is a file of its own under `docs/plan/`, moved byte for byte and proved so by `scripts/plan_split.py --check`; a new entry is named for its pull request's number and the plan has no version of its own; `make docs` checks the files against Part B and refuses a section or an entry in the old place; `scripts/plan_port.py` carries a branch's edits of the old layout over. Part B's tables are not moved and still collide by rows (the owner, 2026-10-08: "Change log and step sections") | doing | — |
+| S099 | A dispatcher and workers: the test lock and the two briefs | Steps run in worker sessions, one step and one worktree each, handed out by a dispatcher session (the owner, 2026-10-08: "yes and you will be the orchestrator this way"); `make pytest`, `make pytest-db` and `make alerts` take one lock for the machine (`scripts/machine_lock.sh`), so a second session's run waits for the first and says who holds it, and one that waited too long runs nothing; the two roles are skills (`plan-dispatcher`, `plan-worker`) that name no path of the machine; Part A's "A dispatcher and workers" replaces "One step at a time, again"; the same goes into the development base in a pull request there | done | — |
 
 ### Toward services: a database each and six images
 
@@ -1161,6 +1235,7 @@ that day; the rest stand as their step recorded them.
 | `make mermaid-render` and `make pdf` fail under rootless Docker, which the virtual machine runs: `scripts/render-mermaid.sh` starts the container with the caller's user and group, which rootless Docker maps to another user than the folder's owner, and every PNG ends in "EACCES: permission denied" (five of five, then the PDF's four of four, on 2026-10-07). The same script on a copy of the folder made world-writable rendered all five. CI's Docker is not rootless and renders. The script's canonical copy is development-base's, so the fix goes there first and is copied here. With it, from the review of S089's workflow step (low): the render container needs no network and could run with none, in this job and in the PDF's; and the script passes when it finds no block, which a count in the Makefile's target would catch | S089 (the first local render; the infra review) | done (S092, 2026-10-08: the container starts as its root under rootless Docker; no network; the Makefile's target fails on an empty extraction) | S092 |
 | The import layering page (`docs/architecture/code/import-layering.md`: its diagram, its table of contracts and its counts) and the `RuntimeComponents` view were read from the code of 2026-10-07. S082 moves the workloads' graphs and the sweep's SQL and adds a contract per service, S083 makes a package per service and S086 cuts the sweep in two: each brings the page, `model/components.dsl` and the view's register row to the code it leaves | S089, S090 | open | S082 |
 | The `DataOwnership` and `AuditTrail` views (`docs/architecture/model/data.dsl`) draw the grants of 2026-10-07, read from the migration files' GRANT and REVOKE statements and not from a catalog. S084 takes the tool servers' reads of runs and claims away, S085 replaces the one audit table by a table per service and a relay, S086 cuts the sweep's reach into the runtime's schema, and S087 makes five databases: each brings the model's arrows, the two views and their register rows to what it leaves, and S087's baselines are where the grants are read from a migrated database's catalog and compared with the views | S091 | open | S085 |
+| Two things S096 found and did not change. The threat model is 94 of the full PDF's 274 pages because some rows' Status holds more than a page of history (T-02, T-03 and others): that is the register's text, and shortening it, or moving the history of a row to the step that made it, is an edit of the register, not of its printing. And `scripts/build_architecture_pdf_source.py` stands at 795 lines of the size check's 800: its next change moves a part out (the brief's functions are the natural one), in development-base first | S096 | open | S035 |
 | Grafana's pages were not exercised in a browser against the Prometheus gateway's read list, and the two gateways' memory was not read under load or on a large answer: smoke's calls through Grafana's datasource (queries and rules, R17) are all that went through it, so the metrics browser's label drop-downs, Explore and the Alerting page, and with them `series`, `labels`, `metadata`, `query_exemplars` and `format_query`, were not seen used, and a path Grafana needs that the list lacks would not have shown (it would answer 403, class `x` in the gateway's log). The gateways' working sets were read once after R17: 4.3 MiB (peak 9.6 MiB) against 64 MiB for Prometheus's, 19.8 MiB at its peak for Loki's | S072 (third part, R17: P7, P10) | open; a hand check in a browser, then the gateway's log searched for `class=x`; the lines that are Grafana's are added to the list once each | S073 |
 | The log agent spins at more than one core, silently, minutes after it starts: measured from `/proc` on the development machine on 2026-10-08 (1.14 to 1.33 cores over 10 and 30 seconds, on an instance 6.4 hours old and on a fresh pod at 190 and 370 seconds of age, with load 2 to 3; 0.01 cores at 70 seconds), with an idle network and an ordinary log whose one error, between the calm and the spinning reading, is `fileconsumer/file.go:280 Failed to open file ... no such file or directory` for the log file of a finished sweep pod the cluster had just removed (stanza's file consumer, v0.162.0). Its values (`infra/kind/values/log-agent.yaml`, S064; not changed by S072) request 25m of CPU and set no CPU limit, so nothing bounds it; smoke, the alerts and Prometheus's own CPU series for the pod (0.001 cores at the same minute) saw none of it. Why the instance of 2026-10-07 11:13 to 18:33 averaged 8.7 % of a core is not known | S072 (third part: found after R18, when the machine was read after an overload) | narrowed by S073 (2026-10-08): the cause was reproduced in a container and the memory limit raised to 384Mi, with a CPU limit of 500m as a bound (run LR1 on kind saw the agent calm for twelve minutes). Open: something that sees a spin (an alert on the container's CPU from a source that shows it, or a smoke line); Prometheus's series did not, which has a row of its own below | S073 |
 | What the final infrastructure check before S072's third pull request left, all low (`s072` handoff, the check of 2026-10-07): T-90's cell keeps its superseded sentences ahead of the dated note that reverses them; four `die` sentences inside `make up`'s warm window (the database's steps and the roles' wait) carry no note that telemetry is refused until a re-run; the streaming of a chunked request body through Prometheus's gateway is recalled from nginx's documentation and was not seen; the placeholder check is a word match and a test could count the four tokens instead; the Service address check would pass `...` or `:` (the value is only an annotation); no test holds that the gateway image's pin has a registry segment, which the split for Loki's chart needs; and `scratch_repo` in `test_kind_cluster_holder.py` copies `up.sh` without `gateways.sh`, harmless until a test runs `up.sh` from that tree | S072 (third part, the final check: LOW-1 to LOW-7) | open | S073 |
@@ -1182,11 +1257,12 @@ that day; the rest stand as their step recorded them.
 | What the sixth round's check lists beyond the pinned rows, all none on main and on the fifth round (so no regression) and not yet rows of the case file: `bash -oc pipefail '…'`, `bash -c -o pipefail '…'`, `su --command '…'` and `su --command='…'`, `su` with five words before `-c`, seven pairs of `-o x` (six pairs deny and seven fall outside the window: the measured edge), `env -a NAME make` and `env -u A -S '…'`. And two false denies, main none: two letters are still case-blind in the body gate (`bash -C '…'` is read as `-c`, `env -s '…'` as `-S`), and `echo bash -c 'make -m "aws-destroy"'` (a row, kept on purpose: an echo of a shell-wrapped removal), beside `make git commit -m "aws-destroy"` (deny kept: main denies the unquoted form) | S071 (the sixth round's check, 2026-10-08) | open; rows to add to the case file | S071 (its paid half) |
 | The bypasses the reviews of the guard's added rules keep listing, none a regression (main gives none on each): a target split by quotes or built by a substitution (`make eval-"record"`, `make $(printf eval-rec)ord`, `make eval-{record,x}`, `make -m "aws-"apply`, `make azure-"apply"`); a target or a whole command in a file (`make $(cat t.txt)`, `xargs -a t.txt make`, a script written and then run by name, `set -a; . ./live.env`, a script the command names such as `python3 X.py` or `bash X.sh`); the flags variable with its target held elsewhere (`MAKEFLAGS="-- $T" make`, `T` set in an earlier call); the Azure make rule, which has no co-occurrence rule (`T=azure-apply; make $T`); the AWS option rule behind a prefix outside its tables (`stdbuf -oL`, `ionice`, `doas`, `systemd-run`, `eval make`, `\make`, a quoted `"make"`) or with the target in a loop or a variable; a raw request spelled `az re""st`, `"az" rest` or `a=az; $a rest`, or through `python3 -m azure.cli rest` or `subprocess.run(['az','rest'])`; the identity library through `from azure import identity`, `importlib`, `node` or `pwsh`, the classes `OnBehalfOf`, `AuthorizationCode`, `AzurePipelines` and `AzureApplication`, or a heredoc piped into an interpreter the heredoc pass does not know; main's older rules that cut at a separator inside a quote (`git commit --author="A;B" -n`, `kubectl get secret x -n "a;b" -o yaml`, `cat "a;b" .env`); and `parallel -m "…"` and `python3 -m "<quoted>"`, which main's own pass blanks as prose | S071 (the reviews of G3 to G6, 2026-10-07 and 08) | open; the third review listed file-then-run (a command that runs a file a session wrote, `set -a; . ./live.env` included) among the items to close before a paid run on this machine (the other, `${T:-…}`, is closed), and it is not built: the hook would have to open the files a command names (the design's note) | S071 (its paid half) |
 | The paid-target rule's false asks, measured by the third review and the re-check and accepted by the session as the price of co-occurrence (a false ask costs a click, a missed one costs money; the owner may overturn): any command that holds the word make and a paid target as words asks, wherever they stand (`rg -n "make eval-record" docs/`, `grep -rn "make gateway-live" docs`, `git log -S"make gateway-live"`, `gh pr create --body "… make eval-record"`, `make test && git add docs/operations/runbooks/gateway-live`, `make test PYTEST_ARGS="-k gateway-live"`, `echo gateway-live >> notes.txt && make docs`; 8 of the 34 daily shapes the review tried asked, all of this form; a commit message goes in with `-F` and so does not ask); the narrower rule for a default in a parameter expansion asks on `make ${T:-my-eval-record}` and `echo "${T:-eval-record}" && make docs`; and the raw-request and identity rules ask on a search whose quoted pattern names them (`grep -rn "az rest" docs`, `python3 -m pytest -k "DefaultAzureCredential"`). A search with the Grep tool asks nobody, and the review found no target of main's Makefile outside the paid ones that gained an ask | S071 (the third review and the fifth round's re-check, 2026-10-07 and 08) | open; accepted | S071 (its paid half) |
-| A quoted word after `env -S` (an empty string, a comment, an assignment or another prefix) hides the build tool behind it from the added AWS removal rule: `env -S '' make -m "aws-destroy"`, `env -S '# c' make …`, `env -S 'A=b' make …`, `env -S 'nice -n 5' make …`, `env -S 'sudo' make …`. The fifth round denied these forms and the sixth gives none, which is what main gives; the sixth round's check calls it a medium that is not weaker than main, and judges that a session almost certainly would not type it. Its suggested fix: add to the alternatives for `env` a `-S` followed by a quoted word (already masked to `'xxx'`) so that make after it stays the command word, at the cost of a deny on `env -S 'sh' make` (the stronger direction), reverse-checked against row 2841 so that `env -S x make` stays none. The check asked for it before the paid run; the session reads that as the next change of the hook and not as S071's paid model run, because the rule is the AWS removal rule and not one of the paid-model rules | S071 (the sixth round's check, 2026-10-08) | open; left open by the session's decision | S020 (the guard's rules for the Azure wrapper: the next change of the hook, with a security review of its own) |
+| A quoted word after `env -S` (an empty string, a comment, an assignment or another prefix) hides the build tool behind it from the added AWS removal rule: `env -S '' make -m "aws-destroy"`, `env -S '# c' make …`, `env -S 'A=b' make …`, `env -S 'nice -n 5' make …`, `env -S 'sudo' make …`. The fifth round denied these forms and the sixth gives none, which is what main gives; the sixth round's check calls it a medium that is not weaker than main, and judges that a session almost certainly would not type it. Its suggested fix: add to the alternatives for `env` a `-S` followed by a quoted word (already masked to `'xxx'`) so that make after it stays the command word, at the cost of a deny on `env -S 'sh' make` (the stronger direction), reverse-checked against row 2841 so that `env -S x make` stays none. The check asked for it before the paid run; the session reads that as the next change of the hook and not as S071's paid model run, because the rule is the AWS removal rule and not one of the paid-model rules | S071 (the sixth round's check, 2026-10-08) | closed by S020 GA1 (2026-10-08), as an addition and with the fix the check suggested: the added scanner in the hook's deny block, a copy of the AWS one, reads a quoted word after `env -S` as a part of `env`, so `make` after it stays the command word, and in that shape only it reads the AWS targets as well as the Azure names (`env -S '' make -m "aws-destroy"`, `env -S '# c' make …`, `env -S 'A=b' make …`, `env -S 'nice -n 5' make …` and `env -S 'sudo' make …` are denied for the removal and ask for apply and plan); `env -S x make` stays none, as the check asked. The old scanner and the AWS patterns are not edited. 48 rows of the case file hold it (`es-*`, 16, and `e-s-*`, 32, the review's own shapes among them), and the differential of the whole case file and the 535 measured shapes against main's hook found no decision weaker (0 of 3,869), the 29 tighter commands of this shape the wanted ones. One security review of GA1 and GA2 together is still to come | S020 (done in GA1; the review is S020's) |
 | Prometheus's CPU series for the log agent's pod showed 0.001 cores in the same minute that the process used more than one (1.14 to 1.33 cores from `/proc`, 2026-10-08). Why is not known and nobody looked: the query, its source and the cluster's scrape of the containers' metrics were not read, and the reproduction had no such scrape (LA1). Until it is known, no alert or dashboard on container CPU is evidence that this fault is absent, and the telemetry runbook says to read the process on the node instead. Run LR1's CPU figures are from `/proc` too | S073 (the spin of 2026-10-08; LA1's report; run LR1) | open | S073 |
 | The trigger of the log agent's thrash on the cluster is not identified. LA1 reproduced a mechanism in a container (a burst of a few hundred lines at 192Mi, the page cache giving up the binary's pages and the process reading them back); it did not reproduce the event that started it on the cluster. The "Failed to open file ... no such file or directory" line seen before the first spin is consistent with a coincidence: a removed file, a removed directory and a checkpoint naming a gone file did nothing in the reproduction. Why the instance of 2026-10-07 from 11:13 to 18:33 averaged 8.7 % of a core is not known. At 384Mi run LR1 saw the agent calm for twelve minutes (0.01 cores, no reads, 0 to 43 refaults a second) through smoke's burst; the case the limit does not cure (140,000 lines at once with the exporter failing: 270 MiB of anonymous memory, reads of 0.3 to 2.9 GB a second) was not run on the cluster | S073 (the spin of 2026-10-08; LA1's report; run LR1) | open | S073 |
 | The two evaluation tests run twice on every pull request: once in a shard, whichever the hash gives them, and once in the `evaluation` job, which exists because no shard is sure to hold both tests that write the reports. Together about 85 s of runner time. Not changed: the job is not the slowest, and a way to run them once (a shard that deselects them, or the gate reading a shard's reports) would make the gate depend on the split | S074 (CI speed, 2026-10-08) | open; low | S074 |
 | What the shards' reports do not prove, from the short re-check of the rework (L-2 to L-4): skips are not counted (the report holds the tests kept, not the tests that passed, so a test that skips silently in CI still counts; `MERIDIAN_REQUIRE_DB` covers the database and Redis tests); the report is written when collection finishes, about four minutes before a shard ends, in the workspace the shard's tests then run in, and no test overwrites it that anyone found; and nothing pins the expected suite but the coverage floor: equal digests prove only that the shards agree with each other, so a module dropped by `--ignore` or a `collect_ignore` entry gives equal digests and a smaller total. Fixes, if wanted: the skipped count at `pytest_sessionfinish`, and a total or digest committed to the repository | S074 (CI speed; the short re-check, 2026-10-08) | open; low; the last is accepted residual risk | S074 |
+| The command guard's time in the documents job. On the hosted runner the guard's slowest shape took 2.87 s of CPU against the bound of 3 s on pull request 147's last run (1.26 s on the development machine; the runner is 1.8 to 2.3 times slower), so a slower runner fails `tests/test_guard_bash.sh` on any pull request; re-running the job is the way round. Nearly all of that time is three older passes of `main`'s hook that find quoted pieces in quadratic time, as S020's scanner did before its tokeniser was made linear; the same change there is a change of `main`'s guard lines and needs its own review. And the guard's 3,824 cases run one after another, one start of the hook each (the job's limit was raised from 5 to 15 minutes for it): a parallel loop over the cases | S020, S099 | open | S074 |
 | TLS to the sign-in issuer on kind: the edge's proxy pods reach Keycloak, and the Claims API reaches its key and token addresses, over plain HTTP inside the cluster, so whoever sits on that path could serve keys of their own (T-117). Accepted on a disposable development cluster and said in the kind README ("The sign-in issuer"); a business runs its issuer behind TLS end to end: a certificate for the Keycloak Service from the services' CA, Keycloak's HTTPS listener, the Claims API's key client trusting that CA, and the edge's backend TLS to the Service, with the issuer string staying the front URL | S021 (Y2b, 2026-10-08) | open; designed, nothing of it is built | S094 |
 
 ## Part C — Step details
@@ -1293,6 +1369,8 @@ also go into Part B's follow-up backlog.
 | S092 | Mermaid and PDF render under rootless Docker | [S092.md](plan/steps/S092.md) |
 | S095 | Retention and erasure of uploaded files | [S095.md](plan/steps/S095.md) |
 | S097 | The plan in files | [S097.md](plan/steps/S097.md) |
+| S096 | The PDF: no row lost, and a brief edition | [S096.md](plan/steps/S096.md) |
+| S099 | A dispatcher and workers: the test lock and the two briefs | [S099.md](plan/steps/S099.md) |
 | S021 | Identity | [S021.md](plan/steps/S021.md) |
 
 ## Part D — Open questions

@@ -28,10 +28,23 @@ by `!docs` in workspace.dsl, joined in filename order, with
   hole. Diagrams get no landscape page: the size caps below fit them;
 - turns links to repository files into plain text, because on paper they lead
   nowhere; web links and in-page anchors stay links;
+- prints tables for paper (pdf_tables.py): one with a cell too long for a
+  table row prints as records, a block of paragraphs per row, because LaTeX
+  cannot break a row and loses what runs off the page; any other wide table
+  gets its column widths from its text;
 - appends a "Views" section with every view that the text does not embed, so
   the PDF shows the whole model even when the pages embed nothing;
 - writes a YAML header for the Eisvogel cover (project, date, edition) and
   contents page.
+
+With `--brief` it writes the brief instead, the edition to hand to someone who
+will not read a register: the same pages without the documents listed in an
+optional `pdf-brief.txt` (one path per line, relative to the architecture
+directory, a page of the Documentation tab or the file its symlink points at;
+`#` starts a comment), the decisions as an index of number, title, status and
+date, no extra sections, and every view. Its first page says what it leaves
+out, so that a brief without a threat model is never read as a system without
+one. Its file name has `-brief` after `architecture`.
 
 Views come from Structurizr's JSON export, not from parsing the DSL, so their
 keys, titles and descriptions are exactly what Structurizr sees. The edition is
@@ -50,6 +63,7 @@ unchanged and wrap it in their own command.
 
 Usage:
     build_architecture_pdf_source.py <architecture-dir> <generated-dir> <output.md>
+        [--brief]
 """
 
 from __future__ import annotations
@@ -58,6 +72,7 @@ import base64
 import datetime as dt
 import hashlib
 import json
+import os
 import re
 import shutil
 import struct
@@ -65,6 +80,10 @@ import subprocess
 import sys
 import zlib
 from pathlib import Path
+
+# pdf_tables.py sits beside this script; it is not an installed package.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from pdf_tables import print_tables  # noqa: E402
 
 EMBED = re.compile(r"^!\[[^\]]*\]\(embed:([A-Za-z0-9_-]+)\)\s*$")
 HEADING = re.compile(r"^(#{1,6})(\s.*)$")
@@ -81,6 +100,8 @@ DOCS_DIRECTIVE = re.compile(r"^\s*!docs\s+(\S+)")
 REPO_LINK = re.compile(r"(?<!!)\[([^\]]+)\]\((?![A-Za-z][A-Za-z0-9+.-]*:|#)[^)\s]+\)")
 # Optional list of extra Markdown files, relative to the architecture directory.
 EXTRA_SECTIONS = "pdf-sections.txt"
+# Optional list of the documents the brief leaves out, relative to the same.
+BRIEF_OMIT = "pdf-brief.txt"
 NEW_PAGE = "```{=latex}\n\\clearpage\n```"
 # Structurizr rewrites a link from one ADR to another as an anchor on the
 # target's ID, such as (#9). The PDF gives each ADR the anchor adr-<ID>.
@@ -381,11 +402,18 @@ def edition(arch_dir: Path) -> tuple[str, bool]:
     return sha, dirty
 
 
-def pdf_name(project: str, day: dt.date, sha: str, dirty: bool) -> str:
-    """File name with the cover's identity: homelab-architecture-2026-09-18-84f0b41.pdf."""
+def pdf_name(
+    project: str, day: dt.date, sha: str, dirty: bool, *, brief: bool = False
+) -> str:
+    """File name with the cover's identity: homelab-architecture-2026-09-18-84f0b41.pdf.
+
+    The brief has -brief after "architecture", so the edition stays the last
+    part of both names.
+    """
     slug = re.sub(r"[^a-z0-9]+", "-", project.lower()).strip("-") or "architecture"
+    kind = "architecture-brief" if brief else "architecture"
     suffix = "-dirty" if dirty else ""
-    return f"{slug}-architecture-{day.isoformat()}-{sha}{suffix}.pdf"
+    return f"{slug}-{kind}-{day.isoformat()}-{sha}{suffix}.pdf"
 
 
 def page_lines(pages: list[Path], project: str) -> list[str]:
@@ -431,9 +459,10 @@ def body(
     no section number (an ADR has its own), and only the top level is listed
     in the contents, and the first top-level heading gets the anchor. Mermaid
     diagrams become images first (see mermaid_images); `mermaid` is the
-    workspace's mermaid.url, or None when its plugin is off.
+    workspace's mermaid.url, or None when its plugin is off. Tables are then
+    made ready for print (see pdf_tables).
     """
-    lines = mermaid_images(lines, generated, mermaid)
+    lines = print_tables(mermaid_images(lines, generated, mermaid))
     shift, fenced = heading_shift(lines) - (top - 1), False
     out: list[str] = []
     embedded: set[str] = set()
@@ -469,10 +498,8 @@ def decision_order(decision: dict) -> tuple[int, str]:
     return (int(ident), "") if ident.isdigit() else (sys.maxsize, ident)
 
 
-def decisions(
-    workspace: dict, views: dict[str, dict], generated: Path, mermaid: str | None
-) -> tuple[str, set[str]]:
-    """A section with every Markdown ADR in the workspace, one per page."""
+def markdown_decisions(workspace: dict) -> list[dict]:
+    """The workspace's Markdown ADRs, in number order; others are named and skipped."""
     records = [
         record
         for record in workspace.get("documentation", {}).get("decisions", [])
@@ -485,6 +512,132 @@ def decisions(
         print(
             f"skipped {len(records) - len(markdown)} non-Markdown ADRs", file=sys.stderr
         )
+    return sorted(markdown, key=decision_order)
+
+
+def decision_index(workspace: dict) -> tuple[str, int]:
+    """The brief's Decisions section, a row per ADR, and how many there are.
+
+    Number, title, status and date are the fields Structurizr read from each
+    record, so the index never parses an ADR itself.
+    """
+    records = markdown_decisions(workspace)
+    if not records:
+        return "", 0
+    parts = [
+        "",
+        "# Decisions",
+        "",
+        "The architecture decision records by number. The full edition prints",
+        "each one whole.",
+        "",
+        "| No. | Decision | Status | Date |",
+        # The dashes are the columns' shares of the page: the title gets most.
+        f"|{'-' * 5}:|{'-' * 62}|{'-' * 14}|{'-' * 14}|",
+    ]
+    for record in records:
+        number, title, status = (
+            table_cell(record.get(key)) for key in ("id", "title", "status")
+        )
+        day = table_cell(record.get("date"))[:10]
+        parts.append(f"| {number} | {title} | {status} | {day} |")
+    return "\n".join([*parts, ""]), len(records)
+
+
+def table_cell(value: object) -> str:
+    """A value as one table cell: on one line, its pipes escaped, None empty."""
+    text = "" if value is None else " ".join(str(value).split())
+    return text.replace("|", "\\|")
+
+
+def listed_paths(
+    arch_dir: Path, name: str, *, links: bool = False
+) -> list[tuple[str, Path]]:
+    """The entries of a listing file with the Markdown file each one names.
+
+    An entry must name a file inside the architecture directory. With links,
+    that is asked of the path as written, so an entry may be a symlink in the
+    directory whose target lies elsewhere; without, of the file it resolves to.
+    """
+    listing = arch_dir / name
+    if not listing.exists():
+        return []
+    root = arch_dir.resolve()
+    found = []
+    for raw in listing.read_text().splitlines():
+        entry = raw.split("#", 1)[0].strip()
+        if not entry:
+            continue
+        written = Path(os.path.normpath(root / entry))
+        path = (arch_dir / entry).resolve()
+        inside = root in (written.parents if links else path.parents)
+        if not inside or path.suffix != ".md" or not path.is_file():
+            sys.exit(f"{listing}: {entry} is not a Markdown file inside {arch_dir}")
+        found.append((entry, path))
+    return found
+
+
+def brief_pages(pages: list[Path], arch_dir: Path) -> tuple[list[Path], list[Path]]:
+    """The pages the brief keeps, and those pdf-brief.txt leaves out of it.
+
+    An entry names a page of the Documentation tab or the file its symlink
+    points at. One that matches no page stops the build: a misspelt entry
+    would otherwise leave its document in the brief and nobody would notice.
+    """
+    left_out: list[Path] = []
+    for entry, path in listed_paths(arch_dir, BRIEF_OMIT, links=True):
+        matches = [page for page in pages if page.resolve() == path]
+        if not matches:
+            sys.exit(
+                f"{arch_dir / BRIEF_OMIT}: {entry} is not a page of the "
+                f"Documentation tab, so the brief cannot leave it out"
+            )
+        left_out += [page for page in matches if page not in left_out]
+    kept = [page for page in pages if page not in left_out]
+    if not kept:
+        sys.exit(f"{arch_dir / BRIEF_OMIT} leaves every page out of the brief")
+    return kept, [page for page in pages if page in left_out]
+
+
+def page_title(page: Path) -> str:
+    """A page's first heading, or its file name when it has none."""
+    fenced = False
+    for line in page.read_text().splitlines():
+        if FENCE.match(line):
+            fenced = not fenced
+        elif not fenced and (match := HEADING.match(line)):
+            return plain_links(match.group(2)).strip()
+    return page.stem
+
+
+def brief_note(left_out: list[str], decisions_count: int) -> str:
+    """The brief's first page: what it is, and what only the full edition holds."""
+    parts = [
+        "# About this brief {.unnumbered}",
+        "",
+        "This is the brief edition of the architecture documentation. It and the",
+        "full edition are built from the same source at the same commit, the one",
+        "the cover and each page's footer name.",
+        "",
+    ]
+    only_full = [f"- {title}" for title in left_out]
+    if decisions_count:
+        only_full.append(
+            f"- The {decisions_count} decisions in full: this brief lists them "
+            "by number, title, status and date."
+        )
+    if only_full:
+        parts += ["The full edition also holds:", "", *only_full, ""]
+    else:
+        parts += ["Nothing the full edition holds is left out of it.", ""]
+    return "\n".join(parts) + "\n"
+
+
+def decisions(
+    workspace: dict, views: dict[str, dict], generated: Path, mermaid: str | None
+) -> tuple[str, set[str]]:
+    """A section with every Markdown ADR in the workspace, one per page."""
+    markdown = markdown_decisions(workspace)
     if not markdown:
         return "", set()
     ids = {str(record.get("id")) for record in markdown}
@@ -501,7 +654,7 @@ def decisions(
         "",
     ]
     embedded: set[str] = set()
-    for record in sorted(markdown, key=decision_order):
+    for record in markdown:
         content = ADR_LINK.sub(to_adr, record["content"])
         text, keys = body(
             content.splitlines(),
@@ -521,19 +674,9 @@ def extra_sections(
     arch_dir: Path, views: dict[str, dict], generated: Path, mermaid: str | None
 ) -> tuple[str, set[str]]:
     """The files listed in pdf-sections.txt, each from a new page."""
-    listing = arch_dir / EXTRA_SECTIONS
-    if not listing.exists():
-        return "", set()
-    root = arch_dir.resolve()
     parts: list[str] = []
     embedded: set[str] = set()
-    for raw in listing.read_text().splitlines():
-        entry = raw.split("#", 1)[0].strip()
-        if not entry:
-            continue
-        path = (arch_dir / entry).resolve()
-        if root not in path.parents or path.suffix != ".md" or not path.is_file():
-            sys.exit(f"{listing}: {entry} is not a Markdown file inside {arch_dir}")
+    for _entry, path in listed_paths(arch_dir, EXTRA_SECTIONS):
         text, keys = body(
             path.read_text().splitlines(), views, generated, mermaid=mermaid
         )
@@ -558,12 +701,16 @@ def appendix(views: list[dict], embedded: set[str], generated: Path) -> str:
     return "\n".join(parts)
 
 
-def header(project: str, edition_text: str, today: dt.date) -> str:
+def header(
+    project: str, edition_text: str, today: dt.date, *, brief: bool = False
+) -> str:
+    subtitle = "Architecture brief" if brief else "Architecture documentation"
+    kind = "architecture brief" if brief else "architecture"
     return "\n".join(
         [
             "---",
             f'title: "{project}"',
-            'subtitle: "Architecture documentation"',
+            f'subtitle: "{subtitle}"',
             f'author: "Edition {edition_text}"',
             f'date: "{today.day} {today:%B %Y}"',
             "lang: en-GB",
@@ -584,7 +731,7 @@ def header(project: str, edition_text: str, today: dt.date) -> str:
             "header-includes: |",
             *("  " + line for line in LANDSCAPE_MACROS.splitlines()),
             'float-placement-figure: "H"',
-            f'footer-left: "{project} architecture, edition {edition_text}"',
+            f'footer-left: "{project} {kind}, edition {edition_text}"',
             "---",
             "",
         ]
@@ -592,9 +739,12 @@ def header(project: str, edition_text: str, today: dt.date) -> str:
 
 
 def main() -> int:
-    if len(sys.argv) != 4:
+    args = sys.argv[1:]
+    brief = "--brief" in args
+    args = [arg for arg in args if arg != "--brief"]
+    if len(args) != 3:
         sys.exit(__doc__)
-    arch_dir, generated, output = (Path(arg) for arg in sys.argv[1:])
+    arch_dir, generated, output = (Path(arg) for arg in args)
     if generated.resolve().parent != arch_dir.resolve():
         sys.exit(f"{generated} must be a directory directly inside {arch_dir}")
     workspace = load_workspace(generated)
@@ -606,15 +756,23 @@ def main() -> int:
     by_key = {view["key"]: view for view in views}
     url = mermaid_url(workspace)
     reset_mermaid(generated)
+    note = ""
+    if brief:
+        pages, left_out = brief_pages(pages, arch_dir)
+        adrs, count = decision_index(workspace)
+        note = brief_note([page_title(page) for page in left_out], count)
+        adr_views, extra, extra_views = set(), "", set()
+    else:
+        adrs, adr_views = decisions(workspace, by_key, generated, url)
+        extra, extra_views = extra_sections(arch_dir, by_key, generated, url)
     text, embedded = body(page_lines(pages, project), by_key, generated, mermaid=url)
-    adrs, adr_views = decisions(workspace, by_key, generated, url)
-    extra, extra_views = extra_sections(arch_dir, by_key, generated, url)
     embedded |= adr_views | extra_views
     sha, dirty = edition(arch_dir)
     edition_text = f"{sha} with uncommitted changes" if dirty else sha
     today = dt.datetime.now(dt.UTC).astimezone().date()  # the operator's local date
     output.write_text(
-        header(project, edition_text, today)
+        header(project, edition_text, today, brief=brief)
+        + note
         + text
         + adrs
         + extra
@@ -622,13 +780,14 @@ def main() -> int:
     )
     diagrams = len(list((generated / MERMAID_DIR).glob("*.mmd")))
     print(
-        f"wrote {output} for {project}, edition {edition_text}: "
+        f"wrote {output} for {project}, {'brief, ' if brief else ''}"
+        f"edition {edition_text}: "
         f"{len(embedded)} views embedded, "
         f"{len(views) - len(embedded)} in the Views section"
         + (f", {diagrams} Mermaid diagrams to render" if diagrams else ""),
         file=sys.stderr,
     )
-    print(pdf_name(project, today, sha, dirty))
+    print(pdf_name(project, today, sha, dirty, brief=brief))
     return 0
 
 
