@@ -64,9 +64,39 @@ def test_the_runtime_re_exports_the_models_it_had() -> None:
 
 
 def test_the_runtime_re_exports_the_constants_it_had() -> None:
+    # Identity cannot tell a re-export from a second definition for the short
+    # string (CPython interns it), so the next test reads the source.
     assert runtime_sweep.RUNNING_LEASE_SECONDS is runlease.RUNNING_LEASE_SECONDS
     assert runtime_sweep.ABANDONED_REASON is runlease.ABANDONED_REASON
     assert runs.RUNNING_LEASE_SECONDS is runlease.RUNNING_LEASE_SECONDS
+
+
+def test_the_runtime_sweep_defines_neither_constant_and_imports_both() -> None:
+    assert runtime_sweep.__file__ is not None
+    tree = ast.parse(Path(runtime_sweep.__file__).read_text(encoding="utf-8"))
+    names = ("ABANDONED_REASON", "RUNNING_LEASE_SECONDS")
+    assigned: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+            targets = [node.target]
+        else:
+            continue
+        for target in targets:
+            for part in ast.walk(target):
+                if isinstance(part, ast.Name) and part.id in names:
+                    assigned.add(part.id)
+    imported = {
+        alias.asname or alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "meridian.platform.common.runlease"
+        for alias in node.names
+    }
+
+    assert assigned == set()
+    assert set(names) <= imported
 
 
 def _modules_imported_by(module: ModuleType) -> set[str]:
