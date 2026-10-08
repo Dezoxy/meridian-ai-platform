@@ -331,7 +331,10 @@ Negative / accepted trade-offs:
   group's may be refused by Azure).
 - The foundation's vault and Azure OpenAI account are open to every address and
   the vault receives the administrator's password: T-104. The owner's firewall
-  decision is open and comes before any apply.
+  decision is open and comes before any apply. (Amended on 2026-10-08: the
+  owner decided it, "Deny, allow operator (Recommended)": default deny, the
+  operator's address allowed, private endpoints for the cluster; it is
+  designed, not written, and applies at the next apply the owner runs.)
 - The state holds the operator's address and may hold the workspace's shared
   keys: T-103.
 - The audit log is destroyed with the environment, with no export: T-105.
