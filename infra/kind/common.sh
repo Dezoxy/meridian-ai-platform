@@ -97,6 +97,17 @@ readonly KCTL_REQUEST_TIMEOUT KCTL_OUTER_TIMEOUT KCTL_WAIT_MARGIN HELM_UPGRADE_M
 # How long `timeout` waits after its signal before it kills the call.
 readonly KCTL_KILL_AFTER=5
 
+# The switch of the sign-in issuer add-on (S021, Y2b): MERIDIAN_IDENTITY is empty
+# (off, the default: `make up`, `make deploy` and `make smoke` do what they did
+# before the add-on existed) or `keycloak` (Keycloak in the namespace `identity`,
+# infra/kind/identity.sh). Anything else stops the script here, before it does
+# anything, with a usage line: a typo must not read as "off".
+case "${MERIDIAN_IDENTITY-}" in
+  "" | keycloak) ;;
+  *) die "usage: MERIDIAN_IDENTITY must be empty (off, the default) or keycloak (the local sign-in issuer, an add-on: infra/kind/README.md, 'The sign-in issuer'); for example MERIDIAN_IDENTITY=keycloak make up" ;;
+esac
+identity_on() { [[ "${MERIDIAN_IDENTITY-}" == keycloak ]]; }
+
 # kctl_classify ARGS...: sets ${kctl_class} to "request" (add the flag), "outer"
 # (run under timeout), "waits" (wait and rollout status: run under timeout for
 # their own --timeout plus a margin) or "none" (a stream, or a call that has its

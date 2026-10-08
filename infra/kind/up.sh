@@ -42,6 +42,8 @@
 #      Loki, OpenTelemetry Collector, and (S064) the log agent: a second release
 #      of the collector's chart, the contrib build, as a DaemonSet in `logging`
 #      that sends the output of `meridian`'s pods to the collector
+#   5. only with MERIDIAN_IDENTITY=keycloak (S021, Y2b), last: the sign-in issuer
+#      add-on, identity.sh (README, "The sign-in issuer"); off, nothing of it is made
 # Every version is pinned in pins.env.
 # Who holds the cluster (S075, common.sh): on a cluster that exists, another
 # holder stops this before it changes anything unless TAKE_CLUSTER=1; the record
@@ -500,7 +502,10 @@ log "edge: Envoy Gateway"
 install_release envoy-gateway envoy-gateway-system "${ENVOY_GATEWAY_CHART}" \
   "${ENVOY_GATEWAY_VERSION}" "" envoy-gateway.yaml \
   --set "global.images.envoyGateway.image=${ENVOY_GATEWAY_IMAGE_REPOSITORY}:${ENVOY_GATEWAY_IMAGE_TAG}@${ENVOY_GATEWAY_IMAGE_DIGEST}"
-kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/gateway.yaml" >/dev/null
+# The edge's manifest is the committed file, unless MERIDIAN_IDENTITY=keycloak
+# widens who may attach a route to it (gateways.sh, S021 Y2b).
+edge_manifest="$(edge_gateway_manifest)" || exit 1
+kctl apply --server-side --force-conflicts -f - <<<"${edge_manifest}" >/dev/null
 
 log "identity: cert-manager, who may ask for a certificate, and the CA for the services"
 install_release cert-manager cert-manager "${CERT_MANAGER_CHART}" \
@@ -743,6 +748,15 @@ kctl -n envoy-gateway-system wait --for=condition=Programmed gateway/edge --time
 kctl -n envoy-gateway-system wait --for=condition=Available deployment \
   -l gateway.envoyproxy.io/owning-gateway-name=edge --timeout=5m >/dev/null ||
   die "the wait for the edge's proxy Deployment to be Available ended without the condition (it waits up to 5m; kubectl's own message above says whether the time ran out or the wait failed at once, for instance with not found): look at its pods (kubectl -n envoy-gateway-system get pods -l gateway.envoyproxy.io/owning-gateway-name=edge; describe the one that is not ready) and at the controller's log (kubectl -n envoy-gateway-system logs deploy/envoy-gateway)"
+
+# The sign-in issuer (S021, Y2b): an add-on, off unless MERIDIAN_IDENTITY=keycloak.
+# Off, the script says one line when an earlier run left its namespace; on, it
+# refuses under 2,500 MB of memory available, and its failure leaves `changing`.
+if identity_on; then
+  "${KIND_DIR}/identity.sh" up
+else
+  "${KIND_DIR}/identity.sh" note
+fi
 
 # Every wait above ended well: only now is the cluster claimed (S075). A run that
 # stopped earlier leaves the record as it was.

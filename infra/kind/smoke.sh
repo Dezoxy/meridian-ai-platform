@@ -18,7 +18,8 @@
 # The checks, in order: 01 edge, 02 database, 03 tools, 04 telemetry, 05 cost
 # panel, 06 adjuster pages, 07 sweep, 08 network policy, 09 service identity, 10
 # certificate policy, 11 alert rules, 12 telemetry stores (one more short-lived Pod
-# in observability, unique name, deleted when the check ends and by the EXIT trap).
+# in observability, unique name, deleted when the check ends and by the EXIT trap),
+# 13 issuer (S021: one SKIP line unless MERIDIAN_IDENTITY=keycloak; reads only).
 # Prints one PASS, FAIL or SKIP line per check and exits non-zero on any FAIL.
 set -euo pipefail
 
@@ -50,6 +51,8 @@ set -euo pipefail
 . "${KIND_DIR}/smoke.d/11-alert-rules.sh"
 # shellcheck source=smoke.d/12-telemetry-stores.sh
 . "${KIND_DIR}/smoke.d/12-telemetry-stores.sh"
+# shellcheck source=smoke.d/13-issuer.sh
+. "${KIND_DIR}/smoke.d/13-issuer.sh"
 
 need_tools docker kubectl curl jq base64 openssl timeout
 require_local_docker
@@ -75,6 +78,7 @@ check_service_identity
 check_certificate_policy
 check_alert_rules
 check_telemetry_stores
+check_issuer
 
 if ((failures > 0)); then
   printf '\n%s check(s) FAILED\n' "${failures}"

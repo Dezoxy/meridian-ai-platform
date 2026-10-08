@@ -5,7 +5,9 @@
 # it always did; nothing here runs when the file is sourced. It is not run on its
 # own. It uses `die`, `log`, `kctl` and `KIND_DIR` (common.sh), the
 # NGINX_GATEWAY_IMAGE_* pins (pins.env) and `object_fingerprint` (up.sh), which are
-# all defined by the time a function below is called.
+# all defined by the time a function below is called. The last function, at the
+# end of the file, is the edge Gateway's manifest (S021, Y2b); identity.sh sources
+# this file too, for fill_placeholder.
 
 # The policies of Prometheus's port and its gateway's, and the gateway itself (S072,
 # contract M4): no placeholder for an address, applied right after the stack's
@@ -111,4 +113,31 @@ apply_prometheus_gateway() {
   kctl -n observability rollout status deployment/prometheus-gateway \
     --timeout=5m >/dev/null ||
     die "Prometheus's gateway (deployment/prometheus-gateway in observability) did not finish rolling out in 5m (its new pod was not Ready): Grafana reads no Prometheus and the collector's metrics are refused and dropped until it is, and on a warm cluster the old pod may still serve the old configuration; look at its pods (kubectl -n observability get pods -l app.kubernetes.io/name=prometheus-gateway; describe the newest) and its log, then run make up again"
+}
+
+# The edge Gateway's manifest (S021, Y2b), on stdout. With the sign-in issuer
+# add-on off (MERIDIAN_IDENTITY empty) it is the committed file, byte for byte: the
+# listener admits routes from the namespace `meridian` only. With it on (keycloak),
+# the one change is who may attach a route to the listener: the namespaces whose
+# name label is `meridian` or `identity`, by a selector on that label (the API server
+# sets it and nobody can edit it) and never `All`. matchLabels cannot say "or", so
+# the selector becomes matchExpressions. The text is cut and joined as
+# fill_placeholder does, so a file that lost the block is refused and not applied
+# as it stands. A later run with the switch off applies the file again, and the
+# widening should go from the Gateway (server-side apply drops a field its manager
+# no longer sends; written, not run on the cluster).
+# edge_gateway_manifest [FILE]: FILE is the Gateway's manifest (the committed one by
+# default; a test gives it another).
+readonly EDGE_GATEWAY_FILE="${KIND_DIR}/manifests/gateway.yaml"
+readonly EDGE_ROUTES_FROM_MERIDIAN=$'            matchLabels:\n              kubernetes.io/metadata.name: meridian'
+readonly EDGE_ROUTES_FROM_BOTH=$'            matchExpressions:\n              - key: kubernetes.io/metadata.name\n                operator: In\n                values: [meridian, identity]'
+edge_gateway_manifest() {
+  local file="${1:-${EDGE_GATEWAY_FILE}}" manifest
+  if ! identity_on; then
+    cat "${file}"
+    return
+  fi
+  manifest="$(<"${file}")"
+  manifest="$(fill_placeholder "${manifest}" "${EDGE_ROUTES_FROM_MERIDIAN}" "${EDGE_ROUTES_FROM_BOTH}")" || exit 1
+  printf '%s\n' "${manifest}"
 }

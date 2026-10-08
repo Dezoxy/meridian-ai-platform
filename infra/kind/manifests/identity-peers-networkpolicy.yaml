@@ -1,0 +1,66 @@
+# The two OTHER ends of the connections to Keycloak (S021, Y2b), applied by
+# infra/kind/identity.sh only when MERIDIAN_IDENTITY=keycloak. NetworkPolicy wants
+# both ends: the policy `keycloak` in `identity` (identity-networkpolicy.yaml)
+# admits the edge's proxy pods and the Claims API's pods on 8080, and the two pods
+# below each need a rule to send there, because both namespaces deny egress by
+# default. They are policies of their own, ADDED to the ones that exist (policies
+# are additive: a pod may do what any policy that selects it allows), so that
+# neither the edge's file (envoy-gateway-networkpolicy.yaml, whose test pins its
+# rules) nor the Meridian chart changes with the switch. Written and tested without
+# a cluster; not run on the cluster yet.
+#
+#   identity-edge-egress         in envoy-gateway-system: the proxy pods may send to
+#                                Keycloak's pods in `identity`, port 8080 (the
+#                                route's upstream), and to nothing else new.
+#   identity-claims-api-egress   in meridian: the Claims API's pods may send to
+#                                Keycloak's pods in `identity`, port 8080 (the key
+#                                set and, with Y3, the token), and to nothing else
+#                                new. No other service of `meridian` is given it.
+#
+# What turning the switch off does: nothing. These two objects stay on the cluster
+# until someone deletes them by hand (README, "The sign-in issuer"): each is an
+# allow rule towards a namespace that may no longer exist, which opens nothing.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: identity-edge-egress
+  namespace: envoy-gateway-system
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: proxy
+      gateway.envoyproxy.io/owning-gateway-name: edge
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: identity
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: keycloak
+      ports:
+        - port: 8080
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: identity-claims-api-egress
+  namespace: meridian
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: claims-api
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: identity
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: keycloak
+      ports:
+        - port: 8080
+          protocol: TCP
