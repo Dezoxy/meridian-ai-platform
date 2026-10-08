@@ -607,7 +607,7 @@ def run_script(
     kind_dir, stubs = tmp_path / "infra" / "kind", tmp_path / "bin"
     kind_dir.mkdir(parents=True)
     stubs.mkdir()
-    for name in SCRIPTS:
+    for name in (*SCRIPTS, "gateways.sh"):  # up.sh sources gateways.sh
         shutil.copy(KIND_DIR / name, kind_dir / name)
     if kubeconfig:
         (kind_dir / "kubeconfig").write_text("stub\n", encoding="utf-8")

@@ -50,6 +50,14 @@ which for this project is always in the EU.
 
 ### Inventory
 
+Where each kind of data is stored is the table below. Which service may
+reach which schema of the database is two views of the model, read from the
+migrations' grants (S091):
+
+![Data ownership view: each service, the schema that is its own and the grants that cross into another service's schema](embed:DataOwnership)
+
+![Audit trail view: the services that insert audit events and what reads the trail](embed:AuditTrail)
+
 | Data | Class | Stored in | Notes |
 |---|---|---|---|
 | Claims | `personal` | Platform Database, claims schema | Synthetic in every environment of this project; entered through `POST /claims` or the claimant's form (S049), whose banner asks for fictional data (T-04). The claimant's status page shows the claim's ID, state and documents, never the name, email or description (T-65) |
@@ -71,6 +79,7 @@ which for this project is always in the EU.
 | Evaluation results | `personal` (pseudonymous) | A JSON report: the baseline in Git (`data/evaluation/`), a run's report beside it or in CI's temporary directory (S017); the recording of a real model's answers and two live reports beside the baseline (S050); no table in the Platform Database (S050 decided against one) | Per golden-set case, the grades and the proposal's route, reason, recommendation, amount and assessment, with the hashes of the prompt, the judge's prompt, the recording, the tools and the golden set; since S050 also the model's rationale and the judge's reason (both redacted), the name and the arguments of each tool call, and the tokens and the cost from the gateway's ledger; no prompt text. The cases are synthetic today: a report over real claims would hold claim data in those fields and could not be committed |
 | Registry | `internal` | Git | Changed only by pull request (T-35) |
 | Provider credentials, signing keys, the pipeline's cloud identity | Secret, outside the classes | Key Vault; Kubernetes Secrets on kind | Never in a prompt, a log or the repository (T-18, T-34, T-37) |
+| The collector's client key, and the telemetry authority's (S072: implemented and tested, seen on kind in runs R14 to R17) | Secret, kind only | Kubernetes Secrets `otel-collector-client-tls` and `telemetry-ca` in `observability`, made by cert-manager | Never committed, never in a log. Whoever holds the client key is the one subject the two gateways admit as a writer (T-90; Tempo's receiver checks the authority alone); 90 days, a new key at each renewal, no revocation. The authority's key is within reach of the three accounts that read Secrets in every namespace (T-68) |
 | Mock OIDC issuer signing key (designed, S021: no issuer runs on kind yet) | Secret, kind only | To be generated at `make up` | Never committed and never accepted outside kind (T-06) |
 
 ### Retention

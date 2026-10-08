@@ -289,6 +289,10 @@ ANSWER_VARIABLES = {
     "now",
     "out",
     "password",
+    # Check 12 (S072, M3b): the public certificate of a Secret, about a kilobyte,
+    # piped to openssl and never an argument; and the probe's one-word answer.
+    "pem",
+    "stores_answer",
     "policies",
     "policy",
     "primary",
@@ -318,6 +322,7 @@ SMALL_POSITIONALS = {
     ("network_pod_spec", "name"): "$1",
     ("network_pod_spec", "namespace"): "$2",
     ("network_pod_spec", "label"): "$3",
+    ("telemetry_stores_pod_spec", "name"): "$1",
     ("refused_manifest", "name"): "$1",
     ("refused_manifest", "csr"): "$2",
     ("alerts_in_state", "state"): "$1",
