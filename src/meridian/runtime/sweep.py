@@ -21,25 +21,20 @@ import psycopg
 from psycopg import sql
 
 from meridian.platform.common.audit import AuditEvent, record_event
+from meridian.platform.common.runlease import ABANDONED_REASON as ABANDONED_REASON
+from meridian.platform.common.runlease import (
+    RUNNING_LEASE_SECONDS as RUNNING_LEASE_SECONDS,
+)
 
-# How long a run may stay ``Running`` before a resume may take it over: a leg
-# that died, or whose last status write failed twice, leaves the run so. Well
-# above the longest a live leg can take (four model calls, each at most the
-# 30 s deadline plus one 30 s read timeout, and sixteen tool calls of 10 s: 400 s;
-# a test multiplies the constants), so a live leg is not taken over. Not a
-# ceiling for one case: model-call response headers that trickle (each wait
-# under the read timeout; httpx has no timeout for a whole request). A leg
-# that outlives the lease writes nothing over the run (its end matches its own
-# claim, ``runs.py``); its tool calls bind until it ends (T-10). The sweep
-# ends an unfinished run only after the same time (``runs.py`` reads it from
-# here, so the runtime and the sweep cannot disagree).
-RUNNING_LEASE_SECONDS = 600
+# ``ABANDONED_REASON`` and ``RUNNING_LEASE_SECONDS`` are defined once, in
+# ``runlease``, which imports nothing; ``runs.py`` reads the lease from here, so
+# the runtime and the sweep cannot disagree on it.
+
 # The statuses of a run something may still be working on or resuming.
 SWEPT_STATUSES = ("Running", "AwaitingApproval")
 # The event and outcome of a run moved to ``Failed``, as ``runs.py`` writes them
-# for a failure (a test keeps the two equal); the sweep's reason word follows.
+# for a failure (a test keeps the two equal).
 RUN_FAILED_EVENT = ("run.failed", "failed")
-ABANDONED_REASON = "abandoned"
 # The three tables of LangGraph's saver (0008) and the second host's own,
 # ``workflow_checkpoints`` (0023, S037), named here and not imported: its store
 # imports the second framework, and this module must not. Every one has a
@@ -148,6 +143,9 @@ WHERE thread_id = %(thread)s AND NOT EXISTS (
 )
 """
 UNGUARDED_DELETE = "DELETE FROM runtime.{table} WHERE thread_id = %(thread)s"
+# The row lock the sweep takes on a run before it decides: a row a resume holds is
+# skipped, not waited for (S082: it was in the claims workload's sweep).
+LOCK_RUN = "SELECT tenant FROM runtime.runs WHERE run_id = %s FOR UPDATE SKIP LOCKED"
 
 
 def _run_thread(thread_id: str) -> uuid.UUID | None:
@@ -223,6 +221,14 @@ def leftover_threads(
     }
     rows = conn.execute(LEFTOVER_THREADS, params).fetchall()
     return [thread for (thread,) in rows]
+
+
+def lock_run(conn: psycopg.Connection, run_id: uuid.UUID) -> str | None:
+    """Lock the run's row for the caller's transaction and return its tenant, or
+    ``None`` when there is no such row or someone else holds it (a resume
+    does, while it claims the run): the caller leaves that run to them."""
+    row = conn.execute(LOCK_RUN, (run_id,)).fetchone()
+    return None if row is None else row[0]
 
 
 def end_abandoned_run(
