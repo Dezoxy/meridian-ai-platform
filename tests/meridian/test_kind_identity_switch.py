@@ -92,13 +92,13 @@ def test_keycloak_is_on() -> None:
         "mock",
     ],
 )
-def test_any_other_value_stops_with_a_usage_line_before_anything_runs(
+def test_any_other_value_is_refused_by_the_check_with_a_usage_line(
     value: str,
 ) -> None:
-    done = bash(f'. "{KIND_DIR}/common.sh"\necho reached', value)
+    done = bash(f'. "{KIND_DIR}/common.sh"\nidentity_switch_check\necho reached', value)
 
     assert done.returncode != 0
-    assert done.stdout == ""  # nothing after the source ran
+    assert done.stdout == ""  # nothing after the check ran
     assert USAGE in done.stderr
     assert (
         "keycloak" in done.stderr
@@ -106,12 +106,20 @@ def test_any_other_value_stops_with_a_usage_line_before_anything_runs(
     )
 
 
-def test_every_script_that_sources_common_sh_refuses_a_bad_value_for_free() -> None:
-    # up.sh, deploy.sh and smoke.sh each source common.sh before any other line
-    # that does anything, so the one check there covers all three.
-    for name in ("up.sh", "deploy.sh", "smoke.sh"):
-        text = (KIND_DIR / name).read_text(encoding="utf-8")
-        assert '. "$(dirname "${BASH_SOURCE[0]}")/common.sh"' in text, name
+@pytest.mark.parametrize("value", [None, "", "keycloak"])
+def test_the_check_lets_the_two_accepted_values_through(value: str | None) -> None:
+    done = bash(f'. "{KIND_DIR}/common.sh"\nidentity_switch_check\necho reached', value)
+
+    assert (done.returncode, done.stdout.strip()) == (0, "reached")
+
+
+def test_sourcing_common_sh_alone_refuses_nothing() -> None:
+    # Teardown and the holder command source it and must never be blocked by a
+    # mistyped switch: only the three scripts that read it call the check (the
+    # stand-in runs are in test_kind_identity_guards.py).
+    done = bash(f'. "{KIND_DIR}/common.sh"\necho reached', "dex")
+
+    assert (done.returncode, done.stdout.strip()) == (0, "reached")
 
 
 # ── the edge: off is the committed file, on adds one namespace ───────────────
@@ -206,9 +214,7 @@ def test_up_applies_the_gateway_from_the_function_and_stops_when_it_fails() -> N
     ).read_text(encoding="utf-8")
 
 
-def test_the_add_on_is_one_block_in_up_and_runs_after_every_wait_and_before_ok() -> (
-    None
-):
+def test_the_add_on_is_one_block_in_up_and_runs_after_every_wait_and_after_ok() -> None:
     lines = UP_SH.splitlines()
     (ok,) = [i for i, line in enumerate(lines) if line == "record_cluster_holder ok"]
     (available,) = [
@@ -221,18 +227,28 @@ def test_the_add_on_is_one_block_in_up_and_runs_after_every_wait_and_before_ok()
     (start,) = [i for i, line in enumerate(lines) if line == "if identity_on; then"]
     block = lines[start : lines.index("fi", start) + 1]
 
-    assert available < start < ok
-    assert block == [
+    # `ok` is recorded BEFORE the add-on: a refusal for lack of memory changes
+    # nothing and must leave `ok`; identity.sh records `changing` itself after its
+    # last check and `ok` at its end (test_kind_identity_guards.py).
+    assert available < ok < start
+    assert not any(line.startswith("record_cluster_holder") for line in lines[start:])
+    assert lines[ok - 1] == "" or lines[ok - 1].startswith("#")
+    assert block[:3] == [
         "if identity_on; then",
         '  "${KIND_DIR}/identity.sh" up',
         "else",
-        '  "${KIND_DIR}/identity.sh" note',
-        "fi",
     ]
+    # A failure of the note cannot skip anything or stop make up.
+    assert block[3].startswith('  "${KIND_DIR}/identity.sh" note || log "identity: ')
+    assert block[4] == "fi"
+    assert lines[start + 5].startswith('log "done.')
+    # A mistyped switch stops make up at its start, before the first thing it does.
+    assert lines.index("identity_switch_check") < lines.index("check_prerequisites")
     # Nothing else of up.sh runs the add-on: the script is named in these two lines
     # only, and the switch is read in this block and in the Gateway's function.
     code = [line for line in lines if not line.startswith("#")]
     assert sum("identity.sh" in line for line in code) == 2
     assert sum("identity_on" in line for line in code) == 1
+    assert code.count("identity_switch_check") == 1
     assert sum("MERIDIAN_IDENTITY" in line for line in code) == 0
     assert len(lines) < 800  # the ceiling of the file size check

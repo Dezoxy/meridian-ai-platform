@@ -48,9 +48,16 @@ PROXY = {
 }
 KEYCLOAK = {NAME_LABEL: "keycloak"}
 CLAIMS_API = {NAME_LABEL: "claims-api"}
-# The one path prefix the staff realm needs for the browser's sign-in and for the
-# tokens, and the one for the login page's styles and scripts. Nothing else.
-ROUTE_PREFIXES = ["/realms/meridian-staff/", "/resources/"]
+# What the sign-in flow needs, and nothing else: the discovery document, the
+# protocol endpoints (login redirect, token, keys, logout), the login form's posts,
+# and the login page's styles and scripts. Not the account console, not the client
+# registration, not the admin console, not the master realm.
+ROUTE_PREFIXES = [
+    "/realms/meridian-staff/.well-known/",
+    "/realms/meridian-staff/protocol/openid-connect/",
+    "/realms/meridian-staff/login-actions/",
+    "/resources/",
+]
 
 
 def workload() -> list[dict]:
@@ -191,6 +198,8 @@ def test_the_image_is_a_placeholder_and_no_tag_or_digest_is_written_here() -> No
     assert container["image"] == "IMAGE-PLACEHOLDER"
     assert pod_spec()["initContainers"][0]["image"] == "IMAGE-PLACEHOLDER"
     assert text.count("IMAGE-PLACEHOLDER") == 2
+    assert text.count("REALM-SHA256-PLACEHOLDER") == 1
+    assert len(re.findall(r"^\s*image:", text, re.M)) == 2  # no third, by hand
     assert "@sha256" not in text and "quay.io" not in text
     assert not re.search(r"keycloak:\d", text)
 
@@ -280,7 +289,15 @@ def test_the_init_container_has_the_same_hardening_and_only_copies() -> None:
     container = keycloak_container()
 
     assert init["securityContext"] == container["securityContext"]
-    assert init["command"][:2] == ["cp", "-a"]
+    # -R and nothing that preserves: cp -a tries to set the mode and times of
+    # /quarkus itself, which belongs to root, and exits 1 as uid 1000.
+    assert init["command"] == [
+        "cp",
+        "-R",
+        "/opt/keycloak/lib/quarkus/.",
+        "/quarkus/",
+    ]
+    assert not any(word.startswith("-") and word != "-R" for word in init["command"])
     assert "limits" in init["resources"] and "requests" in init["resources"]
     assert init["resources"]["limits"].get("cpu") is None
 
@@ -343,7 +360,7 @@ def test_the_service_has_the_http_port_alone_and_not_the_health_port() -> None:
 # ── the route: two prefixes, a .localhost name, the edge's 404 for the rest ──
 
 
-def test_the_route_forwards_two_prefixes_of_the_staff_realm_and_nothing_else() -> None:
+def test_the_route_forwards_what_the_sign_in_flow_needs_and_nothing_else() -> None:
     route = of_kind("HTTPRoute")["spec"]
 
     assert route["parentRefs"] == [
@@ -357,9 +374,19 @@ def test_the_route_forwards_two_prefixes_of_the_staff_realm_and_nothing_else() -
         assert set(match) == {"path"}  # no header or method match widens it
     assert rule["backendRefs"] == [{"name": "keycloak", "port": HTTP_PORT}]
     assert "filters" not in rule
-    # Whatever matches neither prefix (/admin, /realms/master, the root) has no
-    # rule, and the edge answers it with its 404.
-    for path in ("/admin/", "/realms/master/", "/", "/metrics", "/health"):
+    # Whatever matches none of them has no rule, and the edge answers it with its
+    # 404: the admin console, the master realm, the staff realm's account console
+    # and client registration, the realm's own page, and the root.
+    for path in (
+        "/admin/",
+        "/realms/master/",
+        "/realms/meridian-staff/account/",
+        "/realms/meridian-staff/clients-registrations/openid-connect",
+        "/realms/meridian-staff/",
+        "/",
+        "/metrics",
+        "/health",
+    ):
         assert not any(path.startswith(prefix) for prefix in ROUTE_PREFIXES), path
 
 
@@ -397,6 +424,23 @@ def test_the_workload_header_names_the_one_line_to_change_for_a_root_that_fails(
     assert "readOnlyRootFilesystem" in header
     assert "lib/quarkus" in header
     assert "plain HTTP" in header
+
+
+def test_the_pod_template_has_a_slot_for_the_realm_secrets_fingerprint() -> None:
+    template = of_kind("Deployment")["spec"]["template"]
+
+    # A quoted string: a digest of digits only would be read as a number.
+    assert template["metadata"]["annotations"] == {
+        "meridian.local/realm-sha256": "REALM-SHA256-PLACEHOLDER"
+    }
+
+
+def test_the_probe_sentence_cites_where_the_node_traffic_was_measured() -> None:
+    header = header_of(NAMESPACE_FILE)
+
+    assert "cert-manager-networkpolicy.yaml" in header
+    assert "not seen for this pod" in header
+    assert "measured on kind 2026-10-07" in header
 
 
 def test_up_does_not_mention_these_files_the_add_on_script_does() -> None:

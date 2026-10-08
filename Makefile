@@ -291,7 +291,7 @@ synthetic:
 # infra/kind/README.md says what these create. The cluster's credentials stay in
 # infra/kind/kubeconfig (gitignored); ~/.kube/config is never touched.
 
-## up              create the kind cluster, install the local platform and provision the Grafana dashboards (needs Docker, kind, kubectl, helm; first run pulls images; stops when another holder has the cluster unless TAKE_CLUSTER=1); MERIDIAN_IDENTITY=keycloak also makes the local sign-in issuer, an add-on that is off by default and needs 2,500 MB of memory available (infra/kind/README.md, "The sign-in issuer"); any other value stops with a usage line
+## up              create the kind cluster, install the local platform and provision the Grafana dashboards (needs Docker, kind, kubectl, helm; first run pulls images; stops when another holder has the cluster unless TAKE_CLUSTER=1); MERIDIAN_IDENTITY=keycloak also makes the local sign-in issuer, an add-on that is off by default, written and not yet run on the cluster, and needs 2,500 MB of memory available (infra/kind/README.md, "The sign-in issuer"); any other value stops with a usage line
 up:
 	infra/kind/up.sh
 
@@ -307,7 +307,7 @@ images:
 demo: deploy
 	DECISION="$(DECISION)" infra/kind/demo.sh
 
-## smoke           prove the edge, pgvector, the policy, knowledge and migration stores, a trace, log and metric reaching Grafana's datasources, the cost dashboard and, once deployed, one call per tool server through the runtime's client, the gateway's series, the adjuster's and claimant's pages, the sweep's last Job and that its schedule has not stopped, that three connections no network policy allows are blocked and one it allows is not, that the gateway refuses a caller with no identity or with another CA's certificate, that the certificate policy stands and the issuer refuses a request from another namespace, and that the alert rules are loaded, healthy and quiet and the health dashboard is served; with MERIDIAN_IDENTITY=keycloak also that the sign-in issuer's pod and documents answer through the edge (one SKIP line otherwise)
+## smoke           prove the edge, pgvector, the policy, knowledge and migration stores, a trace, log and metric reaching Grafana's datasources, the cost dashboard and, once deployed, one call per tool server through the runtime's client, the gateway's series, the adjuster's and claimant's pages, the sweep's last Job and that its schedule has not stopped, that three connections no network policy allows are blocked and one it allows is not, that the gateway refuses a caller with no identity or with another CA's certificate, that the certificate policy stands and the issuer refuses a request from another namespace, and that the alert rules are loaded, healthy and quiet and the health dashboard is served; with MERIDIAN_IDENTITY=keycloak also six lines for the sign-in issuer: its pod, its documents through the edge, the paths the edge keeps closed, and its issuer as the Claims API's pod sees it (one SKIP line otherwise; not yet run on the cluster)
 smoke:
 	infra/kind/smoke.sh
 

@@ -100,12 +100,17 @@ readonly KCTL_KILL_AFTER=5
 # The switch of the sign-in issuer add-on (S021, Y2b): MERIDIAN_IDENTITY is empty
 # (off, the default: `make up`, `make deploy` and `make smoke` do what they did
 # before the add-on existed) or `keycloak` (Keycloak in the namespace `identity`,
-# infra/kind/identity.sh). Anything else stops the script here, before it does
-# anything, with a usage line: a typo must not read as "off".
-case "${MERIDIAN_IDENTITY-}" in
-  "" | keycloak) ;;
-  *) die "usage: MERIDIAN_IDENTITY must be empty (off, the default) or keycloak (the local sign-in issuer, an add-on: infra/kind/README.md, 'The sign-in issuer'); for example MERIDIAN_IDENTITY=keycloak make up" ;;
-esac
+# infra/kind/identity.sh). Anything else is refused by identity_switch_check with a
+# usage line: a typo must not read as "off". Only up.sh, smoke.sh and identity.sh
+# call it, at their start, before they do anything; the other scripts that source
+# this file never read the switch, and a mistyped value in the environment must not
+# block teardown (down.sh) or the holder command (holder.sh).
+identity_switch_check() {
+  case "${MERIDIAN_IDENTITY-}" in
+    "" | keycloak) ;;
+    *) die "usage: MERIDIAN_IDENTITY must be empty (off, the default) or keycloak (the local sign-in issuer, an add-on: infra/kind/README.md, 'The sign-in issuer'); for example MERIDIAN_IDENTITY=keycloak make up" ;;
+  esac
+}
 identity_on() { [[ "${MERIDIAN_IDENTITY-}" == keycloak ]]; }
 
 # kctl_classify ARGS...: sets ${kctl_class} to "request" (add the flag), "outer"

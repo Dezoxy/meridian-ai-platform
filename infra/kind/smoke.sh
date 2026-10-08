@@ -55,6 +55,8 @@ set -euo pipefail
 . "${KIND_DIR}/smoke.d/13-issuer.sh"
 
 need_tools docker kubectl curl jq base64 openssl timeout
+# A mistyped MERIDIAN_IDENTITY stops here, before the cluster is asked (common.sh).
+identity_switch_check
 require_local_docker
 need_cluster
 

@@ -1,15 +1,18 @@
 """Smoke's check 13: the sign-in issuer, only when the add-on is on (S021, Y2b).
 
 ``check_issuer`` in ``infra/kind/smoke.d/13-issuer.sh`` prints one SKIP line while
-``MERIDIAN_IDENTITY`` is off, and four lines when it is ``keycloak``: the pod is
-Ready and runs the pinned image, the discovery document through the edge names the
-front URL as its issuer, the key document holds a signing key, and ``/admin/`` and
-``/realms/master/`` through the edge are 404. No line reads a Secret or signs
-anyone in.
+``MERIDIAN_IDENTITY`` is off, and six lines when it is ``keycloak``: the pod is
+Ready and runs the pinned image (init container and environment too), the discovery
+document through the edge names the front URL as its issuer, the key document holds
+a signing key, four paths are the edge's own empty 404, four ways of climbing to the
+master realm are 404 (sent as written), and, from the Claims API's pod, the
+discovery document fetched by the Service's name names the front URL. No line reads
+a Secret or signs anyone in.
 
 The function runs in bash against stand-ins for ``kctl`` and ``curl``. What no test
-here proves: that Envoy forwards the two prefixes, that the cluster's ``imageID`` is
-the index digest, and that the pod is ready on the cluster at all.
+here proves: that Envoy forwards the four prefixes and keeps the rest closed, that
+the cluster's ``imageID`` is the index digest, and that the pod is ready on the
+cluster at all.
 """
 
 import json
@@ -41,9 +44,29 @@ FUNCTIONS = (
     "check_issuer_pod",
     "check_issuer_discovery",
     "check_issuer_keys",
+    "issuer_edge_404",
     "check_issuer_closed",
+    "check_issuer_climbing",
+    "check_issuer_inside",
     "check_issuer",
 )
+# Through the edge, each must be the edge's own 404: the status and an empty body.
+CLOSED = [
+    "/admin/",
+    "/realms/master/",
+    "/realms/meridian-staff/account/",
+    "/realms/meridian-staff/clients-registrations/openid-connect",
+]
+CLIMBING = [
+    "/realms/meridian-staff/../master/",
+    "/realms/meridian-staff/%2e%2e/master/",
+    "/realms/meridian-staff/..%2fmaster/",
+    "/realms/meridian-staff/.well-known/../../master/",
+]
+INSIDE = "http://keycloak.identity.svc:8080/realms/meridian-staff"
+# The six lines in order: the pod, the discovery document, the keys, the closed
+# paths, the ways of climbing, and the question from inside the cluster.
+PASSING = ["PASS"] * 6
 
 
 def pod(
@@ -51,9 +74,17 @@ def pod(
     ready: bool = True,
     image: str = IMAGE,
     image_id: str | None = None,
+    init_image: str = IMAGE,
+    env: bool = False,
 ) -> dict:
+    container: dict = {"name": "keycloak", "image": image}
+    if env:
+        container["env"] = [{"name": "KC_SOMETHING", "value": "x"}]
     return {
-        "spec": {"containers": [{"name": "keycloak", "image": image}]},
+        "spec": {
+            "initContainers": [{"name": "copy-quarkus", "image": init_image}],
+            "containers": [container],
+        },
         "status": {
             "conditions": [{"type": "Ready", "status": "True" if ready else "False"}],
             "containerStatuses": [
@@ -86,8 +117,13 @@ def run_check(
     pods_fail: bool = False,
     answers: dict[str, tuple[str, str]] | None = None,
     curl_fail: str = "",
+    deployed: bool = True,
+    inside: str = REALM,
+    inside_fail: bool = False,
 ) -> tuple[list[str], list[str], list[str]]:
-    """The PASS, FAIL and SKIP lines, the ``kctl`` calls and the ``curl`` calls."""
+    """The PASS, FAIL and SKIP lines, the ``kctl`` calls and the ``curl`` calls.
+    ``inside`` is what the Claims API's pod prints as the issuer; ``deployed``
+    False leaves smoke's list of Meridian Deployments empty."""
     tmp_path.mkdir(parents=True, exist_ok=True)
     calls, fetched = tmp_path / "kctl-calls", tmp_path / "curl-calls"
     calls.touch()
@@ -95,8 +131,7 @@ def run_check(
     table = {
         f"{REALM}/.well-known/openid-configuration": ("200", GOOD_DISCOVERY),
         f"{REALM}/protocol/openid-connect/certs": ("200", GOOD_KEYS),
-        f"{FRONT}/admin/": ("404", ""),
-        f"{FRONT}/realms/master/": ("404", ""),
+        **{f"{FRONT}{path}": ("404", "") for path in (*CLOSED, *CLIMBING)},
         **(answers or {}),
     }
     answers_script = ["declare -A STATUS BODY"]
@@ -120,8 +155,18 @@ def run_check(
             *re.findall(r'^issuer_[a-z_]+=""$', SMOKE_SH, re.M),
             *(function_definition(SMOKE_SH, name) for name in FUNCTIONS),
             *answers_script,
+            "deployed_services() {",
+            '  [[ "${DEPLOYED}" != yes ]] || echo deployment.apps/claims-api',
+            "}",
             "kctl() {",
             f'  echo "$*" >>"{calls}"',
+            '  case "$*" in',
+            '    *" exec "*)',
+            '      if [[ "${INSIDE_FAIL}" == yes ]]; then',
+            '        echo "Traceback: connection refused" >&2; return 1',
+            "      fi",
+            '      printf "%s\\n" "${INSIDE}"; return 0 ;;',
+            "  esac",
             '  if [[ "${PODS_FAIL}" == yes ]]; then',
             '    echo "Error from server" >&2; return 1',
             "  fi",
@@ -153,6 +198,9 @@ def run_check(
             "PODS": pods,
             "PODS_FAIL": "yes" if pods_fail else "no",
             "CURL_FAIL": curl_fail,
+            "DEPLOYED": "yes" if deployed else "no",
+            "INSIDE": inside,
+            "INSIDE_FAIL": "yes" if inside_fail else "no",
         },
         check=False,
     )
@@ -184,20 +232,32 @@ def test_while_the_add_on_is_off_the_check_prints_one_skip_and_asks_nothing(
     assert asked == [] and fetched == []
 
 
-# ── on: four lines ───────────────────────────────────────────────────────────
+# ── on: six lines ────────────────────────────────────────────────────────────
 
 
-def test_when_all_is_well_four_pass_lines_follow_in_order(tmp_path: Path) -> None:
+def test_when_all_is_well_six_pass_lines_follow_in_order(tmp_path: Path) -> None:
     lines, asked, fetched = run_check(tmp_path)
 
-    assert kinds(lines) == ["PASS"] * 4
+    assert kinds(lines) == PASSING
     assert all(line.split()[1] == "issuer:" for line in lines)
     assert "Ready" in lines[0] and DIGEST.split(":")[1][:12] in lines[0]
     assert REALM in lines[1]
     assert "signing key" in lines[2]
-    assert "/admin/" in lines[3] and "/realms/master/" in lines[3] and "404" in lines[3]
-    assert len(asked) == 1 and "get pod" in asked[0] and "-n identity" in asked[0]
-    assert len(fetched) == 4
+    assert all(path in lines[3] for path in CLOSED) and "empty body" in lines[3]
+    assert all(path in lines[4] for path in CLIMBING)
+    assert INSIDE in lines[5] and REALM in lines[5]
+    assert len(asked) == 2  # the pod, and the one exec in the Claims API's pod
+    assert "get pod" in asked[0] and "-n identity" in asked[0]
+    assert len(fetched) == 2 + len(CLOSED) + len(CLIMBING)
+
+
+def test_every_path_goes_as_written_and_by_get_alone(tmp_path: Path) -> None:
+    _, _, fetched = run_check(tmp_path)
+
+    assert all("--path-as-is" in call.split() for call in fetched)
+    assert [call.split()[-1] for call in fetched[-len(CLIMBING) :]] == [
+        f"{FRONT}{path}" for path in CLIMBING
+    ]
 
 
 def test_the_check_is_read_only_and_reads_no_secret_and_signs_nobody_in(
@@ -207,7 +267,8 @@ def test_the_check_is_read_only_and_reads_no_secret_and_signs_nobody_in(
     body = function_body(SMOKE_SH, "check_issuer")
     text = "".join(function_body(SMOKE_SH, name) for name in FUNCTIONS)
 
-    assert all(call.startswith("-n identity get pod") for call in asked)
+    assert asked[0].startswith("-n identity get pod")
+    assert asked[1].startswith("-n meridian exec deploy/claims-api -- python -c ")
     assert not any("secret" in call.lower() for call in asked)
     for call in fetched:
         assert not re.search(r"(^| )(-X|-d|--data|-H|-u|--user|-b|--cookie)\b", call)
@@ -215,7 +276,60 @@ def test_the_check_is_read_only_and_reads_no_secret_and_signs_nobody_in(
     assert "secret" not in text.lower()
     assert "password" not in text.lower() and "client_secret" not in text
     assert "grant_type" not in text and "openid-connect/token" not in text
-    assert body.count("check_issuer_") == 4
+    assert body.count("check_issuer_") == 6
+
+
+def test_the_closed_and_climbing_paths_are_the_ones_the_script_names() -> None:
+    script = SMOKE_SH
+
+    for path in (*CLOSED, *CLIMBING):
+        assert path in script, path
+    assert "--path-as-is" in script
+
+
+# ── from inside the cluster ──────────────────────────────────────────────────
+
+
+def test_the_inside_line_asks_the_service_by_its_name_from_the_claims_apis_pod(
+    tmp_path: Path,
+) -> None:
+    _, asked, _ = run_check(tmp_path)
+
+    assert asked[1].endswith(f"{INSIDE}/.well-known/openid-configuration")
+
+
+def test_the_inside_line_fails_for_the_service_url_as_issuer_and_for_a_failed_fetch(
+    tmp_path: Path,
+) -> None:
+    wrong, _, _ = run_check(
+        tmp_path / "a", inside="http://keycloak.identity.svc:8080/x"
+    )
+    failed, _, _ = run_check(tmp_path / "b", inside_fail=True)
+
+    for lines in (wrong, failed):
+        assert kinds(lines) == [*PASSING[:5], "FAIL"]
+        assert lines[5].split()[1] == "issuer:"
+    assert "pins" in wrong[5]
+    assert "could not fetch" in failed[5] and "connection refused" in failed[5]
+
+
+def test_the_inside_line_is_skipped_while_the_claims_api_is_not_deployed(
+    tmp_path: Path,
+) -> None:
+    lines, asked, _ = run_check(tmp_path, deployed=False)
+
+    assert kinds(lines) == [*PASSING[:5], "SKIP"]
+    assert "make deploy" in lines[5]
+    assert len(asked) == 1  # no exec was tried
+
+
+def test_what_the_pod_prints_cannot_put_an_escape_or_a_line_in_the_inside_line(
+    tmp_path: Path,
+) -> None:
+    lines, _, _ = run_check(tmp_path, inside="x\x1b[31m\nPASS  fake")
+
+    assert len(lines) == 6 and kinds(lines)[5] == "FAIL"
+    assert all("\x1b" not in line for line in lines)
 
 
 def test_the_pod_line_fails_for_each_thing_that_is_not_as_it_should_be(
@@ -231,14 +345,30 @@ def test_the_pod_line_fails_for_each_thing_that_is_not_as_it_should_be(
         "another digest in the status": json.dumps(
             {"items": [pod(image_id="quay.io/keycloak/keycloak@sha256:" + "0" * 64)]}
         ),
+        "an init container with another image": json.dumps(
+            {"items": [pod(init_image="quay.io/keycloak/keycloak:26.8.0")]}
+        ),
+        "an environment on the container": json.dumps({"items": [pod(env=True)]}),
         "not json": "not json at all",
         "empty": "",
     }
     for name, pods in cases.items():
         lines, _, _ = run_check(tmp_path / name.replace(" ", "-"), pods=pods)
 
-        assert kinds(lines) == ["FAIL", "PASS", "PASS", "PASS"], (name, lines)
+        assert kinds(lines) == ["FAIL", *PASSING[1:]], (name, lines)
         assert lines[0].split()[1] == "issuer:", name
+
+
+def test_the_pod_line_names_the_init_container_and_the_environment(
+    tmp_path: Path,
+) -> None:
+    init, _, _ = run_check(
+        tmp_path / "i", pods=json.dumps({"items": [pod(init_image="x/y:1")]})
+    )
+    env, _, _ = run_check(tmp_path / "e", pods=json.dumps({"items": [pod(env=True)]}))
+
+    assert "init container" in init[0] and "another image" in init[0]
+    assert "environment" in env[0]
 
 
 def test_the_pod_line_fails_when_the_pod_cannot_be_read_and_says_how_to_make_it(
@@ -268,7 +398,7 @@ def test_the_discovery_line_wants_200_and_the_front_url_as_the_issuer(
             tmp_path / name.replace(" ", "-"), answers={url: answer}
         )
 
-        assert kinds(lines) == ["PASS", "FAIL", "PASS", "PASS"], (name, lines)
+        assert kinds(lines) == ["PASS", "FAIL", *PASSING[2:]], (name, lines)
 
 
 def test_the_keys_line_wants_a_signing_key_and_an_encryption_key_does_not_count(
@@ -290,31 +420,59 @@ def test_the_keys_line_wants_a_signing_key_and_an_encryption_key_does_not_count(
             tmp_path / name.replace(" ", "-"), answers={url: ("200", body)}
         )
 
-        assert kinds(lines) == ["PASS", "PASS", "FAIL", "PASS"], (name, lines)
+        assert kinds(lines) == [*PASSING[:2], "FAIL", *PASSING[3:]], (name, lines)
     lines, _, _ = run_check(tmp_path / "a-status", answers={url: ("500", GOOD_KEYS)})
-    assert kinds(lines) == ["PASS", "PASS", "FAIL", "PASS"]
+    assert kinds(lines) == [*PASSING[:2], "FAIL", *PASSING[3:]]
 
 
-def test_the_closed_line_fails_on_any_answer_but_404_and_names_the_path(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("paths", "index"), [(CLOSED, 3), (CLIMBING, 4)], ids=["closed", "climbing"]
+)
+def test_the_edge_lines_fail_on_any_answer_but_the_edges_own_404_and_name_the_path(
+    tmp_path: Path, paths: list[str], index: int
 ) -> None:
-    for path in ("/admin/", "/realms/master/"):
-        for status in ("200", "302", "401", "403", "503"):
+    for path in paths:
+        for status in ("200", "302", "400", "401", "403", "503"):
             lines, _, _ = run_check(
-                tmp_path / f"{path.strip('/').replace('/', '-')}-{status}",
+                tmp_path / f"{index}-{abs(hash(path))}-{status}",
                 answers={f"{FRONT}{path}": (status, "")},
             )
 
-            assert kinds(lines) == ["PASS", "PASS", "PASS", "FAIL"], (path, status)
-            assert path in lines[3] and status in lines[3]
-            other = "/realms/master/" if path == "/admin/" else "/admin/"
-            assert other not in lines[3].split("expected")[0] or status in lines[3]
+            expected = ["FAIL" if i == index else "PASS" for i in range(6)]
+            assert kinds(lines) == expected, (path, status)
+            assert path in lines[index] and status in lines[index]
+            others = [p for p in paths if p != path]
+            assert not any(
+                other in lines[index].split("got", 1)[1] for other in others
+            ), (path, status)
+
+
+@pytest.mark.parametrize(
+    ("paths", "index"), [(CLOSED, 3), (CLIMBING, 4)], ids=["closed", "climbing"]
+)
+def test_a_404_with_a_body_is_keycloaks_and_not_the_edges(
+    tmp_path: Path, paths: list[str], index: int
+) -> None:
+    for position, path in enumerate(paths):
+        lines, _, _ = run_check(
+            tmp_path / f"{index}-{position}",
+            answers={f"{FRONT}{path}": ("404", "<html>Page not found</html>")},
+        )
+
+        assert lines[index].startswith("FAIL"), (path, lines)
+        assert path in lines[index] and "with a body" in lines[index]
+        assert "Keycloak" in lines[index]
 
 
 def test_a_request_that_gets_no_answer_is_a_fail_and_not_a_404(tmp_path: Path) -> None:
-    for needle, index in (("/.well-known/", 1), ("/certs", 2), ("/admin/", 3)):
+    for needle, index in (
+        ("/.well-known/", 1),
+        ("/certs", 2),
+        ("/admin/", 3),
+        ("/%2e%2e/", 4),
+    ):
         lines, _, _ = run_check(
-            tmp_path / needle.strip("/.").replace("/", "-"), curl_fail=needle
+            tmp_path / needle.strip("/.%").replace("/", "-"), curl_fail=needle
         )
 
         assert kinds(lines)[index] == "FAIL", (needle, lines)
@@ -328,7 +486,7 @@ def test_an_answer_cannot_put_terminal_escapes_or_extra_lines_in_a_line(
     hostile = json.dumps({"issuer": "http://evil\x1b[31m\nPASS  fake"})
     lines, _, _ = run_check(tmp_path, answers={url: ("200", hostile)})
 
-    assert len(lines) == 4
+    assert len(lines) == 6
     assert all("\x1b" not in line for line in lines)
     assert kinds(lines)[1] == "FAIL"
 

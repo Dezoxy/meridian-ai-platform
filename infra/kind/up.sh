@@ -42,8 +42,10 @@
 #      Loki, OpenTelemetry Collector, and (S064) the log agent: a second release
 #      of the collector's chart, the contrib build, as a DaemonSet in `logging`
 #      that sends the output of `meridian`'s pods to the collector
-#   5. only with MERIDIAN_IDENTITY=keycloak (S021, Y2b), last: the sign-in issuer
-#      add-on, identity.sh (README, "The sign-in issuer"); off, nothing of it is made
+#   5. only with MERIDIAN_IDENTITY=keycloak (S021, Y2b), after the record is `ok`:
+#      the sign-in issuer add-on, identity.sh (README, "The sign-in issuer"); it
+#      records `changing` itself after its last check and `ok` at its end; off,
+#      nothing of it is made
 # Every version is pinned in pins.env.
 # Who holds the cluster (S075, common.sh): on a cluster that exists, another
 # holder stops this before it changes anything unless TAKE_CLUSTER=1; the record
@@ -56,6 +58,8 @@ set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 # shellcheck source=gateways.sh
 . "$(dirname "${BASH_SOURCE[0]}")/gateways.sh"
+# A mistyped MERIDIAN_IDENTITY stops here, before anything is done (common.sh).
+identity_switch_check
 
 readonly HELM_TIMEOUT=10m
 readonly ROLES_TIMEOUT=300
@@ -749,16 +753,19 @@ kctl -n envoy-gateway-system wait --for=condition=Available deployment \
   -l gateway.envoyproxy.io/owning-gateway-name=edge --timeout=5m >/dev/null ||
   die "the wait for the edge's proxy Deployment to be Available ended without the condition (it waits up to 5m; kubectl's own message above says whether the time ran out or the wait failed at once, for instance with not found): look at its pods (kubectl -n envoy-gateway-system get pods -l gateway.envoyproxy.io/owning-gateway-name=edge; describe the one that is not ready) and at the controller's log (kubectl -n envoy-gateway-system logs deploy/envoy-gateway)"
 
-# The sign-in issuer (S021, Y2b): an add-on, off unless MERIDIAN_IDENTITY=keycloak.
-# Off, the script says one line when an earlier run left its namespace; on, it
-# refuses under 2,500 MB of memory available, and its failure leaves `changing`.
-if identity_on; then
-  "${KIND_DIR}/identity.sh" up
-else
-  "${KIND_DIR}/identity.sh" note
-fi
-
 # Every wait above ended well: only now is the cluster claimed (S075). A run that
 # stopped earlier leaves the record as it was.
 record_cluster_holder ok
+
+# The sign-in issuer (S021, Y2b): an add-on, off unless MERIDIAN_IDENTITY=keycloak,
+# and after the record above, so that a refusal for lack of memory, which changes
+# nothing, leaves `ok`. On, identity.sh records `changing` itself after its last
+# check and `ok` at its end, so a half-made add-on leaves `changing`. Off, it says
+# one line when an earlier run left its namespace, and a failure of that line
+# stops nothing.
+if identity_on; then
+  "${KIND_DIR}/identity.sh" up
+else
+  "${KIND_DIR}/identity.sh" note || log "identity: the note about the sign-in issuer failed; make up is otherwise done"
+fi
 log "done. Next: make smoke | make grafana | export KUBECONFIG=${KUBECONFIG_FILE}"

@@ -11,6 +11,8 @@ What none of this shows: that the pod starts, that the route is accepted, that t
 policies let the edge and the Claims API through. The README's list says so.
 """
 
+import base64
+import hashlib
 import json
 import os
 import re
@@ -68,24 +70,54 @@ case "${all}" in
     printf 'mode=%s dirmode=%s\n' "$(stat -c %a "${source}")" \
       "$(stat -c %a "$(dirname "${source}")")" >"${STUB_DIR}/secret-${name}.info"
     cp "${source}" "${STUB_DIR}/secret-${name}.seen"
+    cp "${source}" "${STUB_DIR}/cluster-${name}"
     printf '%s\n' "${source}" >>"${STUB_DIR}/sources"
     printf '{"apiVersion":"v1","kind":"Secret","metadata":{"name":"%s",' "${name}"
     printf '"namespace":"identity","creationTimestamp":null},"data":{}}\n'
     ;;
+  *"create configmap"*)
+    state=""
+    for argument in "$@"; do
+      case "${argument}" in --from-literal=state=*) state="${argument#*state=}" ;; esac
+    done
+    printf '{"apiVersion":"v1","kind":"ConfigMap",'
+    printf '"metadata":{"name":"meridian-cluster-holder","creationTimestamp":null},'
+    printf '"data":{"state":"%s"}}\n' "${state}"
+    ;;
   *" apply "*)
-    count=$(($(cat "${STUB_DIR}/count" 2>/dev/null || echo 0) + 1))
-    echo "${count}" >"${STUB_DIR}/count"
     if [[ "${file}" == - ]]; then
-      cat >"${STUB_DIR}/applied-${count}"
+      cat >"${STUB_DIR}/incoming"
     else
-      cp "${file}" "${STUB_DIR}/applied-${count}"
+      cp "${file}" "${STUB_DIR}/incoming"
     fi
-    echo "APPLIED ${count} ${file##*/}" >>"${STUB_DIR}/calls"
+    if grep -q meridian-cluster-holder "${STUB_DIR}/incoming"; then
+      echo "HOLDER $(jq -r .data.state "${STUB_DIR}/incoming")" >>"${STUB_DIR}/calls"
+      rm -f "${STUB_DIR}/incoming"
+    else
+      count=$(($(cat "${STUB_DIR}/count" 2>/dev/null || echo 0) + 1))
+      echo "${count}" >"${STUB_DIR}/count"
+      mv "${STUB_DIR}/incoming" "${STUB_DIR}/applied-${count}"
+      echo "APPLIED ${count} ${file##*/}" >>"${STUB_DIR}/calls"
+    fi
+    ;;
+  *"get secret keycloak-realm -o jsonpath"*)
+    if [[ -f "${STUB_DIR}/cluster-keycloak-realm" ]]; then
+      base64 -w0 "${STUB_DIR}/cluster-keycloak-realm"
+    elif [[ -n "${STUB_REALM_SECRET-}" ]]; then
+      printf c3R1Yg==
+    fi
     ;;
   *"get secret keycloak-realm -o name"*)
-    [[ -z "${STUB_REALM_SECRET-}" ]] || echo secret/keycloak-realm ;;
+    if [[ -n "${STUB_REALM_SECRET-}" || -f "${STUB_DIR}/cluster-keycloak-realm" ]]; then
+      echo secret/keycloak-realm
+    fi
+    ;;
   *"get secret keycloak-credentials -o name"*)
-    [[ -z "${STUB_CREDENTIALS_SECRET-}" ]] || echo secret/keycloak-credentials ;;
+    kept="${STUB_DIR}/cluster-keycloak-credentials"
+    if [[ -n "${STUB_CREDENTIALS_SECRET-}" || -f "${kept}" ]]; then
+      echo secret/keycloak-credentials
+    fi
+    ;;
   *"get deployment keycloak -o name"*)
     [[ -z "${STUB_DEPLOYMENT-}" ]] || echo deployment.apps/keycloak ;;
   *"get namespace identity -o name"*)
@@ -95,6 +127,12 @@ case "${all}" in
   *"get httproute keycloak -o json"*) cat "${STUB_DIR}/httproute.json" ;;
 esac
 exit 0
+"""
+
+# The record of who holds the cluster reads the commit of the checkout with git; the
+# copy under tmp_path is no repository, and a test makes no commit.
+GIT_STUB = """#!/usr/bin/env bash
+case "$*" in *"rev-parse --short HEAD"*) echo abc1234 ;; *) exit 1 ;; esac
 """
 
 WIDE = {
@@ -165,6 +203,10 @@ class Run:
             and re.search(r" (apply|create|delete|patch|replace|rollout) ", call)
         ]
 
+    def holders(self) -> list[str]:
+        """The states the run recorded as the holder of the cluster, in order."""
+        return [c.split()[1] for c in self.calls if c.startswith("HOLDER ")]
+
     def applied(self) -> list[tuple[str, str]]:
         """(file name or ``-``, text) of each apply, in order."""
         names = [c.split()[2] for c in self.calls if c.startswith("APPLIED")]
@@ -198,7 +240,10 @@ def run_script(
     namespace: bool = False,
     rotate: str = "",
     fail: str = "",
+    edits: tuple[tuple[str, str, str], ...] = (),
 ) -> Run:
+    """``edits``: (file under infra/kind, old text, new text), applied to the copy
+    before the run, for the tests of a file that is malformed."""
     tmp_path.mkdir(parents=True, exist_ok=True)
     kind = tmp_path / "infra" / "kind"
     stub = tmp_path / "stub"
@@ -210,9 +255,10 @@ def run_script(
         shutil.copytree(KIND_DIR / "manifests", kind / "manifests")
         (kind / "kubeconfig").write_text("stand-in")
         stub.mkdir()
-        binary = stub / "kubectl"
-        binary.write_text(STUB)
-        binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
+        for tool, text in (("kubectl", STUB), ("git", GIT_STUB)):
+            binary = stub / tool
+            binary.write_text(text)
+            binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
         (stub / "gateway-wide.json").write_text(json.dumps(WIDE))
         (stub / "gateway-narrow.json").write_text(json.dumps(NARROW))
         (stub / "deployment.json").write_text(json.dumps(DEPLOYMENT))
@@ -220,6 +266,9 @@ def run_script(
     (tmp_path / "meminfo").write_text(
         meminfo or f"MemTotal: 9000000 kB\nMemAvailable: {kilobytes} kB\n"
     )
+    for relative, old, new in edits:
+        target = kind / relative
+        target.write_text(target.read_text().replace(old, new, 1))
     for stale in (
         *stub.glob("applied-*"),
         stub / "calls",
@@ -401,31 +450,88 @@ def test_one_secret_missing_means_both_are_made_anew(tmp_path: Path) -> None:
     assert len([c for c in run.calls if "create secret generic" in c]) == 2
 
 
-def test_rotate_makes_new_secrets_and_restarts_a_pod_that_is_running(
+def annotation(run: Run) -> str:
+    """The realm fingerprint the run wrote on the pod template."""
+    _, workload = run.applied()[-1]
+    (deployment,) = [
+        d for d in yaml.safe_load_all(workload) if d and d["kind"] == "Deployment"
+    ]
+    return deployment["spec"]["template"]["metadata"]["annotations"][
+        "meridian.local/realm-sha256"
+    ]
+
+
+def digest_of_cluster_realm(run: Run) -> str:
+    """What the fingerprint must be: the SHA-256 of the base64 text the cluster's
+    Secret holds (the stand-in keeps the file the last Secret was made from)."""
+    content = (run.stub / "cluster-keycloak-realm").read_bytes()
+    return hashlib.sha256(base64.b64encode(content)).hexdigest()
+
+
+def test_the_pod_carries_the_realm_secrets_fingerprint_and_prints_nothing_of_it(
     tmp_path: Path,
 ) -> None:
-    run = run_script(
-        tmp_path,
-        "up",
-        realm_secret=True,
-        credentials_secret=True,
-        deployment=True,
-        rotate="1",
+    run = run_script(tmp_path, "up")
+
+    assert run.process.returncode == 0, run.output
+    assert annotation(run) == digest_of_cluster_realm(run)
+    assert re.fullmatch(r"[0-9a-f]{64}", annotation(run))
+    # The Secret's content is read through one jsonpath, into a variable and a pipe.
+    reads = [c for c in run.calls if "get secret keycloak-realm -o jsonpath" in c]
+    assert len(reads) == 1
+    assert not any(value in run.output for value in secret_values(run))
+    content = (run.stub / "cluster-keycloak-realm").read_bytes()
+    assert base64.b64encode(content).decode() not in run.output
+
+
+def test_rotate_makes_new_secrets_and_the_pod_template_changes_with_them(
+    tmp_path: Path,
+) -> None:
+    # Each run's record is read at once: the next run clears the stand-in's files.
+    first = annotation(run_script(tmp_path, "up"))
+    second = run_script(tmp_path, "up", rotate="1")
+
+    assert second.process.returncode == 0, second.output
+    assert len([c for c in second.calls if "create secret generic" in c]) == 2
+    assert annotation(second) == digest_of_cluster_realm(second)
+    # A changed template rolls the pod by itself: no separate restart is asked.
+    assert first != annotation(second)
+    assert not [c for c in second.calls if "rollout restart" in c]
+
+
+def test_a_plain_run_after_a_run_that_changed_nothing_keeps_the_same_template(
+    tmp_path: Path,
+) -> None:
+    first = annotation(run_script(tmp_path, "up"))
+    second = run_script(tmp_path, "up")
+
+    assert second.process.returncode == 0, second.output
+    assert not [c for c in second.calls if "create secret" in c]
+    assert first == annotation(second)
+
+
+def test_a_rotation_interrupted_before_the_workload_is_rolled_by_the_next_plain_run(
+    tmp_path: Path,
+) -> None:
+    first = annotation(run_script(tmp_path, "up"))
+    # The Secrets are replaced, and the run stops at the peers' policies, before
+    # the Deployment is applied: the pod on the cluster still has the old realm.
+    broken = run_script(
+        tmp_path, "up", rotate="1", fail="identity-peers-networkpolicy.yaml"
     )
+    broken_creates = len([c for c in broken.calls if "create secret generic" in c])
+    broken_applied = [name for name, _ in broken.applied()]
+    again = run_script(tmp_path, "up")  # no ROTATE: both Secrets exist, kept
 
-    assert run.process.returncode == 0, run.output
-    assert len([c for c in run.calls if "create secret generic" in c]) == 2
-    restarts = [i for i, c in enumerate(run.calls) if "rollout restart" in c]
-    workload = run.calls.index([c for c in run.calls if c.startswith("APPLIED")][-1])
-    # A pod that runs never imports a realm again: the restart follows the apply.
-    assert len(restarts) == 1 and restarts[0] > workload
-
-
-def test_rotate_on_a_first_run_has_nothing_to_restart(tmp_path: Path) -> None:
-    run = run_script(tmp_path, "up", rotate="1")
-
-    assert run.process.returncode == 0, run.output
-    assert not [c for c in run.calls if "rollout restart" in c]
+    assert broken.process.returncode != 0
+    assert broken_creates == 2
+    # No Deployment: the pod on the cluster still has the first run's template.
+    assert broken_applied == ["identity-networkpolicy.yaml", "-", "-"]
+    assert again.process.returncode == 0, again.output
+    assert not [c for c in again.calls if "create secret" in c]
+    # The old template is not applied again: the annotation is the new realm's.
+    assert annotation(again) == digest_of_cluster_realm(again)
+    assert annotation(again) != first
 
 
 @pytest.mark.parametrize("value", ["yes", "0", "true", "2"])

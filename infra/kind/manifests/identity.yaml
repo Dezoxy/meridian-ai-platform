@@ -8,16 +8,21 @@
 #
 # Four objects: a ServiceAccount (no token is mounted), the Deployment, the Service
 # `keycloak` (port 8080 only; the health port 9000 is not in it) and an HTTPRoute on
-# the edge for the host name id.meridian.localhost, which forwards two path prefixes
-# of the staff realm and nothing else: /realms/meridian-staff/ (the login pages, the
-# discovery document, the keys, the token and the logout) and /resources/ (the login
-# page's styles and scripts). /admin, /realms/master and the rest have no rule, so
-# the edge answers them with its 404; smoke proves it (smoke.d/13-issuer.sh).
+# the edge for the host name id.meridian.localhost, which forwards what the sign-in
+# flow needs and nothing else: under /realms/meridian-staff/ the discovery document
+# (.well-known/), the protocol endpoints (protocol/openid-connect/: the login
+# redirect, the token, the keys, the logout) and the login form's own posts
+# (login-actions/), and /resources/ (the login page's styles and scripts). Not the
+# account console (account/), not the client registration (clients-registrations/),
+# not /admin, not /realms/master: they have no rule, so the edge answers them with
+# its 404; smoke proves it (smoke.d/13-issuer.sh). That the login page still loads
+# with these four prefixes is untried.
 #
-# The image is a placeholder word, twice (the init container and the container, and
-# the script refuses a file that holds it any other number of times, comments
-# included): the script writes KEYCLOAK_IMAGE of pins.env there, by digest, so that
-# no tag or digest lives in this file (Renovate reads pins.env).
+# The image is a placeholder word, twice (the init container and the container),
+# and the realm Secret's fingerprint is another, once (a pod annotation, below);
+# the script refuses a file that holds either any other number of times, comments
+# included, and a third `image:` line: it writes KEYCLOAK_IMAGE of pins.env there,
+# by digest, so that no tag or digest lives in this file (Renovate reads pins.env).
 #
 # Arguments (the container run of Y2a, 2026-10-08, with the realm file and this
 # hostname): `start-dev` (development mode, its built-in database, nothing
@@ -79,6 +84,11 @@ spec:
       labels:
         app.kubernetes.io/name: keycloak
         app.kubernetes.io/part-of: meridian-identity
+      annotations:
+        # The SHA-256 of the realm Secret's content (identity.sh writes it, and
+        # prints nothing of the content): a realm that changed rolls the pod on any
+        # run, also after a rotation that was interrupted before the restart.
+        meridian.local/realm-sha256: "REALM-SHA256-PLACEHOLDER"
     spec:
       serviceAccountName: keycloak
       automountServiceAccountToken: false
@@ -92,7 +102,9 @@ spec:
       initContainers:
         - name: copy-quarkus
           image: IMAGE-PLACEHOLDER
-          command: [cp, -a, /opt/keycloak/lib/quarkus/., /quarkus/]
+          # -R and nothing that preserves: -a would try to set the mode and times of
+          # /quarkus itself, which belongs to root, and exit 1 as uid 1000.
+          command: [cp, -R, /opt/keycloak/lib/quarkus/., /quarkus/]
           resources:
             requests:
               cpu: 10m
@@ -213,7 +225,13 @@ spec:
     - matches:
         - path:
             type: PathPrefix
-            value: /realms/meridian-staff/
+            value: /realms/meridian-staff/.well-known/
+        - path:
+            type: PathPrefix
+            value: /realms/meridian-staff/protocol/openid-connect/
+        - path:
+            type: PathPrefix
+            value: /realms/meridian-staff/login-actions/
         - path:
             type: PathPrefix
             value: /resources/

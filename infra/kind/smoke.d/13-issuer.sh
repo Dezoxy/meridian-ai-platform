@@ -1,26 +1,47 @@
 # shellcheck shell=bash
-#  13. issuer: four lines when the sign-in issuer add-on is on (S021, Y2b), one SKIP
+#  13. issuer: six lines when the sign-in issuer add-on is on (S021, Y2b), one SKIP
 #                 line when it is off (MERIDIAN_IDENTITY empty, the default: Keycloak
 #                 is an add-on that `make up` makes only with MERIDIAN_IDENTITY=
 #                 keycloak; infra/kind/README.md, "The sign-in issuer"). On, in order:
 #                 the pod in `identity` is Ready and runs the pinned image (the
-#                 Deployment's image is KEYCLOAK_IMAGE of pins.env, and the pod's
-#                 imageID ends in its digest); the discovery document, through the
-#                 edge, names the FRONT URL (http://id.meridian.localhost:8088/
-#                 realms/meridian-staff) as its issuer; the key document, through the
-#                 edge, holds at least one RS256 signing key; and /admin/ and
-#                 /realms/master/ through the edge are 404, because the route
-#                 forwards two prefixes of the staff realm and nothing else. The
-#                 requests are plain GETs of public documents: no line reads a
-#                 Secret, signs anyone in or asks for a token. The lines say what
-#                 they prove and not more: that a browser's sign-in works, that
-#                 the Claims API reaches the key URL and that the pod keeps its
-#                 keys are not checked here. Not run on the cluster yet.
-#                 A pod that is not up yet fails the first line and the others
-#                 run all the same; an add-on that was never made fails them all.
+#                 Deployment's image is KEYCLOAK_IMAGE of pins.env, the init
+#                 container runs the same, the container has no environment, and
+#                 the pod's imageID ends in the digest); the discovery document,
+#                 through the edge, names the FRONT URL (http://id.meridian.
+#                 localhost:8088/realms/meridian-staff) as its issuer; the key
+#                 document, through the edge, holds at least one RS256 signing key;
+#                 four paths through the edge are the edge's own 404 with an empty
+#                 body (a 404 from Keycloak has a body): /admin/, /realms/master/
+#                 and, under the staff realm, account/ and clients-registrations/
+#                 openid-connect, because the route forwards what the sign-in flow
+#                 needs and nothing else; three ways of climbing from the staff
+#                 realm to the master realm (a plain .., %2e%2e and ..%2f, sent
+#                 as written with curl's --path-as-is) are 404 too, and so is one
+#                 from inside an allowed prefix; and, from INSIDE the cluster, the
+#                 Claims API's pod fetches the discovery document by the Service's
+#                 name (keycloak.identity.svc:8080) and it names the FRONT URL as
+#                 its issuer, which proves the policy that admits the Claims API,
+#                 the path, and --hostname. That last line is skipped while the
+#                 Claims API is not deployed. The requests are plain GETs of public
+#                 documents: no line reads a Secret, signs anyone in or asks for a
+#                 token. The lines say what they prove and not more: that a
+#                 browser's sign-in works and that the pod keeps its keys are not
+#                 checked here, and neither is a refusal by the network policy. Not
+#                 run on the cluster yet. A pod that is not up yet fails the first
+#                 line and the others run all the same; an add-on that was never
+#                 made fails them all.
 
 readonly ISSUER_FRONT_URL=http://id.meridian.localhost:8088
 readonly ISSUER_REALM_URL="${ISSUER_FRONT_URL}/realms/meridian-staff"
+# Paths that the route does not forward, so the edge answers with its own 404.
+readonly ISSUER_CLOSED_PATHS="/admin/ /realms/master/ /realms/meridian-staff/account/ /realms/meridian-staff/clients-registrations/openid-connect"
+# Ways of reaching the master realm from the staff realm, or from inside an allowed
+# prefix, sent as written (--path-as-is): none may get through the edge.
+readonly ISSUER_CLIMBING_PATHS="/realms/meridian-staff/../master/ /realms/meridian-staff/%2e%2e/master/ /realms/meridian-staff/..%2fmaster/ /realms/meridian-staff/.well-known/../../master/"
+# The Service's name for the pods, and the probe the Claims API's pod runs (Python
+# is in its image; curl is not): the issuer of the discovery document, one line.
+readonly ISSUER_SERVICE_URL=http://keycloak.identity.svc:8080/realms/meridian-staff
+readonly ISSUER_INSIDE_PROBE='import json, sys, urllib.request; print(json.load(urllib.request.urlopen(sys.argv[1], timeout=8)).get("issuer", ""))'
 # What the last issuer_get left: the status, the body and, when curl failed, why.
 issuer_status=""
 issuer_body=""
@@ -29,11 +50,12 @@ issuer_error=""
 # ── 13. issuer ───────────────────────────────────────────────────────────────
 # issuer_get URL: GET URL through the edge, as the other checks reach the Claims
 # API. Returns 1 when curl failed (issuer_error holds why); otherwise leaves the
-# status in ${issuer_status} and the body in ${issuer_body}. Nothing is followed.
+# status in ${issuer_status} and the body in ${issuer_body}. Nothing is followed, and
+# the path goes as written (--path-as-is: curl would otherwise remove the dots).
 issuer_get() {
   local out status
   out="$(mktemp)"
-  if ! status="$(curl -q --noproxy '*' -sS -m 10 -o "${out}" -w '%{http_code}' "$1" 2>&1)"; then
+  if ! status="$(curl -q --noproxy '*' -sS --path-as-is -m 10 -o "${out}" -w '%{http_code}' "$1" 2>&1)"; then
     issuer_error="$(clean_lines "${status}")"
     rm -f "${out}"
     return 1
@@ -56,8 +78,12 @@ check_issuer_pod() {
         | ([$pod.status.conditions[]? | select(.type == "Ready" and .status == "True")] | length) as $ready
         | ([$pod.spec.containers[]? | select(.name == "keycloak") | .image][0] // "") as $spec
         | ([$pod.status.containerStatuses[]? | select(.name == "keycloak") | .imageID][0] // "") as $id
+        | ([$pod.spec.initContainers[]? | select(.image != $image)] | length) as $other
+        | ([$pod.spec.containers[]? | select(has("env") or has("envFrom"))] | length) as $environment
         | if $ready != 1 then "the pod is not Ready"
           elif $spec != $image then "the pod runs another image than the pin in pins.env"
+          elif $other != 0 then "an init container runs another image than the pin in pins.env"
+          elif $environment != 0 then "the container has an environment, and none is written"
           elif ($id | endswith($digest) | not) then "the pod reports an imageID that does not end in the pinned digest"
           else "ok" end
       end' <<<"${pods}" 2>/dev/null)" || verdict=""
@@ -106,20 +132,69 @@ check_issuer_keys() {
   fi
 }
 
-check_issuer_closed() {
-  local path wrong=""
-  for path in /admin/ /realms/master/; do
+# issuer_edge_404 WHAT PATH...: one line. Each PATH through the edge must be the
+# EDGE's own 404: the status 404 and an empty body (a 404 that Keycloak answers has
+# a body, so a route that forwards the path would not pass as one that does not).
+issuer_edge_404() {
+  local what=$1 path wrong=""
+  shift
+  for path in "$@"; do
     if ! issuer_get "${ISSUER_FRONT_URL}${path}"; then
       fail "issuer: ${ISSUER_FRONT_URL}${path} did not answer: ${issuer_error}"
       return
     fi
-    [[ "${issuer_status}" == 404 ]] || wrong+="${wrong:+, }${path} -> ${issuer_status}"
+    if [[ "${issuer_status}" != 404 ]]; then
+      wrong+="${wrong:+, }${path} -> ${issuer_status}"
+    elif [[ -n "${issuer_body}" ]]; then
+      wrong+="${wrong:+, }${path} -> 404 with a body, which is Keycloak's and not the edge's"
+    fi
   done
   if [[ -z "${wrong}" ]]; then
-    pass "issuer: /admin/ and /realms/master/ through the edge are 404 (the route forwards the staff realm's two prefixes and nothing else)"
+    pass "issuer: ${what} through the edge are the edge's own 404, with an empty body: $*"
   else
-    fail "issuer: expected 404 from the edge, got ${wrong}: the route forwards more than the staff realm's two prefixes"
+    fail "issuer: expected the edge's own 404 for ${what}, got ${wrong}: the route forwards more than the sign-in flow needs"
   fi
+}
+
+check_issuer_closed() {
+  local paths
+  read -r -a paths <<<"${ISSUER_CLOSED_PATHS}"
+  issuer_edge_404 "the admin console, the master realm, the staff realm's account console and its client registration" "${paths[@]}"
+}
+
+check_issuer_climbing() {
+  local paths
+  read -r -a paths <<<"${ISSUER_CLIMBING_PATHS}"
+  issuer_edge_404 "the ways of climbing to the master realm, sent as written" "${paths[@]}"
+}
+
+# check_issuer_inside: from the Claims API's pod, the discovery document by the
+# Service's name. The edge's lines cannot tell a missing --hostname (the Host header
+# they send gives the front name all the same); a pod asking at the Service's name
+# can, and it also proves the policy that admits the Claims API, and the path.
+check_issuer_inside() {
+  local found answer err_file
+  if ! found="$(deployed_services)"; then
+    fail "issuer: could not look for the Meridian deployments (kubectl's error is above)"
+    return
+  fi
+  if ! grep -qx '[^/]*/claims-api' <<<"${found}"; then
+    skip "issuer: the Claims API is not deployed (make deploy), so the issuer is not asked from inside the cluster"
+    return
+  fi
+  err_file="$(mktemp)"
+  if answer="$(kctl -n meridian exec deploy/claims-api -- python -c "${ISSUER_INSIDE_PROBE}" \
+    "${ISSUER_SERVICE_URL}/.well-known/openid-configuration" 2>"${err_file}")"; then
+    answer="$(clean_lines "${answer}")"
+    if [[ "${answer}" == "${ISSUER_REALM_URL}" ]]; then
+      pass "issuer: from the Claims API's pod, the discovery document fetched as ${ISSUER_SERVICE_URL} names the front URL ${ISSUER_REALM_URL} as its issuer (the policy, the path and --hostname hold)"
+    else
+      fail "issuer: from the Claims API's pod the discovery document names '${answer}' as its issuer, not ${ISSUER_REALM_URL}: a token's iss would not match what the Claims API pins"
+    fi
+  else
+    fail "issuer: the Claims API's pod could not fetch the discovery document as ${ISSUER_SERVICE_URL}: $(clean_lines "${answer}") $(clean_lines "$(<"${err_file}")" | cut -c 1-300)"
+  fi
+  rm -f "${err_file}"
 }
 
 check_issuer() {
@@ -131,4 +206,6 @@ check_issuer() {
   check_issuer_discovery
   check_issuer_keys
   check_issuer_closed
+  check_issuer_climbing
+  check_issuer_inside
 }

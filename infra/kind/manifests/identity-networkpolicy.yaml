@@ -23,7 +23,11 @@
 #                 else, the edge's proxy pods (the browser's calls: the login page,
 #                 the discovery document, the keys and the token) and the Claims
 #                 API's pods in `meridian` (the keys and the token). The health port
-#                 9000 has no rule: the kubelet's probes are not filtered by a policy.
+#                 9000 has no rule: a call that starts on the node passed a
+#                 default-deny policy on this cluster's network plugin (measured on
+#                 kind 2026-10-07, see cert-manager-networkpolicy.yaml, which
+#                 quotes the Kubernetes page and its caveats), so the kubelet's
+#                 probes should pass; not seen for this pod.
 # Both peers are named by namespace AND pod label. The two OTHER ends of those two
 # connections are policies of their own in identity-peers-networkpolicy.yaml,
 # because the edge's namespace and the chart each deny egress by default and their
