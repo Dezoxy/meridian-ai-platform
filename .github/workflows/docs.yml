@@ -1,9 +1,10 @@
 name: Docs / Consistency
 
 # The documentation gate, Structurizr validation of the architecture model,
-# the derived-diagram sync check and a secret scan. Runs on every pull request
-# and on main. Read-only. Each job name is a required status check in the
-# protect-main ruleset; rename one and update the ruleset in the same change.
+# the derived-diagram sync check, a render of every Mermaid block and a
+# secret scan. Runs on every pull request and on main. Read-only. Each job
+# name is a required status check in the protect-main ruleset; rename one and
+# update the ruleset in the same change.
 on:
   pull_request:
   push:
@@ -54,6 +55,11 @@ jobs:
         run: make mermaid-views
       - name: Derived blocks are current
         run: git diff --exit-code -- '*.md'
+      # Renders every Mermaid block in the Markdown with the Makefile's pinned
+      # image (MERMAID_IMAGE) and fails on one that does not parse, which
+      # GitHub would only show as an error box on the pushed page.
+      - name: Every Mermaid block renders
+        run: make mermaid-render
 
   secrets:
     name: secret scan

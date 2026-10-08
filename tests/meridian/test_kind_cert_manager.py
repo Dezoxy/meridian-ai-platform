@@ -211,9 +211,10 @@ def test_the_readme_describes_what_s056_added_to_deploy_and_smoke_and_the_restar
 ):
     readme = " ".join((KIND_DIR / "README.md").read_text(encoding="utf-8").split())
 
-    # `make smoke` checks eleven things; the tenth is the certificate policy and
-    # the eleventh the alert rules (test_smoke_alert_rules.py).
-    assert "`make smoke` checks eleven things" in readme
+    # `make smoke` checks twelve things; the tenth is the certificate policy, the
+    # eleventh the alert rules (test_smoke_alert_rules.py) and, since S072 (contract
+    # M3b), the twelfth the telemetry stores.
+    assert "`make smoke` checks twelve things" in readme
     assert "`make smoke` checks nine things" not in readme
     assert "**Certificate policy.** Five lines" in readme
     # The ninth check's description no longer counts three statuses.

@@ -14,6 +14,13 @@
 #   telemetry-ca          the CA certificate (ECDSA P-256, one year), and the
 #                         Issuer of the same name that signs with its key
 #   otel-collector        the collector's server certificate (90 days)
+#   otel-collector-client the collector's client certificate (90 days; S072)
+#   tempo-receiver        the server certificate of Tempo's OTLP receiver (90
+#                         days; S072)
+#   loki-gateway          the server certificate of Loki's gateway (90 days;
+#                         S072)
+#   prometheus-gateway    the server certificate of Prometheus's gateway (90
+#                         days; S072, contract M4, the last document of this file)
 #
 # Why an authority of its own and not the `meridian-services` issuer: S056 made
 # "that issuer signs only for the `meridian` namespace and its URI prefix" the
@@ -31,13 +38,16 @@
 # untouched. The authority's private key is the Secret `telemetry-ca` in
 # `observability`: no Meridian pod and no Role in `meridian` can read it. It is
 # readable by whatever holds a read of Secrets in `observability` or
-# cluster-wide: cert-manager's controller and its cainjector, the CloudNativePG
-# operator, and in the rendered kube-prometheus-stack chart Prometheus's
-# operator (kube-state-metrics no longer does: its collector for Secrets is
-# excluded, values/kube-prometheus-stack.yaml). The two operators can also
-# write Secrets cluster-wide, so each can overwrite the authority's Secret, not
-# only read it. Whoever reads the key can issue a certificate for the
-# collector's name, and so can intercept the services' telemetry.
+# cluster-wide: cert-manager's controller and its cainjector, and in the rendered
+# kube-prometheus-stack chart Prometheus's operator (kube-state-metrics no longer
+# does: its collector for Secrets is excluded, values/kube-prometheus-stack.yaml).
+# The CloudNativePG operator no longer does either: since S072 (contract C) it
+# works through a Role in `meridian` and not through a ClusterRole over every
+# namespace. cert-manager and Prometheus's operator can also write Secrets
+# cluster-wide, so each can overwrite the authority's Secret, not only read it.
+# Whoever reads the key can issue a certificate for the collector's name, and so
+# can intercept the services' telemetry, and one for the collector's client
+# name, and so can write to the stores that ask for it (below).
 #
 # Who can ask for a certificate: approver-policy decides, by the policies
 # `telemetry-ca` and `otel-collector` in certificate-policy.yaml, each of which
@@ -111,6 +121,174 @@ spec:
   dnsNames:
     - otel-collector.observability.svc
     - otel-collector.observability.svc.cluster.local
+  issuerRef:
+    name: telemetry-ca
+    kind: Issuer
+    group: cert-manager.io
+---
+# The collector's CLIENT certificate (S072, contract M1): what the collector will
+# present to the telemetry stores that write-protect their ports. It is issued
+# and mounted (values/otel-collector.yaml). Contract M1 changed no behaviour;
+# since contract M2 the exporter to Tempo presents it (Tempo's receiver asks for
+# it, the Certificate below), since contract M3 the exporter to Loki does, to
+# Loki's gateway, and since contract M4 the exporter to Prometheus does, to
+# Prometheus's gateway.
+#
+# Its own Certificate and its own policy (otel-collector-client in
+# certificate-policy.yaml), not the usage `client auth` added to the server
+# certificate above: the server policy stays as S063 made it, and a request to
+# this authority for client auth under any other name is denied. The one DNS name
+# says what the certificate is and resolves nowhere (`.meridian` is not the
+# cluster's domain, and no Service or pod has it). Its subject is the fixed
+# common name `otel-collector-client` (S072, contract M3b), and the policy allows
+# that one common name and no other: Loki's gateway, which checks the subject of
+# the client certificate it verified (`$ssl_client_s_dn`, seen as
+# `CN=otel-collector-client` on the pinned nginx), admits a write only from this
+# name, so a certificate this authority signs for another client name does not
+# write to Loki. Tempo's receiver cannot check a name (it checks the chain and
+# nothing more), so for Tempo any certificate this authority signs for client use
+# is a writer's: the policy lets it sign exactly this one. Neither the policy nor
+# the schema of approver-policy can REQUIRE a usage: `allowed.usages` is a ceiling
+# ("must be a subset", its CRD), so a request without `client auth` is approved
+# too, and it makes a certificate with no extended key usage, which nginx accepts
+# as a client (seen). What keeps a request like that from being made is who may
+# create a Certificate in `observability`, not this policy. Lifetime, renewal and
+# key as the server certificate has them: 90 days, a new ECDSA P-256 key at every
+# renewal.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: otel-collector-client
+  namespace: observability
+spec:
+  commonName: otel-collector-client
+  secretName: otel-collector-client-tls
+  duration: 2160h # 90 days, named: the policy caps it and cannot read a missing one
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always # a new key at every renewal
+  usages:
+    - digital signature
+    - client auth
+  dnsNames:
+    - otel-collector.client.observability.meridian
+  issuerRef:
+    name: telemetry-ca
+    kind: Issuer
+    group: cert-manager.io
+---
+# The SERVER certificate of Tempo's OTLP receiver (S072, contract M2): what the
+# collector's exporter verifies on its hop to Tempo (port 4317), now TLS with a
+# client certificate required. Tempo mounts the Secret (values/tempo.yaml) and
+# uses its ca.crt, the telemetry authority, as the client CA, so only a sender
+# whose certificate this authority signed is heard. up.sh waits for the
+# Certificate before Tempo's release. Its own policy (tempo-receiver in
+# certificate-policy.yaml) allows exactly these two names and the two server
+# usages: the collector's client certificate is not allowed to name Tempo, and
+# this one is not allowed `client auth`. The names are the host the collector's
+# exporter dials (tempo.observability.svc.cluster.local, values/otel-collector.yaml)
+# and its short form, as the collector's own certificate has both. Lifetime and
+# key as its neighbours: 90 days, a new ECDSA P-256 key at every renewal. Whether
+# Tempo reads a renewed certificate without a restart is not established.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: tempo-receiver
+  namespace: observability
+spec:
+  secretName: tempo-receiver-tls
+  duration: 2160h # 90 days, named: the policy caps it and cannot read a missing one
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always # a new key at every renewal
+  usages:
+    - digital signature
+    - server auth
+  dnsNames:
+    - tempo.observability.svc
+    - tempo.observability.svc.cluster.local
+  issuerRef:
+    name: telemetry-ca
+    kind: Issuer
+    group: cert-manager.io
+---
+# The SERVER certificate of Loki's gateway (S072, contract M3): the one TLS
+# listener of the chart's nginx in front of Loki (values/loki.yaml), which the
+# collector's exporter verifies and which Grafana reads through. The gateway asks
+# a client for a certificate at the handshake, optionally, and answers 403 on the
+# paths that write unless it verified against this authority: the collector's
+# client certificate (above) is what passes. The Secret is mounted by Loki's
+# release, so up.sh waits for the Certificate before it. Its own policy
+# (loki-gateway in certificate-policy.yaml): exactly these two names, the two
+# server usages, 90 days. The names are the gateway Service's (loki-gateway, the
+# chart's name for it) and the host the collector's exporter dials
+# (values/otel-collector.yaml), in the short and the fully qualified form as the
+# collector's own certificate has both. Lifetime and key as its neighbours. nginx
+# reads a renewed certificate at each handshake (the certificate and the key are
+# variables of a `map`, values/loki.yaml: SEEN on the pinned image, a pair replaced
+# under the mount was served at the next handshake with no reload); its client CA
+# is read at start only, so up.sh rolls the pod when the authority's certificate
+# changes.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: loki-gateway
+  namespace: observability
+spec:
+  secretName: loki-gateway-tls
+  duration: 2160h # 90 days, named: the policy caps it and cannot read a missing one
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always # a new key at every renewal
+  usages:
+    - digital signature
+    - server auth
+  dnsNames:
+    - loki-gateway.observability.svc
+    - loki-gateway.observability.svc.cluster.local
+  issuerRef:
+    name: telemetry-ca
+    kind: Issuer
+    group: cert-manager.io
+---
+# The SERVER certificate of Prometheus's gateway (S072, contract M4): the one TLS
+# listener of the nginx of this repository's own in front of Prometheus
+# (manifests/observability-prometheus-gateway.yaml), which the collector's
+# exporter verifies and which Grafana reads through. As Loki's gateway, it asks a
+# client for a certificate at the handshake, optionally, and answers 403 on the
+# path that writes (the OTLP receiver's) unless the client's certificate verified
+# against this authority and carries the collector's common name (above); remote
+# write, the admin API and the lifecycle endpoints answer 403 whatever the
+# certificate. The Secret is mounted by the gateway's Deployment, which up.sh
+# applies after the stack's release, so up.sh waits for the Certificate before the
+# stack. Its own policy (prometheus-gateway in certificate-policy.yaml): exactly
+# these two names, the two server usages, 90 days. The names are the gateway
+# Service's (prometheus-gateway) and the host the collector's exporter and
+# Grafana's datasource dial (values/otel-collector.yaml,
+# values/kube-prometheus-stack.yaml), in the short and the fully qualified form
+# as its neighbours have both. Lifetime and key as theirs. nginx reads a renewed
+# certificate at each handshake (the variable form, as Loki's gateway does).
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: prometheus-gateway
+  namespace: observability
+spec:
+  secretName: prometheus-gateway-tls
+  duration: 2160h # 90 days, named: the policy caps it and cannot read a missing one
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always # a new key at every renewal
+  usages:
+    - digital signature
+    - server auth
+  dnsNames:
+    - prometheus-gateway.observability.svc
+    - prometheus-gateway.observability.svc.cluster.local
   issuerRef:
     name: telemetry-ca
     kind: Issuer

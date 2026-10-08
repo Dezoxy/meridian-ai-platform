@@ -32,7 +32,10 @@
 #      and never overwritten (the store itself runs in the Meridian release,
 #      `make deploy`)
 #   4. Grafana admin Secret (only if absent), Grafana's Role (ConfigMaps in
-#      observability, nothing else), kube-prometheus-stack, the Grafana
+#      observability, nothing else), kube-prometheus-stack, Prometheus's gateway
+#      (S072, contract M4: an nginx of this repository's own, with the
+#      NetworkPolicies that close Prometheus's port to every other pod; the
+#      OTLP receiver's path needs the collector's client certificate), the Grafana
 #      dashboards in infra/kind/dashboards (one ConfigMap each; one no longer
 #      there is deleted), Meridian's alert rules (infra/kind/alerts, one
 #      PrometheusRule), a ServiceMonitor for cert-manager's metrics, Tempo,
@@ -49,6 +52,8 @@ set -euo pipefail
 
 # shellcheck source=common.sh
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+# shellcheck source=gateways.sh
+. "$(dirname "${BASH_SOURCE[0]}")/gateways.sh"
 
 readonly HELM_TIMEOUT=10m
 readonly ROLES_TIMEOUT=300
@@ -96,14 +101,32 @@ readonly CERT_MANAGER_POLICY_FILE="${KIND_DIR}/manifests/cert-manager-networkpol
 # observability's takes it on the one egress rule for the node's 6443 and 10250,
 # the API server and the kubelet, which are one address on kind (S072, contract E).
 readonly OBSERVABILITY_POLICY_FILE="${KIND_DIR}/manifests/observability-networkpolicy.yaml"
+# The policies of Loki's pods and its gateway's (S072, contract M3b): no placeholder,
+# applied just before Loki's release and not at the start of the run.
+readonly LOKI_POLICY_FILE="${KIND_DIR}/manifests/observability-loki-networkpolicy.yaml"
+# Prometheus's gateway: its policy file, its manifest and the placeholders in it are
+# named in gateways.sh (S072, contract M4), with the functions that fill and apply it.
 # Envoy Gateway's namespace (S072, contract N): denied by default, and the one
 # egress rule for TCP 6443 (the controller and its pre-install hook Job) takes the
 # same placeholder; it is applied before the release, which the Job runs under.
 readonly ENVOY_GATEWAY_POLICY_FILE="${KIND_DIR}/manifests/envoy-gateway-networkpolicy.yaml"
 readonly API_SERVER_PEERS_PLACEHOLDER='to: [{ipBlock: {cidr: API-SERVER-ADDRESS/32}}]'
 
+# What a failed release adds to its error, set by the caller just before a
+# release whose failure leaves something half done (empty: nothing). Set once, right
+# after observability's policies are applied (the warm window opens there), and
+# emptied after the collector's release.
+release_failure_note=""
+
 # install_release NAME NAMESPACE CHART VERSION REPO VALUES_FILE [helm args...]
 # REPO is empty for an OCI chart. Helm's output is shown only when it fails.
+# What waits for the pods that a changed annotation rolls (S072, contract M4b):
+# `--wait` below. Helm's readiness check of a Deployment looks at its NEW
+# ReplicaSet and wants the expected number of ready pods there, and of a
+# StatefulSet at its updated replicas (recalled from Helm's source, not seen on the
+# cluster), so the gateway of Loki, Grafana, the collector and Tempo are each
+# waited for by their own release. Prometheus's gateway is no release: its apply
+# waits for `rollout status` (apply_prometheus_gateway).
 install_release() {
   local name=$1 namespace=$2 chart=$3 version=$4 repo=$5 values=$6
   shift 6
@@ -115,7 +138,7 @@ install_release() {
     --values "${KIND_DIR}/values/${values}" "$@" \
     --wait --timeout "${HELM_TIMEOUT}" 2>&1)"; then
     printf '%s\n' "${out}" >&2
-    die "helm release ${name} failed"
+    die "helm release ${name} failed${release_failure_note:+: ${release_failure_note}}"
   fi
   log "release ${name} ${version} ready in ${namespace}"
 }
@@ -256,7 +279,11 @@ apply_certificate_policy() {
 
 # Publish the public certificate of the collector's authority (S063) as the
 # ConfigMap telemetry-ca (key ca.crt) in `meridian`, for the services to mount
-# and trust it, and (S064) in `logging`, for the log agent. Only the field
+# and trust it, (S064) in `logging`, for the log agent, and (S072, contract M3) in
+# `observability`, which Grafana's environment reads to trust Loki's gateway and
+# (contract M4) Prometheus's
+# (a public certificate in a ConfigMap, so Grafana never holds a Secret of
+# the authority's). Only the field
 # tls.crt of the authority's Secret is read (a jsonpath; never the object and
 # never tls.key), once, the text is checked to be a certificate and not to hold
 # a key, and nothing is printed. Server-side apply, on every run: a renewed
@@ -272,15 +299,37 @@ publish_telemetry_ca() {
     die "could not read tls.crt of the Secret telemetry-ca in observability (is the Certificate telemetry-ca Ready? kubectl -n observability get certificate)"
   [[ "${pem}" == "-----BEGIN CERTIFICATE-----"* && "${pem}" != *"PRIVATE KEY"* ]] ||
     die "tls.crt of the Secret telemetry-ca in observability does not hold a certificate; the ConfigMap telemetry-ca was not changed"
-  for namespace in meridian logging; do
+  for namespace in meridian logging observability; do
     kctl -n "${namespace}" create configmap telemetry-ca --from-literal=ca.crt="${pem}" \
       --dry-run=client -o json |
       jq '.metadata.labels = {"app.kubernetes.io/part-of": "meridian"}
         | del(.metadata.creationTimestamp)' |
       kctl -n "${namespace}" apply --server-side --force-conflicts -f - >/dev/null
   done
-  log "telemetry: the authority's public certificate is the ConfigMap telemetry-ca in meridian and in logging"
+  log "telemetry: the authority's public certificate is the ConfigMap telemetry-ca in meridian, in logging and in observability"
 }
+
+# The SHA-256 of one PUBLIC certificate field of a Secret or a ConfigMap in
+# `observability`, printed as hex: object_fingerprint secret loki-gateway-tls
+# 'ca\.crt'. A pod that reads a certificate file only when it starts (Tempo's
+# receiver, nginx's client CA, Grafana's environment variable) is given this as
+# a pod annotation, so a `make up` after a renewal changes the pod template and
+# the pod is rolled; without it the pod would keep the file it loaded until
+# something else restarted it (S072, contract M3b). Only tls.crt and ca.crt are
+# ever named here, never tls.key; nothing is printed but the digest.
+object_fingerprint() {
+  local kind=$1 name=$2 field=$3 value
+  value="$(kctl -n observability get "${kind}" "${name}" -o "jsonpath={.data.${field}}")" ||
+    die "could not read ${field} of the ${kind} ${name} in observability (kubectl -n observability get ${kind} ${name})"
+  [[ -n "${value}" ]] ||
+    die "the ${kind} ${name} in observability holds no ${field//\\/}: its Certificate is not Ready, or the field is not there"
+  if [[ "${kind}" == secret ]]; then
+    value="$(printf '%s' "${value}" | base64 -d)" ||
+      die "the ${field//\\/} of the ${kind} ${name} in observability is not base64"
+  fi
+  printf '%s' "${value}" | sha256sum | cut -d' ' -f1
+}
+
 
 # Create the Grafana admin Secret once. The password is generated here, goes to
 # kubectl on stdin, and is never a command-line argument and never printed.
@@ -425,6 +474,15 @@ apply_api_server_policy "${CERT_MANAGER_POLICY_FILE}" "cert-manager's"
 
 log "network: observability's NetworkPolicies, with the node's address (before Prometheus, Tempo, Loki and the collector)"
 apply_api_server_policy "${OBSERVABILITY_POLICY_FILE}" "observability's" "TCP 6443 and 10250"
+# From this apply on, on a warm cluster the collector's and Grafana's egress rules
+# name the two gateways and no longer the stores' own ports (S072, contracts M3 and
+# M4): the old collector's exporters to Loki's and Prometheus's own ports time out
+# (a refused write is not retried: those logs and metrics are lost) and Grafana's
+# old datasources cannot reach them, until the stack's release and the collector's
+# are in. A failure anywhere before the collector's release leaves that open, so
+# every release's failure message says so, from here to the collector's (a test
+# holds the two ends); the note ends with the collector's release below.
+release_failure_note="telemetry stays refused and dropped, and Grafana's Prometheus and Loki reads fail, until a re-run of make up converges (observability's policies, which the collector's and Grafana's egress rules to the two gateways are in, are applied, and the collector's release has not run: its metrics and logs, which the gateways admit only with its client certificate, and its traces go nowhere, and the old collector's exporters still name the stores' own ports)"
 
 log "network: Envoy Gateway's NetworkPolicies, with the node's address (before the controller, its hook Job and the proxy pods)"
 apply_api_server_policy "${ENVOY_GATEWAY_POLICY_FILE}" "Envoy Gateway's controller and hook Job" "TCP 6443"
@@ -474,7 +532,11 @@ kctl wait --for=condition=Ready certificaterequestpolicy/meridian-services \
   certificaterequestpolicy/meridian-services-ca \
   certificaterequestpolicy/meridian-deny-unlisted \
   certificaterequestpolicy/telemetry-ca \
-  certificaterequestpolicy/otel-collector --timeout=2m >/dev/null ||
+  certificaterequestpolicy/otel-collector \
+  certificaterequestpolicy/otel-collector-client \
+  certificaterequestpolicy/tempo-receiver \
+  certificaterequestpolicy/loki-gateway \
+  certificaterequestpolicy/prometheus-gateway --timeout=2m >/dev/null ||
   die "the certificate policies were not Ready in 2m: read the Ready condition of each (kubectl get certificaterequestpolicy -o yaml) and approver-policy's pod (kubectl -n cert-manager get pods; logs deploy/cert-manager-approver-policy)"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/service-ca.yaml" >/dev/null
 # Helm returns when cert-manager runs (its startupapicheck hook has proved the
@@ -487,12 +549,19 @@ kctl wait --for=condition=Ready clusterissuer/meridian-services \
 # The collector's own authority (S063, T-90): namespaced Issuers in
 # observability, so no policy for the services' issuer changes. The collector's
 # Certificate being Ready means the authority's was issued before it. The
-# release of the collector, further on, mounts the Secret it makes.
+# release of the collector, further on, mounts the Secrets they make: the server
+# certificate's and, since S072 (contract M1), the client certificate's; Tempo's
+# release mounts the receiver certificate's (contract M2), Loki's mounts the
+# gateway's (contract M3) and Prometheus's gateway, applied after the stack's
+# release, mounts its own (contract M4). All five are waited for here, before the
+# first store is installed (a Secret that does not exist leaves the pod in
+# ContainerCreating and stops `make up` at that release).
 log "telemetry: the CA for the collector's certificate, in observability"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/telemetry-ca.yaml" >/dev/null
 kctl -n observability wait --for=condition=Ready certificate/otel-collector \
-  --timeout=5m >/dev/null ||
-  die "the Certificate otel-collector in observability was not Ready in 5m: read the CertificateRequests of the Certificates telemetry-ca and otel-collector (kubectl -n observability get certificaterequest; describe each) for their Approved or Denied condition, the Ready condition of the policies telemetry-ca and otel-collector (the add-on's pod logs say why one was not applied), and the Certificates' events"
+  certificate/otel-collector-client certificate/tempo-receiver \
+  certificate/loki-gateway certificate/prometheus-gateway --timeout=5m >/dev/null ||
+  die "the Certificate otel-collector, otel-collector-client, tempo-receiver, loki-gateway or prometheus-gateway in observability was not Ready in 5m: read the CertificateRequests of the Certificates telemetry-ca, otel-collector, otel-collector-client, tempo-receiver, loki-gateway and prometheus-gateway (kubectl -n observability get certificaterequest; describe each) for their Approved or Denied condition, the Ready condition of the policies telemetry-ca, otel-collector, otel-collector-client, tempo-receiver, loki-gateway and prometheus-gateway (the add-on's pod logs say why one was not applied), and the Certificates' events"
 publish_telemetry_ca
 
 # The operator runs in `meridian`, with the chart's `config.clusterWide=false`
@@ -549,6 +618,12 @@ ensure_grafana_secret
 log "observability: Grafana's Role (ConfigMaps in observability only)"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/grafana-rbac.yaml" >/dev/null
 log "observability: Prometheus and Grafana"
+# Grafana reads the authority's certificate from its environment at start (the
+# ConfigMap telemetry-ca published above, grafana.envValueFrom): the annotation
+# with its fingerprint rolls the pod when the authority is renewed (S072,
+# contract M3b). The ConfigMap must be published BEFORE this release, or the pod
+# cannot start (a test holds that order).
+grafana_ca_sha="$(object_fingerprint configmap telemetry-ca 'ca\.crt')"
 install_release kube-prometheus-stack observability "${PROMETHEUS_STACK_CHART}" \
   "${PROMETHEUS_STACK_VERSION}" "${PROMETHEUS_STACK_REPO}" kube-prometheus-stack.yaml \
   --set "prometheusOperator.image.tag=${PROMETHEUS_OPERATOR_IMAGE_TAG}" \
@@ -564,28 +639,89 @@ install_release kube-prometheus-stack observability "${PROMETHEUS_STACK_CHART}" 
   --set "grafana.image.tag=${GRAFANA_IMAGE_TAG}" \
   --set "grafana.image.sha=${GRAFANA_IMAGE_DIGEST#sha256:}" \
   --set "grafana.sidecar.image.tag=${GRAFANA_SIDECAR_IMAGE_TAG}" \
-  --set "grafana.sidecar.image.sha=${GRAFANA_SIDECAR_IMAGE_DIGEST#sha256:}"
+  --set "grafana.sidecar.image.sha=${GRAFANA_SIDECAR_IMAGE_DIGEST#sha256:}" \
+  --set-string "grafana.podAnnotations.meridian-ca-sha256=${grafana_ca_sha}"
 kctl -n observability wait --for=condition=Available \
   prometheus/kube-prometheus-stack-prometheus --timeout=10m >/dev/null
+# Prometheus is written and read through its gateway (S072, contract M4): the
+# release above pointed Grafana's datasource at it, so it comes up right away, with
+# the policies that close Prometheus's own port to everything else. The collector's
+# metrics exporter points at it from the collector's release, last.
+apply_prometheus_gateway
 apply_dashboards
 apply_alert_rules
 log "observability: Prometheus scrapes cert-manager's metrics"
 kctl apply --server-side --force-conflicts -f "${KIND_DIR}/manifests/cert-manager-metrics.yaml" >/dev/null
 log "observability: Tempo"
+# Tempo's receiver asks the sender for a client certificate (S072, contract M2),
+# and its Secret was waited for above. On a WARM cluster this release asks for a
+# certificate about a minute before the collector's new release presents one
+# (the collector is installed last), so the traces of that minute are refused and
+# dropped; smoke's read-backs wait for the collector's release. On a first
+# install no sender exists yet. Tempo reads its certificate and its client CA only
+# when it starts, and the chart's receiver settings are not known to re-read them
+# (a reload_interval is not established for Tempo 3.1.0, values/tempo.yaml), so
+# the pod is given the fingerprints of both as annotations: a `make up` after a
+# renewal rolls it.
+tempo_cert_sha="$(object_fingerprint secret tempo-receiver-tls 'tls\.crt')"
+tempo_ca_sha="$(object_fingerprint secret tempo-receiver-tls 'ca\.crt')"
 install_release tempo observability "${TEMPO_CHART}" "${TEMPO_VERSION}" \
   "${GRAFANA_COMMUNITY_REPO}" tempo.yaml \
-  --set "tempo.tag=${TEMPO_IMAGE_TAG}@${TEMPO_IMAGE_DIGEST}"
+  --set "tempo.tag=${TEMPO_IMAGE_TAG}@${TEMPO_IMAGE_DIGEST}" \
+  --set-string "podAnnotations.meridian-cert-sha256=${tempo_cert_sha}" \
+  --set-string "podAnnotations.meridian-ca-sha256=${tempo_ca_sha}"
 log "observability: Loki"
+# Loki is written through its gateway, which asks for the collector's client
+# certificate (S072, contract M3); its Secret, loki-gateway-tls, was waited for
+# above, and the image pin of the gateway is NGINX_GATEWAY_IMAGE_* in pins.env (the
+# same pin is Prometheus's gateway's image, applied further up).
+# Loki's own policies and the gateway's are in a file of their own, applied here
+# and not at the start of the run (S072, contract M3b), so Loki's port stays as it
+# was until the pods that the policies are about are being replaced. What a warm
+# cluster still loses, once, when it moves from Loki's own port to the gateway:
+# the collector's and Grafana's egress rules (observability-networkpolicy.yaml,
+# applied at the start) already point at the gateway, so the old collector's
+# exporter to Loki's own port is cut at that apply, and Grafana's datasource (the
+# stack's release, above) already points at the gateway, so its Loki reads fail
+# until this release is Ready. The logs of that window are dropped, and smoke's
+# read-backs wait for the collector's release, as for Tempo above. On a first
+# install no sender exists. If this run stops before the collector's release the
+# window stays open until a re-run of `make up` converges; the message says so.
+# nginx re-reads the gateway's certificate at each handshake but its client CA
+# only at start, so the pod is given the CA's fingerprint as an annotation.
+log "observability: Loki's and its gateway's NetworkPolicies"
+kctl apply --server-side --force-conflicts -f "${LOKI_POLICY_FILE}" >/dev/null
+loki_ca_sha="$(object_fingerprint secret loki-gateway-tls 'ca\.crt')"
 install_release loki observability "${LOKI_CHART}" "${LOKI_VERSION}" \
   "${GRAFANA_COMMUNITY_REPO}" loki.yaml \
   --set "loki.image.tag=${LOKI_IMAGE_TAG}" \
-  --set "loki.image.digest=${LOKI_IMAGE_DIGEST}"
+  --set "loki.image.digest=${LOKI_IMAGE_DIGEST}" \
+  --set "gateway.image.registry=${NGINX_GATEWAY_IMAGE_REPOSITORY%%/*}" \
+  --set "gateway.image.repository=${NGINX_GATEWAY_IMAGE_REPOSITORY#*/}" \
+  --set "gateway.image.tag=${NGINX_GATEWAY_IMAGE_TAG}" \
+  --set "gateway.image.digest=${NGINX_GATEWAY_IMAGE_DIGEST}" \
+  --set-string "gateway.podAnnotations.meridian-ca-sha256=${loki_ca_sha}"
 log "observability: OpenTelemetry Collector"
+# The collector re-reads its client pair by itself, but only every five minutes
+# (reload_interval), and the two gateways admit a write from ONE common name. When
+# `make up` re-issued the client certificate with another subject (run R16: after
+# the gateways began to check it), the old pod went on presenting the old
+# certificate, was refused with a 403, and its writes of those minutes were lost
+# (a 403 is not retried). So the pod is given the fingerprints of the client
+# certificate and of the authority's certificate (the file that verifies the
+# gateways and Tempo) as annotations, and a `make up` that changed either rolls
+# it: the new pod starts with the new pair. A plain renewal that keeps the subject
+# rolls it too, which costs the telemetry in flight and nothing else.
+collector_client_sha="$(object_fingerprint secret otel-collector-client-tls 'tls\.crt')"
+collector_ca_sha="$(object_fingerprint secret otel-collector-client-tls 'ca\.crt')"
 install_release otel-collector observability "${OTEL_COLLECTOR_CHART}" \
   "${OTEL_COLLECTOR_VERSION}" "${OTEL_REPO}" otel-collector.yaml \
   --set "image.repository=${OTEL_COLLECTOR_IMAGE_REPOSITORY}" \
   --set "image.tag=${OTEL_COLLECTOR_IMAGE_TAG}" \
-  --set "image.digest=${OTEL_COLLECTOR_IMAGE_DIGEST}"
+  --set "image.digest=${OTEL_COLLECTOR_IMAGE_DIGEST}" \
+  --set-string "podAnnotations.meridian-client-cert-sha256=${collector_client_sha}" \
+  --set-string "podAnnotations.meridian-ca-sha256=${collector_ca_sha}"
+release_failure_note=""
 
 # The log agent (S064) needs the collector's Service to send to and the
 # ConfigMap telemetry-ca in `logging` (published above): both exist by now. Its

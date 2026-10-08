@@ -2,9 +2,11 @@
 #  10. certificate policy: five lines (S056, S062, S073), run after the first
 #                 nine and never skipped: its objects exist after `make up`, so
 #                 a missing one is a FAIL. The first three lines read only: the
-#                 five CertificateRequestPolicies
+#                 nine CertificateRequestPolicies
 #                 (meridian-services, meridian-services-ca,
-#                 meridian-deny-unlisted, telemetry-ca, otel-collector; S063)
+#                 meridian-deny-unlisted, telemetry-ca, otel-collector; S063;
+#                 otel-collector-client, tempo-receiver, loki-gateway,
+#                 prometheus-gateway; S072)
 #                 are Ready; the Deployment
 #                 cert-manager-approver-policy in cert-manager has an available
 #                 replica; and cert-manager's own approver is off, read two ways
@@ -111,7 +113,7 @@
 # are Deployments in cert-manager. With cert-manager's approver off
 # (disableAutoApproval in values/cert-manager.yaml) the chart renders neither
 # the ClusterRole below nor the controller without the argument that follows.
-readonly POLICY_NAMES=(meridian-services meridian-services-ca meridian-deny-unlisted telemetry-ca otel-collector)
+readonly POLICY_NAMES=(meridian-services meridian-services-ca meridian-deny-unlisted telemetry-ca otel-collector otel-collector-client tempo-receiver loki-gateway prometheus-gateway)
 readonly POLICY_NAMESPACE=cert-manager
 readonly POLICY_ADDON=cert-manager-approver-policy
 readonly POLICY_CONTROLLER=cert-manager

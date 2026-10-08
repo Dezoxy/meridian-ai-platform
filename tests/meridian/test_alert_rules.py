@@ -603,13 +603,13 @@ def test_the_certificate_alerts_name_only_the_three_certificate_namespaces() -> 
     # The CA's certificate is in cert-manager's namespace; the chart's in the
     # release's, which the workload alerts already pin to "meridian".
     assert service_ca_certificate()["metadata"]["namespace"] in CERTIFICATE_NAMESPACES
-    # The collector's two Certificates are in observability, the third namespace.
+    # The six telemetry Certificates (S072) are in observability, the third one.
     telemetry = [
         d["metadata"]["namespace"]
         for d in yaml.safe_load_all(TELEMETRY_CA_FILE.read_text("utf-8"))
         if d and d["kind"] == "Certificate"
     ]
-    assert telemetry == ["observability", "observability"]
+    assert telemetry == ["observability"] * 6
     assert set(telemetry) <= CERTIFICATE_NAMESPACES
 
 
@@ -645,7 +645,7 @@ def test_the_approver_alert_names_the_two_deployments_of_the_issuing_path() -> N
         assert any(line.startswith(prefix) for line in lines), release
 
 
-def test_the_certificate_runbook_exists_and_names_the_five_policies() -> None:
+def test_the_certificate_runbook_exists_and_names_the_nine_policies() -> None:
     runbook = (
         REPO_ROOT / "docs" / "operations" / "runbooks" / "certificate-expiry.md"
     ).read_text("utf-8")
@@ -659,7 +659,7 @@ def test_the_certificate_runbook_exists_and_names_the_five_policies() -> None:
         if d and d["kind"] == "CertificateRequestPolicy"
     ]
 
-    assert len(policies) == 5
+    assert len(policies) == 9  # three for the services, six for telemetry (S072)
     for policy in policies:
         assert f"`{policy}`" in runbook, policy
     for alert in CERTIFICATE_ALERTS:

@@ -29,6 +29,12 @@ loki:
     delete_request_store: filesystem
   pattern_ingester:
     enabled: false
+  # The chart's gateway proxies /ui to Loki's UI when this is on; the UI itself is
+  # off (loki.ui.enabled is false in the chart), so nothing is behind that
+  # location, and it is dropped so that nothing ever is (S072, contract M3b).
+  ui:
+    gateway:
+      enabled: false
 
 singleBinary:
   replicas: 1
@@ -66,11 +72,181 @@ read:
 backend:
   replicas: 0
 
+# The gateway (S072, contracts M3 and M3b): the chart's own nginx in front of Loki,
+# and the only way in. Loki's port takes connections from this pod alone (the
+# NetworkPolicy in manifests/observability-loki-networkpolicy.yaml), so what
+# decides who may read and who may write is here. ONE listener, TLS 1.3, and a
+# client certificate that is OPTIONAL at the handshake (`ssl_verify_client
+# optional`): seen on the pinned image (nginx 1.31.6), a client that presents none
+# gets `$ssl_client_verify` NONE, and one that presents a certificate that does
+# not verify (another authority, or a server-only purpose) gets nginx's own
+# 400 "The SSL certificate error" before any location runs. So Grafana reads over
+# TLS and holds no key. Why not a client certificate REQUIRED on the one port: the
+# kubelet's probe and Grafana would need one too, and Grafana's would then be a
+# writer's.
+#
+# THREE CLASSES, decided from the request, and the default is the closed one (the
+# chart's gateway proxies every path under /loki/api/v1/ and /api/prom/ to Loki,
+# and Loki's own router has pages that change state, the rings and the deletion
+# API among them, so a list of what is dangerous would have to be complete):
+#   r  a READ: needs no certificate. Only the paths on the list in the first map
+#      (below), which are the ones Grafana's Loki datasource calls and the
+#      probe's `/`. Anchored, so `/loki/api/v1/query/x` is not one.
+#   w  a WRITE: the three push paths, `/otlp/v1/logs`, `/loki/api/v1/push` and
+#      `/api/prom/push`. Needs a verified certificate whose subject is exactly
+#      `CN=otel-collector-client` (the collector's: its policy allows that one
+#      common name). A certificate of the authority with another name, or a
+#      certificate with no purpose set, verifies and still gets 403.
+#   x  everything else: the administrator's class (delete, rules, flush, the
+#      ingester's endpoints, every ring page, memberlist, /config, the UI) and
+#      every path nobody listed. 403 WHATEVER the certificate: the collector's
+#      certificate does not open them. Paths that match none of the chart's
+#      locations (an upper-case path, `/foo`) get nginx's own 404 and are never
+#      proxied.
+# Fail closed on what the client SENT: a path is a read or a write only when the
+# raw request URI (`$request_uri`, what Loki receives) AND the normalised `$uri`
+# (what nginx matched the location on) both land in the same class, and the raw
+# path part, which the anchored patterns match literally, holds no `%` and no
+# `//` (nginx would otherwise decode and merge them before it matches). The
+# upstream still receives `$request_uri`, as the chart has it: forwarding a
+# decoded `$uri` is a known request-splitting hazard.
+#
+# The chart emits no `ssl_*` directive: `ssl: true` only adds `ssl` to the
+# `listen` lines, and the certificate, the client CA and the protocol come from
+# `serverSnippet`. The check is added WITHOUT owning the chart's nginx file: the
+# maps are in `httpSnippet`, and `locationSnippet` (which the chart puts in every
+# location, `location = /` included) answers 403 for the pair the maps denied.
+# The maps are read against the chart's template at this pin (18.13.7): a chart
+# bump that adds a location is a reason to read it again
+# (tests/meridian/test_telemetry_loki_gateway.py evaluates the maps with nginx's
+# rules for the raw URI and its normal form). The first map and the second are
+# the same list, one on each view of the request.
+#
+# The server certificate is read at each handshake (SEEN on the pinned image:
+# `ssl_certificate` with a variable, here a `map` with one constant default,
+# serves a certificate that was replaced in the file without a reload), so its
+# renewal needs nothing. The client CA, `ssl_client_certificate`, is read at start
+# only: up.sh gives the pod an annotation with the fingerprint of the CA, so a
+# `make up` after the authority's renewal rolls the pod.
+#
+# One replica and one container: the chart's metrics sidecar (a second image and
+# a syslog access log) is off. nginx's own workers are about 5 processes of a few
+# MiB each, so 32Mi requested and 64Mi limited (the namespace's limits already
+# add up to about 4.5 GiB against 7.65 GiB for Docker, infra/kind/README.md
+# Memory); the gateway's use is read on the cluster from cAdvisor's series
+# (container_memory_working_set_bytes) and is not known yet. The pod meets the Pod
+# Security level `restricted` by the chart's own defaults (non-root 101, read-only
+# root filesystem, no capabilities, RuntimeDefault), and mounts no service-account
+# token (`gateway.automountServiceAccountToken` is false in the chart;
+# `defaults.automountServiceAccountToken` above agrees). Loki's own listener,
+# probes and Service are not changed.
+#
+# Port 8443 for the container and the Service alike (unprivileged nginx binds
+# above 1024), so the NetworkPolicy's pod port is the Service's port and the
+# exporter's URL. The probes are HTTPS: the kubelet does not verify the server's
+# certificate and presents no client certificate, which `optional` admits.
+# `enableIPv6` is off: the pod's `listen [::]` would fail to start on an IPv4-only
+# pod network. The body limit is raised from the chart's 4M, because a push the
+# collector batches could be larger than that and nginx would answer 413 (a
+# refused push drops logs); Loki itself had no such limit on this path. The
+# chart's `/tmp` is an emptyDir with no size limit and no value for one, and a
+# body larger than nginx's buffer is written there: the container's
+# ephemeral-storage limit bounds it (the pod is evicted past it, which is a
+# restart, not a full node).
+#
+# The Secret loki-gateway-tls (a Certificate in manifests/telemetry-ca.yaml;
+# up.sh waits for it before this release) is mounted read-only in a directory of
+# its own, outside /etc/nginx (the chart's ConfigMap owns that path).
+gateway:
+  enabled: true
+  replicas: 1
+  containerPort: 8443
+  service:
+    port: 8443
+  metrics:
+    enabled: false
+  # A Service link is an environment variable per Service of the namespace: the
+  # gateway reads none of them.
+  enableServiceLinks: false
+  # Said here and not left to the chart's default, which is false too: nginx calls
+  # no API server.
+  automountServiceAccountToken: false
+  # The chart's hard anti-affinity to its own pods would keep the new pod of a
+  # rolling update Pending on this cluster's one node (the old one is still
+  # there): a null removes it, as Helm reads a null. One replica, so it spreads
+  # nothing.
+  affinity: null
+  resources:
+    requests:
+      cpu: 20m
+      memory: 32Mi
+    limits:
+      memory: 64Mi
+      ephemeral-storage: 128Mi
+  readinessProbe:
+    httpGet:
+      scheme: HTTPS
+  livenessProbe:
+    httpGet:
+      path: /
+      port: http
+      scheme: HTTPS
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 2
+  nginxConfig:
+    ssl: true
+    enableIPv6: false
+    clientMaxBodySize: 10M
+    httpSnippet: |
+      server_tokens off;
+      map $host $loki_gateway_cert { default /etc/loki-gateway/tls/tls.crt; }
+      map $host $loki_gateway_key { default /etc/loki-gateway/tls/tls.key; }
+      map $request_uri $loki_class_raw {
+        default x;
+        ~^/(\?.*)?$ r;
+        ~^/loki/api/v1/(query|query_range|labels|series|index/stats|index/volume|index/volume_range|patterns|detected_labels|detected_fields|format_query|status/buildinfo|tail)(\?.*)?$ r;
+        ~^/loki/api/v1/(label|detected_field)/[A-Za-z_][A-Za-z0-9_]*/values(\?.*)?$ r;
+        ~^/(otlp/v1/logs|loki/api/v1/push|api/prom/push)(\?.*)?$ w;
+      }
+      map $uri $loki_class_uri {
+        default x;
+        ~^/(\?.*)?$ r;
+        ~^/loki/api/v1/(query|query_range|labels|series|index/stats|index/volume|index/volume_range|patterns|detected_labels|detected_fields|format_query|status/buildinfo|tail)(\?.*)?$ r;
+        ~^/loki/api/v1/(label|detected_field)/[A-Za-z_][A-Za-z0-9_]*/values(\?.*)?$ r;
+        ~^/(otlp/v1/logs|loki/api/v1/push|api/prom/push)(\?.*)?$ w;
+      }
+      map "$loki_class_raw:$loki_class_uri" $loki_class {
+        default x;
+        "r:r" r;
+        "w:w" w;
+      }
+      map "$loki_class:$ssl_client_verify:$ssl_client_s_dn" $loki_denied {
+        default 1;
+        "w:SUCCESS:CN=otel-collector-client" 0;
+        ~^r: 0;
+      }
+    locationSnippet: |
+      if ($loki_denied) { return 403; }
+    serverSnippet: |
+      ssl_certificate $loki_gateway_cert;
+      ssl_certificate_key $loki_gateway_key;
+      ssl_client_certificate /etc/loki-gateway/tls/ca.crt;
+      ssl_verify_client optional;
+      ssl_protocols TLSv1.3;
+  extraVolumes:
+    - name: tls
+      secret:
+        secretName: loki-gateway-tls
+        defaultMode: 288 # 0440
+  extraVolumeMounts:
+    - name: tls
+      mountPath: /etc/loki-gateway/tls
+      readOnly: true
+
 chunksCache:
   enabled: false
 resultsCache:
-  enabled: false
-gateway:
   enabled: false
 minio:
   enabled: false

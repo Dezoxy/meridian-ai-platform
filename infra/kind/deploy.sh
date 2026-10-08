@@ -12,8 +12,10 @@
 #      without it the Certificates of step 3 are never issued, and a cluster
 #      made before S055 does not know the Certificate kind, so the upgrade would
 #      fail after the Jobs of step 2 had run; and what approves them (S056): the
-#      five CertificateRequestPolicies (meridian-services, meridian-services-ca,
-#      meridian-deny-unlisted, telemetry-ca, otel-collector) Ready and
+#      nine CertificateRequestPolicies (meridian-services, meridian-services-ca,
+#      meridian-deny-unlisted, telemetry-ca, otel-collector,
+#      otel-collector-client, tempo-receiver, loki-gateway,
+#      prometheus-gateway) Ready and
 #      approver-policy running, because the
 #      issuer is Ready without them and with cert-manager's own approver off
 #      nothing would approve a request, so the wait of step 4 would run out. A
@@ -82,7 +84,7 @@ readonly ISSUER_NAME=meridian-services
 # What approves the Certificates' requests (S056): the CertificateRequestPolicies
 # that manifests/certificate-policy.yaml applies (a test keeps the two equal) and
 # the Deployment of approver-policy, which `make up` installs.
-readonly CERTIFICATE_POLICIES=(meridian-services meridian-services-ca meridian-deny-unlisted telemetry-ca otel-collector)
+readonly CERTIFICATE_POLICIES=(meridian-services meridian-services-ca meridian-deny-unlisted telemetry-ca otel-collector otel-collector-client tempo-receiver loki-gateway prometheus-gateway)
 readonly APPROVER_NAMESPACE=cert-manager
 readonly APPROVER_DEPLOYMENT=cert-manager-approver-policy
 # How long require_approval looks for an available replica of the add-on, and

@@ -324,10 +324,13 @@ owner runs it by hand from `infra/terraform/foundation` after
   never applied) adds private endpoints for the vault and the account and an
   audit-log setting on the vault, but it closes nothing: the three stay
   reachable from the internet, protected by Entra ID and RBAC only, and the
-  vault would receive the database administrator's password. A firewall is an
-  open decision of the owner's, to be made before any apply (see the module's
-  README and T-104). The laptop's IP changes, which is why an allow list is
-  not used.
+  vault would receive the database administrator's password. A firewall was
+  decided by the owner on 2026-10-08 (default deny, the operator's address
+  allowed, private endpoints for the cluster); it is designed and not written,
+  and the foundation as applied has none (see the module's README and T-104).
+  The laptop's IP changes, which was why an allow list was not used: a changed
+  address will lock the operator out, once it is written, until the variable
+  is corrected.
 - Terraform in CI and GitHub OIDC federation: S022. Nothing here stores a
   credential.
 - The ephemeral platform environment (virtual network, AKS, ACR, PostgreSQL

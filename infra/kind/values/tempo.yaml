@@ -29,6 +29,64 @@ tempo:
       memory: 192Mi
     limits:
       memory: 448Mi
+  # The one receiver (S072, contract M2): OTLP over gRPC on 4317, the collector's
+  # hop, with TLS that asks the sender for a client certificate. The server
+  # certificate and key are the Secret tempo-receiver-tls below (the Certificate
+  # is in manifests/telemetry-ca.yaml; up.sh waits for it before this release).
+  # The client CA is the same Secret's ca.crt: the telemetry authority, so the
+  # collector's client certificate (otel-collector-client-tls) verifies and no
+  # other chain does. A CA Issuer of cert-manager writes ca.crt into the Secret of
+  # a certificate it signs; that is expected and seen only on the cluster.
+  # TLS 1.3 is the floor, as the collector's own receiver has it. Reads and both
+  # probes are on 3200 and are not touched: the chart's server block stays.
+  #
+  # The chart's other receivers were on by default and nothing uses them: OTLP
+  # over HTTP (4318) and the four Jaeger ones. Each protocol is set to null here,
+  # which Helm reads as removing the key. The `jaeger` key itself stays, with
+  # `protocols: {}`: the chart's port templates (templates/_ports.tpl) read
+  # `.Values.tempo.receivers.jaeger.protocols.*` unguarded, so `jaeger: null`
+  # fails the render. So the rendered config holds NO Jaeger protocol and no OTLP
+  # HTTP, but it does hold an empty `jaeger` receiver; Tempo 3.1.0 STARTS with it
+  # (seen on kind, run R14). The Service still lists 9411, 55680 and 55681: the
+  # chart hardcodes those ports, and no receiver listens behind them.
+  #
+  # What this receiver does NOT do (S072, contract M3b). It checks the chain and
+  # nothing more: any certificate the telemetry authority signs for client use is
+  # a writer's to Tempo, whatever its name (Loki's gateway, which can read the
+  # subject, admits only `CN=otel-collector-client`; Tempo's receiver has no such
+  # setting). Today the authority's policy signs exactly one client certificate.
+  # It does not re-read a renewed certificate: no `reload_interval` is set here
+  # because nothing in the chart (it carries no reference for the receiver's TLS
+  # settings) or in the files of this repository establishes that Tempo 3.1.0
+  # passes one through to the receiver, and a key it did not know could stop the
+  # pod. So `make up` gives the pod the fingerprints of its certificate and of the
+  # CA as annotations (up.sh), and a renewal is taken up by the next `make up`,
+  # which rolls the pod; until then the pod serves the file it loaded. Smoke
+  # compares the certificate it serves with the Secret's (smoke.d/12-
+  # telemetry-stores.sh), which is what finds a pod that was not rolled.
+  receivers:
+    jaeger:
+      protocols:
+        grpc: null
+        thrift_binary: null
+        thrift_compact: null
+        thrift_http: null
+    otlp:
+      protocols:
+        http: null
+        grpc:
+          endpoint: 0.0.0.0:4317
+          tls:
+            cert_file: /etc/tempo/receiver-tls/tls.crt
+            key_file: /etc/tempo/receiver-tls/tls.key
+            client_ca_file: /etc/tempo/receiver-tls/ca.crt
+            min_version: "1.3"
+  # Read-only, a directory and not a subPath (a subPath never sees a renewed
+  # Secret). The pod's fsGroup (10001, the chart's) reads the 0440 files.
+  extraVolumeMounts:
+    - name: receiver-tls
+      mountPath: /etc/tempo/receiver-tls
+      readOnly: true
 # The chart renders no Role, ClusterRole or binding for Tempo, and its
 # configuration discovers nothing through the API server: memberlist carries a
 # cluster label and no join list, and there is no Kubernetes discovery. So the
@@ -42,3 +100,10 @@ serviceAccount:
 persistence:
   enabled: true
   size: 2Gi
+# The receiver's server certificate and the authority (see tempo.receivers). The
+# mounts are under `tempo:`; the volumes are a root key of this chart.
+extraVolumes:
+  - name: receiver-tls
+    secret:
+      secretName: tempo-receiver-tls
+      defaultMode: 288 # 0440
