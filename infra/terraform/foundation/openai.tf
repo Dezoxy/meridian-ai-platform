@@ -15,6 +15,18 @@ resource "azurerm_cognitive_account" "openai" {
   local_auth_enabled            = false
   public_network_access_enabled = true
 
+  # The same firewall as the vault's (key_vault.tf): the public endpoint stays
+  # on and refuses every address but the operator's. Written as code on
+  # 2026-10-08, not applied. The provider requires custom_subdomain_name above
+  # with this block. bypass is "None" for the reason the vault's is: the
+  # trusted-service list is not needed. The portal's playground is a caller from
+  # another address too, and is refused.
+  network_acls {
+    default_action = "Deny"
+    bypass         = "None"
+    ip_rules       = var.operator_addresses
+  }
+
   tags = local.tags
 }
 

@@ -37,6 +37,44 @@ variable "openai_locations" {
   }
 }
 
+# The addresses the Key Vault and every Azure OpenAI account admit; every other
+# address is refused (key_vault.tf, openai.tf). Written as code on 2026-10-08;
+# applied only when the owner applies it. The address must be the one the
+# platform module (infra/terraform/azure) is applied from, because that module
+# writes a secret into the vault. A bare address, not a /32: the model account
+# refuses /31 and /32, and the vault accepts the bare form, so one form serves
+# both. No default and no example in the repository: the owner gives it in their
+# own shell as TF_VAR_operator_addresses (infra/terraform/README.md).
+variable "operator_addresses" {
+  description = "One to five public IPv4 addresses, each written bare (no prefix length), that may reach the foundation's Key Vault and Azure OpenAI accounts. No default: a wrong or open value would lock the operator out or expose both."
+  type        = set(string)
+  sensitive   = true
+
+  validation {
+    condition     = length(var.operator_addresses) >= 1 && length(var.operator_addresses) <= 5
+    error_message = "operator_addresses must hold one to five entries. An empty set would lock the operator out of the vault and the accounts, and a long list is an open door."
+  }
+
+  validation {
+    condition = alltrue([
+      for entry in var.operator_addresses : (
+        can(regex("^(0|[1-9][0-9]{0,2})(\\.(0|[1-9][0-9]{0,2})){3}$", entry)) &&
+        can(cidrhost("${entry}/32", 0))
+      )
+    ])
+    error_message = "Every entry of operator_addresses must be a bare dotted-quad IPv4 address with no prefix length, no leading zeros and no spaces. The model account refuses /31 and /32, and neither service takes IPv6."
+  }
+
+  validation {
+    condition = alltrue([
+      for entry in var.operator_addresses : (
+        !can(regex("^(0|10|127)\\.|^100\\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\\.|^169\\.254\\.|^172\\.(1[6-9]|2[0-9]|3[01])\\.|^192\\.168\\.|^(22[4-9]|2[3-5][0-9])\\.", entry))
+      )
+    ])
+    error_message = "No entry of operator_addresses may be a this-network, private, loopback, link-local, shared (carrier-grade NAT) or multicast and reserved address (0.0.0.0, 10/8, 172.16/12, 192.168/16, 127/8, 169.254/16, 100.64/10, 224.0.0.0 upward). The services refuse them in an IP rule or they cannot be the operator's address."
+  }
+}
+
 variable "chat_model" {
   # An account in chat_second_locations holds this deployment twice. The trial's
   # quota is 50 units, and a plan cannot see quota: above 25 the second

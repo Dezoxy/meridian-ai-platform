@@ -118,7 +118,10 @@ and five data sources, read from the files:
   resolution policy `NxDomainRedirect`, so a name the zone does not hold (a
   vault or an account with its endpoint somewhere else) goes to public DNS and
   does not vanish; that fails open on a missing record, which is acceptable
-  only because the foundation's vault and account are public (below). The zone
+  only because the foundation's vault and account have a public endpoint
+  (below): the name then reaches the public address, and under the foundation's
+  firewall (written as code, not applied) the cluster's call from any address
+  but the operator's is refused there. The zone
   for the third suffix of an account, the AI Foundry one, is not written: the
   gateway calls the OpenAI suffix and accepts no other host (T-43).
 - **Identities** (`identity.tf`). The foundation's OpenAI account in the
@@ -645,11 +648,15 @@ What is true after everything above, and is not fixed here.
   address reads it. The infrastructure review's default was to BLOCK a public
   data service. **The owner decided on a firewall on 2026-10-08 (it was undecided
   until then): default deny, the operator's address allowed, private endpoints
-  for the cluster; designed, not written.** The two sides are in the plan's
-  section for S020. A firewall is a change to the applied foundation (default
-  Deny plus the operator's address, a sensitive variable with no default and no
-  example), written free and applied by the owner at the next apply; it is not
-  in this module.
+  for the cluster; written as code in the foundation (S020, F1), not applied.**
+  The two sides are in the plan's section for S020. The firewall is a change to
+  the applied foundation (default Deny plus the operator's address, a sensitive
+  variable `operator_addresses` with no default and no example; the public
+  endpoint stays, behind it), applied by the owner at the next apply; it is not
+  in this module, and until it is applied the sentence above is true of Azure.
+  The address allowed must be the address this module is applied from, because
+  this module writes the secret (the foundation's README, "The firewall on the
+  vault and the accounts").
 - **The state is not secret-free.** The password is not in it (it is ephemeral,
   and the schema marks both arguments write-only). But `authorized_ip_ranges` is
   a plain attribute and the state holds the **operator's address**; a

@@ -85,6 +85,80 @@ labels are compared with them (T-12). Nothing in the outputs is secret.
 Owner is a control-plane role. Calling a model needs the data-plane role
 Cognitive Services OpenAI User, which is why Terraform assigns it.
 
+## The firewall on the vault and the accounts
+
+**Written as code (S020, F1, 2026-10-08); not applied.** The foundation as
+applied on 2026-09-30 still admits every address. Nothing in this section is
+true of Azure until the owner applies it, and the owner's `make azure-plan`
+shows the change first.
+
+The owner decided on 2026-10-08 that the vault and the model accounts refuse
+every address but the operator's. In code, the vault and every Azure OpenAI
+account have `default_action = "Deny"`, the addresses of the variable
+`operator_addresses` as their IP rules, and `bypass = "None"`. The public
+endpoint stays on, behind that firewall: with public network access off, the
+service ignores the address rules. `bypass` is `None` because the trusted
+service list includes services that run customers' workloads and nothing here
+needs it; if a later step does, it changes with a dated note in
+`foundation/key_vault.tf`. The cluster's own path is the platform module's
+private endpoints ([azure/](azure/README.md)); the module changes no resource
+of the foundation.
+
+**The variable.** `operator_addresses` is a sensitive set of one to five
+public IPv4 addresses, each written bare, with no prefix length: the model
+account refuses `/31` and `/32`, so one form serves both resources. The
+variable refuses the whole network, private, loopback, link-local, shared and
+multicast ranges, each with a message of its own that does not print the value.
+It has no default and no example file, and no address is written anywhere in
+this repository. The owner gives it in their own shell, as a JSON list of
+strings in the environment variable `TF_VAR_operator_addresses`, before
+`make azure-plan`; Terraform refuses to plan without it. `foundation.sh` runs
+Terraform in the environment it was given (its `tf` function; no `env -i`, no
+`unset`), so the variable reaches the tool unchanged. The wrapper detects no
+address, asks no outside service for one and neither prints nor writes it. The
+state holds the addresses in plain text, as the platform module's state holds
+its own: a sensitive variable hides a value from the display only.
+
+**Which address.** The address allowed must be the address the platform module
+is applied from: that module writes the database administrator's password into
+this vault, and the vault refuses any other address. Either order of the two
+applies works, as long as the address is allowed when the secret is written.
+
+**A foundation apply that succeeds does not prove the address is right.** The
+vault resource's refresh reads the vault's data plane (the certificate
+contacts) and ignores an HTTP 403 or 404 from it, so a firewall that refuses
+the operator's machine does not fail the apply. The secret resource does not
+ignore a refusal: its create checks for an existing secret and fails on
+anything but a 404, and its read fails on anything but a 404. Both are read
+from the provider's source at tag `v5.8.0`, in
+`internal/services/keyvault/key_vault_resource.go` and
+`internal/services/keyvault/key_vault_secret_resource.go` (a sparse checkout of
+that tag, 2026-10-08; nothing was run). The check in the secret's create is
+skipped where a provider feature turns it off, which this repository does not
+set. A wrong address therefore shows first, late, when the platform module
+writes its secret. The proof is a read of the vault from the operator's
+machine: list the vault's secrets with the Azure CLI and expect an answer, not
+a refusal. `make azure-smoke` calls each model account from the operator's
+machine, which proves the accounts' rule; it reads nothing from the vault.
+
+**A wrong address** is corrected through the management plane from any
+address. Azure applies a vault's firewall to its data plane only, and
+the portal, the Azure CLI and Terraform change the rule through the Azure
+Resource Manager endpoint, so the owner is not locked out of correcting it. In
+the meantime the portal opens the vault but does not list its secrets, and the
+model playground is refused, from every address but the operator's.
+
+**A second account** (a line added to `openai_locations`) has no path from the
+cluster under `Deny` until an endpoint for it is added: the platform module
+declares one endpoint, for the account of its own region. The plan's backlog
+holds one row for it, homed at S020.
+
+**What a business does instead** when its egress address is fixed or its
+network is its own: it keeps no address list, reaches the vault and the
+accounts from a VPN or a jump host inside the virtual network, and closes the
+public path altogether. That is not built here; the owner is one person on a
+laptop whose address changes.
+
 ## Where the state lives
 
 Terraform state holds resource attributes, so it is protected as a secret
@@ -319,18 +393,18 @@ owner runs it by hand from `infra/terraform/foundation` after
 
 - The West Europe account and the data-zone SKU: after the subscription's
   upgrade to pay-as-you-go, when the quota exists.
-- IP rules for the vault, the account and the state storage: closing these
-  three to the network is not done. The platform module (S020, written and
-  never applied) adds private endpoints for the vault and the account and an
-  audit-log setting on the vault, but it closes nothing: the three stay
-  reachable from the internet, protected by Entra ID and RBAC only, and the
-  vault would receive the database administrator's password. A firewall was
-  decided by the owner on 2026-10-08 (default deny, the operator's address
-  allowed, private endpoints for the cluster); it is designed and not written,
-  and the foundation as applied has none (see the module's README and T-104).
-  The laptop's IP changes, which was why an allow list was not used: a changed
-  address will lock the operator out, once it is written, until the variable
-  is corrected.
+- IP rules for the state storage: not written, and the account stays
+  reachable from the internet, protected by Entra ID and RBAC only. The vault's
+  and the accounts' are written as code and not applied (see "The firewall on
+  the vault and the accounts" above, the module's README and T-104): the
+  foundation as applied on 2026-09-30 has none, so until the owner applies them
+  the vault, which the platform module (S020, written and never applied) would
+  give the database administrator's password, is open to every address. The
+  platform module adds private endpoints for the vault and the account and an
+  audit-log setting on the vault, and closes nothing itself. The laptop's IP
+  changes, which was why an allow list was not used before: a changed address
+  locks the operator out of the data plane until the variable is corrected and
+  applied again.
 - Terraform in CI and GitHub OIDC federation: S022. Nothing here stores a
   credential.
 - The ephemeral platform environment (virtual network, AKS, ACR, PostgreSQL

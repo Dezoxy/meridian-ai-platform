@@ -5,10 +5,16 @@
 # (README.md).
 #
 # The foundation's public access stays ON: the laptop's live mode and the smoke
-# test use it. So this does not close the vault or the account to the internet,
-# and nothing here changes either resource. What it gives is a private path for
-# the cluster, and it makes the gateway's egress rule (a later change) a rule to
-# one subnet and not to a host name.
+# test use it. It stays behind a firewall that admits the operator's address
+# only: written as code in the foundation (infra/terraform/foundation,
+# var.operator_addresses, 2026-10-08), not applied, so the vault and the account
+# as applied still admit every address. So this does not close the vault or the
+# account to the internet, and nothing here changes either resource; the
+# foundation's firewall does that, when the owner applies it. What this gives is
+# a private path for the cluster, and it makes the gateway's egress rule (a
+# later change) a rule to one subnet and not to a host name. Under that firewall
+# the cluster has this path and no other: a second account has none until an
+# endpoint for it is added here.
 #
 # The foundation's vault and account are in another resource group of the same
 # subscription. An endpoint to a resource is approved by itself when the caller

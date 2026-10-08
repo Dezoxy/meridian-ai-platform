@@ -935,6 +935,7 @@ that day; the rest stand as their step recorded them.
 | Not seen on a cluster for the rate store: a 503 from the gateway while the store is down, `MeridianRateStoreRefusing` firing, two gateway replicas sharing a window, a store frozen by a script and restarted by its probe, and `make deploy` refusing a Secret older than the ACL | S066 | open on all but the first: the 503 was seen on kind on 2026-10-07 (S073, run R11: the store scaled to 0 for 10 seconds, the gateway Ready with no restart and admitting again with the same pod, the error class `TimeoutError`); still not seen: the alert (one refused call is under its thresholds), two replicas, a frozen store and an old Secret | S073 |
 | The circuit breaker and the refusal throttles are per process: two gateway replicas each count failures on their own and may each write a throttled refusal row | S066 (design) | closed by S069 as accepted, as ADR 8 records, until a second replica of anything but the gateway exists; no code | S069 |
 | The rate store in Azure is designed only: a managed Redis in the same EU region, its cost and SKU, and whether Valkey replaces Redis 8 (run under its AGPLv3 option, unmodified) are open | S066 | open | S020 |
+| A second Azure OpenAI account under the foundation's firewall (`Deny`, written as code, not applied) has no path from the cluster until an endpoint for it is added: the platform module declares one endpoint, for the account of its own region | S020 (F1) | open; not built | S020 |
 | No rule reads the rate store's restarts: a store that restarts in a loop while few calls come (256 held connection slots do it every 70 to 90 seconds) resets every tenant's windows each time and stays under the refusal alert's two conditions | S066 (fourth security pass) | closed by S072 (contract R, `2fbf472`; unit-tested by `make alerts`; seen loaded on the warm cluster, R8, 2026-10-07: smoke's check 11 passed with the tree's 21 rules; not seen pending or firing): `MeridianRateStoreRestartLoop`, `warning`, three restarts of the store's container in 15 minutes (a renewal's restart and a start's liveness restart are at most two), with no wait; a loop slower than about seven minutes between restarts is not seen, which the kubelet's back-off cap rules out | S072 |
 | `make smoke` compares the loaded alert rules with the file by group and rule name, not by expression, and `make deploy` does not apply the rules: after a rule's expression changed, the old one stays loaded and smoke passes until `make up` is run (seen on kind, 2026-10-06) | S066 (fourth cluster run) | closed by S073 (K3, K4), seen on kind on 2026-10-07: `make deploy` applied the rules (run R3), smoke compared the expressions and `for` of all the rules with the file's (run R4) and named a changed `for` and a removed rule object, each put back by `make deploy` (run R4b); a changed expression was not seen | S073 |
 | `make deploy` checks the rate store's ACL rules and not that the password in the gateway's address is the one the ACL holds: a mismatch shows as refused calls, not at deploy | S066 (fourth security pass) | open | S073 |
@@ -20976,6 +20977,10 @@ stated with its cost at the paid stop and waits for the owner's yes. A wrong
 address locks the operator out of the vault and the account (the module's
 write of the secret included) until the variable is corrected. T-104's
 mitigation cell holds the decision.
+
+*2026-10-08, F1:* the firewall is written as code in the foundation
+(`operator_addresses`, `Deny`, `bypass` `None`; the foundation's README holds
+the rest) and is not applied.
 
 *The cost of a demo day.* From the sheet's sum of 2026-10-07 (Sweden Central,
 list prices, six of twelve lines estimates): about EUR 0.31 an hour, EUR 3.7
