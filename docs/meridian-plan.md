@@ -65,12 +65,13 @@
 
 ## Part A — How a session works
 
-One step per branch and per worktree, and up to five steps side by side
-in one session whenever that many are ready and do not meet ("Five
-steps side by side", below). A session that grows long is
-compacted by the harness when its context fills (step 7 says how that is
-made safe): the advisor re-reads the whole transcript on every call,
-uncached, and a long context blurs what a step was for.
+One step per branch and per worktree, and one step at a time in one
+session since 2026-10-08 ("One step at a time, again", below; up to five
+ran side by side before that). A session that grows long is compacted:
+by the owner between steps, on the session's word, and by the harness
+when its context fills (step 7 says how that is made safe): the advisor
+re-reads the whole transcript on every call, uncached, and a long
+context blurs what a step was for.
 
 1. **Start small.** Read `CLAUDE.md`, the step table below and the detail
    section of the step you take. Read other files only when the step needs
@@ -155,11 +156,14 @@ uncached, and a long context blurs what a step was for.
    branch and what comes next. The harness compacts the conversation by
    itself when the context is full, and after a checkpoint that loses
    nothing (the owner, 2026-10-06: "we should optimalise the conversation
-   but it should be a routine"). The session does not ask the owner to
-   compact by hand: on 2026-10-06 a compact that ended interrupted stopped
-   every background agent, the harness would not start them again
-   without the owner's word, and the owner decided against compacting by
-   hand that day.
+   but it should be a routine"). On 2026-10-06 a compact by hand that ended
+   interrupted stopped every background agent, the harness would not
+   start them again without the owner's word, and the owner decided
+   against compacting by hand that day. Since 2026-10-08 the owner
+   compacts between steps ("after every step you should say, compact and
+   we can go on"): the session says so when a step is merged and
+   verified and this checkpoint is written, never in the middle of a
+   step and never while an agent or a background command is out.
 
 **The contract.** One concern per contract and about a page, in a scratch
 file the `implementer` reads. A long contract gets worked around with
@@ -225,9 +229,29 @@ Worktree and branch. Do not commit, push, switch branches or stash.
 - Read every source file a subagent changed. A green suite does not show a
   value that was hard-coded to match the one fixture.
 
-**Five steps side by side.** This is the default, not an
-allowance: when a session starts, and whenever a step closes, it fills up to
-five slots with steps whose dependencies are `done` (three until the
+**One step at a time, again (the owner, 2026-10-08).** "Okay so we
+should go back only one step and then archive and start a new step, it
+will save a lot of token i guess", and half an hour later, having
+compacted the session instead of archiving it: "So can we continue here?
+I compacted and after every step you should say, compact and we can go
+on". Three days of five steps side by side had used 86 % of the
+account's weekly limit. So a session carries ONE step to a merged pull
+request, or to its written stop, writes the checkpoint of step 7 and
+tells the owner to compact; then it takes the next. Inside the step
+contracts go out one after another, and a read-only reviewer may run
+beside an implementer. The same day the owner set the order: what can be
+built on kind comes before the paid cloud steps ("before we go to the
+azure payable thing we should go and do a lot of things, like seperated
+images, fake tenant and groups, users, roles and i think we have much
+more to solve before cloud"), and the owner means one tenant by that
+("I meant one tenant not multi-tenant arch"). What follows is the rule
+of 2026-10-06 to 2026-10-08, kept for when the owner asks for steps side
+by side again; its lanes and limits hold then.
+
+**Five steps side by side (2026-10-06 to 2026-10-08; not in force).**
+This was the default, not an allowance: when a session starts, and
+whenever a step closes, it fills up to five slots with steps whose
+dependencies are `done` (three until the
 afternoon of 2026-10-06, when the owner wrote "Okay can you start 5 steps
 in total so we can go quicker on the steps"; a step the owner names on top
 of the five is started too, as S077 was that day). The owner's decisions:
@@ -620,6 +644,7 @@ both readings the same hour ("yes both are right, go on").
 | S091 | Data ownership views | Who reads and writes which schema of the Platform Database, as views of the model: the six schemas (`audit`, `claims`, `gateway`, `knowledge`, `policy`, `runtime`) as components of the database, each service with its own schema and the reads that cross a schema in one view, and the audit trail in a second if one view does not read; every arrow checked against the grants the migrations leave and compared with ADR 10's table, a difference recorded and not smoothed; register rows and PNGs read at full size. No ER diagram: S085 and S087 rewrite the tables. The owner, 2026-10-07: "should we add db view too?", then "okay" to this. Built as (2026-10-07): `DataOwnership` (11 boxes, 13 arrows, the seven grants on another service's schema drawn thicker) and `AuditTrail` (9 and 8), in `docs/architecture/model/data.dsl`, embedded in the data classification's inventory. The grants were read from the migration files' statements, not from a database's catalog; they agree with ADR 10's table. Implemented as views; nothing was run for them | done | S090 |
 | S092 | Mermaid and PDF render under rootless Docker | `make mermaid-render` and `make pdf` finish on a machine whose Docker is rootless, as the virtual machine's is, and still finish in CI; the fix is made in development-base's copy of `scripts/render-mermaid.sh` first and copied here unchanged; with it, the two notes of S089's review (the render container needs no network; the script passes when it finds no block). Built as (2026-10-08): under rootless Docker the render and Pandoc containers start as their root, which there is the caller, and elsewhere as the caller, as before; the render container has no network; this repository's `make mermaid-render` fails when no block was extracted. Development-base's pull request 52 first, then the two scripts and a test copied byte for byte. Implemented, and run on the virtual machine: five diagrams rendered and a PDF of 377 pages written | done | — |
 | S095 | Retention and erasure of uploaded files | The owner's decision of 2026-10-08: "Both, as a new step (Recommended)". A retention period for a claim's uploaded files is a setting, and it has no default that deletes anything: a local cluster deletes no file until the operator sets a period; a sweep deletes a file's BYTES once the period has passed, under a database role that may (a grant, so a migration; `claims_api` keeps SELECT and INSERT and no DELETE); an audited command erases one claim's files on request, run by a signed-in person (hence S021) whose name is on the audit row; the metadata row and the audit rows stay and say what was removed and when; a legal hold on a claim stops both the sweep and the command; the download of a file that is gone answers with a clear refusal, not a 404 of no route and not a 500; tested against PostgreSQL and seen once on kind. **Designed: nothing of it is built.** Open for the step's design: how the row keeps its size and hash while its bytes go (the table checks them), and the same bytes in the write-ahead log and in every backup, which the step's erasure does not reach and its design must say how long they live (T-111) | todo | S080, S021 |
+| S096 | The PDF: no row lost, and a brief edition | The architecture PDF loses no text where a table row is taller than a page, and a second, brief edition exists to hand to someone who will not read a register. Built as (2026-10-08; the owner's "do it" and "Records (Recommended)"): a table with a cell of more than 300 characters prints as records, one block of paragraphs per row, and any other wide table gets its column widths from its text (`scripts/pdf_tables.py`); `make pdf-brief` writes the brief, without the documents `docs/architecture/pdf-brief.txt` lists (the threat model and the Azure platform register), with the decisions as an index and a first page that says what it leaves out; the workflow builds both and attaches both to the release. Measured on the virtual machine: the full edition from 377 pages to 274 and from 117 pages with text past the bottom margin to none; the brief is 34 pages. The code is development-base's (its pull request 54), copied. Landscape pages for the threat model, the session's first proposal, were built and saved nothing (379 pages). Implemented; no release was published | done | S092 |
 | S097 | The plan in files | Each step's section and each change-log entry is a file of its own under `docs/plan/`, moved byte for byte and proved so by `scripts/plan_split.py --check`; a new entry is named for its pull request's number and the plan has no version of its own; `make docs` checks the files against Part B and refuses a section or an entry in the old place; `scripts/plan_port.py` carries a branch's edits of the old layout over. Part B's tables are not moved and still collide by rows (the owner, 2026-10-08: "Change log and step sections") | doing | — |
 
 ### Toward services: a database each and six images
@@ -1161,6 +1186,7 @@ that day; the rest stand as their step recorded them.
 | `make mermaid-render` and `make pdf` fail under rootless Docker, which the virtual machine runs: `scripts/render-mermaid.sh` starts the container with the caller's user and group, which rootless Docker maps to another user than the folder's owner, and every PNG ends in "EACCES: permission denied" (five of five, then the PDF's four of four, on 2026-10-07). The same script on a copy of the folder made world-writable rendered all five. CI's Docker is not rootless and renders. The script's canonical copy is development-base's, so the fix goes there first and is copied here. With it, from the review of S089's workflow step (low): the render container needs no network and could run with none, in this job and in the PDF's; and the script passes when it finds no block, which a count in the Makefile's target would catch | S089 (the first local render; the infra review) | done (S092, 2026-10-08: the container starts as its root under rootless Docker; no network; the Makefile's target fails on an empty extraction) | S092 |
 | The import layering page (`docs/architecture/code/import-layering.md`: its diagram, its table of contracts and its counts) and the `RuntimeComponents` view were read from the code of 2026-10-07. S082 moves the workloads' graphs and the sweep's SQL and adds a contract per service, S083 makes a package per service and S086 cuts the sweep in two: each brings the page, `model/components.dsl` and the view's register row to the code it leaves | S089, S090 | open | S082 |
 | The `DataOwnership` and `AuditTrail` views (`docs/architecture/model/data.dsl`) draw the grants of 2026-10-07, read from the migration files' GRANT and REVOKE statements and not from a catalog. S084 takes the tool servers' reads of runs and claims away, S085 replaces the one audit table by a table per service and a relay, S086 cuts the sweep's reach into the runtime's schema, and S087 makes five databases: each brings the model's arrows, the two views and their register rows to what it leaves, and S087's baselines are where the grants are read from a migrated database's catalog and compared with the views | S091 | open | S085 |
+| Two things S096 found and did not change. The threat model is 94 of the full PDF's 274 pages because some rows' Status holds more than a page of history (T-02, T-03 and others): that is the register's text, and shortening it, or moving the history of a row to the step that made it, is an edit of the register, not of its printing. And `scripts/build_architecture_pdf_source.py` stands at 795 lines of the size check's 800: its next change moves a part out (the brief's functions are the natural one), in development-base first | S096 | open | S035 |
 | Grafana's pages were not exercised in a browser against the Prometheus gateway's read list, and the two gateways' memory was not read under load or on a large answer: smoke's calls through Grafana's datasource (queries and rules, R17) are all that went through it, so the metrics browser's label drop-downs, Explore and the Alerting page, and with them `series`, `labels`, `metadata`, `query_exemplars` and `format_query`, were not seen used, and a path Grafana needs that the list lacks would not have shown (it would answer 403, class `x` in the gateway's log). The gateways' working sets were read once after R17: 4.3 MiB (peak 9.6 MiB) against 64 MiB for Prometheus's, 19.8 MiB at its peak for Loki's | S072 (third part, R17: P7, P10) | open; a hand check in a browser, then the gateway's log searched for `class=x`; the lines that are Grafana's are added to the list once each | S073 |
 | The log agent spins at more than one core, silently, minutes after it starts: measured from `/proc` on the development machine on 2026-10-08 (1.14 to 1.33 cores over 10 and 30 seconds, on an instance 6.4 hours old and on a fresh pod at 190 and 370 seconds of age, with load 2 to 3; 0.01 cores at 70 seconds), with an idle network and an ordinary log whose one error, between the calm and the spinning reading, is `fileconsumer/file.go:280 Failed to open file ... no such file or directory` for the log file of a finished sweep pod the cluster had just removed (stanza's file consumer, v0.162.0). Its values (`infra/kind/values/log-agent.yaml`, S064; not changed by S072) request 25m of CPU and set no CPU limit, so nothing bounds it; smoke, the alerts and Prometheus's own CPU series for the pod (0.001 cores at the same minute) saw none of it. Why the instance of 2026-10-07 11:13 to 18:33 averaged 8.7 % of a core is not known | S072 (third part: found after R18, when the machine was read after an overload) | narrowed by S073 (2026-10-08): the cause was reproduced in a container and the memory limit raised to 384Mi, with a CPU limit of 500m as a bound (run LR1 on kind saw the agent calm for twelve minutes). Open: something that sees a spin (an alert on the container's CPU from a source that shows it, or a smoke line); Prometheus's series did not, which has a row of its own below | S073 |
 | What the final infrastructure check before S072's third pull request left, all low (`s072` handoff, the check of 2026-10-07): T-90's cell keeps its superseded sentences ahead of the dated note that reverses them; four `die` sentences inside `make up`'s warm window (the database's steps and the roles' wait) carry no note that telemetry is refused until a re-run; the streaming of a chunked request body through Prometheus's gateway is recalled from nginx's documentation and was not seen; the placeholder check is a word match and a test could count the four tokens instead; the Service address check would pass `...` or `:` (the value is only an annotation); no test holds that the gateway image's pin has a registry segment, which the split for Loki's chart needs; and `scratch_repo` in `test_kind_cluster_holder.py` copies `up.sh` without `gateways.sh`, harmless until a test runs `up.sh` from that tree | S072 (third part, the final check: LOW-1 to LOW-7) | open | S073 |
@@ -1292,6 +1318,7 @@ also go into Part B's follow-up backlog.
 | S092 | Mermaid and PDF render under rootless Docker | [S092.md](plan/steps/S092.md) |
 | S095 | Retention and erasure of uploaded files | [S095.md](plan/steps/S095.md) |
 | S097 | The plan in files | [S097.md](plan/steps/S097.md) |
+| S096 | The PDF: no row lost, and a brief edition | [S096.md](plan/steps/S096.md) |
 
 ## Part D — Open questions
 

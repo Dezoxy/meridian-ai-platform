@@ -176,7 +176,7 @@ tests/              tests for the scripts and the bash guard
 pyproject.toml      uv project: Python 3.13, the meridian command, dev tools, ruff, pytest, import-linter
 uv.lock             locked dependency versions
 Dockerfile          one image for the six services, the migrations, the policy seed, the ingestion and the scheduled sweep; .dockerignore allowlists its context
-Makefile            validate, inspect, check, docs, view, export, mermaid, pdf, lint, pytest, pytest-db, eval, registry, synthetic, up, deploy, images, demo, smoke, grafana, down, azure-*, aws-*, gcp-*
+Makefile            validate, inspect, check, docs, view, export, mermaid, pdf, pdf-brief, lint, pytest, pytest-db, eval, registry, synthetic, up, deploy, images, demo, smoke, grafana, down, azure-*, aws-*, gcp-*
 ```
 
 Planned, milestone by milestone: OpenAPI documents under `api/` and the
@@ -185,6 +185,9 @@ Terraform exists under `infra/terraform/azure/` (written, never applied).
 
 ## Working in this repository
 
+[CONTRIBUTING.md](CONTRIBUTING.md) says how a change gets from an idea to
+`main`: where to start, what to run and what a pull request must show.
+
 ```bash
 make docs     # documentation gate: twins, mirrors, links, indexes, ADRs, IDs
 make secret-scan  # scan the commits a push would add for secrets, as CI's secret scan does (needs gitleaks)
@@ -192,6 +195,7 @@ make check    # Structurizr validate + inspect with the pinned image (Docker)
 make view     # browse the model at http://localhost:8080/workspace/1
 make mermaid  # regenerate derived Mermaid blocks, render every fence (Docker)
 make pdf      # the Documentation tab and every view as one PDF
+make pdf-brief  # the brief: without the registers, the decisions as an index
 make lint     # ruff, format check, import-linter contracts, file size check (needs uv)
 make pytest   # package and generator tests, including the import-contract check, in parallel (PYTEST_WORKERS=0 for one process; needs uv)
 make pytest-db  # the same with a throwaway PostgreSQL container (with pgvector), so the database tests run too (Docker)

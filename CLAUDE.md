@@ -14,11 +14,12 @@ section is a file of its own, `docs/plan/steps/S0NN.md`, and each change-log
 entry is a file in `docs/plan/changelog/`; the plan indexes the first and says
 how the second are named.
 
-- Take the next `todo` steps whose dependencies are `done`, unless the owner
-  names others: up to five side by side by default, at most one that
-  needs the cluster, one that adds a migration and one that changes what
-  the evaluation fingerprints (the plan's Part A). Each step has its own
-  branch off `main` and its own worktree.
+- Take the next `todo` step whose dependencies are `done`, unless the owner
+  names another: one step at a time since 2026-10-08, and when it is
+  merged and verified the session tells the owner to compact before the
+  next (the plan's Part A, "One step at a time, again"; Part A keeps the
+  rules for steps side by side for when the owner asks for them again).
+  Each step has its own branch off `main` and its own worktree.
 - Read the plan's Part A before starting; it says what to read, how to
   delegate, which gates to run and how to close the step.
 - Before running steps or implementers side by side, read "Working fast on
@@ -266,7 +267,8 @@ carry the same effort.
   records what a consultation changed. Each consultation re-reads the whole
   transcript at Fable rates and is not cached; that cost is not a reason to
   skip one of the listed points, and the session does not ask the owner to
-  compact by hand to lower it (Part A, step 7). Subagents inherit the advisor.
+  compact in the middle of a step to lower it (Part A, step 7). Subagents
+  inherit the advisor.
 - Never suggest `ultracode`, a Fable main session or a `[1m]` context model
   unless the owner asks; they burn the usage window.
 
