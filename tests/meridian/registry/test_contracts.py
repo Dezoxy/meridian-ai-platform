@@ -9,6 +9,9 @@ import pytest
 from toolsupport import CONTRACTS_DIR, HOSTS, list_tools
 from typer.testing import CliRunner
 
+from meridian.platform.claims_mcp.app import (
+    create_app as create_claims_app,
+)
 from meridian.platform.cli import app
 from meridian.platform.knowledge_mcp.app import create_app as create_knowledge_app
 from meridian.platform.knowledge_mcp.settings import KnowledgeServerSettings
@@ -20,9 +23,6 @@ from meridian.platform.toolserver.contracts import (
     tool_listing,
 )
 from meridian.platform.toolserver.settings import ToolServerSettings
-from meridian.workloads.claims_triage.mcp_server.app import (
-    create_app as create_claims_app,
-)
 
 runner = CliRunner()
 PUBLISHED = ("policy-mcp", "knowledge-mcp", "claims-mcp")

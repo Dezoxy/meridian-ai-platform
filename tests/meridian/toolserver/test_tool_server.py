@@ -58,6 +58,9 @@ from toolsupport import (
     worker_holding,
 )
 
+from meridian.platform.claims_mcp.app import (
+    create_app as create_claims_app,
+)
 from meridian.platform.common.env import SettingsError
 from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.platform.common.throttle import (
@@ -100,9 +103,6 @@ from meridian.platform.toolserver.wire import (
     RefusalReason,
 )
 from meridian.runtime.tool_client import ToolClient, ToolUnavailable
-from meridian.workloads.claims_triage.mcp_server.app import (
-    create_app as create_claims_app,
-)
 
 Edit = tuple[str, str, str]
 Known = Literal["nothing", "run", "record"]

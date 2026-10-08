@@ -7,6 +7,9 @@ import pytest
 from servicesupport import REGISTRY_DIR
 from starlette.testclient import TestClient
 
+from meridian.platform.claims_mcp.app import (
+    create_app_from_env as claims_mcp_from_env,
+)
 from meridian.platform.common.env import SettingsError
 from meridian.platform.gateway.app import create_app_from_env as gateway_from_env
 from meridian.platform.knowledge_mcp.app import (
@@ -15,9 +18,6 @@ from meridian.platform.knowledge_mcp.app import (
 from meridian.platform.policy_mcp.app import create_app_from_env as policy_from_env
 from meridian.runtime.app import create_app_from_env as runtime_from_env
 from meridian.workloads.claims_triage.app import create_app_from_env as claims_from_env
-from meridian.workloads.claims_triage.mcp_server.app import (
-    create_app_from_env as claims_mcp_from_env,
-)
 
 DSN = "postgresql://role:pw@db.invalid/meridian"
 PREFIX_ENV = "MERIDIAN_IDENTITY_PREFIX"
