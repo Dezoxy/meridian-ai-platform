@@ -15,7 +15,7 @@
   `make up` (the owner, "Keep it, opt-in only (Recommended)"). Not built: any
   route's use of the guard (Y4), the page flow (Y3), Keycloak on kind (Y2b),
   the switch `MERIDIAN_SIGNIN` (no code reads it); no Entra tenant has issued a
-  token. The threat model's rows T-113 to T-120 are new and implemented in
+  token. The threat model's rows T-114 to T-121 are new and implemented in
   part (T-112 is S071's), T-05 is implemented in part, and T-06, T-32 and T-69
   are amended; the data classification has rows amended and two new; the
   register holds 120 threats. The whole suite: FINAL-SUITE-RESULT.

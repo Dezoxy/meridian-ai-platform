@@ -38,7 +38,7 @@
 # files do not change with the switch.
 #
 # Plain HTTP between the edge and Keycloak and between the Claims API and Keycloak:
-# said, labelled, accepted on a disposable development cluster (threat model T-116),
+# said, labelled, accepted on a disposable development cluster (threat model T-117),
 # and a backlog row (S094: TLS to the issuer; a business runs its issuer behind TLS
 # end to end). The policy keys on a pod's labels and not on who the pod is (T-08).
 apiVersion: v1

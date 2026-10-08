@@ -2972,13 +2972,13 @@ persists: a restart makes new signing keys and imports the realm again. The
 users keep their subjects (the generator derives their ids from the realm and
 the name). A service with a cold key cache refuses a bearer token from before
 the restart; one with a warm cache accepts it for up to an hour; a session
-cookie is not checked against the issuer again (threat model T-119).
+cookie is not checked against the issuer again (threat model T-120).
 
 **Plain HTTP inside the cluster, said.** The edge reaches Keycloak over plain
 HTTP, and so does the Claims API (the key set, and with Y3 the token). That is
 accepted on a disposable development cluster and is **not** how a business runs
 its issuer: it runs it behind TLS end to end. The backlog row is S094's (TLS to
-the issuer); the threat model's T-06, T-116 and T-119 say the same.
+the issuer); the threat model's T-06, T-117 and T-120 say the same.
 
 **Removal is by hand, and turning the switch off does not do it.** A later `make
 up` with the switch off applies the committed Gateway again (the listener admits

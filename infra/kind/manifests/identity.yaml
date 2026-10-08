@@ -39,7 +39,7 @@
 # admin console is not routed.
 #
 # Plain HTTP: the edge reaches this pod over plain HTTP, and so does the Claims API
-# (threat model T-116). Accepted on a disposable development cluster, said in the
+# (threat model T-117). Accepted on a disposable development cluster, said in the
 # README, and a backlog row (S094: TLS to the issuer). No `--proxy-headers` is set:
 # a proxy in front was not tried (the issuer was the front URL from inside the
 # cluster too, seen on kind in run KR1).
