@@ -1521,7 +1521,7 @@ if [[ "$cmd" == *azure-platform-destroy* || "$cmd" == *azure-platform-apply* \
   ga3_text="$(s071_prose_blank "$cmd")"
   if [[ "$ga3_text" =~ $ga3_runner_re ]]; then
     ga3_runner=1
-    [[ "$ga3_text" =~ $ga3_destroy_re ]] && decide deny "$s020_removal_deny"
+    [[ "$ga3_text" =~ $ga3_destroy_re ]] && decide deny "$s020_removal_deny If this is a search or a message that only names the removal: run it without a substitution, find -exec, a pipe into a shell or a runner word (ssh, tmux, source, watch and the like) in the same command, or give the text in a file."
   fi
 fi
 [[ -n "$s020_noscan" ]] && decide ask "$s020_noscan_ask"

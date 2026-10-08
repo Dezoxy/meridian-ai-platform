@@ -717,8 +717,11 @@ the AWS twin on main answers the same shape it is said):
 - A runner that is on no list. The removal behind it is read by the AWS twin
   (deny) and not here (none, measured): `chrt -f 1`, `systemd-run --user`,
   `strace -f`, `numactl -N 0`, `busybox`, `bwrap --bind / /`, `docker run --rm
-  img`, `chronic` and a path before a prefix other than `env`
-  (`/usr/bin/sudo make azure-platform-destroy`). The list is closed on purpose:
+  img`, `chronic`, `setpriv --reuid=1`, `runuser -u x`, a pipe into `at now`, `cron`,
+  `builtin eval`, `env -S'make azure-platform-destroy'` (the split string
+  joined to the flag) and a path before a prefix other than `env`
+  (`/usr/bin/sudo make azure-platform-destroy`, `/usr/bin/time make
+  azure-platform-destroy`). The list is closed on purpose:
   the twin's rule, which reads the loose form with no runner word, flipped four
   prose rows, and each word added is a word that a message may hold.
 - A pseudo-terminal made by `ssh -tt`, `tmux` or `screen` is not on the word
@@ -742,8 +745,11 @@ the AWS twin on main answers the same shape it is said):
   twin's `jq .aws x.json` is denied the same way; `jq .azure.subscription
   x.json` passes). A search for the module's working folder is denied too
   (`cd infra/terraform/azure && rg -n ".terraform" .`, and `cat
-  .terraform/environment` after the `cd`); the way round is to escape the dot
-  (`rg -n "\.terraform" .`).
+  .terraform/environment` after the `cd`). An escaped dot does NOT help after
+  the `cd` (`rg -n "\.terraform" .` is denied there too, measured in the
+  review's re-check); what passes is a bracket for the dot (`rg -n
+  "[.]terraform" .`) or the search from outside the module with a path and no
+  `cd` (`rg -n "\.terraform" infra/terraform/azure`).
 - A message or a comment body given with `-b` (`gh pr comment -b`) is not
   blanked, so one that names a reader and a closed file, or the removal beside
   a runner word, is denied, as for the AWS twin. A body for `git commit -F -` or
