@@ -1,0 +1,28 @@
+- **#XXXX, 2026-10-08:** S099 `doing` (the development base's half is a pull
+  request there): the plan's steps run in worker sessions, one step and one
+  worktree each, handed out by a dispatcher session (the owner: "i want more
+  session once with seperated worktree ... somehow we should apply your
+  policies where two worktree dont try the test in the same time", "yes and
+  you will be the orchestrator this way", "this process we should implement
+  in the repo and at development base too"). One lock for the machine:
+  `scripts/machine_lock.sh` is sourced by the recipes of `make pytest`,
+  `make pytest-db` and the two containers of `make alerts`, whose own shell
+  then holds an exclusive `flock` to its end; a second session's run says who
+  holds it and waits (`MERIDIAN_LOCK_WAIT`, 1,800 s unless set), and one that
+  waited too long runs nothing and exits 75. `make pytest-db` began by
+  removing the containers of its name, so a second run under the default
+  names ended the first one's database: the lock comes before that removal
+  and before the exit trap. It is taken in CI too, because `GITHUB_ACTIONS`
+  is set by hand on the development machine and could not be a switch; a dry
+  run takes none. The two roles are skills, `plan-dispatcher` and
+  `plan-worker`, mirrored for Codex, whose bodies name no project and no path
+  of the machine and whose last section carries this repository's limits (two
+  workers at once, one that holds the cluster and one that does not). Part
+  A's "A dispatcher and workers" replaces "One step at a time, again"; the
+  instruction files and the machine's rule in
+  `docs/development-environment.md` say the same. The board and the workers'
+  status files stay outside the repository, and the stop hook for sub-agent
+  lanes is left as it is. One backlog row, homed at S074: the command
+  guard's time in the documents job (2.87 s of a 3 s bound on the hosted
+  runner; the cases one after another). Not seen: two worker sessions meeting
+  on the lock in earnest.

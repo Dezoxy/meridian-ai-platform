@@ -65,9 +65,10 @@
 
 ## Part A — How a session works
 
-One step per branch and per worktree, and one step at a time in one
-session since 2026-10-08 ("One step at a time, again", below; up to five
-ran side by side before that). A session that grows long is compacted:
+One step per branch and per worktree. Since 2026-10-08 the steps run in
+worker sessions, one step each, handed out by a dispatcher session ("A
+dispatcher and workers", below; up to five ran side by side in one
+session before that). A session that grows long is compacted:
 by the owner between steps, on the session's word, and by the harness
 when its context fills (step 7 says how that is made safe): the advisor
 re-reads the whole transcript on every call, uncached, and a long
@@ -163,7 +164,9 @@ context blurs what a step was for.
    compacts between steps ("after every step you should say, compact and
    we can go on"): the session says so when a step is merged and
    verified and this checkpoint is written, never in the middle of a
-   step and never while an agent or a background command is out.
+   step and never while an agent or a background command is out. A
+   dispatcher says it at the three moments of "A dispatcher and
+   workers"; a worker ends with its status file and is archived.
 
 **The contract.** One concern per contract and about a page, in a scratch
 file the `implementer` reads. A long contract gets worked around with
@@ -229,24 +232,67 @@ Worktree and branch. Do not commit, push, switch branches or stash.
 - Read every source file a subagent changed. A green suite does not show a
   value that was hard-coded to match the one fixture.
 
-**One step at a time, again (the owner, 2026-10-08).** "Okay so we
-should go back only one step and then archive and start a new step, it
-will save a lot of token i guess", and half an hour later, having
-compacted the session instead of archiving it: "So can we continue here?
-I compacted and after every step you should say, compact and we can go
-on". Three days of five steps side by side had used 86 % of the
-account's weekly limit. So a session carries ONE step to a merged pull
-request, or to its written stop, writes the checkpoint of step 7 and
-tells the owner to compact; then it takes the next. Inside the step
-contracts go out one after another, and a read-only reviewer may run
-beside an implementer. The same day the owner set the order: what can be
-built on kind comes before the paid cloud steps ("before we go to the
-azure payable thing we should go and do a lot of things, like seperated
-images, fake tenant and groups, users, roles and i think we have much
-more to solve before cloud"), and the owner means one tenant by that
-("I meant one tenant not multi-tenant arch"). What follows is the rule
-of 2026-10-06 to 2026-10-08, kept for when the owner asks for steps side
-by side again; its lanes and limits hold then.
+**A dispatcher and workers (the owner, 2026-10-08; S099).** Three days of
+five steps side by side in ONE session had used 86 % of the account's
+weekly limit: a session that runs every step as its own sub-agents
+re-reads its whole history on every turn. The owner first went back to
+one step at a time ("Okay so we should go back only one step and then
+archive and start a new step, it will save a lot of token i guess", and,
+having compacted the session instead of archiving it, "after every step
+you should say, compact and we can go on"), and the same morning asked
+for more: "i want more session once with seperated worktree so i can
+optimalise the context long and we can work quicker ... somehow we
+should apply your policies where two worktree dont try the test in the
+same time", and, to the session's proposal, "Okay, yes and you will be
+the orchestrator this way". So:
+
+- **A worker session carries ONE step** to a merged pull request, or to
+  its written stop, in a worktree of its own; then it writes a status
+  file and ends. The `plan-worker` skill is its brief. Inside the step
+  contracts go out one after another, and a read-only reviewer may run
+  beside an implementer.
+- **One dispatcher session hands the steps out.** The `plan-dispatcher`
+  skill is its brief. It keeps the board, a file outside the repository
+  that it alone writes (a board in the tree would be edited by every
+  branch); it gives a new step its number, chooses steps whose files do
+  not meet, verifies each merge on `main` and puts up the next card. The
+  owner starts each worker; the dispatcher cannot. It does not run a
+  worker's step as its own sub-agents and does not read a worker's
+  conversation. Its own small steps (the harness, the board's tooling)
+  it does itself, to a merged pull request.
+- **Two workers at once, at most**: one that holds the kind cluster and
+  one that does not. The lanes of the table below still say what exists
+  once, and at most one step in flight holds each; a step that rebuilds
+  the images or moves the packages runs alone.
+- **Scripts keep the sessions apart, not their good will.** `make
+  pytest`, `make pytest-db` and `make alerts` take the machine's test
+  lock (`scripts/machine_lock.sh`): a second session's run waits and
+  says who holds it, and one that waited half an hour runs nothing. The
+  cluster has its holder record (S075). A worker runs the tests of the
+  areas it changed through those targets, and CI runs the whole suite.
+  One test file run by hand takes no lock.
+- **Compaction.** The dispatcher tells the owner to compact it after
+  each step of its own, after a round of hand-outs is closed, and when
+  its context has grown long; never while a background command or a
+  sub-agent of its own is out. A worker is archived when its step is
+  done.
+- **The order is the owner's.** What can be built on kind comes before
+  the paid cloud steps ("before we go to the azure payable thing we
+  should go and do a lot of things, like seperated images, fake tenant
+  and groups, users, roles and i think we have much more to solve before
+  cloud"), and the owner means one tenant by that ("I meant one tenant
+  not multi-tenant arch").
+- **One board, not two.** The stop hook `check-lanes.sh` reads a board of
+  sub-agent lanes inside one session (`.claude/lanes.md`). The
+  dispatcher's board is not that file and the hook does not read it.
+
+A session that is neither (the owner opens one and names a step) carries
+that one step as a worker does and tells the owner to compact when it is
+merged and verified. What follows is the rule of 2026-10-06 to
+2026-10-08 for steps side by side in ONE session, kept for when the
+owner asks for that again. Its lanes, and what it says of separate
+sessions ("What is shared", "Numbers are taken late", "Who finishes
+later, merges first"), hold for worker sessions today.
 
 **Five steps side by side (2026-10-06 to 2026-10-08; not in force).**
 This was the default, not an allowance: when a session starts, and
@@ -317,7 +363,9 @@ sessions; the brief of each step, or of each session, says:
   implementer while the cluster is up; the virtual machine ran the whole
   suite alone with 10 in under two minutes on 2026-10-05, and in 3 min 46 s
   on 2026-10-08 with 22,437 tests and coverage), for `make pytest-db` and
-  `make eval`, so two test runs never meet.
+  `make eval`, so two test runs never meet. Since S099 the machine's test
+  lock keeps two runs apart, one after the other, and the container's
+  name and port may stay the defaults; the worker count is still passed.
 - **Numbers are taken late.** Migration numbers, `T-NN` and ADR numbers are
   taken after merging `main` into the step's branch, right before the pull
   request. A branch whose migration number is not final is not deployed to
@@ -646,6 +694,7 @@ both readings the same hour ("yes both are right, go on").
 | S095 | Retention and erasure of uploaded files | The owner's decision of 2026-10-08: "Both, as a new step (Recommended)". A retention period for a claim's uploaded files is a setting, and it has no default that deletes anything: a local cluster deletes no file until the operator sets a period; a sweep deletes a file's BYTES once the period has passed, under a database role that may (a grant, so a migration; `claims_api` keeps SELECT and INSERT and no DELETE); an audited command erases one claim's files on request, run by a signed-in person (hence S021) whose name is on the audit row; the metadata row and the audit rows stay and say what was removed and when; a legal hold on a claim stops both the sweep and the command; the download of a file that is gone answers with a clear refusal, not a 404 of no route and not a 500; tested against PostgreSQL and seen once on kind. **Designed: nothing of it is built.** Open for the step's design: how the row keeps its size and hash while its bytes go (the table checks them), and the same bytes in the write-ahead log and in every backup, which the step's erasure does not reach and its design must say how long they live (T-111) | todo | S080, S021 |
 | S096 | The PDF: no row lost, and a brief edition | The architecture PDF loses no text where a table row is taller than a page, and a second, brief edition exists to hand to someone who will not read a register. Built as (2026-10-08; the owner's "do it" and "Records (Recommended)"): a table with a cell of more than 300 characters prints as records, one block of paragraphs per row, and any other wide table gets its column widths from its text (`scripts/pdf_tables.py`); `make pdf-brief` writes the brief, without the documents `docs/architecture/pdf-brief.txt` lists (the threat model and the Azure platform register), with the decisions as an index and a first page that says what it leaves out; the workflow builds both and attaches both to the release. Measured on the virtual machine: the full edition from 377 pages to 274 and from 117 pages with text past the bottom margin to none; the brief is 34 pages. The code is development-base's (its pull request 54), copied. Landscape pages for the threat model, the session's first proposal, were built and saved nothing (379 pages). Implemented; no release was published | done | S092 |
 | S097 | The plan in files | Each step's section and each change-log entry is a file of its own under `docs/plan/`, moved byte for byte and proved so by `scripts/plan_split.py --check`; a new entry is named for its pull request's number and the plan has no version of its own; `make docs` checks the files against Part B and refuses a section or an entry in the old place; `scripts/plan_port.py` carries a branch's edits of the old layout over. Part B's tables are not moved and still collide by rows (the owner, 2026-10-08: "Change log and step sections") | doing | — |
+| S099 | A dispatcher and workers: the test lock and the two briefs | Steps run in worker sessions, one step and one worktree each, handed out by a dispatcher session (the owner, 2026-10-08: "yes and you will be the orchestrator this way"); `make pytest`, `make pytest-db` and `make alerts` take one lock for the machine (`scripts/machine_lock.sh`), so a second session's run waits for the first and says who holds it, and one that waited too long runs nothing; the two roles are skills (`plan-dispatcher`, `plan-worker`) that name no path of the machine; Part A's "A dispatcher and workers" replaces "One step at a time, again"; the same goes into the development base in a pull request there | doing | — |
 
 ### Toward services: a database each and six images
 
@@ -1213,6 +1262,7 @@ that day; the rest stand as their step recorded them.
 | The trigger of the log agent's thrash on the cluster is not identified. LA1 reproduced a mechanism in a container (a burst of a few hundred lines at 192Mi, the page cache giving up the binary's pages and the process reading them back); it did not reproduce the event that started it on the cluster. The "Failed to open file ... no such file or directory" line seen before the first spin is consistent with a coincidence: a removed file, a removed directory and a checkpoint naming a gone file did nothing in the reproduction. Why the instance of 2026-10-07 from 11:13 to 18:33 averaged 8.7 % of a core is not known. At 384Mi run LR1 saw the agent calm for twelve minutes (0.01 cores, no reads, 0 to 43 refaults a second) through smoke's burst; the case the limit does not cure (140,000 lines at once with the exporter failing: 270 MiB of anonymous memory, reads of 0.3 to 2.9 GB a second) was not run on the cluster | S073 (the spin of 2026-10-08; LA1's report; run LR1) | open | S073 |
 | The two evaluation tests run twice on every pull request: once in a shard, whichever the hash gives them, and once in the `evaluation` job, which exists because no shard is sure to hold both tests that write the reports. Together about 85 s of runner time. Not changed: the job is not the slowest, and a way to run them once (a shard that deselects them, or the gate reading a shard's reports) would make the gate depend on the split | S074 (CI speed, 2026-10-08) | open; low | S074 |
 | What the shards' reports do not prove, from the short re-check of the rework (L-2 to L-4): skips are not counted (the report holds the tests kept, not the tests that passed, so a test that skips silently in CI still counts; `MERIDIAN_REQUIRE_DB` covers the database and Redis tests); the report is written when collection finishes, about four minutes before a shard ends, in the workspace the shard's tests then run in, and no test overwrites it that anyone found; and nothing pins the expected suite but the coverage floor: equal digests prove only that the shards agree with each other, so a module dropped by `--ignore` or a `collect_ignore` entry gives equal digests and a smaller total. Fixes, if wanted: the skipped count at `pytest_sessionfinish`, and a total or digest committed to the repository | S074 (CI speed; the short re-check, 2026-10-08) | open; low; the last is accepted residual risk | S074 |
+| The command guard's time in the documents job. On the hosted runner the guard's slowest shape took 2.87 s of CPU against the bound of 3 s on pull request 147's last run (1.26 s on the development machine; the runner is 1.8 to 2.3 times slower), so a slower runner fails `tests/test_guard_bash.sh` on any pull request; re-running the job is the way round. Nearly all of that time is three older passes of `main`'s hook that find quoted pieces in quadratic time, as S020's scanner did before its tokeniser was made linear; the same change there is a change of `main`'s guard lines and needs its own review. And the guard's 3,824 cases run one after another, one start of the hook each (the job's limit was raised from 5 to 15 minutes for it): a parallel loop over the cases | S020, S099 | open | S074 |
 
 ## Part C — Step details
 
@@ -1319,6 +1369,7 @@ also go into Part B's follow-up backlog.
 | S095 | Retention and erasure of uploaded files | [S095.md](plan/steps/S095.md) |
 | S097 | The plan in files | [S097.md](plan/steps/S097.md) |
 | S096 | The PDF: no row lost, and a brief edition | [S096.md](plan/steps/S096.md) |
+| S099 | A dispatcher and workers: the test lock and the two briefs | [S099.md](plan/steps/S099.md) |
 
 ## Part D — Open questions
 
