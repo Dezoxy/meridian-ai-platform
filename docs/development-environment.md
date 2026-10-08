@@ -508,3 +508,25 @@ what a person at the keyboard needs.
   on this machine (257.63 s against 252.52 s at six workers, 2026-10-07; see
   "What things cost"). The data files a run leaves, `.coverage` and
   `.coverage.*`, are ignored by git.
+
+### How CI runs the suite
+
+CI is the only place that runs every test (the owner, 2026-10-08), so its job
+is built to fail closed. `.github/workflows/python.yml` splits the suite into
+four shards by a hash of the test's id (`tests/conftest.py`;
+`MERIDIAN_TEST_SHARD` out of `MERIDIAN_TEST_SHARDS`, both unset on a developer's
+machine, which runs everything). The count is written once, as
+`TEST_SHARD_COUNT` at the top of the workflow. Each shard measures coverage
+and applies no floor; the required check `python` is the last job, combines the
+four coverage files and applies the 98 % floor of `pyproject.toml` once. It
+succeeds only on two combinations of its needed jobs' results, the full run and
+the documents-only run, and fails on a skipped, cancelled or missing shard
+(`scripts/ci_python_verdict.py`, with a unit test over the whole table).
+
+A pull request that changes only documents (`docs/` at any depth, and at the
+root `README.md`, `CLAUDE.md`, `AGENTS.md`, `NOTICE` and `LICENSE`; no README
+beside code) skips the shards and runs the test files that name a document,
+listed in `tests/documents-group.txt` (`make pytest-documents`). A test holds
+that list complete. A push to main always runs everything, which is the
+backstop for a document change the group did not catch. To run the group on
+the machine, use `make pytest-documents`; never the whole suite.

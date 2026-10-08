@@ -5,14 +5,20 @@ import re
 import subprocess
 import tomllib
 
-import yaml
+from ciworkflowsupport import (
+    JOBS,
+    WORKFLOW,
+    WORKFLOW_TEXT,
+    steps_using,
+)
 from servicesupport import REPO_ROOT
 
 MAKEFILE = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
-WORKFLOW_TEXT = (REPO_ROOT / ".github" / "workflows" / "python.yml").read_text(
-    encoding="utf-8"
-)
-JOB = yaml.safe_load(WORKFLOW_TEXT)["jobs"]["python"]
+# The job that runs the tests (S074 split the one job `python` into several; the
+# service containers, the toolchain and the test step are the shards' job). The
+# checks of the other jobs and of the required check are in
+# test_ci_workflow_jobs.py.
+JOB = JOBS["tests"]
 # PostgreSQL 17 with pgvector (S012): the knowledge store needs the extension.
 # The -trixie suffix is the Debian release of kind's database image.
 IMAGE = re.compile(r"pgvector/pgvector:\d+\.\d+\.\d+-pg17-trixie@sha256:[0-9a-f]{64}")
@@ -108,12 +114,15 @@ def step_named(name: str) -> dict:
 def test_the_evaluation_gate_runs_after_the_tests_on_the_report_the_tests_write() -> (
     None
 ):
-    names = [s.get("name") for s in JOB["steps"]]
-    tests = step_named("Tests")
-    gate = step_named("Evaluation gate")
+    # S074 gave the gate a job of its own: the shards each run a part of the
+    # suite, so no shard is sure to hold the two tests that write the reports.
+    steps = JOBS["evaluation"]["steps"]
+    names = [s.get("name") for s in steps]
+    (tests,) = [s for s in steps if s.get("name") == "Evaluation reports"]
+    (gate,) = [s for s in steps if s.get("name") == "Evaluation gate"]
 
-    assert names.index("Evaluation gate") == names.index("Tests") + 1
-    assert names.index("Evaluation gate") < names.index("Registry validation")
+    assert names.index("Evaluation gate") == names.index("Evaluation reports") + 1
+    assert tests["run"] == "make eval-tests"
     written = tests["env"]["MERIDIAN_EVAL_REPORT"]
     assert written == "${{ runner.temp }}/claims-triage-report.json"
     # The gate reads the same file: runner.temp is $RUNNER_TEMP in a shell.
@@ -126,6 +135,17 @@ def test_the_evaluation_gate_runs_after_the_tests_on_the_report_the_tests_write(
     assert injection_written == (
         "${{ runner.temp }}/claims-triage-injection-report.json"
     )
+
+
+def test_the_evaluation_job_runs_the_two_tests_the_make_eval_target_names() -> None:
+    recipe = MAKEFILE.split("\neval-tests:\n", 1)[1].split("\n\n", 1)[0]
+
+    assert recipe.strip() == (
+        "uv run pytest -n 0 $(EVAL_TEST) $(EVAL_INJECTION_TEST) -q"
+    )
+    # Neither report path is set here: the job's environment names them, as the
+    # job's step does above, and `make eval` sets its own for its own run.
+    assert "MERIDIAN_EVAL" not in recipe
 
 
 def test_the_makefile_has_the_four_evaluation_targets_in_its_phony_list() -> None:
@@ -294,7 +314,10 @@ def test_the_jobs_limit_is_twice_its_slowest_measured_run() -> None:
     # to 257.63 s on the development machine), so the slowest is about 14 min
     # 47 s, and twice that is 29 min 34 s, which is 30. The limit ends a job
     # that hangs; it is not a budget, and a run near it is a finding. Change
-    # the number and the workflow's comment together.
+    # the number and the workflow's comment together. Since S074 the suite runs
+    # in shards, each about a quarter of that; the limit stays the whole job's
+    # until a run on the hosted runner says what a shard takes, so the check is
+    # on the unsharded figure still, and the workflow's comment says so.
     slowest_seconds = 14 * 60 + 29
     with_coverage = slowest_seconds * 257.63 / 252.52
 
@@ -337,9 +360,15 @@ def test_the_floor_is_configured_in_one_place_and_equals_the_constant_here() -> 
     assert COVERAGE_CONFIG["run"]["source"] == ["src/meridian"]
     # Neither the Makefile nor the workflow repeats the number: pytest-cov takes
     # it from the configuration when `--cov` is given without `--cov-fail-under`.
-    for text in (MAKEFILE, WORKFLOW_TEXT):
-        assert "--cov-fail-under" not in text
-        assert not re.search(r"fail[-_]under\W*\d", text)
+    # The one exception, on purpose (S074): a shard runs a part of the suite and
+    # must apply no floor, which is `--cov-fail-under=0`, the switch that turns
+    # the configured floor off; it is a zero, not the number, and only the
+    # Makefile's shard variant of the switches has it.
+    assert "--cov-fail-under" not in WORKFLOW_TEXT
+    assert not re.search(r"fail[-_]under\W*\d", WORKFLOW_TEXT)
+    assert MAKEFILE.count("--cov-fail-under") == MAKEFILE.count("--cov-fail-under=0")
+    assert MAKEFILE.count("--cov-fail-under=0") == 2  # the variable and its comment
+    assert not re.search(r"fail[-_]under\W*\d", MAKEFILE.replace("fail-under=0", ""))
 
 
 def test_a_run_with_a_failed_test_does_not_print_the_floors_failure_as_well() -> None:
@@ -362,8 +391,61 @@ def test_the_help_lines_of_both_pytest_targets_say_what_coverage_does_to_a_subse
         assert "coverage floor" in line
 
 
-def test_the_suite_step_turns_coverage_on() -> None:
-    assert step_named("Tests")["env"]["COVERAGE"] == "1"
+def test_the_suite_step_turns_coverage_on_without_a_floor_and_names_its_file() -> None:
+    # A shard measures, applies no floor and keeps its data in a file named for
+    # it, outside the hidden files upload-artifact leaves out; the python job
+    # combines the files and applies the floor once.
+    env = step_named("Tests")["env"]
+
+    assert env["COVERAGE"] == "1"
+    assert env["COVERAGE_SHARD"] == "1"
+    assert env["COVERAGE_FILE"] == (
+        "${{ github.workspace }}/shard-${{ matrix.shard }}.coverage"
+    )
+
+
+def test_a_shards_coverage_switches_have_no_floor_and_no_report_and_only_then() -> None:
+    def pytest_line(*arguments: str) -> str:
+        environment = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("COVERAGE", "COVERAGE_SHARD", "PYTEST_ARGS", "MAKEFLAGS")
+        }
+        return subprocess.run(
+            ["make", "-n", "pytest", *arguments],
+            cwd=REPO_ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+
+    shard = pytest_line("COVERAGE=1", "COVERAGE_SHARD=1")
+    whole = pytest_line("COVERAGE=1")
+
+    assert "--cov --cov-report= --cov-fail-under=0 --no-cov-on-fail" in shard
+    # The whole-suite run is what it was: the report, and the configured floor.
+    assert "--cov-report=term:skip-covered" in whole
+    assert "--cov-fail-under" not in whole
+    # COVERAGE_SHARD alone turns nothing on, and COVERAGE=0 stays off.
+    assert "--cov" not in pytest_line("COVERAGE_SHARD=1")
+    assert "--cov" not in pytest_line("COVERAGE=0", "COVERAGE_SHARD=1")
+
+
+def test_make_coverage_floor_combines_the_shards_files_and_reports_with_the_floor() -> (
+    None
+):
+    recipe = MAKEFILE.split("\ncoverage-floor:\n", 1)[1].split("\n\n", 1)[0]
+    lines = [line.strip() for line in recipe.strip().splitlines()]
+
+    assert re.search(r"^COVERAGE_SHARDS_DIR\s*\?=", MAKEFILE, re.MULTILINE)
+    assert lines == [
+        "uv run coverage combine --keep $(COVERAGE_SHARDS_DIR)/*.coverage",
+        "uv run coverage report --skip-covered",
+    ]
+    # `coverage report` takes the floor from pyproject.toml's fail_under: no
+    # option here names a number.
+    assert "fail" not in recipe
 
 
 def test_both_pytest_targets_can_turn_coverage_on() -> None:
@@ -464,38 +546,44 @@ TERRAFORM_ACTION = "hashicorp/setup-terraform@"
 VERSIONS_FILES = sorted((REPO_ROOT / "infra" / "terraform").glob("*/versions.tf"))
 
 
-def terraform_step() -> dict:
-    (step,) = [
-        s for s in JOB["steps"] if s.get("uses", "").startswith(TERRAFORM_ACTION)
-    ]
+def terraform_step(job: str = "tests") -> dict:
+    (step,) = steps_using(job, TERRAFORM_ACTION)
     return step
 
 
 def test_the_workflow_installs_terraform_before_the_tests_without_its_wrapper() -> None:
-    steps = JOB["steps"]
-    setup = terraform_step()
+    # Both jobs that run tests which call terraform: the shards and the
+    # documents group (the group holds the modules' tests).
+    for job, tests_step in (
+        ("tests", "Tests"),
+        ("docs-tests", "Tests that read documents"),
+    ):
+        steps = JOBS[job]["steps"]
+        setup = terraform_step(job)
+        (run,) = [s for s in steps if s.get("name") == tests_step]
 
-    assert re.fullmatch(r"hashicorp/setup-terraform@[0-9a-f]{40}", setup["uses"])
-    assert steps.index(setup) < steps.index(step_named("Tests"))
-    # One pin: the step reads the job's value. The tests read the program's own
-    # output, so the wrapper is off, and nothing else is given to the action (no
-    # credential, no hostname, no token).
-    assert setup["with"] == {
-        "terraform_version": "${{ env.TERRAFORM_VERSION }}",
-        "terraform_wrapper": False,
-    }
+        assert re.fullmatch(r"hashicorp/setup-terraform@[0-9a-f]{40}", setup["uses"])
+        assert steps.index(setup) < steps.index(run)
+        # One pin: the step reads the workflow's value. The tests read the
+        # program's own output, so the wrapper is off, and nothing else is given
+        # to the action (no credential, no hostname, no token).
+        assert setup["with"] == {
+            "terraform_version": "${{ env.TERRAFORM_VERSION }}",
+            "terraform_wrapper": False,
+        }
 
 
 def test_the_workflow_runs_no_terraform_command_of_its_own() -> None:
     # The tests call `terraform console` on scratch copies, which needs no
     # provider; a step that ran init would download one, and a plan would need a
     # credential the runner does not have.
-    for step in JOB["steps"]:
-        assert "terraform " not in step.get("run", ""), step
+    for job in JOBS.values():
+        for step in job["steps"]:
+            assert "terraform " not in step.get("run", ""), step
 
 
 def test_the_terraform_version_the_workflow_pins_is_one_every_module_accepts() -> None:
-    pinned = JOB["env"]["TERRAFORM_VERSION"]
+    pinned = WORKFLOW["env"]["TERRAFORM_VERSION"]
     major, minor, _patch = (int(part) for part in pinned.split("."))
 
     assert len(VERSIONS_FILES) >= 4
