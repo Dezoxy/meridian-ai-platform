@@ -7,7 +7,8 @@ only after the owner has reviewed the plan and confirmed it. The ephemeral
 platform environment (AKS, PostgreSQL, ACR) is S020, not here: it is written in
 [azure/](azure/README.md), checked by `make azure-platform-validate` and
 `make azure-platform-scan` (through `aws.sh validate azure`) and never planned
-or applied, with no command that does either. The AWS module,
+or applied, with no command that does either; the command guard's rules for the
+names its wrapper will have exist before it (S020, GA1 and GA2). The AWS module,
 checked and not applied, is described in [aws/README.md](aws/README.md). The
 Google Cloud module, checked and never planned or applied, with no command that
 does either, is described in [gcp/README.md](gcp/README.md). The AWS module for

@@ -548,6 +548,132 @@ guard for habits, and the barrier is where the credentials are):
   (`…/foundation/../aws`) is not seen; one that ends in `/..` counts as the
   module, and fails closed.
 
+The Azure platform module (S020, GA1 and GA2; the rules are implemented and
+tested against a case file and were never seen in a live session). The module,
+`infra/terraform/azure/`, is checked and never applied, and the wrapper the
+rules guard, `infra/terraform/azure.sh` with the targets
+`make azure-platform-plan`, `azure-platform-apply` and `azure-platform-destroy`,
+does not exist yet: the rules come first, on purpose. They are the AWS family's
+twins, added beside the older rules (the hook's hunks for them add lines and
+change none, and a differential over the whole case file finds no decision
+weaker than before), they read the command with prose blanked as the AWS rules
+do, and the barrier is the same one: that no Azure sign-in is on the machine a
+session runs on, which S071 plans to end for a live model call.
+
+Denied:
+
+- `make azure-platform-destroy` (also `gmake`, `$MAKE`) and
+  `infra/terraform/azure.sh destroy` (by path, `./`, `bash`, `sh`, behind
+  `cd … &&`), where `make` or the script is the command word of a part, behind
+  assignments, `env`, `sudo`, `time`, `nohup`, `xargs` and the like; a quoted
+  target after a make option; the same inside the body of `bash -c`, `sh -c`,
+  `eval` and `su -c`; and after `env -S` with a quoted word before the build
+  tool, a shape that also reads the AWS targets (`env -S '' make -m
+  "aws-destroy"`), which closes the open medium of S071's sixth review. An
+  `echo`, a `printf`, a search, a commit message and a pull request body that
+  name the target are what they were;
+- the wrapper's names under a pseudo-terminal tool or traced, as the AWS twins
+  (a search for the word `script` in a command that names the wrapper is
+  denied too, a false alarm by design), and a `TF_*=` or any `ARM_*=`
+  assignment in front of them (the foundation's own `make azure-plan`,
+  `azure-apply` and `azure-smoke` do not move);
+- `terraform` or `tofu` by hand where the module is: `-chdir` or a `cd` into
+  `infra/terraform/azure` (the directory itself, at most one slash after it;
+  `azure-x` and the foundation are other directories), the working directory
+  the harness passes (at any depth), or the plan's or the state's name
+  (`azure.tfplan`, `azure.tfstate`). The verbs are the AWS twin's list, which is
+  `apply`, `destroy`, `plan -out`, `import`, `state mv|rm|push`,
+  `force-unlock` and `workspace new|delete|select` of another name than
+  `default`, and three more: `taint` and `untaint`, `state replace-provider`,
+  and `init` with `-backend-config`, `-migrate-state` or `-force-copy`.
+  `validate`, `fmt`, `providers`, `init`, `init -backend=false` and
+  `init -reconfigure` pass;
+- a reader (the AWS twin's list, with `unzip`) of the wrapper's local file
+  `local.env-azure` (a name with `.example` after it is not named, though the
+  older AWS list denies a reader of it all the same), of `azure.tfplan` and its
+  record `azure.tfplan.meta`, of the module's `.terraform/` folder (a bare
+  `.terraform` counts when a `cd` into the module or the harness directory says
+  where the command runs; the lock file `.terraform.lock.hcl` is not the
+  folder), and of the cloud CLI's folder `~/.azure` (also `$HOME/.azure`,
+  `${HOME}/.azure`, an absolute home and a relative `.azure`);
+- a writer of the same: `>`, `>>`, `tee`, `touch`, `install`, `mv`, `ln`, `cp`,
+  `dd`, `rsync`, `truncate` and `sed -i`, and the dot command and `source` of
+  the local file, which would run it in the session's shell;
+- `az storage blob` with `upload`, `download`, `delete`, `undelete`, `lease`,
+  `snapshot`, `copy` or `sync` (the `-batch` forms too) in a part that names
+  the state, `tfstate` or the state account's name prefix `stmeridiantf`
+  (behind a prefix or in a shell's body too; a part that starts with a printing
+  command and holds no substitution is a message or a search and is not read).
+  `az storage blob list` and `show` pass.
+
+Asked:
+
+- `make azure-platform-apply` and `azure.sh apply`, whose text says that it
+  costs money and that the owner runs it after reading the plan, in a terminal
+  of their own; `make azure-platform-plan` and `azure.sh plan`, whose text says
+  that they use the sign-in and read the remote state, which holds the
+  operator's address since the foundation's firewall (the settings allow `make
+  *`, so the settings add an ask for both targets and deny the removal in the
+  forms a session types);
+- `AZURE_CONFIG_DIR=` in front of the wrapper's names (it moves the sign-in the
+  wrapper uses);
+- `terraform` or `tofu` where the module is (as above) with `plan` (it signs
+  in), `show`, `output`, `console`, `refresh`, `state list|show|pull` and
+  `workspace select default` (`workspace show` asks as a `show`). The settings
+  still allow `terraform -chdir=* plan*`, and whether an ask in the hook outranks
+  an allow in the settings is not verified, so the hook's ask is what a
+  session meets;
+- the cloud CLI's `provider register` and `provider unregister`, `aks
+  get-credentials` and `aks command invoke`, `acr login`, `postgres
+  flexible-server execute` and `connect`, `login`, `logout` and `account set`,
+  and `kubelogin`, where the sub-command stands right after `az` (a flag without
+  a value may stand between), because `login` is also a value (`--auth-mode
+  login`); `--help` passes. A part that starts with a printing command (`echo`,
+  `printf`, `rg`, `grep`, `cat`, `git` and the like, behind `sudo`, `time`,
+  `nohup`, `command` or `exec`) and holds no substitution is a message or a
+  search and is not read, so `rg -n 'az login' docs` passes.
+
+Passes unasked: `make azure-platform-validate` and `azure-platform-scan` (the
+module's two free doors), `terraform -chdir=infra/terraform/foundation …` as
+before, `ls`, `stat`, `test`, `wc`, `file`, `sha256sum` and `chmod` of the
+closed files, and `rm` of the local file or of the plan, on purpose: removing a
+door closes it.
+
+Not seen, once, for this family (nothing below is built; each is a way past a
+guard for habits):
+
+- The wrapper's target in a variable, a loop or a substitution
+  (`T=azure-platform-destroy; make $T`, `make $(echo azure-platform-destroy)`,
+  `echo azure-platform-destroy | xargs make`, brace expansion,
+  `MAKEFLAGS="-- azure-platform-destroy"`), a quote in the middle of a word, and
+  a script written to a file and run by name. This is the AWS rules' gap too.
+- A pseudo-terminal made by `ssh -tt`, `tmux` or `screen`: the word list is the
+  AWS twin's (`script`, `unbuffer`, `expect`, `socat`, `setsid`, `pty`) and a
+  third list for both families is a backlog row.
+- `make --trace` and `make -d` ask by the target and are not denied; `doas`; a
+  quoted `'make'`; `printf … | bash`; a here-string to a shell; `$(…)` inside
+  double quotes; `ssh host "make …"` (the remote shell's quoted command);
+  `source` or the dot command on the wrapper itself.
+- `find … -exec cat` over the module's folder or the cloud CLI's folder, a
+  `cd` into `~/.azure` followed by a reader of a bare name, a glob or a variable
+  that builds the path, a redirect from the file (`while read … < file`,
+  `$(<file)`), an editor (`vim`, `nano`: the reader list is the AWS twin's),
+  `python3` with `pathlib`, and `rm` (on purpose). A project folder named
+  `.azure` (the Azure Developer CLI makes one) is read as the CLI's folder, and
+  so is a filter such as `jq .azure x.json` (the AWS twin's `jq .aws x.json` is
+  denied the same way; `jq .azure.subscription x.json` passes).
+- A message or a comment body given with `-b` (`gh pr comment -b`) is not
+  blanked, so one that names a reader and a closed file is denied, as for the
+  AWS twin.
+- A flag with a value between `az` and the sub-command (`az --subscription x
+  login`), `az` through `python3` or a container, and the state blob read or
+  written by another tool (`azcopy`, `curl` on the blob's address, the storage
+  SDK) or named only by a variable.
+- A subdirectory of the module as a root (`-chdir=infra/terraform/azure/x`): it
+  is another root, and the older rows of the case file ask about one.
+- The harness directory is the module only when the call's `cwd` says so;
+  whether it follows a `cd` of an earlier call is not verified.
+
 Timeouts. A hook that runs past its timeout does not block the call, so
 the guard cannot be allowed to run long. The bounds below do not prevent
 that for every shape (the first ones were measured on one-word segments

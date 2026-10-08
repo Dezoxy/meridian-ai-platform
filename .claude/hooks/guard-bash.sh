@@ -1352,6 +1352,121 @@ if [[ "$cmd" == *azure-platform* || "$cmd" == *azure.sh* || ( "$cmd" == *aws-* &
   fi
 fi
 
+# ---- S020 (GA2): ADDED denies for the Azure platform module, its closed files and the state ----
+# GA1 decided the wrapper's names. This block decides the rest of what the design
+# lists: Terraform by hand in infra/terraform/azure, the readers and writers of the
+# files the wrapper keeps closed, and the cloud CLI's sub-commands that touch the
+# state. Like GA1's block it is ADDED, after every deny of the file above and
+# before every ask, so it can turn an ask or a none into a deny and cannot weaken
+# a decision of a rule above; no line above is edited and no variable above is
+# assigned again (the names here start with ga2_). Every rule reads the
+# prose-blanked copy (s071_prose_blank: the quoted value of a message option is
+# emptied), so a commit message or a pull request body that names a file or a
+# sub-command stays what main gives; hook_cmd is not read, because it is blanked
+# only when a word of its list is present and azure is not on it. Nothing the AWS
+# rules own is edited or widened: the verb lists that embed no directory
+# (aws_tf_cmd, aws_ws_default_re, aws_end, reader_pre) are used BY REFERENCE, and
+# every pattern that holds a path is Azure's own.
+#   - Terraform by hand where the module is: a -chdir or a cd into the directory,
+#     the working directory the harness passes, or the plan's or state's name
+#     (azure.tfplan, azure.tfstate), with a boundary after azure so that the
+#     foundation and azure-x stay out. The directory is the module's root, with
+#     at most one slash after it: a path below it (azure/envs/demo, a layout the
+#     module does not have, which the older rows of the case file ask about) is
+#     another root and is not named; the harness directory counts at any depth.
+#     The verbs that change the account, the
+#     state or the workspace are denied, the AWS twin's list and three more:
+#     taint and untaint, state replace-provider, and init with a backend setting
+#     (-backend-config, -migrate-state, -force-copy; init -backend=false and a
+#     plain init pass). The reads ask below. tofu is read as terraform is.
+#   - Readers and writers of the closed files: the local file of the wrapper
+#     (local.env-azure, with a boundary, so a template with .example is not
+#     named), the saved plan and its record (azure.tfplan and anything after
+#     it), the module's .terraform folder, and the cloud CLI's folder under the
+#     home directory (~/.azure, $HOME/.azure, ${HOME}/.azure, an absolute home).
+#     The reader list is the AWS twin's, with unzip (a plan is a zip); the writers
+#     are the twin's with touch (tee, mv, ln, install, cp, a redirect, sed -i), and
+#     the dot command and source of the local file are denied too. A bare
+#     .terraform is the module's folder only when a cd into the module or the
+#     harness directory says so. rm of the local file or of the plan stays none on
+#     purpose: removing a door closes it. ls, stat, test, wc, file and chmod of
+#     them stay none. find -exec cat, a cd into the folder followed by a reader
+#     of a bare name, and a variable that holds the path are not read (the
+#     runbook lists them, as for the AWS twin).
+#   - The state by hand through the cloud CLI: az storage blob upload, download,
+#     delete, lease, snapshot, copy or sync (and the -batch forms) in a segment
+#     that names the state (tfstate or the account's name prefix stmeridiantf). A
+#     list or a show passes. A deny that a yes cannot answer needs the command-word
+#     care of GA1: a segment that starts with a printing command (echo, printf,
+#     rg, grep, cat, git ...) and holds no substitution is a message or a search,
+#     not a use, and is skipped.
+# A python3 that is missing or fails leaves the text as it is (the stronger
+# direction for the readers and writers, as for the AWS twin).
+ga2_assign="([A-Za-z_][A-Za-z0-9_]*=(\"[^\"]*\"|${sq}[^${sq}]*${sq}|[^[:space:]]*)[[:space:]]+)*"
+ga2_printer_re="^[[:space:]]*${ga2_assign}((sudo|time|nohup|command|exec)[[:space:]]+)*(echo|printf|rg|grep|egrep|fgrep|ag|ack|cat|head|tail|sed|awk|wc|less|more|tee|diff|ls|stat|git)([[:space:]]|\$)"
+ga2_dir_re="terraform/azure/?([[:space:]\"${sq};&|)]|\$)"
+ga2_dir_re+="|-chdir[=[:space:]]+[\"${sq}]?([^[:space:]\"${sq}]*/)?azure/?([\"${sq}[:space:]]|\$)"
+ga2_cd_re="(^|[^[:alnum:]_.-])(cd|pushd)[[:space:]]+[\"${sq}]?([^[:space:];&|\"${sq}]*/)?azure/?([\"${sq};&|[:space:]]|\$)"
+ga2_dir_re+="|${ga2_cd_re}|azure\.tf(plan|state)"
+ga2_cwd_re='(^|/)terraform/azure(/|$)'
+ga2_in_module=""
+[[ "$hook_cwd" =~ $ga2_cwd_re ]] && ga2_in_module=1
+ga2_tf_deny_re="${aws_tf_cmd}(apply|destroy|import|force-unlock|taint|untaint|state[[:space:]]+(mv|rm|push|replace-provider)|workspace[[:space:]]+(new|delete|select)|plan[[:space:]]+([^;&|${eol}]*[[:space:]])?-out|init[[:space:]]+([^;&|${eol}]*[[:space:]])?-(backend-config|migrate-state|force-copy))([[:space:]=]|\$|[;&|)\"${sq}])"
+ga2_door="local\.env-azure([^[:alnum:]_.-]|\$)"
+ga2_closed="(${ga2_door}|azure\.tfplan|azure/\.terraform([/[:space:]\"${sq};&|)]|\$)|\.azure([/*?[:space:]\"${sq};&|)]|\$))"
+ga2_bare_tfdir="\.terraform([/[:space:]\"${sq};&|)]|\$)"
+ga2_readers="(cat|tac|nl|less|more|bat|head|tail|grep|egrep|fgrep|rg|ag|sed|awk|gawk|cut|od|hexdump|xxd|strings|base64|diff|cmp|jq|yq|sort|uniq|cp|tar|zip|unzip|python3?|perl|ruby|node|source|echo|printf|xargs|dd|rsync|scp|curl)"
+ga2_writers="(tee|touch|install|mv|ln|cp|dd|rsync|truncate)"
+ga2_source_re="(^|[(\`\"${sq}{]|(then|do|else|elif|if|while|until|!)[[:space:]])[[:space:]]*\.[[:space:]]+([^;&|${eol}]*[[:space:]])?[\"${sq}]?[^[:space:]\"${sq}]*${ga2_door}"
+ga2_blob_re="${cloud_cli}az[[:space:]]+(-[^[:space:];&|]+[[:space:]]+)*storage[[:space:]]+blob[[:space:]]+(download|upload|delete|undelete|lease|snapshot|copy|sync)(-batch)?${aws_end}"
+ga2_state_re="tfstate|stmeridiantf"
+ga2_tf_deny_msg="Terraform by hand against infra/terraform/azure (apply, destroy, import, state mv|rm|push|replace-provider, taint, untaint, force-unlock, plan -out, workspace new|delete|select of another name, init with -backend-config, -migrate-state or -force-copy) skips the wrapper's account pin, plan record and state path: the wrapper is the one door (make azure-platform-plan and make azure-platform-apply, when they exist; the owner runs them, infra/terraform/azure/README.md). validate, fmt and init -backend=false pass."
+ga2_read_deny_msg="That would print what the Azure platform wrapper keeps closed (the local file with the subscription, the tenant and the operator's address, the saved plan and its record, the module's .terraform folder with its backend settings, the Azure CLI's sign-in cache under ~/.azure) to the transcript. Run it yourself."
+ga2_write_deny_msg="That writes a file the Azure platform wrapper keeps closed or that steers the Azure CLI (the local file, the saved plan or its record, the module's .terraform folder, ~/.azure). A rm of the local file or of the plan passes: removing a door closes it. Run it yourself if intended."
+ga2_source_deny_msg="Sourcing the Azure platform wrapper's local file runs it in this shell and puts its values into the session's environment; the wrapper reads the file as data and never runs it. Run it yourself if intended."
+ga2_blob_deny_msg="az storage blob upload, download, delete, lease, snapshot, copy and sync on the Terraform state (the tfstate container, the stmeridiantf account) is state by hand: the state holds the operator's address and the module's outputs, and a write or a lease past Terraform's own lock can corrupt it. Run it yourself if intended; az storage blob list and show pass."
+ga2_text=""
+ga2_tf_module=""
+if [[ ( ( "$cmd" == *terraform* || "$cmd" == *tofu* ) && ( "$cmd" == *azure* || -n "$ga2_in_module" ) ) \
+      || "$cmd" == *local.env-azure* || "$cmd" == *azure.tfplan* || "$cmd" == *azure/.terraform* \
+      || "$cmd" == *.azure* || ( "$cmd" == *.terraform* && ( -n "$ga2_in_module" || "$cmd" == *azure* ) ) \
+      || ( "$cmd" == *storage* && "$cmd" == *blob* ) ]]; then
+  ga2_text="$(s071_prose_blank "$cmd")"
+  if [[ "$cmd" == *terraform* || "$cmd" == *tofu* ]] \
+     && [[ "$ga2_text" =~ $ga2_dir_re || -n "$ga2_in_module" ]]; then
+    ga2_tf_module=1
+    ga2_tf_text="${ga2_text}"$'\n'
+    ga2_ws_cuts=0
+    while [[ "$ga2_tf_text" =~ $aws_ws_default_re ]] && [ $(( ++ga2_ws_cuts )) -le 8 ]; do
+      ga2_tf_text="${ga2_tf_text/"${BASH_REMATCH[0]}"/workspace-keep-default${BASH_REMATCH[1]}}"
+    done
+    [[ "$ga2_tf_text" =~ $ga2_tf_deny_re ]] && decide deny "$ga2_tf_deny_msg"
+  fi
+  # A bare .terraform is the module's folder when a cd (or the harness directory)
+  # says the module is where the command runs.
+  ga2_closed_use="$ga2_closed"
+  if [[ -n "$ga2_in_module" || "$ga2_text" =~ $ga2_cd_re ]]; then
+    ga2_closed_use="${ga2_closed}|${ga2_bare_tfdir}"
+  fi
+  ga2_reader_re="${reader_pre}${ga2_readers}[[:space:]].*(${ga2_closed_use})"
+  ga2_writer_re=">>?[[:space:]]*[\"${sq}]?[^[:space:]\"${sq};&|]*(${ga2_closed_use})"
+  ga2_writer_re+="|${reader_pre}${ga2_writers}[[:space:]].*(${ga2_closed_use})"
+  ga2_writer_re+="|${reader_pre}sed[[:space:]]+([^;&|${eol}]*[[:space:]])?-[a-zA-Z]*i[^;&|${eol}]*(${ga2_closed_use})"
+  while IFS= read -r seg; do
+    if [[ "$seg" == *local.env-azure* || "$seg" == *azure.tfplan* || "$seg" == *.terraform* || "$seg" == *.azure* ]]; then
+      [[ "$seg" =~ $ga2_reader_re ]] && decide deny "$ga2_read_deny_msg"
+      [[ "$seg" =~ $ga2_writer_re ]] && decide deny "$ga2_write_deny_msg"
+      [[ "$seg" =~ $ga2_source_re ]] && decide deny "$ga2_source_deny_msg"
+    fi
+    if [[ "$seg" == *storage* && "$seg" == *blob* ]]; then
+      if [[ "$seg" =~ $ga2_printer_re && "$seg" != *\$\(* && "$seg" != *'`'* && "$seg" != *'<('* ]]; then
+        continue
+      fi
+      [[ "$seg" =~ $ga2_blob_re && "$seg" =~ $ga2_state_re ]] && decide deny "$ga2_blob_deny_msg"
+    fi
+  done < <(printf '%s\n' "$ga2_text" | sed -E 's/(&&|\|\||;|\|)/\n/g')
+fi
+
 # ---- confirmations ----
 [[ "$cmd" =~ (terraform|tofu)[[:space:]].*apply ]] && \
   decide ask "terraform apply mutates cloud infrastructure; confirm the plan and workspace first."
@@ -2063,6 +2178,47 @@ if [[ "$hook_cmd" == *--admin* ]]; then
   elif [[ "$gh_text" =~ $gh_admin_re ]]; then
     decide ask "gh pr merge --admin merges past failing required checks; confirm the checks, or drop --admin."
   fi
+fi
+
+# ---- S020 (GA2): ADDED asks for the Azure platform module and the cloud CLI ----
+# The last block of the file, after every deny and every older ask: it can turn a
+# none into an ask and cannot turn a decision above into a weaker one, and an
+# older rule that already asks (az account set, az acr login --expose-token, a
+# state pull, terraform state surgery) keeps its own message. The text is the
+# prose-blanked copy of the deny block above (made again here when only this block
+# needs it).
+#   - Terraform by hand in the module (found in the deny block, ga2_tf_module):
+#     the reads ask with the AWS twin's list, by reference (aws_tf_ask_re: plan,
+#     show, output, console, refresh, state list|show|pull, workspace select
+#     default; workspace show asks as a show).
+#   - The cloud CLI's sub-commands that change what the wrapper relies on or hand
+#     out a credential: az provider register and unregister, az aks get-credentials
+#     and command invoke, az acr login, az postgres flexible-server execute and
+#     connect, az login and logout, az account set, and kubelogin. A --help passes
+#     (unhelped). The CLI is read where its name stands after a boundary, so a
+#     prefix, a path and the body of a shell are read; the sub-command stands
+#     right after az (a flag without a value may stand between), because the word
+#     login is also a value (az storage blob list --auth-mode login must pass); a
+#     segment that starts with
+#     a printing command and holds no substitution is a message or a search and
+#     is skipped (rg -n 'az login' docs, echo 'az login', git log --grep): a false
+#     ask on a search would be asked at every look into the runbooks.
+ga2_az_ask_re="${cloud_cli}az[[:space:]]+(-[^[:space:];&|]+[[:space:]]+)*(provider[[:space:]]+(un)?register|aks[[:space:]]+(get-credentials|command[[:space:]]+invoke)|acr[[:space:]]+login|postgres[[:space:]]+flexible-server[[:space:]]+(execute|connect)|login|logout|account[[:space:]]+set)${aws_end}"
+ga2_kubelogin_re="${cloud_cli}kubelogin${aws_end}"
+ga2_tf_ask_msg="terraform plan (it signs in with the owner's account and reads the remote state, which holds the operator's address), show, output, console, refresh, state list|show|pull and workspace select default, against infra/terraform/azure, print the state, its outputs or the saved plan (the operator's address, the server names); confirm that this is the owner's own session and that the transcript may hold them, or run it in a terminal of your own."
+ga2_az_ask_msg="That changes what the Azure platform wrapper relies on or hands out a credential: a provider registration or its removal, the cluster's credentials or a command run in the cluster through the CLI, the registry login, a database command through the CLI, the CLI's own login, logout or account switch, or kubelogin. The sign-in is the owner's; confirm that this is the owner's own session and why it is needed. With --help it passes."
+[[ -n "$ga2_tf_module" && "$ga2_text" =~ $aws_tf_ask_re ]] && decide ask "$ga2_tf_ask_msg"
+if [[ ( "$cmd" == *"az "* || "$cmd" == *kubelogin* ) \
+      && ( "$cmd" == *login* || "$cmd" == *logout* || "$cmd" == *provider* || "$cmd" == *aks* \
+           || "$cmd" == *acr* || "$cmd" == *postgres* || "$cmd" == *account* ) ]]; then
+  [ -n "$ga2_text" ] || ga2_text="$(s071_prose_blank "$cmd")"
+  while IFS= read -r seg; do
+    if [[ "$seg" =~ $ga2_printer_re && "$seg" != *\$\(* && "$seg" != *'`'* && "$seg" != *'<('* ]]; then
+      continue
+    fi
+    unhelped "$seg" "$ga2_az_ask_re" && decide ask "$ga2_az_ask_msg"
+    unhelped "$seg" "$ga2_kubelogin_re" && decide ask "$ga2_az_ask_msg"
+  done < <(printf '%s\n' "$ga2_text" | sed -E 's/(&&|\|\||;|\|)/\n/g')
 fi
 
 exit 0

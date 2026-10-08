@@ -966,4 +966,87 @@ cpu_shape "300 prefixes and 1200 quoted pieces before an Azure target" \
   "git azure-platform-plan; $(repeat 'sudo -u x ' 300)$(repeat "'a' " 1200)make azure-platform-apply"
 cpu_shape "600 assignments before an Azure target" \
   "git azure-platform-plan; $(repeat 'TF_VAR_a=1 ' 600)make azure-platform-apply"
+
+# S020 (GA2): the rules added for Terraform by hand in the Azure module, the files
+# the wrapper keeps closed, the cloud CLI's sub-commands and the settings that go
+# with them. The reasons say what each rule is for; the settings hold the second
+# layer; and the passes the rules add (one prose-blanked copy, a segment loop for
+# the closed files and the state blob, a segment loop for the CLI asks) stay under
+# the one CPU bound on shapes built like the worst ones above with the new gates'
+# words in them.
+reason_check "Terraform by hand in the Azure module" 'terraform -chdir=infra/terraform/azure apply' "*infra/terraform/azure*account pin*plan record*state path*wrapper*"
+reason_check "a reader of the closed files" 'cat ~/.azure/azureProfile.json' "*print what the Azure platform wrapper keeps closed*transcript*"
+reason_check "a writer of the closed files" 'touch infra/terraform/local.env-azure' "*keeps closed*removing a door closes it*"
+reason_check "the dot command on the local file" '. infra/terraform/local.env-azure' "*Sourcing*local file*as data*"
+reason_check "the state blob by hand" 'az storage blob upload --container-name tfstate --name x --file y' "*state by hand*Terraform's own lock*"
+reason_check "a read by hand in the Azure module" 'terraform -chdir=infra/terraform/azure output' "*signs in*operator's address*owner's own session*"
+reason_check "the CLI's login" 'az login' "*wrapper relies on*owner's own session*"
+reason_check "kubelogin" 'kubelogin convert-kubeconfig -l azurecli' "*wrapper relies on*kubelogin*"
+# An older rule that already asks keeps its own message: the added asks come last.
+reason_check "the registry login that exposes its token, from the older rule" 'az acr login --name x --expose-token' "*prints a token, a key or a Secret's value*"
+reason_check "the account switch, from the older rule" 'az account set --subscription x' "*control-plane mutation*"
+# The settings (S020, GA2): the plan and apply targets ask and the removal is denied
+# there too (Bash(make *) is allowed, and a hook that timed out would let the removal
+# through); the script's removal is denied in the three spellings a session types;
+# the cloud CLI's folder is closed to the three tools; the free doors stay free.
+for entry in 'Bash(make azure-platform-plan*)' 'Bash(make azure-platform-apply*)'; do
+  if in_list ask "$entry"; then
+    echo "ok   ask holds ${entry}"
+  else
+    echo "FAIL ask lacks ${entry}"
+    fail=1
+  fi
+done
+for entry in 'Bash(make azure-platform-destroy*)' 'Bash(infra/terraform/azure.sh destroy*)' \
+  'Bash(./infra/terraform/azure.sh destroy*)' 'Bash(bash infra/terraform/azure.sh destroy*)'; do
+  if in_list deny "$entry"; then
+    echo "ok   deny holds ${entry}"
+  else
+    echo "FAIL deny lacks ${entry}"
+    fail=1
+  fi
+done
+# shellcheck disable=SC2088  # the entry is the literal text of the settings
+for tool in Read Edit Write; do
+  if in_list deny "${tool}(~/.azure/**)"; then
+    echo "ok   deny holds ${tool}(~/.azure/**)"
+  else
+    echo "FAIL deny lacks ${tool}(~/.azure/**)"
+    fail=1
+  fi
+done
+for entry in 'Bash(make azure-platform-validate*)' 'Bash(make azure-platform-scan*)'; do
+  if in_list ask "$entry" || in_list deny "$entry"; then
+    echo "FAIL the free door ${entry} is asked or denied"
+    fail=1
+  else
+    echo "ok   the free door ${entry} is neither asked nor denied"
+  fi
+done
+cpu_shape "a run of 7960 redirect signs after the closed files' names (the worst shape of the readers and writers)" \
+  "local.env-azure .azure azure.tfplan $(repeat '>' 7960)x"
+ask_for "the worst shape of the readers and writers followed by a denied part is denied" deny \
+  "local.env-azure .azure azure.tfplan $(repeat '>' 7000)x; touch infra/terraform/local.env-azure"
+cpu_shape "2000 repetitions of cat after the local file's name" \
+  "local.env-azure $(repeat 'cat ' 2000)"
+cpu_shape "2000 repetitions of tee after the plan's name" \
+  "azure.tfplan $(repeat 'tee ' 2000)"
+cpu_shape "2000 repetitions of sed after the cloud CLI's folder" \
+  ".azure $(repeat 'sed ' 2000)"
+cpu_shape "800 repetitions of terraform before a near-miss verb, with the module named" \
+  "azure $(repeat 'terraform ' 800)applyx"
+cpu_shape "150 reads by hand in the module" \
+  "$(repeat 'terraform -chdir=infra/terraform/azure output; ' 150)"
+cpu_shape "2000 repetitions of az before a login that is a value" \
+  "az storage blob login $(repeat 'az ' 2000)x"
+cpu_shape "450 segments of az login --help" \
+  "$(repeat 'az login --help;' 450)"
+cpu_shape "800 repetitions of cd azure before a bare read of the folder" \
+  "$(repeat 'cd azure; ' 800)cat .terraform/x"
+cpu_shape "500 repetitions of az storage blob before a near-miss sub-command that names the state" \
+  "$(repeat 'az storage blob ' 500)uploadx tfstate"
+cpu_shape "every trigger word of both passes and the new gates, 3750 escaped quotes and 300 separators" \
+  "git aws rest record azure- credential MERIDIAN_ python3 make aws- azure-platform-apply azure.sh -S env terraform local.env-azure azure.tfplan azure/.terraform .azure az storage blob login $(repeat "$esc_quote" 3750)$(repeat '&' 300)"
+ask_for "that shape followed by a denied part of the new rules is denied" deny \
+  "git aws rest record azure- credential MERIDIAN_ python3 make aws- azure-platform-apply azure.sh -S env terraform local.env-azure azure.tfplan azure/.terraform .azure az storage blob login $(repeat "$esc_quote" 3750)$(repeat '&' 100); az storage blob upload --container-name tfstate"
 exit "$fail"
