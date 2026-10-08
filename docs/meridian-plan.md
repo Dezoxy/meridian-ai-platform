@@ -5,11 +5,12 @@
   `docs/plan/steps/`, in the folder of its twenty numbers (Part C), from
   the template, and fill it in as you go. The step tables hold no
   status: a step's status is the line under its file's heading, and
-  Part F, at the end, lists the finished steps and the steps in flight
-  from those lines (`make plan-progress` writes it).
-  Nothing gets deleted; superseded decisions are struck through with a note.
-  The one exception is the change log, which ended on 2026-10-08 and
-  whose files left the tree by the owner's decision (Part E).
+  Part E, at the end, lists the steps by those lines (`make
+  plan-progress` writes it). This file holds the plan and nothing that
+  ages: a step's row is one plan sentence, rewritten when a decision
+  changes it, and the reason, the date and the owner's words go into
+  the step's file (Part A, "What the plan holds"). Nothing is deleted
+  from a step file or a decision record.
 > **Architecture:** requirements, decisions, views and security live in
   [architecture/](architecture/README.md). This plan owns the step list, the
   session protocol, open questions, the step files in `docs/plan/steps/`
@@ -40,7 +41,7 @@ context blurs what a step was for.
 3. **Open the step.** Add its file from Part C's template, in the folder
    of its twenty numbers (`docs/plan/steps/S100-S119/S100.md`), with the
    status `doing` and the day it starts, and run `make plan-progress`,
-   which puts it under "In flight" in Part F ("A step's status", below).
+   which puts it under "In flight" in Part E ("A step's status", below).
    Take the step's open rows of `docs/plan/backlog.md` into its "done
    when".
 4. **Plan, delegate, verify.** The main session (Opus) writes a short contract
@@ -91,8 +92,8 @@ context blurs what a step was for.
    step's own "done when" criterion.
 6. **Close.** Fill in the work log and verification, set `done` and the
    day it finished in the file's status line, run `make plan-progress`
-   (the step moves to "Finished steps" in Part F, and nothing above
-   Part F changes for a status), commit, go
+   (the step moves to "Finished steps" in Part E, and nothing above
+   Part E changes for a status), commit, go
    through "Before pushing" below, open the PR with a description that
    is the record ("The pull request's description", below), merge it with
    `gh pr merge --squash` as soon as every required check is green, and
@@ -219,29 +220,59 @@ job". So:
 - **A step is free** when it has no file, or a file that says `todo`,
   and every step it depends on is `done` by its own file. A step whose
   file says `doing` is taken.
-- **Part F** ends with two tables, "Finished steps" and under it "In
-  flight", each row linked to the step's file. `make plan-progress`
-  writes them from the status lines, and `make docs` fails when they
-  are not what the files say, when a status line has another form and
-  when a step table gets a Status column again. Nobody types into them.
-- **A conflict between Part F's two markers**, after a merge of `main`
+- **Part E** is three tables, "Finished steps", "In flight" and "Not
+  started" (a file that says `todo`), each row linked to the step's
+  file. `make plan-progress` writes them from the status lines, and
+  `make docs` fails when they are not what the files say, when a status
+  line has another form and when a step table gets a Status column
+  again. Nobody types into them.
+- **A conflict between Part E's two markers**, after a merge of `main`
   into a branch that opened or closed a step, is never resolved by
   hand: take either side whole, run `make plan-progress`, and `make
   docs` proves the result. The tables are sorted and hold no date of
   the run, so two branches produce the same lines from the same files.
 - **What a step leaves open while it is `doing`** is said in its file
   ("Where it stands", "Left before it is done"), not in a table of the
-  plan. The paragraph "Where the project stands" in Part F is written
-  by hand, by the step that changes what exists.
+  plan.
+
+**What the plan holds, and what it does not (S102).** The plan says what
+is to be built, and reads the same the day after a step finished as the
+day before. Its step rows had become the place where a step's history
+was written (50 of 102 rows over 500 characters, the longest 3,462),
+because this file's top said that nothing gets deleted and nothing read
+a row. The owner, 2026-10-08: "i jsut want to close out these kind of
+problem". So:
+
+- **A step row is one plan sentence:** what is true when the step is
+  done, the whole row in at most 500 characters. No date, no
+  struck-through text, no quote of the owner and no word on what is
+  built so far (`Built as`, `Designed`, `Implemented`, `not met`, a
+  status word).
+- **A decision that changes a step rewrites its row to the new truth.**
+  The reason, the date and the owner's words go into the step's file.
+  Nothing is deleted from a step file or a decision record; the rows
+  keep no history.
+- **No status by hand.** A step's status is its file's line, Part E is
+  generated, and what exists today is the root README's to say.
+- **Part D holds open questions only.** An answered one moves, whole,
+  to `docs/plan/questions-closed.md` and keeps its number.
+- **The plan's text outside its rows does not grow.** `make docs` holds
+  it under a ceiling (`FIXED_TEXT_MAX` in `scripts/check_plan_files.py`)
+  that is lowered when the plan shrinks. A new rule takes the room of an
+  old sentence; raising the ceiling is the owner's decision.
+- **A pull request titled for a step changes that step's file**
+  (`S102: …` changes `S102.md`); CI refuses one that does not.
+- **What the gates cannot see.** A check counts and matches; it does not
+  read prose for truth. A row can be short, clean and wrong, and a build
+  label in words the gate does not know passes. The `docs-sync` audit
+  before every pull request stays the judgment half.
 
 **The pull request's description (S100).** It is the step's record
 outside its own file. The repository squashes with the pull request's
 title and description, so the description becomes the commit's message
-on `main`, and `git log` is the change log. The plan had a change log of
-its own until 2026-10-08, one entry a pull request; the owner asked "the
-changelog makes sense here or the github owned prs enough?" and chose
-"Stop and delete the old" (Part E). So no entry file is written, and the
-description holds what the entry held:
+on `main`, and `git log` is the change log. The plan's own change log
+ended with S100; its 105 entries are in git at commit `093fd8b`, under
+`docs/plan/changelog/`. The description holds what an entry held:
 
 - **The title** says what is true after the merge, as one sentence, and
   starts with the step (`S100: …`), or with `docs:` for a pull request
@@ -399,9 +430,9 @@ sessions; the brief of each step, or of each session, says:
   taken after merging `main` into the step's branch, right before the pull
   request. A branch whose migration number is not final is not deployed to
   the cluster: the runner records a migration by name and hash. The plan
-  has no version and no change log of its own (S100): the pull request's
-  description is the record ("The pull request's description", above),
-  so nothing in the tree waits for the pull request's number.
+  has no version: the pull request's description is the record ("The
+  pull request's description", above), so nothing in the tree waits for
+  the pull request's number.
 - **Who finishes later, merges first.** That session runs
   `git merge origin/main` (no rebase and no force-push on a branch with a
   pull request), runs the gates again, then opens its pull request. After
@@ -501,11 +532,12 @@ Cost rules:
 
 ## Part B — Roadmap and step list
 
-The tables below are the plan as it was written, and hold no status
-(S101). A step's status is in its file, as one of `todo` · `doing` ·
-`done` · `blocked` · `dropped`; Part F lists the finished steps and
-those in flight, each with a link to its file. A step with no file has
-not started.
+The tables below are the plan, and hold no status (S101) and no history
+(S102): a row is one plan sentence, and what a step decided, built and
+left open is in its file. A step's status is in its file, as one of
+`todo` · `doing` · `done` · `blocked` · `dropped`; Part E lists the
+steps by it, each with a link to its file. A step with no file has not
+started.
 
 Each step is sized for one focused session of two to four hours. Dependencies
 are the step IDs in the last column. Every capability stays labelled
@@ -835,7 +867,7 @@ step for at 20, okay"): a folder is named for the first and the last
 number it may hold, `S000-S019`, `S020-S039` and so on, so S100's file
 is `docs/plan/steps/S100-S119/S100.md`, and a folder is made when its
 first step starts. A step that starts gets a file from the template
-below; Part F lists the files by what their status lines say (this part
+below; Part E lists the files by what their status lines say (this part
 held an index kept by hand until S101). Nothing in this part holds a
 step's section, and no step file lies outside its folder: `make docs`
 refuses both and says where the file belongs. Template:
@@ -866,87 +898,16 @@ number; a new one takes the next number that neither table holds.
 | 1 | How many hours per week, and when do interviews start? | S002 | Plan in two-week increments; cut M3 before M2 |
 | 6 | Should a session be stopped from editing the command guard's own files? The permission rules allow Edit and Write on `.claude/hooks/guard-bash.sh` and `.claude/settings.json`, so a session can weaken the guard that reads its commands (N4 of the third security review). Two ways: deny Edit and Write on `.claude/hooks/**` and `.claude/settings*.json`, or ask before each. The session recommends asking: a deny would also stop a session from fixing the guard when a review finds a hole, as S075 did after each of its three reviews, while an ask puts the edit in front of the owner | S075's pull request, if the owner wants it built there; no step needs it | Neither is built: the guard stays a guard for habits, and the gap is listed in the runbook and in the hook's header |
 
-## Part E — Changelog
+## Part E — Where the steps stand
 
-The plan's change log ended on 2026-10-08 (S100). It was one entry a
-pull request: in this part until S097, then a file an entry under
-`docs/plan/changelog/`, 98 named for the plan's version (`v0.01.md` to
-`v0.98.md`) and 7 for a pull request (`pr-0137.md`, and `pr-0144.md` to
-`pr-0149.md`). The owner asked "the changelog makes sense here or the
-github owned prs enough?", was offered "Stop, keep the old
-(Recommended)", "Keep as it is" and "Stop and delete the old", and
-answered "Stop and delete the old".
-
-So the 105 files left the tree, and they are in git's history up to the
-commit `093fd8b`: `git ls-tree --name-only 093fd8b docs/plan/changelog/`
-lists them and `git show 093fd8b:docs/plan/changelog/v0.57.md` prints
-one. A step file that names an entry ("v0.57", "the change-log entry")
-means those files. From S100's pull request on, the record of a change
-is its pull request's description, which the squash commit carries into
-`git log` (Part A, "The pull request's description"). `make docs`
-refuses an entry in this part and a `docs/plan/changelog` folder.
-
-## Part F — Where the steps stand
-
-The parts above are the plan as it was written: no step table holds a
-status (S101; the owner, 2026-10-08: "it should show us the plan itself
-without any modification so no todo and done and other, and at the end
-it should order the done jobs that is linked into the plan steps folder
-files"). A step's status is one line in its own file, and this part
-shows it: the two tables at its end, "Finished steps" and "In flight",
-are written from those lines by `make plan-progress` and held to them
-by `make docs`, so nobody types into them (Part A, "A step's status").
-A step that starts or finishes changes its file and this part, and
-nothing above.
-
-### Where the project stands
-
-One running paragraph, at the top of this file until S101. A step that
-changes what exists says so here.
-
-**Status:** bootstrap, 2026-10-04. The architecture model, the first decisions,
-the engineering harness, a local platform on kind, the Azure foundation, the
-platform registry and a walking skeleton of the Claims API, the Agent Runtime
-and the Model Gateway exist; the skeleton runs on kind with `make demo`, from
-one hardened Helm chart under a default-deny network policy (S019), where the
-runtime, the gateway and the tool servers know the calling service from its
-certificate (mutual TLS, S055) and refuse a tenant or agent the registry does
-not let it name, the issuer signs only for the services' namespace and a service
-asks for its own restart once a renewed certificate is mounted (S056), the
-gateway routes a call to Azure OpenAI by data class and residency from a laptop,
-falls back to a second deployment in the same region and holds each tenant to
-its rate limits (the windows shared by its pods through a Redis on kind, S066)
-and budgets (a Grafana dashboard on kind shows what each tenant, agent, model
-and provider used), it answers embedding requests under the same controls (in
-replay mode and against Azure from a laptop), three MCP tool servers and the
-runtime's client for them run on kind, where the policy wordings are ingested
-into pgvector and searched through one of those servers (with a simulated
-embedding), a triage graph calls the tools in a fixed order and lets rules
-decide each claim's route (a real model answered its one question, asked for by
-schema, for the golden set from a laptop; on kind the model is simulated; the
-runtime hosts a second agent framework behind the same protocol for a small
-second workload, a claim brief that an adjuster decides (S037, seen on kind once
-under replay); claimant text that holds special-category data or addresses the
-model is not sent, and identifiers are redacted before any model call and in
-logs), a claim it refers to an adjuster waits with its run paused in PostgreSQL
-until the adjuster decides it on a server-rendered page that says whether the
-recommendation it shows rests on a model's reading or on the rules alone (S070,
-tested, not seen on kind) and the Claims API records the decision and resumes it
-(or sends the claim back to triage), a claim whose triage failed is decided by
-an adjuster, a claim can be withdrawn or get the documents it was asked for, at
-most five triages each, a scheduled sweep refers a claim whose documents are
-overdue to an adjuster and cleans up what a failed request left behind, a
-claimant submits a claim (the API stamps its report date, and a decided or still
-open claim counts in the policy's claim history), reads its status, reports
-documents and withdraws it on server-rendered pages that say nothing of the
-proposal (no sign-in yet), `make demo-seed` fills the adjuster's queue and the
-claimant's lookup on kind with the first forty synthetic claims, deciding none
-(S098), CI grades the golden set's proposals with rules and
-an LLM judge against a reviewed baseline (the model's answers recorded from
-Azure OpenAI and replayed through the gateway), alert rules, a health dashboard
-and five runbooks exist as files, applied to the kind cluster and none
-exercised, with service level objectives nobody has measured (S024), and no
-service runs in Azure yet.
+The parts above are the plan: no step table holds a status. A step's
+status is one line in its own file, and this part shows it: its three
+tables, "Finished steps", "In flight" and "Not started", are written
+from those lines by `make plan-progress` and held to them by `make
+docs`, so nobody types into them (Part A, "A step's status"). A step
+that starts or finishes changes its file and this part, and nothing
+above. What exists today is said in the root [README](../README.md),
+not here.
 
 <!-- plan-progress: begin (written by "make plan-progress", never by hand) -->
 
