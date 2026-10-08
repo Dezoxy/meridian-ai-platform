@@ -576,6 +576,7 @@ both readings the same hour ("yes both are right, go on").
 | S090 | Component view of the Agent Runtime | A component view in the Structurizr model answers which responsibilities sit inside the Agent Runtime and which of them is the only way out to a model, a tool and the database: components by responsibility and not one per file, with a register row and a PNG read at full size, and no other view changed. Built as (2026-10-07, the owner's "Component view (Recommended)", which drew it from today's code and took away the wait for S083): `RuntimeComponents`, six components (Run API, Run Records, LangGraph Host, Agent Framework Host, Model Client, Tool Client) in `docs/architecture/model/components.dsl`, 12 boxes and 15 arrows, embedded in the import layering page. Implemented as a view read from the code; nothing was run for it. The render under rootless Docker went to S092, and S082 brings the page and the view to the code it moves (a backlog row). The Model Gateway gets a view only when a question needs one | done | — |
 | S091 | Data ownership views | Who reads and writes which schema of the Platform Database, as views of the model: the six schemas (`audit`, `claims`, `gateway`, `knowledge`, `policy`, `runtime`) as components of the database, each service with its own schema and the reads that cross a schema in one view, and the audit trail in a second if one view does not read; every arrow checked against the grants the migrations leave and compared with ADR 10's table, a difference recorded and not smoothed; register rows and PNGs read at full size. No ER diagram: S085 and S087 rewrite the tables. The owner, 2026-10-07: "should we add db view too?", then "okay" to this. Built as (2026-10-07): `DataOwnership` (11 boxes, 13 arrows, the seven grants on another service's schema drawn thicker) and `AuditTrail` (9 and 8), in `docs/architecture/model/data.dsl`, embedded in the data classification's inventory. The grants were read from the migration files' statements, not from a database's catalog; they agree with ADR 10's table. Implemented as views; nothing was run for them | done | S090 |
 | S092 | Mermaid and PDF render under rootless Docker | `make mermaid-render` and `make pdf` finish on a machine whose Docker is rootless, as the virtual machine's is, and still finish in CI; the fix is made in development-base's copy of `scripts/render-mermaid.sh` first and copied here unchanged; with it, the two notes of S089's review (the render container needs no network; the script passes when it finds no block). Built as (2026-10-08): under rootless Docker the render and Pandoc containers start as their root, which there is the caller, and elsewhere as the caller, as before; the render container has no network; this repository's `make mermaid-render` fails when no block was extracted. Development-base's pull request 52 first, then the two scripts and a test copied byte for byte. Implemented, and run on the virtual machine: five diagrams rendered and a PDF of 377 pages written | done | — |
+| S096 | The PDF: no row lost, and a brief edition | The architecture PDF loses no text where a table row is taller than a page, and a second, brief edition exists to hand to someone who will not read a register. Built as (2026-10-08; the owner's "do it" and "Records (Recommended)"): a table with a cell of more than 300 characters prints as records, one block of paragraphs per row, and any other wide table gets its column widths from its text (`scripts/pdf_tables.py`); `make pdf-brief` writes the brief, without the documents `docs/architecture/pdf-brief.txt` lists (the threat model and the Azure platform register), with the decisions as an index and a first page that says what it leaves out; the workflow builds both and attaches both to the release. Measured on the virtual machine: the full edition from 377 pages to 274 and from 117 pages with text past the bottom margin to none; the brief is 34 pages. The code is development-base's (its pull request 54), copied. Landscape pages for the threat model, the session's first proposal, were built and saved nothing (379 pages). Implemented; no release was published | done | S092 |
 
 ### Toward services: a database each and six images
 
@@ -1111,6 +1112,7 @@ that day; the rest stand as their step recorded them.
 | `make mermaid-render` and `make pdf` fail under rootless Docker, which the virtual machine runs: `scripts/render-mermaid.sh` starts the container with the caller's user and group, which rootless Docker maps to another user than the folder's owner, and every PNG ends in "EACCES: permission denied" (five of five, then the PDF's four of four, on 2026-10-07). The same script on a copy of the folder made world-writable rendered all five. CI's Docker is not rootless and renders. The script's canonical copy is development-base's, so the fix goes there first and is copied here. With it, from the review of S089's workflow step (low): the render container needs no network and could run with none, in this job and in the PDF's; and the script passes when it finds no block, which a count in the Makefile's target would catch | S089 (the first local render; the infra review) | done (S092, 2026-10-08: the container starts as its root under rootless Docker; no network; the Makefile's target fails on an empty extraction) | S092 |
 | The import layering page (`docs/architecture/code/import-layering.md`: its diagram, its table of contracts and its counts) and the `RuntimeComponents` view were read from the code of 2026-10-07. S082 moves the workloads' graphs and the sweep's SQL and adds a contract per service, S083 makes a package per service and S086 cuts the sweep in two: each brings the page, `model/components.dsl` and the view's register row to the code it leaves | S089, S090 | open | S082 |
 | The `DataOwnership` and `AuditTrail` views (`docs/architecture/model/data.dsl`) draw the grants of 2026-10-07, read from the migration files' GRANT and REVOKE statements and not from a catalog. S084 takes the tool servers' reads of runs and claims away, S085 replaces the one audit table by a table per service and a relay, S086 cuts the sweep's reach into the runtime's schema, and S087 makes five databases: each brings the model's arrows, the two views and their register rows to what it leaves, and S087's baselines are where the grants are read from a migrated database's catalog and compared with the views | S091 | open | S085 |
+| Two things S096 found and did not change. The threat model is 94 of the full PDF's 274 pages because some rows' Status holds more than a page of history (T-02, T-03 and others): that is the register's text, and shortening it, or moving the history of a row to the step that made it, is an edit of the register, not of its printing. And `scripts/build_architecture_pdf_source.py` stands at 795 lines of the size check's 800: its next change moves a part out (the brief's functions are the natural one), in development-base first | S096 | open | S035 |
 | Grafana's pages were not exercised in a browser against the Prometheus gateway's read list, and the two gateways' memory was not read under load or on a large answer: smoke's calls through Grafana's datasource (queries and rules, R17) are all that went through it, so the metrics browser's label drop-downs, Explore and the Alerting page, and with them `series`, `labels`, `metadata`, `query_exemplars` and `format_query`, were not seen used, and a path Grafana needs that the list lacks would not have shown (it would answer 403, class `x` in the gateway's log). The gateways' working sets were read once after R17: 4.3 MiB (peak 9.6 MiB) against 64 MiB for Prometheus's, 19.8 MiB at its peak for Loki's | S072 (third part, R17: P7, P10) | open; a hand check in a browser, then the gateway's log searched for `class=x`; the lines that are Grafana's are added to the list once each | S073 |
 | The log agent spins at more than one core, silently, minutes after it starts: measured from `/proc` on the development machine on 2026-10-08 (1.14 to 1.33 cores over 10 and 30 seconds, on an instance 6.4 hours old and on a fresh pod at 190 and 370 seconds of age, with load 2 to 3; 0.01 cores at 70 seconds), with an idle network and an ordinary log whose one error, between the calm and the spinning reading, is `fileconsumer/file.go:280 Failed to open file ... no such file or directory` for the log file of a finished sweep pod the cluster had just removed (stanza's file consumer, v0.162.0). Its values (`infra/kind/values/log-agent.yaml`, S064; not changed by S072) request 25m of CPU and set no CPU limit, so nothing bounds it; smoke, the alerts and Prometheus's own CPU series for the pod (0.001 cores at the same minute) saw none of it. Why the instance of 2026-10-07 11:13 to 18:33 averaged 8.7 % of a core is not known | S072 (third part: found after R18, when the machine was read after an overload) | open; a CPU limit so that a spin is bounded, the cause looked up and fixed or worked around (the poll interval, an exclusion for finished pods), and something that sees it (an alert on the container's CPU from a source that shows it, or a smoke line) | S073 |
 | What the final infrastructure check before S072's third pull request left, all low (`s072` handoff, the check of 2026-10-07): T-90's cell keeps its superseded sentences ahead of the dated note that reverses them; four `die` sentences inside `make up`'s warm window (the database's steps and the roles' wait) carry no note that telemetry is refused until a re-run; the streaming of a chunked request body through Prometheus's gateway is recalled from nginx's documentation and was not seen; the placeholder check is a word match and a test could count the four tokens instead; the Service address check would pass `...` or `:` (the value is only an annotation); no test holds that the gateway image's pin has a registry segment, which the split for Loki's chart needs; and `scratch_repo` in `test_kind_cluster_holder.py` copies `up.sh` without `gateways.sh`, harmless until a test runs `up.sh` from that tree | S072 (third part, the final check: LOW-1 to LOW-7) | open | S073 |
@@ -21346,6 +21348,117 @@ compared, and one line in the Makefile.
 
 **Follow-ups:** none.
 
+### S096 — The PDF: no row lost, and a brief edition
+**Status:** done · **Started:** 2026-10-08 · **Finished:** 2026-10-08
+**Goal:** the architecture PDF loses no text where a table row is taller than
+a page, is shorter, and comes in a second, brief edition to hand to someone
+who will not read a register.
+
+**Decisions:**
+
+- **The owner, 2026-10-08:** "the pdf is 337 pages i guess it is really long"
+  (it was 377). The session proposed a brief edition, the threat model on
+  landscape pages and the two mapping ADRs left as they are; the owner: "do
+  it". Asked how the long register tables should print, with pages of both in
+  front of them and three options, the owner answered "Records
+  (Recommended)" ("(Recommended)" is the question tool's mark on the option
+  the session recommended).
+- **What the measurements changed.** The landscape pages were built and
+  saved nothing: 379 pages against 377, because a landscape page has a
+  portrait page's area. Drawing the pages then showed what the page count hid:
+  LaTeX cannot break a table row across pages, so a row taller than a page
+  ran past the bottom margin and off the sheet. 117 of the 377 pages did
+  this, 90 of them in the threat model, and the text beyond the sheet was not
+  in the PDF. The PDFs built since the threat model's rows grew long have had
+  this defect; nobody had drawn a page.
+- **The session's own (the owner may overturn any):**
+  - A table with a cell of more than 300 characters prints as records, one
+    block per row: the first cell in bold with the short columns beside it,
+    each long column as a paragraph under its name. A column is long for the
+    whole table when one of its cells is longer than 60 characters, so every
+    block of a table has the same shape. For print alone: the Markdown, GitHub
+    and the Documentation tab keep the table.
+  - Any other table that Pandoc wraps gets its column widths from its text,
+    never narrower than its longest word. Equal widths gave a four-letter ID
+    as much room as a paragraph.
+  - Not taken, each measured: widths alone (324 pages, 57 still past the
+    margin), widths with smaller table text (292 and 44, or 273 and 35).
+  - The brief leaves out what `docs/architecture/pdf-brief.txt` lists, today
+    the threat model and the Azure platform register; the data classification
+    stays, because its inventory holds the two database views. The decisions
+    print as an index from the fields Structurizr read, not from the ADRs'
+    text. Its first page names what it leaves out, so that a brief without a
+    threat model is not read as a platform without one (C-07). A listed path
+    that is no page of the Documentation tab stops the build.
+  - One run writes one PDF: `make pdf` and `make pdf-brief`. The workflow
+    builds both, refuses anything but exactly the two, and attaches both to
+    the release.
+  - The code is development-base's: `scripts/pdf_tables.py` (new), the
+    builder, the PDF script, their two test files and the workflow are
+    copies, byte for byte. This repository's own are the Makefile's target,
+    `pdf-brief.txt` and the documents.
+
+**Advisor:** one consultation, 2026-10-08, at the design and at the surprise
+(the landscape pages that saved nothing, and the cut-off rows). It changed
+three things: the cut-off rows are stated as a defect of the PDF on `main`
+and not as a matter of length; widths alone were ruled out, because that
+variant lost more text than today's; and the brief's first page says what the
+full edition holds. It advised leaving the records layout to a later decision
+of the owner's; the session measured that layout as well (264 pages, no page
+past the margin) and put the choice to the owner then, with the pages.
+
+**Review:** the `python-reviewer` read the new module, the builder's changes
+and the tests in the base's pull request: no critical or high finding, three
+medium (a fence was tracked by any fence line, so a table shown inside a
+four-backtick fence was rewritten and a real one after a tilde fence skipped;
+a pipe inside a code span ended a cell; the brief's listing refused a page
+symlinked in from outside the architecture directory) and five low. The three
+medium and four of the low ones were fixed there with twelve more tests; a
+table inside a block quote stays as it is, and the module says so.
+
+**Work log:** 2026-10-08. Five variants of the PDF's source, built by a
+script outside the repository and counted and drawn with a PDF library:
+landscape, widths, widths with two smaller sizes of table text, records. In
+development-base, pull request 54: the tests first, then the module, the
+builder, the script, the Makefile's target, the workflow and its documents;
+its `build` job built both PDFs on a runner whose Docker is not rootless.
+Here, branch `s096-pdf-brief` off `main`, with `main` merged in once: the six
+copies, the Makefile's target, the listing and the documents. The step was
+first numbered S095; another session's open pull request took S093 to S095
+and the plan's v0.93, so the numbers were taken late, as Part A says.
+
+**Result / verification:**
+
+| | Pages | Pages with text past the bottom margin |
+|---|---|---|
+| The PDF of `main` before (2026-10-08, 9ab950e) | 377 | 117 |
+| The full edition now (`make pdf`) | 274 | 0 |
+| The brief (`make pdf-brief`) | 34 | 0 |
+
+- Counted with a PDF library on the virtual machine: a page counts when a
+  line of text other than the footer and the page number ends in the bottom
+  margin. Chapter by chapter, before and now: threat model 116 and 94,
+  decisions 191 and 131, Azure platform 21 and 14, data classification 15
+  and 8.
+- Drawn and read: the brief's cover ("Architecture brief"), its first page
+  (it names the threat model, the Azure platform and the 11 decisions in
+  full), its decisions index, and of the full edition a page of the threat
+  model, one of the Google Cloud mapping and one of the quality attributes:
+  every block of the same shape, no text over the footer.
+- `make test`: "Ran 455 tests", "OK". `make lint`: exit 0 (the builder is 795
+  lines, under the 800 of the size check). `make docs`: "docs consistency: 14
+  checks passed". `make secret-scan`: in the pull request.
+- The six copies against the base's `main`, and the workflow's `build` job
+  with both PDFs: in the pull request.
+- Not seen: a release with both PDFs (the workflow publishes from `main`
+  only, when an operator starts it); the brief in someone else's hands.
+
+**Follow-ups:** one backlog row, homed at S035: the threat model is 94
+pages because some rows' Status holds more than a page of history, which
+is the register's text and not its printing; and the builder stands at 795
+lines of the size check's 800, so the next change to it moves a part out,
+in development-base first.
+
 ## Part D — Open questions
 
 | # | Question | Needed by | Default if unanswered |
@@ -22389,3 +22502,13 @@ compared, and one line in the Makefile.
   how and what changed). The whole suite, run alone on 2026-10-08 with the
   cluster's node container stopped for its length: `22437 passed, 9 skipped,
   8 warnings in 226.49s (0:03:46)`, coverage 99.14 %.
+- **v0.94, 2026-10-08:** S096, the PDF loses no row and has a brief edition
+  (new, `done`; the owner's "do it" and "Records (Recommended)"): a table with
+  a cell too long for a table row prints as records and any other wide table
+  gets its widths from its text; `make pdf-brief` writes the brief, without
+  the threat model and the Azure platform register, with the decisions as an
+  index. Measured: the full edition from 377 pages to 274, and from 117 pages
+  with text past the bottom margin, where the PDF lost it, to none; the brief
+  is 34 pages. The code is development-base's (its pull request 54), copied.
+  One backlog row is new, homed at S035. The numbers S093 to S095 and v0.93
+  are another open pull request's.

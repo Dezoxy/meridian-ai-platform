@@ -172,7 +172,7 @@ listed in [pdf-brief.txt](pdf-brief.txt), today the threat model and the
 Azure platform register, prints the decisions as an index of number, title,
 status and date, and says on its first page what only the full edition holds.
 In both, a table with a cell too long for one table row prints as records, one
-block of paragraphs per row. Before S095 a row taller than a page ran past the
+block of paragraphs per row. Before S096 a row taller than a page ran past the
 bottom margin and off the sheet, and the PDF lost that text: 117 of 377 pages
 on 2026-10-08. The Markdown, GitHub and the Documentation tab keep the tables.
 
