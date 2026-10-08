@@ -146,6 +146,7 @@ check: validate inspect
 ## docs            fail when documentation contradicts the tree (links, indexes, ADRs, view register, IDs, headings)
 docs:
 	python3 scripts/check_docs_consistency.py
+	python3 scripts/check_plan_files.py
 
 ## test            unit tests for the checker and the Mermaid and PDF scripts
 test:
