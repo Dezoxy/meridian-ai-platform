@@ -215,7 +215,12 @@ the directory must be one git ignores (`infra/kind/.identity/`). Status: the
 generator is implemented and tested without a cluster (`make test`); the image
 was run in a container, outside the cluster, by an opt-in rig
 (`MERIDIAN_KEYCLOAK_RIG=1 uv run pytest tests/meridian/test_keycloak_rig.py`,
-about 2 minutes and 2.5 GB free); nothing of it is on the cluster yet.
+about 2 minutes and 2.5 GB free; 6 passed against the pinned image on
+2026-10-08); nothing of it is on the cluster yet. By the owner's answer of
+2026-10-08 ("Keep it, opt-in only (Recommended)") Keycloak on kind will be an
+add-on that is off unless switched on and not part of plain `make up`
+(designed: the namespace, the switch and the Secret are not built, and `make
+up` does not call the generator).
 
 To read what a chart installs by default (its tags must be the ones in
 `pins.env`), render it without the `--set` arguments, here for cert-manager;

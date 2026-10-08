@@ -23,7 +23,10 @@ Gateway and the three tool servers serve mutual TLS and tell their callers
 apart by certificate (ADR 4). The edge reaches the Claims Triage App over
 plain HTTP and has no TLS, and there is no sign-in for people, so a tenant is
 the calling service's word, bounded by its entry in the registry: TLS at the
-edge and the sign-in (S020, S021) are designed. Since S037 (2026-10-06) the
+edge and the sign-in (S020, S021) are designed; of the sign-in, S021 has built
+and tested a token check, a session cookie and a route guard that no route
+calls (implemented, not wired), and nothing issues a token on kind or Azure.
+Since S037 (2026-10-06) the
 Agent Runtime hosts a second agent framework, Microsoft Agent Framework, behind
 the same `Host` protocol as LangGraph, for a second workload, the claim brief
 ([ADR 9](decisions/0009-run-a-second-agent-framework-behind-the-same-host-protocol.md)):
@@ -154,7 +157,7 @@ every `.md` file in that folder.
 | Requirements | [constraints](requirements/constraints.md) · [quality attributes](requirements/quality-attributes.md) |
 | Security | [threat model](security/threat-model.md) · [data classification](security/data-classification.md) |
 | Deployment | [Azure platform](deployment/azure-platform.md): every Azure service the platform uses or designs, the residency rule in words no cloud owns, and, in its last section, a comparison of a managed and a self-managed cluster (not a plan) |
-| Code | [import layering](code/import-layering.md): which Python package may import which, as the six import-linter contracts enforce it, with one Mermaid diagram of the layers, and the component view of the Agent Runtime |
+| Code | [import layering](code/import-layering.md): which Python package may import which, as the nine import-linter contracts enforce it, with one Mermaid diagram of the layers, and the component view of the Agent Runtime |
 
 Only `overview/` is imported into the model by `!docs`. Registers reach it by
 symlink (`overview/10-constraints.md`, `11-quality-attributes.md`,

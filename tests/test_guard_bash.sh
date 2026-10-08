@@ -596,6 +596,7 @@ else
 fi
 for entry in 'Bash(terraform plan*)' 'Bash(terraform -chdir=*aws* plan*)' 'Bash(make aws-plan*)' 'Bash(make aws-apply*)' \
   'Bash(make aws-kubeadm-plan*)' 'Bash(make aws-kubeadm-apply*)' \
+  'Bash(make eval-record*)' 'Bash(make eval-injection-record*)' 'Bash(make gateway-live*)' 'Bash(az rest*)' \
   'Bash(terraform apply*)' 'Bash(terraform -chdir=* apply*)'; do
   if in_list ask "$entry"; then
     echo "ok   ask holds ${entry}"
@@ -733,4 +734,180 @@ else
   echo "FAIL the directory scan found ${module_count} modules of the AWS family, fewer than 2"
   fail=1
 fi
+
+# The paid model calls (S071, G1). The ask says that the command calls a live
+# model and spends money, and that the owner's yes to a stated cost comes first;
+# the settings keep the free targets out of the ask list, so that the replay of
+# the recording and the smoke check (three calls, under a cent) never ask.
+for command_text in 'make eval-record' 'make eval-injection-record' 'make gateway-live' \
+  'infra/terraform/foundation.sh eval-record' 'MERIDIAN_LIVE_AZURE=1 pytest'; do
+  reason="$(reason_of "$command_text")"
+  case "$reason" in
+    *"live model"*"spend money"*"owner's yes"*"stated cost"*) echo "ok   the ask for ${command_text} says it calls a live model, spends money and needs the owner's yes to a stated cost" ;;
+    *)
+      echo "FAIL the ask for ${command_text} does not say it calls a live model, spends money and needs the owner's yes to a stated cost: $reason"
+      fail=1
+      ;;
+  esac
+done
+for entry in 'Bash(make azure-smoke*)' 'Bash(make eval*)' 'Bash(make eval-baseline*)' 'Bash(make eval-compare*)' 'Bash(make eval)'; do
+  if in_list ask "$entry" || in_list deny "$entry"; then
+    echo "FAIL ask or deny holds ${entry}, a free target"
+    fail=1
+  else
+    echo "ok   neither ask nor deny holds ${entry}, a free target"
+  fi
+done
+# The worst shapes of the new rules under the byte bound: `make ` repeated and
+# then a target that only starts like a paid one (the make rule backtracks over
+# every blank), and an opt-in name repeated (the loop is bounded at sixteen
+# reads and then asks). Both are answered well inside the CPU bound.
+paid_shape="$(for _ in $(seq 1550); do printf 'make '; done)eval-recorder"
+jq -nc --arg c "$paid_shape" '{tool_input:{command:$c}}' > "$big_input"
+cpu="$( { time bash "$hook" < "$big_input" > /dev/null; } 2>&1 )"
+cpu_seconds="$(awk '{ print $1 + $2 }' <<<"$cpu")"
+if awk -v s="$cpu_seconds" -v b="$cpu_bound" 'BEGIN { exit !(s < b) }'; then
+  echo "ok   1550 repetitions of make before a near-miss paid target take ${cpu_seconds} s of CPU, under ${cpu_bound}"
+else
+  echo "FAIL 1550 repetitions of make before a near-miss paid target take ${cpu_seconds} s of CPU, not under ${cpu_bound}"
+  fail=1
+fi
+ask_for "1550 repetitions of make before a paid target ask" ask \
+  "$(for _ in $(seq 1550); do printf 'make '; done)eval-record"
+paid_env_shape="$(for _ in $(seq 360); do printf 'MERIDIAN_EVAL_RECORD=0 '; done)pytest"
+jq -nc --arg c "$paid_env_shape" '{tool_input:{command:$c}}' > "$big_input"
+cpu="$( { time bash "$hook" < "$big_input" > /dev/null; } 2>&1 )"
+cpu_seconds="$(awk '{ print $1 + $2 }' <<<"$cpu")"
+if awk -v s="$cpu_seconds" -v b="$cpu_bound" 'BEGIN { exit !(s < b) }'; then
+  echo "ok   360 opt-in assignments set to 0 take ${cpu_seconds} s of CPU, under ${cpu_bound}"
+else
+  echo "FAIL 360 opt-in assignments set to 0 take ${cpu_seconds} s of CPU, not under ${cpu_bound}"
+  fail=1
+fi
+ask_for "360 opt-in assignments set to 0 ask, the loop reads sixteen" ask "$paid_env_shape"
+
+# The paid call itself and the additions of S071 (G2, G4). The asks say that the
+# command reaches a live model without the gateway and that the gateway's
+# targets are the only door; a paid target found by co-occurrence and one given
+# through MAKEFLAGS say what the other paid asks say.
+for command_text in 'az rest --url https://x' 'python3 -c "import azure.identity"'; do
+  reason="$(reason_of "$command_text")"
+  case "$reason" in
+    *"live"*"spends money"*"gateway's ceiling"*"only door"*"stated cost"*) echo "ok   the ask for ${command_text} says it reaches a live model without the gateway and that the gateway's targets are the only door" ;;
+    *)
+      echo "FAIL the ask for ${command_text} does not say it reaches a live model without the gateway and that its targets are the only door: $reason"
+      fail=1
+      ;;
+  esac
+done
+# shellcheck disable=SC2016  # the commands are samples for the hook, not for this shell
+for command_text in 'MAKEFLAGS="-- eval-record" make' 'T=eval-record; make $T' 'make -C $(cd x; pwd) gateway-live'; do
+  reason="$(reason_of "$command_text")"
+  case "$reason" in
+    *"live model"*"spend money"*"owner's yes"*"stated cost"*) echo "ok   the ask for ${command_text} says it calls a live model and spends money" ;;
+    *)
+      echo "FAIL the ask for ${command_text} does not say it calls a live model and spends money: $reason"
+      fail=1
+      ;;
+  esac
+done
+reason="$(reason_of 'make -m "aws-destroy"')"
+case "$reason" in
+  *"owner's"*"terminal"*"no session holds the credentials"*) echo "ok   the deny for a quoted removal target behind a make option says it is the owner's, in a terminal" ;;
+  *)
+    echo "FAIL the deny for a quoted removal target behind a make option does not say it is the owner's, in a terminal: $reason"
+    fail=1
+    ;;
+esac
+reason="$(reason_of 'make -m "aws-apply"')"
+case "$reason" in
+  *"COST MONEY"*"owner"*"no session holds the credentials"*) echo "ok   the ask for a quoted apply target behind a make option says it costs money and who runs it" ;;
+  *)
+    echo "FAIL the ask for a quoted apply target behind a make option does not say it costs money and who runs it: $reason"
+    fail=1
+    ;;
+esac
+# The worst shape of the az rule (it backtracks over every blank, like the make
+# rule): `az ` repeated and then a word that only starts like rest.
+az_shape="$(for _ in $(seq 2000); do printf 'az '; done)restx"
+jq -nc --arg c "$az_shape" '{tool_input:{command:$c}}' > "$big_input"
+cpu="$( { time bash "$hook" < "$big_input" > /dev/null; } 2>&1 )"
+cpu_seconds="$(awk '{ print $1 + $2 }' <<<"$cpu")"
+if awk -v s="$cpu_seconds" -v b="$cpu_bound" 'BEGIN { exit !(s < b) }'; then
+  echo "ok   2000 repetitions of az before a near-miss word take ${cpu_seconds} s of CPU, under ${cpu_bound}"
+else
+  echo "FAIL 2000 repetitions of az before a near-miss word take ${cpu_seconds} s of CPU, not under ${cpu_bound}"
+  fail=1
+fi
+ask_for "2000 repetitions of az before rest ask" ask "$(for _ in $(seq 2000); do printf 'az '; done)rest"
+
+# The passes S071 adds (G4): a copy of the command with the separators inside
+# quoted pieces blanked, a pass of its own that empties message values, and the
+# pass that finds a quoted AWS target behind a make option. G2's pass over the
+# older copy ran 14 to 56 s on a line of unmatched escaped quotes and message
+# flags (the hook's timeout is 10 s, and a hook past it does not block); the new
+# passes mask the quoted pieces once and scan the text a few times. Each shape
+# stays under the one CPU bound (they take 0.1 to 1.4 s here). The first four
+# are the first review's, the worst first; the rest are the next-worst shapes
+# found by trying every flag the passes read, a make in the segment, nested
+# quotes, long runs of separators and every trigger word of the passes at once
+# (the second review's worst, which starts four Python passes).
+repeat() { # $1=text $2=count: the text, that many times
+  local i out=""
+  for ((i = 0; i < $2; i++)); do out+="$1"; done
+  printf '%s' "$out"
+}
+cpu_shape() { # $1=what the shape is $2=the command
+  jq -nc --arg c "$2" '{tool_input:{command:$c}}' > "$big_input"
+  cpu="$( { time bash "$hook" < "$big_input" > /dev/null; } 2>&1 )"
+  cpu_seconds="$(awk '{ print $1 + $2 }' <<<"$cpu")"
+  if awk -v s="$cpu_seconds" -v b="$cpu_bound" 'BEGIN { exit !(s < b) }'; then
+    echo "ok   ${1} takes ${cpu_seconds} s of CPU, under ${cpu_bound}"
+  else
+    echo "FAIL ${1} takes ${cpu_seconds} s of CPU, not under ${cpu_bound}"
+    fail=1
+  fi
+}
+esc_quote='\"'
+cpu_shape "1500 escaped quotes and 700 empty -m values" "git $(repeat "$esc_quote" 1500)$(repeat " -m ''" 700)"
+cpu_shape "2000 escaped quotes and 500 empty -m values" "git $(repeat "$esc_quote" 2000)$(repeat " -m ''" 500)"
+cpu_shape "500 escaped quotes and 1100 empty -m values" "git $(repeat "$esc_quote" 500)$(repeat " -m ''" 1100)"
+cpu_shape "3000 escaped quotes and 150 empty -m values" "git $(repeat "$esc_quote" 3000)$(repeat " -m ''" 150)"
+cpu_shape "1500 escaped quotes and 500 empty --body values" "git $(repeat "$esc_quote" 1500)$(repeat " --body ''" 500)"
+cpu_shape "1500 escaped quotes and 600 empty -am values" "git $(repeat "$esc_quote" 1500)$(repeat " -am ''" 600)"
+cpu_shape "make, 1500 escaped quotes and 700 empty -m values" "git make $(repeat "$esc_quote" 1500)$(repeat " -m ''" 700)"
+cpu_shape "aws, 1500 escaped quotes and 400 make -m values" "aws $(repeat "$esc_quote" 1500)$(repeat " make -m 'x'" 400)"
+cpu_shape "a long run of quoted values after -m" "git -m $(repeat "'x'" 2500)"
+cpu_shape "3000 separators and 800 empty -m values" "git $(repeat ';' 3000)$(repeat " -m ''" 800)"
+cpu_shape "every trigger word, 3900 escaped quotes and 300 separators" \
+  "git aws rest record azure- credential MERIDIAN_ python3 $(repeat "$esc_quote" 3900)$(repeat '&' 300)"
+# The command-word test of the AWS pass (G5: an option's argument is eaten, which
+# gave the prefixes a second alternative per flag): prefixes with options and
+# arguments in a long run, ended by make or by a word that is not make.
+cpu_shape "800 prefixes with option arguments before make" \
+  "git aws-destroy; $(repeat 'sudo -u x env -u y ' 400)make -m \"aws-apply\""
+cpu_shape "1500 sudo -u without an argument-taking end" "git aws-destroy; $(repeat 'sudo -u ' 1500)git commit"
+cpu_shape "400 repetitions of timeout and xargs options before a near-miss word" \
+  "git aws-destroy; $(repeat 'timeout -s K 5 xargs -I X ' 400)makefile -m \"aws-apply\""
+# G6: the gate that reads a shell's -c body now allows flags that take an argument
+# (-o pipefail), and the flag classes of the prefixes are case-sensitive. A long run
+# of -o pairs before -c (past the 80-byte window the gate reads), the same run
+# before every quoted piece, a run of mixed-case flags before make, and one before
+# a word that only starts like make.
+cpu_shape "3000 pairs of -o x before a shell's -c" \
+  "git aws-destroy; bash $(repeat '-o x ' 3000)-c 'make -m \"aws-apply\"'"
+cpu_shape "200 shells with a run of -o pairs, each before a quoted piece" \
+  "git aws-destroy; $(repeat "bash $(repeat '-o x ' 12)-c 'q' " 200)make -m \"aws-apply\""
+cpu_shape "800 prefixes with flags of both cases before make" \
+  "git aws-destroy; $(repeat 'sudo -H -P -u x xargs -p -i -l -I Y ' 400)make -m \"aws-apply\""
+cpu_shape "400 repetitions of four prefixes with flags before a near-miss word" \
+  "git aws-destroy; $(repeat 'command -p setsid -f env -S xargs -i ' 400)makefile -m \"aws-apply\""
+cpu_shape "300 repetitions of su and env -S, each before a quoted piece" \
+  "git aws-destroy; $(repeat "su a b c d -c 'q' env -i -S 'q' " 300)make -m \"aws-apply\""
+# A line that reaches the passes with padding is still read to its end: the
+# denied part after the padding is denied, not skipped.
+ask_for "the first review's worst shape followed by a denied part is denied" deny \
+  "git $(repeat "$esc_quote" 1500)$(repeat " -m ''" 700); git push --force"
+ask_for "every trigger word and padding followed by a denied part is denied" deny \
+  "git aws rest record azure- credential MERIDIAN_ python3 $(repeat "$esc_quote" 3900)$(repeat '&' 100); git push --force"
 exit "$fail"

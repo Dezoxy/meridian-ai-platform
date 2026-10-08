@@ -373,6 +373,40 @@ the rest; a test regenerates them and fails on a committed file that differs.
 The folder is marked binary in the repository's attributes file, so a PNG's
 CR LF survives a commit.
 
+## Held-out injection cases
+
+`injection-heldout/cases.json` and `manifest.json` hold 72 more cases, in a
+folder of their own and not in `injection/`: the injection set's fingerprint
+refuses a file of its folder that its manifest does not list. **Their
+sentences are attack text and data, like the others.** Status: implemented,
+and read by one report command and its tests; `make eval` does not read them,
+so they are a report, not a fingerprint of the gate.
+
+The sentences (48 attacks, six to each of eight families, and 24
+look-alikes, in English, Hungarian, German, French, Polish and Spanish) were
+written by an agent that was given the claim's fields, the names of the attack
+classes and the generator's interface, and nothing else: it read none of the
+screen's patterns, the existing cases or their summary. They are kept exactly as
+it wrote them (`generator/heldout_text.py`, ASCII with escapes), and a test
+holds a SHA-256 of each. The IDs run `CLM-5001` to `CLM-5072` in its order, a
+range no claim or case uses. Each sentence is appended to its base
+description with one space, where the injection set also puts a sentence before
+the description or on a new line, so the two sets' rates are not measured the
+same way in that respect. The attacks rotate over the injection set's six attack
+bases as its own description attacks do, and the look-alikes over its six benign
+bases in turn. The case file has the shape of `injection/cases.json`; the
+manifest adds `held_out: true` and, per case, the writer's ID, the language and
+the family, which the case fields have no place for. The writer's note on what
+each sentence is after is in no data file.
+
+`make synthetic` writes both files with the rest. To measure the screen on
+them: `uv run python -m meridian.workloads.claims_triage.injection_heldout`
+(see `data/evaluation/README.md`).
+
+**The rule: the screen, its patterns, the existing cases and these sentences
+are not changed after the result is read, because a set that was tuned on is no
+longer held out.**
+
 ## Regenerating
 
 ```sh
