@@ -778,7 +778,7 @@ def kctl_calls() -> list[tuple[str, list[str]]]:
     # path under KIND_DIR: the entry file alone holds fewer than the hundred
     # sites the first test below reads.
     parts = [path.relative_to(KIND_DIR).as_posix() for path in smoke_parts()]
-    for name in (*SCRIPTS, "down.sh", "holder.sh", "grafana.sh", "common.sh", *parts):
+    for name in (*sorted(p.name for p in KIND_DIR.glob("*.sh")), *parts):
         text = (KIND_DIR / name).read_text(encoding="utf-8")
         for line in logical_lines(text):
             for match in re.finditer(r"(?<![\w-])kctl\s", line):

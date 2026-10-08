@@ -192,9 +192,9 @@ Mermaid. The rule is "Model or Mermaid" in
   catches syntax errors that GitHub would show as an error box.
   The `derived diagrams` job of the `docs` workflow runs both halves on
   every pull request, so a fence that does not parse fails a required
-  check. Under rootless Docker `make mermaid-render` and `make pdf` cannot
-  write their PNGs (the container's user is not the folder's owner); there
-  the pull request's job is the proof.
+  check. `make mermaid-render` and `make pdf` also run under rootless
+  Docker, where the render container starts as its root, which there is
+  you (S092). The render container has no network.
 
 ## Not documented here
 
