@@ -578,7 +578,8 @@ def test_the_policy_check_is_the_tenth_and_is_documented() -> None:
     assert calls[8:10] == ["check_service_identity", "check_certificate_policy"]
     assert calls[10] == "check_alert_rules"
     assert calls[11] == "check_telemetry_stores"  # S072, contract M3b
-    assert calls[12].startswith("if ((failures")
+    assert calls[12] == "check_issuer"  # S021, Y2b: one SKIP line unless switched on
+    assert calls[13].startswith("if ((failures")
     # Four lines since S062: the three above and the request that must be
     # refused (test_certificate_refused_request.py); five since S073, K5: the
     # database's own certificates (test_smoke_database_certificates.py).

@@ -23,7 +23,10 @@ Gateway and the three tool servers serve mutual TLS and tell their callers
 apart by certificate (ADR 4). The edge reaches the Claims Triage App over
 plain HTTP and has no TLS, and there is no sign-in for people, so a tenant is
 the calling service's word, bounded by its entry in the registry: TLS at the
-edge and the sign-in (S020, S021) are designed. Since S037 (2026-10-06) the
+edge and the sign-in (S020, S021) are designed; of the sign-in, S021 has built
+and tested a token check, a session cookie and a route guard that no route
+calls (implemented, not wired), and nothing issues a token on kind or Azure.
+Since S037 (2026-10-06) the
 Agent Runtime hosts a second agent framework, Microsoft Agent Framework, behind
 the same `Host` protocol as LangGraph, for a second workload, the claim brief
 ([ADR 9](decisions/0009-run-a-second-agent-framework-behind-the-same-host-protocol.md)):
@@ -154,7 +157,7 @@ every `.md` file in that folder.
 | Requirements | [constraints](requirements/constraints.md) · [quality attributes](requirements/quality-attributes.md) |
 | Security | [threat model](security/threat-model.md) · [data classification](security/data-classification.md) |
 | Deployment | [Azure platform](deployment/azure-platform.md): every Azure service the platform uses or designs, the residency rule in words no cloud owns, and, in its last section, a comparison of a managed and a self-managed cluster (not a plan) |
-| Code | [import layering](code/import-layering.md): which Python package may import which, as the six import-linter contracts enforce it, with one Mermaid diagram of the layers, and the component view of the Agent Runtime |
+| Code | [import layering](code/import-layering.md): which Python package may import which, as the nine import-linter contracts enforce it, with one Mermaid diagram of the layers, and the component view of the Agent Runtime |
 
 Only `overview/` is imported into the model by `!docs`. Registers reach it by
 symlink (`overview/10-constraints.md`, `11-quality-attributes.md`,
@@ -164,6 +167,17 @@ The security and quality registers came before the code they govern, so later
 steps cite their IDs instead of inventing them. Add other concern documents
 when there is something true to say: reliability when something runs, and
 the deployment of each cloud when there is something to place.
+
+The PDF comes in two editions, built from the same source at the same commit:
+`make pdf` writes the full one and `make pdf-brief` the brief, the one to hand
+to someone who will not read a register. The brief leaves out the documents
+listed in [pdf-brief.txt](pdf-brief.txt), today the threat model and the
+Azure platform register, prints the decisions as an index of number, title,
+status and date, and says on its first page what only the full edition holds.
+In both, a table with a cell too long for one table row prints as records, one
+block of paragraphs per row. Before S096 a row taller than a page ran past the
+bottom margin and off the sheet, and the PDF lost that text: 117 of 377 pages
+on 2026-10-08. The Markdown, GitHub and the Documentation tab keep the tables.
 
 ## Diagrams
 

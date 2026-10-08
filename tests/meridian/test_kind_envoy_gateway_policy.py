@@ -484,7 +484,11 @@ def test_up_applies_it_after_the_namespaces_and_before_the_controllers_release()
     (release,) = [
         i for i, line in enumerate(lines) if line.startswith("install_release envoy-")
     ]
-    (gateway,) = [i for i, line in enumerate(lines) if "manifests/gateway.yaml" in line]
+    # The Gateway is applied from edge_gateway_manifest (gateways.sh, S021 Y2b),
+    # which prints the committed manifests/gateway.yaml with the switch off.
+    (gateway,) = [
+        i for i, line in enumerate(lines) if line.startswith("edge_manifest=")
+    ]
     (observability,) = [
         i
         for i, line in enumerate(lines)

@@ -1,10 +1,12 @@
 name: Docs / Architecture PDF
 
-# Publishes the architecture Documentation tab and every view as one PDF on a
-# GitHub release, when an operator starts it on main. One release per edition:
-# the edition is the last commit to docs/architecture, and the tag is
-# architecture-<edition>. It runs `make pdf`, so the image pins at the top of
-# the Makefile apply here exactly as they do locally.
+# Publishes the architecture Documentation tab and every view as a PDF on a
+# GitHub release, when an operator starts it on main, and beside it the brief:
+# the same without the documents docs/architecture/pdf-brief.txt lists and
+# with the decisions as an index. One release per edition: the edition is the
+# last commit to docs/architecture, and the tag is architecture-<edition>. It
+# runs `make pdf` and `make pdf-brief`, so the image pins at the top of the
+# Makefile apply here exactly as they do locally.
 #
 # On a pull request that changes this workflow, the PDF scripts or the
 # Makefile, only the build job runs, so the build is proven in CI before a
@@ -33,6 +35,7 @@ jobs:
     timeout-minutes: 30
     outputs:
       pdf: ${{ steps.build.outputs.pdf }}
+      brief: ${{ steps.build.outputs.brief }}
       edition: ${{ steps.build.outputs.edition }}
       project: ${{ steps.build.outputs.project }}
     steps:
@@ -55,20 +58,28 @@ jobs:
 
       # The same command as a local build: export PNG and JSON with the pinned
       # Structurizr image, assemble, render with Pandoc and Eisvogel.
-      - name: Build the PDF
+      - name: Build the PDF and the brief
         id: build
         shell: bash
         run: |
           set -euo pipefail
           make pdf
+          make pdf-brief
           generated=docs/architecture/generated
           shopt -s nullglob
           pdfs=("${generated}"/*.pdf)
-          if [[ "${#pdfs[@]}" -ne 1 ]]; then
-            echo "::error::expected one PDF in ${generated}, found ${#pdfs[@]}" >&2
+          briefs=("${generated}"/*-architecture-brief-*.pdf)
+          if [[ "${#pdfs[@]}" -ne 2 || "${#briefs[@]}" -ne 1 ]]; then
+            echo "::error::expected the PDF and its brief in ${generated}, found ${#pdfs[@]} PDFs, ${#briefs[@]} of them a brief" >&2
             exit 1
           fi
-          pdf="$(basename "${pdfs[0]}")"
+          brief="$(basename "${briefs[0]}")"
+          # The two names differ in "-brief" alone, so they are one edition.
+          pdf="${brief/-architecture-brief-/-architecture-}"
+          if [[ ! -f "${generated}/${pdf}" ]]; then
+            echo "::error::the brief ${brief} has no PDF ${pdf} beside it" >&2
+            exit 1
+          fi
           # payment-platform-architecture-2026-09-18-af49b21.pdf -> af49b21
           edition="${pdf%.pdf}"
           edition="${edition##*-}"
@@ -78,9 +89,10 @@ jobs:
           fi
           project="$(jq -r '.name // "Architecture"' "${generated}/workspace.json")"
           mkdir -p "${RUNNER_TEMP}/pdf"
-          cp "${generated}/${pdf}" "${RUNNER_TEMP}/pdf/"
+          cp "${generated}/${pdf}" "${generated}/${brief}" "${RUNNER_TEMP}/pdf/"
           {
             echo "pdf=${pdf}"
+            echo "brief=${brief}"
             echo "edition=${edition}"
             echo "project=${project}"
           } >> "${GITHUB_OUTPUT}"
@@ -93,7 +105,7 @@ jobs:
           retention-days: 14
 
   # Only this job can write, and only when an operator started the workflow on
-  # main. It publishes the PDF the build job produced; it builds nothing.
+  # main. It publishes the two PDFs the build job produced; it builds nothing.
   release:
     needs: build
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
@@ -113,6 +125,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PDF: ${{ needs.build.outputs.pdf }}
+          BRIEF: ${{ needs.build.outputs.brief }}
           EDITION: ${{ needs.build.outputs.edition }}
           PROJECT: ${{ needs.build.outputs.project }}
           MAIN_SHA: ${{ github.sha }}
@@ -127,8 +140,8 @@ jobs:
           fi
           # The tag points at the edition commit: the model state the PDF shows.
           edition_sha="$(gh api "repos/${GH_REPO}/commits/${EDITION}" --jq .sha)"
-          gh release create "${tag}" "${RUNNER_TEMP}/pdf/${PDF}" \
+          gh release create "${tag}" "${RUNNER_TEMP}/pdf/${PDF}" "${RUNNER_TEMP}/pdf/${BRIEF}" \
             --target "${edition_sha}" \
             --title "${PROJECT} architecture, edition ${EDITION}" \
-            --notes "Architecture documentation built from main at ${MAIN_SHA}. Edition ${EDITION} is the last commit to docs/architecture. Share it only with people who may read this repository."
-          echo "published ${tag}: ${PDF}"
+            --notes "Architecture documentation built from main at ${MAIN_SHA}, as the full edition and as a brief that says on its first page what it leaves out. Edition ${EDITION} is the last commit to docs/architecture. Share them only with people who may read this repository."
+          echo "published ${tag}: ${PDF} and ${BRIEF}"

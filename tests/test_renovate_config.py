@@ -86,6 +86,9 @@ NOT_A_CHARTS_TAG = {
     # The rate store (S066) and the tests' Redis are one image whose tag is the
     # repository's own choice, in Meridian's own chart: its own group moves it.
     "redis": "the repository's own choice, in its own Renovate group",
+    # The mock OIDC issuer on kind (S021): the identity namespace's own
+    # Deployment runs it, no chart; its own Renovate group moves it.
+    "quay.io/keycloak/keycloak": "the mock issuer's own Deployment, no chart",
     # The documentation toolchain, run by the Makefile and CI: no chart.
     "structurizr/structurizr": "documentation tooling, no chart",
     "pandoc/extra": "documentation tooling, no chart",
@@ -390,6 +393,31 @@ class Readers(unittest.TestCase):
         self.assertGreater(rules.index(group), rules.index(platform))
         note = " ".join(group["prBodyNotes"])
         for words in ("RATE_STORE_IMAGE", "PYTEST_REDIS_IMAGE", "`make smoke`"):
+            self.assertIn(words, note)
+
+    def test_the_mock_issuer_s_image_is_read_and_arrives_in_a_group_of_its_own(
+        self,
+    ) -> None:
+        # KEYCLOAK_IMAGE (S021) is one line, name:tag@digest, so the pins file's
+        # image reader takes it. A new release can change a claim the sign-in
+        # module checks, so its pull request has a group and a note of its own.
+        name = "quay.io/keycloak/keycloak"
+        pins = (ROOT / PINS).read_text(encoding="utf-8")
+        found = {m.group("depName"): m for m in self.image_reader(PINS).finditer(pins)}
+        rules = self.config["packageRules"]
+        (group,) = [r for r in rules if name in r.get("matchPackageNames", [])]
+        (platform,) = [r for r in rules if r.get("groupName") == "kind platform"]
+
+        self.assertIn(name, found)
+        tag, digest = found[name].group("currentValue", "currentDigest")
+        self.assertRegex(tag, r"^\d+\.\d+\.\d+$")
+        self.assertRegex(digest, r"^sha256:[a-f0-9]{64}$")
+        self.assertEqual(group["matchDatasources"], ["docker"])
+        self.assertNotEqual(group["groupName"], platform["groupName"])
+        # A later rule wins, so the group must come after the platform's.
+        self.assertGreater(rules.index(group), rules.index(platform))
+        note = " ".join(group["prBodyNotes"])
+        for words in ("MERIDIAN_KEYCLOAK_RIG=1", "`typ`", "`make smoke`"):
             self.assertIn(words, note)
 
     def test_the_redis_group_takes_the_image_only_and_not_the_python_client(

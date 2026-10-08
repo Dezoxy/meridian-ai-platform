@@ -1074,13 +1074,13 @@ def test_up_checks_the_record_once_the_cluster_exists_and_before_it_changes_one(
 
 
 def test_up_writes_the_record_last_after_every_wait_that_can_fail() -> None:
-    tail = UP_SH.rstrip().splitlines()[-3:]
     waits = UP_SH.index("wait --for=condition=Available deployment")
-
-    assert tail[1] == "record_cluster_holder ok"
-    assert tail[2].startswith('log "done. Next:')
+    # S021 (Y2c): the add-on's block follows the record, so a refusal leaves `ok`.
+    after = UP_SH.split("\nrecord_cluster_holder ok\n")[1].rstrip().splitlines()
+    code = [line for line in after if line and line[0] != "#"]
     assert UP_SH.count("record_cluster_holder ok") == 1
     assert waits < UP_SH.index("record_cluster_holder ok")
+    assert code[0] == "if identity_on; then" and code[-1].startswith('log "done')
 
 
 def test_up_writes_changing_in_both_branches_of_create_cluster() -> None:

@@ -253,15 +253,19 @@ and `destroy azure` print the usage line and run nothing, on purpose, and no
 the wrapper (a clean environment, the lock read-only, no variable or override
 file, the default workspace, a plan record bound to its commit and hash, a
 check of the password's version rule, a documented retry for role propagation,
-redaction of Azure's host shapes and of an address) **together with** the
-command guard's and the settings' rules for the new names, as the AWS module's
-were, with a security review of its own. Until then the guard has no rule for
-this directory beyond the ones that reach every Terraform call, so a Terraform
-command typed by hand here (`plan`, `state`, `output`) gets no ask, and the
-only barrier is that the machine where a session runs holds no Azure sign-in.
-S071 plans such a sign-in on the development machine for a live model call, so
-that barrier ends with it: the wrapper and the guard's rules come first, and
-nobody runs Terraform by hand against this directory in the meantime.
+redaction of Azure's host shapes and of an address). The command guard's and
+the settings' rules for the new names exist before it (S020, GA1 and GA2:
+implemented and tested against a case file, never seen in a live session; one
+security review of both is still to come): the removal and a state change by
+hand are denied, the plan, the apply and the reads by hand ask, and the
+wrapper's local file, the saved plan, this directory's `.terraform` folder and
+the cloud CLI's folder `~/.azure` are neither read nor written by a session
+(`docs/operations/runbooks/secret-rotation.md`, "The Azure platform module",
+has the rules and what they do not see). They are a guard for habits and not a
+boundary, so the barrier is still that the machine where a session runs holds
+no Azure sign-in. S071 plans such a sign-in on the development machine for a
+live model call, so that barrier ends with it, and nobody runs Terraform by
+hand against this directory in the meantime.
 
 `validate` is run from the repository root and leaves nothing in this
 directory: `aws.sh` keeps the provider cache under the home directory
