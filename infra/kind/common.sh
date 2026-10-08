@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Shared by up.sh, deploy.sh, upkeep.sh, demo.sh, smoke.sh, down.sh, holder.sh, grafana.sh and cert-renew.sh. Source it; do not run it.
+# Shared by up.sh, deploy.sh, upkeep.sh, demo.sh, demo-seed.sh, smoke.sh, down.sh, holder.sh, grafana.sh and cert-renew.sh. Source it; do not run it.
 #
 # Safety rules kept in one place:
 #  - The cluster's credentials live in infra/kind/kubeconfig (gitignored). The
