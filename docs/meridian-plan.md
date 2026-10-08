@@ -184,9 +184,37 @@ Worktree and branch. Do not commit, push, switch branches or stash.
   git does not know, which gitleaks alone passes with nothing scanned). CI
   scans every commit of a pull request, so a finding in an early commit is
   not fixed by a later one.
-- `GITHUB_ACTIONS=true make pytest-db` once, when the step changed Python.
-  A tool can behave differently when CI's variables are set; Typer's usage
-  errors did, on pull request 27.
+- **Tests: the changed areas locally, the whole suite in CI** (the owner,
+  2026-10-08, about 04:45 UTC, after "What does it mean full suite in your
+  understanding?" and "Okay but ehy dont we just test those things that is
+  modified?": "Affected tests, CI runs all (Recommended)"; offered beside it:
+  keep the whole suite locally, and a mixed rule). It replaces ~~`GITHUB_ACTIONS=true
+  make pytest-db` once, when the step changed Python~~ (a tool can behave
+  differently when CI's variables are set; Typer's usage errors did, on pull
+  request 27: that is one more thing CI's whole run is for).
+  - **Locally, before a pull request:** the tests of the changed areas (the
+    changed folders mapped to their test folders, `-n 4` at most; the
+    import-contract tests always; after a merge of `main`, the tests its
+    commits added), `make lint`, `make docs`, `make test` and
+    `make secret-scan`. The cluster stays up.
+  - **In CI, on the pull request:** the whole suite (the hosted runner took
+    10 min 1 s to 14 min 29 s before coverage and 14 min 0 s with it, on
+    2026-10-07, so about 15 minutes). A red run is fixed and pushed again;
+    nothing merges red.
+  - **Why, with the numbers:** the development machine has 11.4 GB; the kind
+    cluster's node holds about 5 GB; the whole suite with coverage needs about
+    5.5 GB at its peak (2026-10-08: 22,437 tests in 3 min 46 s with the
+    cluster stopped); the machine froze twice, on 2026-10-07 and 08, and was
+    rebooted once.
+  - **A whole local run, when one is wanted by name,** is made with the
+    cluster's node container stopped for its length (the owner, about 03:57
+    UTC the same morning: "Stop cluster during suite (Recommended)"). The
+    helper that does it lives outside the repository for now and is not a
+    `make` target.
+  - **The price, said plainly:** a test broken in a file the change did not
+    touch is found in CI, about 15 minutes after the push, not before it
+    (the same morning, two count pins in `test_alert_rules.py` were such
+    tests).
 - Read a gate's exit status, not its last lines. A gate piped into `tail`
   inside an `&&` chain hands on `tail`'s status, and a failing check passes:
   on 2026-10-06 a gate piped through another command before `&&` hid a
@@ -259,8 +287,9 @@ sessions; the brief of each step, or of each session, says:
   S075).
 - **What each step has of its own.** `PYTEST_DB_CONTAINER`,
   `PYTEST_DB_PORT` and `PYTEST_WORKERS` (4 beside other steps, 3 for an
-  implementer while the cluster is up; the virtual machine runs the whole
-  suite alone with 10 in under two minutes), for `make pytest-db` and
+  implementer while the cluster is up; the virtual machine ran the whole
+  suite alone with 10 in under two minutes on 2026-10-05, and in 3 min 46 s
+  on 2026-10-08 with 22,437 tests and coverage), for `make pytest-db` and
   `make eval`, so two test runs never meet.
 - **Numbers are taken late.** Migration numbers, `T-NN`, ADR numbers and
   the changelog's version are taken after merging `main` into the step's
@@ -270,8 +299,10 @@ sessions; the brief of each step, or of each session, says:
 - **Who finishes later, merges first.** That session runs
   `git merge origin/main` (no rebase and no force-push on a branch with a
   pull request), runs the gates again, then opens its pull request. After
-  a merge of `main` into a step's branch the whole suite runs on the merged
-  tree before the branch is pushed, and a contract's gates name every
+  a merge of `main` into a step's branch ~~the whole suite runs on the merged
+  tree before the branch is pushed~~ (until 2026-10-08) the tests the merged
+  commits added run beside the changed areas', and CI runs the whole suite on
+  the pull request ("Before pushing", above); a contract's gates name every
   directory its change reaches (2026-10-06: a merge pushed after the cheap
   gates left a test red on S076's branch).
 
@@ -345,8 +376,10 @@ Cost rules:
 - Broad searches go to an Explore subagent, which returns conclusions instead
   of file dumps.
 - The Azure environment exists only on demo days (C-04).
-- One whole suite at a time on a machine, and none beside a busy cluster
-  unless the machine was measured to carry both: on the laptop the suite
+- For a whole local run, when one is wanted by name (since 2026-10-08 the
+  whole suite runs in CI, "Before pushing"): one whole suite at a time on a
+  machine, and none beside a busy cluster unless the machine was measured to
+  carry both: on the laptop the suite
   took 9 minutes alone and did not finish in 35 beside a fresh deploy
   ([development environment](development-environment.md)). Before a whole
   suite the session counts the test databases that are running and waits
@@ -470,14 +503,16 @@ and Pydantic, at the cost of one dependency.
 |---|---|---|---|---|
 | S019 | Hardened Helm charts | Probes, resource limits, default-deny NetworkPolicy, PodDisruptionBudgets, non-root read-only containers, pinned digests; `helm lint` and the infra reviewer pass | done | S018 |
 | S055 | Service-to-service identity | On kind, each service proves which service it is to the one it calls: the Agent Runtime, the Model Gateway and the tool servers refuse a call that carries no identity or comes from a service the registry does not map; the tenant and agent a caller may name come from that mapping, and a header that disagrees is refused; the tool servers accept the runtime alone (T-08, T-24, T-48, T-50); the mechanism is chosen with the owner when the step opens and recorded in an ADR | done | S019 |
-| S020 | Azure platform | Terraform adds the virtual network, AKS, ACR, PostgreSQL Flexible Server with pgvector and Workload Identity to Key Vault; the environment is created and removed with one command each. **First half, code only (2026-10-07): a module `infra/terraform/azure/` written, validated and scanned without an account and NEVER applied** (44 resources, two doors: `make azure-platform-validate` and `make azure-platform-scan`), its README, ADR 11, the deployment view `DeploymentAzure` (designed), the threat model's rows T-103 to T-107 and the Azure platform document brought to it. **What waits:** the wrapper and the command guard's rules for it (no door that plans, applies or removes exists); the owner's upgrade to pay-as-you-go by about 2026-10-30; the owner's decision on a firewall for the foundation's vault and account; the apply and its cost, stated at the paid stop; and the second half (the chart on the cluster, the roles, the egress rule, S022's push). The "done when" above is the whole step and is not met | doing | S007, S019, S055, S056 |
-| S021 | Identity | Entra ID sign-in for the UI and APIs; roles platform-admin, agent-developer, adjuster and auditor; a mock OIDC issuer on kind; the tenant is resolved from the token | todo | S020 |
-| S022 | Delivery pipeline | Build, SBOM, Trivy scan, cosign signing, push to ACR, kind smoke test, manual approval, deploy to AKS; the rollback runbook exercised; evidence attached to the release | todo | S020, S021 |
+| S020 | Azure platform | Terraform adds the virtual network, AKS, ACR, PostgreSQL Flexible Server with pgvector and Workload Identity to Key Vault; the environment is created and removed with one command each. **First half, code only (2026-10-07): a module `infra/terraform/azure/` written, validated and scanned without an account and NEVER applied** (44 resources, two doors: `make azure-platform-validate` and `make azure-platform-scan`), its README, ADR 11, the deployment view `DeploymentAzure` (designed), the threat model's rows T-103 to T-107 and the Azure platform document brought to it. **What waits:** the wrapper and the command guard's rules for it (no door that plans, applies or removes exists); the owner's upgrade to pay-as-you-go by about 2026-10-30; the firewall for the foundation's vault and account, **decided by the owner on 2026-10-08** ("Deny, allow operator (Recommended)": default deny, the operator's address allowed, private endpoints for the cluster; **designed**, to be written as code in the foundation module and applied at the next apply the owner runs); the apply and its cost, stated at the paid stop; and the second half (the chart on the cluster, the roles, the egress rule, S022's push). The "done when" above is the whole step and is not met | doing | S007, S019, S055, S056 |
+| S021 | Identity | Entra ID sign-in for the UI and APIs; roles platform-admin, agent-developer, adjuster and auditor; a mock OIDC issuer on kind; the tenant is resolved from the token. **The owner, 2026-10-08,** asked "another question, we do we have to implemt keycloak? we are gonna use entr id not?", was told that Entra ID is the issuer on Azure and that Keycloak is only the local stand-in for the mock issuer, and chose "Keep it, opt-in only (Recommended)" (offered beside it: Entra only; keep only what exists): Keycloak is to be built on kind as an add-on that is OFF unless switched on and is not part of plain `make up`. **Designed: nothing of it is on `main` yet** (the realm generator and the pin are on the step's branch) | todo | S020 |
+| S093 | Claimants sign in as themselves | The owner's decision of 2026-10-07: "Own claimant sign-in" (the session had recommended the pages behind the staff sign-in for now; the owner chose against it). A second realm beside staff, `meridian-claimants`, with members of the public and no role (on Azure Microsoft Entra External ID, designed and not asked about yet); a claimant's session of its own, shorter than a staff one; a claim is OWNED by the claimant who filed it (the claimant's subject is stored on the claim: a migration, a column added in one file and backfilled in the next); a claim's status, its documents, its withdrawal and uploads, where they exist, are refused to another claimant with the answer an unknown claim gets; a claim that exists without an owner is staff-only; each realm's token and cookie is refused on the other's routes. **Designed: nothing of it is built.** Open for the step's design: whether a claimant is also tied to a policy (T-76's planted claims), and the claimant's session length | todo | S021 |
+| S094 | Sign-in at the edge | The owner's order of 2026-10-07: "App layer first, edge second (Recommended)"; both layers are the committed end state, so this is a step and not a "later". First TLS at kind's edge, which is plain HTTP today; then Envoy Gateway's sign-in and role rules (its `SecurityPolicy`) in front of the same app checks, which stay. A step of its own because Envoy's sign-in forces `Secure` on its cookies with no switch, so it cannot be seen to work before the edge has TLS; because the proxy pod and the controller pod each need egress to the issuer, in a namespace that is default-deny today; and because the facts sheet marks six paths as ones only a run would tell (whether a browser keeps the forced `Secure` cookie on `http://*.localhost`, whether the controller takes an in-cluster issuer with a plain-HTTP token endpoint, which pods need the new egress, whether a certificate-authority route to the issuer works, whether a policy attaches to one named rule of the Claims API's route, and what the app then receives). **Designed: nothing of it is built** | todo | S021 |
+| S022 | Delivery pipeline | Build, SBOM, Trivy scan, cosign signing, push to ACR, kind smoke test, manual approval, deploy to AKS; the rollback runbook exercised; evidence attached to the release. **Hard condition (the owner, 2026-10-08):** the pipeline depends on the staff sign-in (S021) only, not on claimants' sign-in (S093) or sign-in at the edge (S094); so until S094 exists, the AKS edge admits the operator's address only, and the pipeline's deploy refuses an edge without that allowlist. The question was "Do S022 and S026 wait for S093 and S094?", asked with a table; the answer: "S021 only, allowlist (Recommended)" (the other options are not recorded). Designed: nothing of the allowlist or the refusal is built | todo | S020, S021 |
 | S023 | Mistral provider | Mistral Large 3 adapter on Azure AI Foundry, DataZoneStandard; the routing policy uses it; ADR 3's provider set updated | todo | S010, S020 |
 | S024 | Operations baseline | SLO definitions (targets, unmeasured), alert rules and dashboards as code; runbooks for provider outage, budget exhaustion, database failure, rollback and secret rotation | done | S011, S019 |
 | S025 | AWS mapping | An AWS deployment view and an ADR mapping every Azure service to its AWS equivalent, written against the Azure platform as S020's row and the model design it (the owner, 2026-10-06: before Azure, so the dependency on S020 is lifted; when S020 has run, a mapping it falsified is corrected there) | done | S007, S019 |
 | S077 | GCP mapping | A Google Cloud deployment view and an ADR mapping every Azure service to its Google Cloud equivalent, as S025 does for AWS and against the same designed Azure platform (the owner, 2026-10-06: "add another step for gcp like aws too and start it too"); where S025 and this step would say one thing twice (the table of what Azure is used for, the residency rule for a second and a third cloud), it is said once and both use it | done | S007, S019 |
-| S026 | M2 exit | Environment created, fifteen-minute demo on AKS, environment removed; recorded; the run's cost logged | todo | S021, S022, S024 |
+| S026 | M2 exit | Environment created, fifteen-minute demo on AKS, environment removed; recorded; the run's cost logged. **The owner, 2026-10-08** ("S021 only, allowlist (Recommended)"): the demo waits for the staff sign-in (S021) and not for S093 or S094; the AKS edge admits the operator's address only until S094 exists, the condition written into S022's row. Designed, not built | todo | S021, S022, S024 |
 
 ### Backlog steps
 
@@ -576,6 +611,7 @@ both readings the same hour ("yes both are right, go on").
 | S090 | Component view of the Agent Runtime | A component view in the Structurizr model answers which responsibilities sit inside the Agent Runtime and which of them is the only way out to a model, a tool and the database: components by responsibility and not one per file, with a register row and a PNG read at full size, and no other view changed. Built as (2026-10-07, the owner's "Component view (Recommended)", which drew it from today's code and took away the wait for S083): `RuntimeComponents`, six components (Run API, Run Records, LangGraph Host, Agent Framework Host, Model Client, Tool Client) in `docs/architecture/model/components.dsl`, 12 boxes and 15 arrows, embedded in the import layering page. Implemented as a view read from the code; nothing was run for it. The render under rootless Docker went to S092, and S082 brings the page and the view to the code it moves (a backlog row). The Model Gateway gets a view only when a question needs one | done | — |
 | S091 | Data ownership views | Who reads and writes which schema of the Platform Database, as views of the model: the six schemas (`audit`, `claims`, `gateway`, `knowledge`, `policy`, `runtime`) as components of the database, each service with its own schema and the reads that cross a schema in one view, and the audit trail in a second if one view does not read; every arrow checked against the grants the migrations leave and compared with ADR 10's table, a difference recorded and not smoothed; register rows and PNGs read at full size. No ER diagram: S085 and S087 rewrite the tables. The owner, 2026-10-07: "should we add db view too?", then "okay" to this. Built as (2026-10-07): `DataOwnership` (11 boxes, 13 arrows, the seven grants on another service's schema drawn thicker) and `AuditTrail` (9 and 8), in `docs/architecture/model/data.dsl`, embedded in the data classification's inventory. The grants were read from the migration files' statements, not from a database's catalog; they agree with ADR 10's table. Implemented as views; nothing was run for them | done | S090 |
 | S092 | Mermaid and PDF render under rootless Docker | `make mermaid-render` and `make pdf` finish on a machine whose Docker is rootless, as the virtual machine's is, and still finish in CI; the fix is made in development-base's copy of `scripts/render-mermaid.sh` first and copied here unchanged; with it, the two notes of S089's review (the render container needs no network; the script passes when it finds no block). Built as (2026-10-08): under rootless Docker the render and Pandoc containers start as their root, which there is the caller, and elsewhere as the caller, as before; the render container has no network; this repository's `make mermaid-render` fails when no block was extracted. Development-base's pull request 52 first, then the two scripts and a test copied byte for byte. Implemented, and run on the virtual machine: five diagrams rendered and a PDF of 377 pages written | done | — |
+| S095 | Retention and erasure of uploaded files | The owner's decision of 2026-10-08: "Both, as a new step (Recommended)". A retention period for a claim's uploaded files is a setting, and it has no default that deletes anything: a local cluster deletes no file until the operator sets a period; a sweep deletes a file's BYTES once the period has passed, under a database role that may (a grant, so a migration; `claims_api` keeps SELECT and INSERT and no DELETE); an audited command erases one claim's files on request, run by a signed-in person (hence S021) whose name is on the audit row; the metadata row and the audit rows stay and say what was removed and when; a legal hold on a claim stops both the sweep and the command; the download of a file that is gone answers with a clear refusal, not a 404 of no route and not a 500; tested against PostgreSQL and seen once on kind. **Designed: nothing of it is built.** Open for the step's design: how the row keeps its size and hash while its bytes go (the table checks them), and the same bytes in the write-ahead log and in every backup, which the step's erasure does not reach and its design must say how long they live (T-111) | todo | S080, S021 |
 
 ### Toward services: a database each and six images
 
@@ -1093,7 +1129,7 @@ that day; the rest stand as their step recorded them.
 | The size check's scope has gaps. It reads Python under five directories and shell under two, so a new top-level Python directory is outside it, and so are `infra/kind/alerts/meridian.test.yaml` (2,184 lines, the one file over 800 outside the check), the chart's helpers (`_helpers.tpl`, 766), `tests/test_guard_bash.sh` (736), Terraform (largest 286 lines) and SQL (largest 526). A path with a space cannot be listed: the failure message suggests a line that the parser (`line.split()`) rejects, and no tracked path has a space today | S074 (the review of the three gates, finding 8, 2026-10-07) | open; low | S074 |
 | Code that runs only in a child process counts as not covered: pytest-cov 7.1 has no subprocess hook, `patch = subprocess` is not set and nothing sets `COVERAGE_PROCESS_START`, so what a test reaches only through a `python -m` child shows as missed (the reviewer ran a function reached only that way and its lines were missed). The 99.11 per cent does not rest on it, and a change in that share, up or down, is not visible in the number | S074 (the review of the three gates, 2026-10-07) | open; low; seen by the reviewer, not measured over the suite | S074 |
 | The Azure module has no door that plans, applies or removes it, and the command guard and the settings have no rule for its directory (a by-hand plan, `state` or `output` there asks no one; the only barrier is that no sign-in is on the machine, and S071 plans one): the wrapper (a clean environment, the lock read-only, no variable or override file, the default workspace, a plan record bound to its commit and hash, `TF_LOG*` and `TF_CLI_ARGS*` dropped, a check that a plan that creates or replaces the server rewrites the administrator's secret, a documented retry for role propagation, redaction of Azure's host shapes and of an address) comes together with the guard's and the settings' rules for the new names, before any target exists, with a security review of its own (S079's K6 form) | S020 (Z8; the two reviews' findings M1, M4, M7, M9) | open | S020's next contract, after S079 is on `main` |
-| The foundation's Key Vault and Azure OpenAI account are open to every address (public access on, default action Allow) and the vault would receive the database administrator's password: a firewall (default Deny plus the operator's address, a sensitive variable with no default and no example) is a change to the applied foundation, written free and applied by the owner at the paid stop; the decision is the owner's and comes before any apply (T-104) | S020 (infrastructure review HIGH-4) | open; owner | S020, the paid stop |
+| The foundation's Key Vault and Azure OpenAI account are open to every address (public access on, default action Allow) and the vault would receive the database administrator's password: a firewall (default Deny plus the operator's address, a sensitive variable with no default and no example) is a change to the applied foundation, written free and applied by the owner at the paid stop; the decision is the owner's and comes before any apply (T-104). **Decided 2026-10-08:** "Deny, allow operator (Recommended)", with private endpoints for the cluster; the code is S020's (the foundation module, a sensitive variable for the operator's address), applied at the next apply the owner runs, after a stated cost (the rule itself costs nothing); a wrong address locks the operator out of the vault and the account until the variable is corrected | S020 (infrastructure review HIGH-4) | ~~open; owner~~ decided 2026-10-08; designed, the code is not written and nothing is applied | S020, the paid stop |
 | The Azure server's own logging is not built: list the server's log categories at the first sign-in, build one diagnostic setting for the category that holds the connection log in a workspace of its own or under a cap of its own, then the parameters `log_connections` and `log_checkpoints`; `connection_throttle.enable` after the bootstrap; the TLS floor (`require_secure_transport`, `ssl_min_protocol_version`) read and stated; the scan's `AZU-0019`, `AZU-0021` and `AZU-0024` stay listed until then | S020 (Z6b; the second review) | open | S020, second half |
 | The Azure audit log is purged with the environment, with no export, and there is no alert on the workspace's daily cap: read Microsoft's page on the cap and the operation it logs, then build the alert and decide on an export before a removal or the knowing loss (T-105) | S020 (security review M6) | open; owner | S020, second half |
 | What the Azure second half must do, nine items in the module's README: the secrets identity's standing read, egress (the Entra host, the metadata address, the policies measured under Cilium), a second administrator, Pod Security labels on Azure's namespaces, the password's version rule, the database's roles and the Entra administrator, the server's logging, the audit log's afterlife, and the edge's Service address and source ranges | S020 (Z8) | open | S020, second half |
@@ -1101,7 +1137,7 @@ that day; the rest stand as their step recorded them.
 | Sign-in closes the open upload and the open download, and removes what stands in for it. Until S021 the upload route takes a file for any claim from anyone who reaches the host and, behind its switch, the download serves every claim's files (T-108, T-110); the chart's `.localhost` guard is the only stop and S021 takes it out when a caller has an identity. The same step makes an upload count as the document it is labelled with (the advisor's reading of 2026-10-07; today the rules read names only, T-66). An upload credential the app checks itself was weighed and not built, because it would be a second, throwaway sign-in beside the real one | S080 (the security review's H-2; F4b) | open; designed | S021 |
 | A second host name for downloads, with a Host check in the app, so that a stored file is served from an origin the pages' cookies do not reach (the security review's requirement 10). Not built: one more name to route and to explain, and S021's cookies do not exist yet. The download's headers keep a file from running in the pages' origin and do no more | S080 (F4b, D7) | open; not built | S021 |
 | The audit model has no field for a file. `claim.file_stored` and `claim.file_downloaded` hold the claim and the tenant (the claim ID is the `reference`, which `audit.claim_trail` joins on), so five files of one claim and a download of one differ only by time, and a row cannot be tied to the file it records (the platform-boundary review's M-2). A field for a file, or a place for the identifier in the reason, is a change of the audit model, which the services split's S085 (the audit outbox, on `main`) makes anyway | S080 (the boundary review; F4b) | open | S085 |
-| Retention and a delete path for uploaded files. `claims_api` holds SELECT and INSERT on `claims.claim_files` and no DELETE, no period is set, and the bytes are also in the write-ahead log and in every backup, so a stored file stays until the database is dropped (T-111; the data classification's row). The owner decides first: how long, who deletes, and whether the schema's owner may (the owner left retention open on 2026-10-05). A foreign key with no cascade means a file must be deleted before its claim | S080 (the database review; design U8) | open; the owner's decision comes first, and nothing is built | S068 |
+| Retention and a delete path for uploaded files. `claims_api` holds SELECT and INSERT on `claims.claim_files` and no DELETE, no period is set, and the bytes are also in the write-ahead log and in every backup, so a stored file stays until the database is dropped (T-111; the data classification's row). The owner decides first: how long, who deletes, and whether the schema's owner may (the owner left retention open on 2026-10-05). A foreign key with no cascade means a file must be deleted before its claim | S080 (the database review; design U8) | ~~open; the owner's decision comes first, and nothing is built~~ decided 2026-10-08: "Both, as a new step (Recommended)", a retention period with a sweep and an audited erasure command (S095); designed, nothing is built | ~~S068~~ S095 |
 | The access log of the Claims API's server holds the file's identifier in the URL of a download, as it holds every route's path. F4d kept the identifier out of the route's span and of the framework's server span (a test reads the exported spans); the uvicorn access line was not changed. While the pages have no sign-in the identifier is a handle that anyone who reaches the host can use; with sign-in it is one that a log line hands out to nobody | S080 (F4b, noticed; the second security review, L-D) | open; narrowed by F4d to the access log | S021 |
 | The adjuster's page prints each file's full SHA-256 in a `title`, so any reader can confirm that a claim holds an exact file without uploading it (read-only; the same family as the duplicate answer of T-38) | S080 (the second security review, L-E) | open; the list could show twelve characters and no more | S021 |
 | The edge's rate-limit buckets: per route or per match. RU1 showed that GET and HEAD of the download share the named rule's bucket and that the uploads' and the downloads' buckets are separate, and six uploads a minute at the edge on the JSON route; it did not try the JSON route and the claimant's form against each other, so whether the two POST matches share one bucket (six a minute) or have one each (twelve) is not known. The app's 30 files a minute is the backstop for either | S080 (the second security review, M-E; run RU1) | open; narrowed by RU1 | S080 |
@@ -20776,9 +20812,9 @@ settled which route serves an encoded path); the whole suite on the final tree
 (done: 21,219 passed, 8 skipped); the pull request and its merge; and the
 owner's decision
 on retention and erasure of uploaded files, which comes before any use with
-real data (For the owner). The code is built and has been reviewed twice, and
-the path ran once on kind; this record is the documents contract that follows
-them. Plan version of this part: v0.87.
+real data (For the owner; answered 2026-10-08, S095). The code is built and
+has been reviewed twice, and the path ran once on kind; this record is the
+documents contract that follows them. Plan version of this part: v0.87.
 
 **Goal:** a claimant attaches one PDF, JPEG or PNG to a claim, before any
 sign-in exists, and an adjuster sees that it is there and, behind a second
@@ -21264,6 +21300,9 @@ left of the earlier list; the second run, RU2, settled the encoded path):
 - **A stored file stays for ever.** The app has no delete and no retention
   period; `claims_api` cannot delete; the bytes are in the log and in backups.
   T-111 is **open** for that reason, and the banner is its only guard.
+  *Pointer, 2026-10-08:* the owner decided retention and erasure ("Both, as a
+  new step (Recommended)"); S095 is the step, **designed, not built**, so this
+  paragraph is still true of what exists.
 - **A well-formed PDF or image that exploits the adjuster's viewer is stored
   and delivered.** Scanning is designed only; "not scanned" is the control.
 - **Anyone who reaches the host can fill the store.** Uploads then stop for
@@ -21287,7 +21326,9 @@ that nothing more is built):
   the banner is the only guard against a real person's document, and the
   features stay off for any host that other people reach. The session's
   recommendation is to decide it with S068's periods, and not to turn either
-  switch on beyond the machine before S021.
+  switch on beyond the machine before S021. *Answered 2026-10-08:* "Both, as a
+  new step (Recommended)", the step S095 (designed, not built); the default
+  above, that nothing more is built, no longer stands.
 - **The older S070 items stay where they are**, in S070's section: the bound on
   what a name may replace (c), the cut of a dotted number and a third date
   guard (d), where the three known phone leaks go (e), `drafted_by` (f) and
@@ -21300,15 +21341,15 @@ that nothing more is built):
 the table): scanning (S080, later half); sign-in closes the open upload and
 download and removes the `.localhost` guard, and an upload counts as the
 document (S021); a second host name for downloads (S021); the audit model has
-no field for a file (S085); retention and a delete path (S068); the file
-identifier in the access log (S021); the hash in the list's `title` (S021);
-the edge's rate-limit buckets, per route or per match (S080, the next run);
-the parser leans on Starlette's internals (S080, later half); Envoy's handling
-of an encoded path, closed for this edge by RU2; small ends (S080, later
-half). Two rows of the first documents are gone: the download's missing bound
-on concurrent reads (F4d gave it four permits and 30 a minute) and
-`adjuster.py` over 800 lines (it is 745). The row "Uploads (T-38)" is closed by
-this step and homed here.
+no field for a file (S085); retention and a delete path (S068; S095 since
+2026-10-08); the file identifier in the access log (S021); the hash in the
+list's `title` (S021); the edge's rate-limit buckets, per route or per match
+(S080, the next run); the parser leans on Starlette's internals (S080, later
+half); Envoy's handling of an encoded path, closed for this edge by RU2; small
+ends (S080, later half). Two rows of the first documents are gone: the
+download's missing bound on concurrent reads (F4d gave it four permits and 30
+a minute) and `adjuster.py` over 800 lines (it is 745). The row "Uploads
+(T-38)" is closed by this step and homed here.
 
 **Follow-ups:**
 
@@ -21443,8 +21484,9 @@ with its README, ADR 11, the deployment view `DeploymentAzure`, five threat
 rows, the Azure platform document brought to it. The second half is the
 owner's: the wrapper and the guard's rules (a later pull request: no door that
 plans, applies or removes the module exists), the upgrade to pay-as-you-go by
-about 2026-10-30, a decision on a firewall for the foundation's vault and
-account, the apply with its cost stated first and a yes, and then the work that
+about 2026-10-30, the firewall for the foundation's vault and account (the
+owner decided it on 2026-10-08: see "For the owner"; designed, to be written),
+the apply with its cost stated first and a yes, and then the work that
 needs a cluster: the chart on it, the identities' service accounts, the
 database's roles, the egress rule, S022's push. If the owner answers no to the
 apply, this section closes the step as done with its second half not built, and
@@ -21486,9 +21528,13 @@ sheet changed one, the entry says which):
 - **Identities and endpoints (D10, D11).** Two identities, each federated to one
   service account with one role on one resource; no role on a group, the vault or
   the subscription. Private endpoints for the vault and the OpenAI account, so
-  that the gateway's egress rule can be a rule to one subnet; **the foundation's
-  public access stays on** (the laptop's live mode and `make azure-smoke` use
-  it), so closing the three resources to the network is not done.
+  that the gateway's egress rule can be a rule to one subnet; ~~**the
+  foundation's public access stays on** (the laptop's live mode and `make
+  azure-smoke` use it), so closing the three resources to the network is not
+  done.~~ **Reversed by the owner on 2026-10-08:** the foundation's vault and
+  account become deny by default with the operator's address allowed, private
+  endpoints for the cluster ("For the owner"); designed, not written. The
+  module as built on 2026-10-07 is unchanged.
 - **Observability and budget (D13, D14).** One workspace with a daily cap takes
   the cluster's audit categories, the one thing the cluster cannot keep for
   itself; managed Redis and Azure Monitor stay designed. A budget alerts and
@@ -21651,7 +21697,8 @@ Azure):
 **Not done, by decision or left open:** the wrapper and the guard's rules; the
 server's logging, the throttle, the cap's alert and the TLS floor as
 parameters (the README says why each is not built); an `anonymous_pull`
-setting; a firewall for the foundation; a private cluster; Defender, Azure
+setting; a firewall for the foundation (decided 2026-10-08, not written); a
+private cluster; Defender, Azure
 Policy and Container Insights; the web application firewall (a written design
 in ADR 11); the second half.
 
@@ -21689,7 +21736,9 @@ Microsoft's page "Upgrade your Azure free account" and the facts read on
    `ManagedIdentity`, `OperationalInsights`): by a command of the owner's, before
    the apply, never by the provider. Optional after the upgrade: the West Europe
    OpenAI account (a line of the foundation's `openai_locations`).
-7. Decide the firewall (below), and then ask for the plan.
+7. ~~Decide the firewall (below), and then ask for the plan.~~ The firewall is
+   decided (2026-10-08, below); its code is this step's and is applied at the
+   next apply the owner runs, after the cost is stated.
 - *Not in the checklist, on purpose:* a new tenant. The owner's decision is to
   stay; a later move recreates the foundation, the cluster and the server (ADR
   11).
@@ -21707,6 +21756,19 @@ endpoints. **Leave it open**: no change to an applied foundation and a laptop
 that works from anywhere, with the password behind a role and nothing else, and
 the audit setting recording each read. The session reads the first as what both
 reviews ask for. The decision is the owner's and comes before any apply.
+
+**Decided by the owner, 2026-10-08, about 04:12 UTC** (question tool, asked
+with a table and a recommendation; question 2 of four owed ones): **"Deny,
+allow operator (Recommended)"**. Default deny, the operator's address
+allowlisted, private endpoints for the cluster; written as code, applied at
+the next apply the owner runs. Offered beside it: private endpoints only;
+leave open. **Designed, not built:** the code goes into the foundation module
+(this step's second half takes it; a backlog row homes it here) and nothing is
+applied. The rule change itself costs nothing; the apply that carries it is
+stated with its cost at the paid stop and waits for the owner's yes. A wrong
+address locks the operator out of the vault and the account (the module's
+write of the secret included) until the variable is corrected. T-104's
+mitigation cell holds the decision.
 
 *The cost of a demo day.* From the sheet's sum of 2026-10-07 (Sweden Central,
 list prices, six of twelve lines estimates): about EUR 0.31 an hour, EUR 3.7
@@ -22138,6 +22200,76 @@ compared, and one line in the Makefile.
   page; the owner was sent the file).
 
 **Follow-ups:** none.
+
+### S095 — Retention and erasure of uploaded files
+**Status:** todo · **Started:** — · **Finished:** — · written on 2026-10-08
+as a decision record; nothing is built.
+**Goal:** a stored upload has an end of life and an exit: a retention period
+that a sweep enforces, and an audited command that erases one claim's files
+on request. **Designed, not built** (hard rule 7).
+
+**The owner's decision** (question tool, 2026-10-08, about 04:12 UTC, asked
+with a table and a recommendation, as `owner-answers-2026-10-06.md` holds
+it): question 3 of four owed ones, "Retention and erasure of uploaded
+files". The owner's answer, as given: **"Both, as a new step
+(Recommended)"**. Four options were offered:
+
+1. **Both, as a new step (Recommended), chosen:** a retention period as a
+   setting with a sweep that deletes the file bytes after it, and an audited
+   command that erases one claim's files; the audit row stays.
+2. A retention period and its sweep alone.
+3. The audited erasure command alone.
+4. Nothing now.
+
+**Why both** (the session's reasoning, which the owner accepted by choosing
+the recommendation): a schedule without an erasure path cannot answer a
+person's request to have a file removed (GDPR Art. 17, which the data
+classification names for the audit trail), and an erasure path without a
+schedule lets files accumulate that nobody asked to remove, the bytes sitting
+in the table, the write-ahead log and every backup (T-111).
+
+**What it replaces.** S080's "For the owner" said that, with no answer, nothing
+more would be built, and the session had recommended deciding retention with
+S068's periods; S068 built the mechanism for the audit table and the ledger
+only. The backlog row "Retention and a delete path for uploaded files" is
+homed here now. S080's sentence that a stored file stays for ever keeps its
+text and is true of what is built.
+
+**Decisions of the design** (the session's, written with the row; the owner
+may overturn any):
+
+- **No default that deletes.** The period is a setting. On a local cluster
+  nothing is deleted until the operator sets it; a default would delete test
+  files without anyone having chosen to.
+- **The sweep's role is not `claims_api`.** The Claims API keeps SELECT and
+  INSERT on `claims.claim_files` and no DELETE; the sweep deletes the bytes
+  under a role that may, as the scheduled sweep of S052 runs under a role
+  that deletes and reads nothing else. The grant is a migration, so the step
+  is in the database lane of Part A.
+- **The command needs a person.** The erasure is run by a signed-in person
+  whose name is on the audit row, so the step depends on S021; the audit row
+  holds the claim and the person, and the rows already cannot be tied to one
+  file (S085).
+- **A legal hold stops both.** A claim under hold is skipped by the sweep and
+  refused by the command.
+- **A gone file answers clearly.** The download of a file whose bytes were
+  removed says so, in a refusal that is not the 404 of an unknown file.
+- **What it cannot reach:** the write-ahead log and the backups keep the bytes
+  for as long as they live. The step's design says how long that is (kind's
+  database is disposable; a production backup would need its own expiry).
+
+**Advisor:** not consulted (a plan row and a decision record, documents
+alone; Part A, step 4).
+
+**Work log:** the row, this section, T-111's mitigation cell, the data
+classification's row and S080's accepted sentence were brought to the
+decision by the documents change of 2026-10-08 (the change log's entry).
+
+**Result / verification:** none; nothing is built. The step is done when the
+row's "done when" is met: tested against PostgreSQL and seen once on kind.
+
+**Follow-ups:** none yet. The step's own design takes the questions in its
+row.
 
 ## Part D — Open questions
 
@@ -23182,7 +23314,31 @@ compared, and one line in the Makefile.
   how and what changed). The whole suite, run alone on 2026-10-08 with the
   cluster's node container stopped for its length: `22437 passed, 9 skipped,
   8 warnings in 226.49s (0:03:46)`, coverage 99.14 %.
-- **PLAN-VERSION, 2026-10-08:** S071, free half (still `doing`; the paid half
+- **v0.93, 2026-10-08:** the owner's decisions of the morning, written
+  into the plan and the registers, all designed and none built. (1) The
+  foundation's Key Vault and Azure OpenAI account become deny by default with
+  the operator's address allowed and private endpoints for the cluster ("Deny,
+  allow operator (Recommended)"): S020's section, its row, the backlog row and
+  T-104, with ADR 11, the Azure platform document and the two Terraform
+  READMEs where a sentence called it undecided; D11's "public access stays on"
+  is struck. (2) S095 is new (`todo`; S080, S021): a retention period for
+  uploaded files with a sweep, and an audited erasure command ("Both, as a new
+  step (Recommended)"); its Part C section holds the decision; the backlog row
+  is homed there, and S080's accepted sentence, T-111 and the data
+  classification's row point to it. (3) S022 and S026 depend on the staff
+  sign-in only ("S021 only, allowlist (Recommended)"); S022's row carries the
+  hard condition that the AKS edge admits the operator's address only until
+  S094 exists, and its deploy refuses an edge without it. (4) Rows S093 and
+  S094 are copied from the sign-in branch byte for byte, so that its merge
+  finds identical lines. (5) Before a pull request only the changed areas'
+  tests run locally and CI runs the whole suite ("Affected tests, CI runs all
+  (Recommended)"): Part A's "Before pushing" and the development
+  environment's page, with the 2026-10-08 figures beside the old ones. (6)
+  Keycloak stays as the local stand-in, an add-on that is off unless
+  switched on ("Keep it, opt-in only (Recommended)"): a note in S021's row.
+  The answer on the graphs' move (S082) is not here: it is in S082's section
+  on its branch. Documents only; the whole suite was not run.
+- **v0.94, 2026-10-08:** S071, free half (still `doing`; the paid half
   is open and no paid call was made): the label worksheet and its comparison
   for the judge's 13 recorded verdicts, a ceiling the gateway holds for a paid
   run (a registry copy with each charged tenant's budget at or below the run's
