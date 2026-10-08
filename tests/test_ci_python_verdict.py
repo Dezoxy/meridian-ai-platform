@@ -293,6 +293,44 @@ class ShardReports(Files):
 
                 self.assertTrue(verdict.report_problems(self.folder, 4))
 
+    def test_reports_of_an_empty_suite_are_a_problem(self) -> None:
+        # Four reports that agree and add up (0 = 0 + 0 + 0 + 0) prove nothing.
+        self.reports(1, 2, 3, 4, collected=0, kept=0)
+
+        problems = verdict.report_problems(self.folder, 4)
+
+        self.assertEqual(len(problems), 4, problems)
+        self.assertIn("collected", problems[0])
+
+    def test_a_negative_kept_count_is_a_problem_even_when_the_sum_is_right(
+        self,
+    ) -> None:
+        for number, kept in enumerate((-50, 75, 50, 25), start=1):
+            self.put(number, report(number, kept=kept))
+
+        problems = verdict.report_problems(self.folder, 4)
+
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("shard-1.report.json", problems[0])
+        self.assertIn("kept", problems[0])
+
+    def test_a_kept_count_over_the_total_is_a_problem(self) -> None:
+        self.reports(1, 2, 3)
+        self.put(4, report(4, kept=101))
+
+        problems = verdict.report_problems(self.folder, 4)
+
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("shard-4.report.json", problems[0])
+        self.assertIn("101", problems[0])
+
+    def test_the_edges_of_the_counts_are_accepted(self) -> None:
+        # One test collected, and a shard that keeps none of it or all of it.
+        for number, kept in enumerate((1, 0, 0, 0), start=1):
+            self.put(number, report(number, collected=1, kept=kept))
+
+        self.assertEqual(verdict.report_problems(self.folder, 4), [])
+
     def test_the_count_is_the_one_it_is_given(self) -> None:
         self.reports(1, 2, 3, 4)
 

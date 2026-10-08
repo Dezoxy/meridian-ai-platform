@@ -1175,6 +1175,7 @@ that day; the rest stand as their step recorded them.
 | The paid-target rule's false asks, measured by the third review and the re-check and accepted by the session as the price of co-occurrence (a false ask costs a click, a missed one costs money; the owner may overturn): any command that holds the word make and a paid target as words asks, wherever they stand (`rg -n "make eval-record" docs/`, `grep -rn "make gateway-live" docs`, `git log -S"make gateway-live"`, `gh pr create --body "… make eval-record"`, `make test && git add docs/operations/runbooks/gateway-live`, `make test PYTEST_ARGS="-k gateway-live"`, `echo gateway-live >> notes.txt && make docs`; 8 of the 34 daily shapes the review tried asked, all of this form; a commit message goes in with `-F` and so does not ask); the narrower rule for a default in a parameter expansion asks on `make ${T:-my-eval-record}` and `echo "${T:-eval-record}" && make docs`; and the raw-request and identity rules ask on a search whose quoted pattern names them (`grep -rn "az rest" docs`, `python3 -m pytest -k "DefaultAzureCredential"`). A search with the Grep tool asks nobody, and the review found no target of main's Makefile outside the paid ones that gained an ask | S071 (the third review and the fifth round's re-check, 2026-10-07 and 08) | open; accepted | S071 (its paid half) |
 | A quoted word after `env -S` (an empty string, a comment, an assignment or another prefix) hides the build tool behind it from the added AWS removal rule: `env -S '' make -m "aws-destroy"`, `env -S '# c' make …`, `env -S 'A=b' make …`, `env -S 'nice -n 5' make …`, `env -S 'sudo' make …`. The fifth round denied these forms and the sixth gives none, which is what main gives; the sixth round's check calls it a medium that is not weaker than main, and judges that a session almost certainly would not type it. Its suggested fix: add to the alternatives for `env` a `-S` followed by a quoted word (already masked to `'xxx'`) so that make after it stays the command word, at the cost of a deny on `env -S 'sh' make` (the stronger direction), reverse-checked against row 2841 so that `env -S x make` stays none. The check asked for it before the paid run; the session reads that as the next change of the hook and not as S071's paid model run, because the rule is the AWS removal rule and not one of the paid-model rules | S071 (the sixth round's check, 2026-10-08) | open; left open by the session's decision | S020 (the guard's rules for the Azure wrapper: the next change of the hook, with a security review of its own) |
 | The two evaluation tests run twice on every pull request: once in a shard, whichever the hash gives them, and once in the `evaluation` job, which exists because no shard is sure to hold both tests that write the reports. Together about 85 s of runner time. Not changed: the job is not the slowest, and a way to run them once (a shard that deselects them, or the gate reading a shard's reports) would make the gate depend on the split | S074 (CI speed, 2026-10-08) | open; low | S074 |
+| What the shards' reports do not prove, from the short re-check of the rework (L-2 to L-4): skips are not counted (the report holds the tests kept, not the tests that passed, so a test that skips silently in CI still counts; `MERIDIAN_REQUIRE_DB` covers the database and Redis tests); the report is written when collection finishes, about four minutes before a shard ends, in the workspace the shard's tests then run in, and no test overwrites it that anyone found; and nothing pins the expected suite but the coverage floor: equal digests prove only that the shards agree with each other, so a module dropped by `--ignore` or a `collect_ignore` entry gives equal digests and a smaller total. Fixes, if wanted: the skipped count at `pytest_sessionfinish`, and a total or digest committed to the repository | S074 (CI speed; the short re-check, 2026-10-08) | open; low; the last is accepted residual risk | S074 |
 
 ## Part C — Step details
 
@@ -15629,14 +15630,16 @@ result.
   combination of the results GitHub can give. Each shard writes, when
   `MERIDIAN_TEST_SHARD_REPORT` names a file, a report (the shard, the count,
   the tests collected before the selection, the tests kept and the SHA-256 of
-  the sorted list of node ids) and uploads it with its coverage data; `python`
-  refuses unless there is one report for each shard, every digest and every
-  total is the same and the kept counts add up to the total, and it prints the
-  total and the four counts. The partition test that collected the suite five
-  times is replaced by a test of the selection function on 6,000 synthetic ids
-  (disjoint and complete for counts 1 to 8, no shard of four empty), the tests
-  that run pytest on a small file, and one that the report holds what is
-  written above; no test in the suite collects the whole suite now.
+  the sorted list of node ids) and uploads it with its coverage data; the kept
+  count is taken after every deselection, so an option that drops tests fails
+  the check; `python` refuses unless there is one report for each shard, every
+  digest and every total is the same and the kept counts add up to the total,
+  and it prints the total and the four counts. The partition test that
+  collected the suite five times is replaced by a test of the selection
+  function on 6,000 synthetic ids (disjoint and complete for counts 1 to 8, no
+  shard of four empty), the tests that run pytest on a small file, and one that
+  the report holds what is written above; no test in the suite collects the
+  whole suite now.
 - **The review.** An infrastructure review of CI1 (2026-10-08): verdict "merge
   with fixes", no critical and no high finding, three medium and four low. M1
   (the coverage steps ran only on an output of an earlier step, which a missing
@@ -15646,7 +15649,14 @@ result.
   the reports. M3 (a re-run might meet its own earlier artifact): closed,
   `overwrite: true` with a comment. L3 (a whitespace change in the Makefile's
   `## alerts` help line): closed, that line is `main`'s bytes. L1, L2 and L4
-  were about the classifier and fell away with it.
+  were about the classifier and fell away with it. A short re-check of the
+  rework said merge with fixes: one medium and four lows. The medium (the
+  report was written before pytest's own `-k`, `-m`, `--deselect` and `--lf`
+  removed tests, so those options kept `python` green) is closed: the report is
+  written when collection has finished, with the tests the run will run as the
+  kept count. Its L-1 (the script accepted a total of 0 and kept counts below 0
+  or above the total) is closed: it refuses them. L-2 to L-4 are one backlog
+  row (home S074).
 - **The advisor was consulted twice:** before CI1's contract, and after the
   first run on GitHub. The second consultation changed the fast path's fate
   (removed), the partition test (replaced by the selection test and the

@@ -27,8 +27,10 @@ Two commands:
                     ``MERIDIAN_TEST_SHARD_REPORT`` names a file): there is one
                     for each shard, each says the shard it is and the shard
                     count, every digest of the full list of test ids is the
-                    same, every total is the same, and the tests the shards kept
-                    add up to the total. It prints the total and the kept counts.
+                    same, every total is the same and at least 1, each kept
+                    count is from 0 to the total, and the tests the shards kept
+                    (counted after every deselection) add up to the total. It
+                    prints the total and the kept counts.
 
 Run: python3 scripts/ci_python_verdict.py jobs --static R --tests R --evaluation R
 """
@@ -130,6 +132,15 @@ def _read_reports(
         wrong = [key for key in REPORT_FIELDS if _field_is_wrong(content, key)]
         if wrong:
             problems.append(f"{name} lacks a valid {', '.join(wrong)} field")
+            continue
+        collected, kept = content["collected"], content["kept"]
+        if collected < 1:
+            problems.append(f"{name} collected {collected} tests, not at least 1")
+            continue
+        if not 0 <= kept <= collected:
+            problems.append(
+                f"{name} kept {kept} tests of {collected}: not from 0 to {collected}"
+            )
             continue
         reports[number] = content
     return reports, problems

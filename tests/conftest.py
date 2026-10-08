@@ -11,14 +11,16 @@ usage error (exit status 4): a shard that silently kept the wrong tests, or all
 of them, is the failure this must not allow. A shard that keeps nothing ends
 with pytest's exit status 5.
 
-``MERIDIAN_TEST_SHARD_REPORT`` names a file the shard writes at collection, as
-JSON: ``shard``, ``shards``, ``collected`` (the tests collected before the
-selection), ``kept`` (the tests this shard keeps) and ``digest`` (the SHA-256,
-in hex, of the sorted node ids of everything collected before the selection,
-joined by newlines and encoded as UTF-8). CI's final job reads the four reports
-and refuses unless every digest and every total is the same and the kept counts
-add up to the total: that is the proof, on the runners, that the shards together
-are the whole suite. The variable without a shard selection is a usage error.
+``MERIDIAN_TEST_SHARD_REPORT`` names a file the shard writes when collection has
+finished, as JSON: ``shard``, ``shards``, ``collected`` (the tests collected
+before the selection), ``kept`` (the tests the run will run, counted after every
+deselection, ``-k``, ``-m``, ``--deselect`` and ``--lf`` included) and ``digest``
+(the SHA-256, in hex, of the sorted node ids of everything collected before the
+selection, joined by newlines and encoded as UTF-8). CI's final job reads the
+four reports and refuses unless every digest and every total is the same and the
+kept counts add up to the total: that is the proof, on the runners, that the
+shards together are the whole suite, and an option that drops a test breaks the
+sum. The variable without a shard selection is a usage error.
 
 This file is stdlib and pytest only: it is loaded before any fixture, and every
 test under ``tests/meridian`` and ``tests/synthetic`` loads it.
@@ -38,6 +40,9 @@ import pytest
 SHARD_ENV = "MERIDIAN_TEST_SHARD"
 SHARDS_ENV = "MERIDIAN_TEST_SHARDS"
 REPORT_ENV = "MERIDIAN_TEST_SHARD_REPORT"
+# What the selection saw: (tests collected, digest of their ids), kept in the
+# config from the selection to the end of collection, where the report is written.
+FULL_LIST = pytest.StashKey[tuple[int, str]]()
 
 
 def _whole_number(name: str, value: str) -> int:
@@ -99,7 +104,7 @@ def digest_of(node_ids: Sequence[str]) -> str:
 
 
 def write_report(
-    path: str, shard: int, shards: int, node_ids: Sequence[str], kept: int
+    path: str, shard: int, shards: int, collected: int, digest: str, kept: int
 ) -> None:
     """Write the shard's report; whole or not at all, whichever worker is last.
 
@@ -110,9 +115,9 @@ def write_report(
     report = {
         "shard": shard,
         "shards": shards,
-        "collected": len(node_ids),
+        "collected": collected,
         "kept": kept,
-        "digest": digest_of(node_ids),
+        "digest": digest,
     }
     temporary = f"{path}.{os.getpid()}.tmp"
     Path(temporary).write_text(
@@ -136,9 +141,28 @@ def pytest_collection_modifyitems(
     shard, shards = chosen
     kept = [item for item in items if in_shard(item.nodeid, shard, shards)]
     dropped = [item for item in items if not in_shard(item.nodeid, shard, shards)]
-    report = report_path(os.environ)
-    if report is not None:
-        write_report(report, shard, shards, [item.nodeid for item in items], len(kept))
+    # The total and the digest are of everything collected, taken here, before
+    # the selection; the report itself is written when collection has finished.
+    ids = [item.nodeid for item in items]
+    config.stash[FULL_LIST] = (len(ids), digest_of(ids))
     if dropped:
         config.hook.pytest_deselected(items=dropped)
     items[:] = kept
+
+
+def pytest_collection_finish(session: pytest.Session) -> None:
+    """Write the report, with the tests the run will really run as ``kept``.
+
+    pytest's own ``-k``, ``-m``, ``--deselect`` and ``--lf`` deselect after this
+    file's hook above, so a count taken there would still include the tests they
+    drop. Here ``session.items`` is what is left after every one of them (and,
+    under pytest-xdist, what this worker holds, which is what the run runs), so a
+    run that drops a test adds up to less than the total and CI refuses it.
+    """
+    path = report_path(os.environ)
+    chosen = selection(os.environ)
+    full = session.config.stash.get(FULL_LIST, None)
+    if path is None or chosen is None or full is None:
+        return
+    collected, digest = full
+    write_report(path, chosen[0], chosen[1], collected, digest, len(session.items))

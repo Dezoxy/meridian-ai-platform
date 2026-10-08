@@ -587,9 +587,11 @@ same four jobs of `.github/workflows/python.yml`, side by side:
 The reports are how CI proves that the shards are the whole suite. A shard
 writes, when `MERIDIAN_TEST_SHARD_REPORT` names a file, the shard and the count,
 the number of tests collected before the selection, the number it kept and the
-SHA-256 of the sorted list of all the node ids. `python` refuses unless there is
-one report for each shard, every digest and every total is the same and the kept
-counts add up to the total; it prints the total and the four kept counts.
+SHA-256 of the sorted list of all the node ids. The kept count is taken after
+every deselection, so an option that drops tests (`-k`, `-m`, `--deselect`,
+`--lf`) fails the check. `python` refuses unless there is one report for each
+shard, every digest and every total is the same and the kept counts add up to
+the total; it prints the total and the four kept counts.
 
 There is no shortcut for a pull request that changes only documents: it runs
 the whole suite too. A fast path for such pull requests was built (S074) and

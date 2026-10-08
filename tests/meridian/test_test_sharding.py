@@ -302,3 +302,125 @@ def test_a_report_that_cannot_be_written_fails_the_run(tmp_path: Path) -> None:
     done = collect({SHARD: "1", SHARDS: "2", REPORT: str(report)}, SMALL)
 
     assert done.returncode not in (0, NO_TESTS), done.stdout + done.stderr
+
+
+# ── an option that drops tests after the shard selection (the re-check's M-1) ──
+VERDICT = REPO_ROOT / "scripts" / "ci_python_verdict.py"
+
+
+def one_test_to_drop(shard_ids: list[str], whole: list[str]) -> tuple[str, str]:
+    """A test of the shard that a `-k` of its name removes alone, and its name."""
+    for node_id in shard_ids:
+        name = node_id.split("::")[-1]
+        if "[" not in name and sum(name in other for other in whole) == 1:
+            return node_id, name
+    raise AssertionError("no test of the shard has a name of its own")
+
+
+def write_two_reports(folder: Path, second_shard_options: list[str]) -> list[str]:
+    """Reports of shard 1 and shard 2 of 2; the second run gets the options.
+
+    Returns the whole list of node ids, the total the reports must add up to.
+    """
+    for number in (1, 2):
+        options = second_shard_options if number == 2 else []
+        report = folder / f"shard-{number}.report.json"
+        done = collect(
+            {SHARD: str(number), SHARDS: "2", REPORT: str(report)}, *options, SMALL
+        )
+        assert done.returncode == 0, done.stdout[-2000:] + done.stderr[-2000:]
+        (folder / f"shard-{number}.coverage").write_text("data", encoding="utf-8")
+    return node_ids(collect({}, SMALL))
+
+
+def run_verdict(folder: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(VERDICT), "coverage-files", str(folder), "--shards", "2"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_the_unreduced_reports_of_two_shards_pass_the_final_check(
+    tmp_path: Path,
+) -> None:
+    whole = write_two_reports(tmp_path, [])
+
+    done = run_verdict(tmp_path)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert f"{len(whole)} tests collected" in done.stdout
+
+
+def test_a_k_that_drops_a_test_lowers_kept_and_the_final_check_names_the_sum(
+    tmp_path: Path,
+) -> None:
+    whole = node_ids(collect({}, SMALL))
+    share = node_ids(collect({SHARD: "2", SHARDS: "2"}, SMALL))
+    _, name = one_test_to_drop(share, whole)
+
+    write_two_reports(tmp_path, ["-k", f"not {name}"])
+    written = json.loads((tmp_path / "shard-2.report.json").read_text("utf-8"))
+    done = run_verdict(tmp_path)
+
+    # The share of the shard is one higher, and the total is still the whole.
+    assert written["kept"] == len(share) - 1
+    assert written["collected"] == len(whole)
+    assert done.returncode == 1, done.stdout + done.stderr
+    assert (
+        f"the shards kept {len(whole) - 1} tests in all, "
+        f"and {len(whole)} were collected"
+    ) in done.stdout
+
+
+def test_a_deselect_that_drops_a_test_lowers_kept_and_the_final_check_refuses(
+    tmp_path: Path,
+) -> None:
+    whole = node_ids(collect({}, SMALL))
+    share = node_ids(collect({SHARD: "2", SHARDS: "2"}, SMALL))
+
+    write_two_reports(tmp_path, ["--deselect", share[0]])
+    written = json.loads((tmp_path / "shard-2.report.json").read_text("utf-8"))
+    done = run_verdict(tmp_path)
+
+    assert written["kept"] == len(share) - 1
+    assert done.returncode == 1, done.stdout + done.stderr
+    assert (
+        f"the shards kept {len(whole) - 1} tests in all, "
+        f"and {len(whole)} were collected"
+    ) in done.stdout
+
+
+def test_a_k_under_parallel_workers_writes_the_count_the_workers_run(
+    tmp_path: Path,
+) -> None:
+    # The count is the items each worker holds after every deselection, which is
+    # what xdist then runs: the passed tests are the report's kept.
+    whole = node_ids(collect({}, SMALL))
+    share = node_ids(collect({SHARD: "2", SHARDS: "3"}, SMALL))
+    _, name = one_test_to_drop(share, whole)
+    report = tmp_path / "shard-2.report.json"
+    command = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+        "-n",
+        "2",
+        "-p",
+        "no:cacheprovider",
+    ]
+    done = subprocess.run(
+        [*command, "-k", f"not {name}", SMALL],
+        cwd=REPO_ROOT,
+        env=clean_environment({SHARD: "2", SHARDS: "3", REPORT: str(report)}),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert done.returncode == 0, done.stdout[-2000:] + done.stderr[-2000:]
+    written = json.loads(report.read_text(encoding="utf-8"))
+    assert written["kept"] == len(share) - 1
+    assert f"{len(share) - 1} passed" in done.stdout
