@@ -185,6 +185,9 @@ Terraform exists under `infra/terraform/azure/` (written, never applied).
 
 ## Working in this repository
 
+[CONTRIBUTING.md](CONTRIBUTING.md) says how a change gets from an idea to
+`main`: where to start, what to run and what a pull request must show.
+
 ```bash
 make docs     # documentation gate: twins, mirrors, links, indexes, ADRs, IDs
 make secret-scan  # scan the commits a push would add for secrets, as CI's secret scan does (needs gitleaks)
