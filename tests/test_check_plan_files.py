@@ -3,7 +3,9 @@
 The plan's step sections are files in folders of 20 steps, the follow-up backlog is
 two files, and the check keeps those files and the plan one story. Each test builds
 a small tree that is right, plants one violation and expects one finding; the
-clean tree must pass, and the real repository must pass too.
+clean tree must pass, and the real repository must pass too. The status line, Part F
+and ``--write`` (S101) are tested in test_plan_progress.py, which shares this
+fixture.
 
 Run: python3 -m unittest discover -s tests
 """
@@ -23,14 +25,36 @@ from test_check_docs_consistency import load_checker_for  # noqa: E402
 SCRIPT = HERE.parent / "scripts" / "check_plan_files.py"
 FENCE = "`" * 3
 
-PLAN = f"""# Plan
+BEGIN = '<!-- plan-progress: begin (written by "make plan-progress", never by hand) -->'
+END = "<!-- plan-progress: end -->"
+FINISHED_HEAD = (
+    "\n### Finished steps\n\n| Finished | Step | Title | File |\n|---|---|---|---|\n"
+)
+FLIGHT_HEAD = (
+    "\n### In flight\n\n"
+    "| Started | Step | Title | Status | File |\n|---|---|---|---|---|\n"
+)
+
+
+def block(finished="", flight=""):
+    """The lines between the markers, as the plan holds them, from literal rows."""
+    return FINISHED_HEAD + finished + FLIGHT_HEAD + flight + "\n"
+
+
+def part_f(between):
+    return f"## Part F — Where the steps stand\n\n{BEGIN}\n{between}{END}\n"
+
+
+# The literal block for the fixture's one step, S001 (done, finished 2026-09-28).
+S001_ROW = "| 2026-09-28 | S001 | One | [S001.md](plan/steps/S000-S019/S001.md) |\n"
+PLAN_BEFORE_F = f"""# Plan
 
 ## Part B — Roadmap and step list
 
-| ID | Step | Done when | Status | Depends |
-|---|---|---|---|---|
-| S001 | One | x | done | — |
-| S002 | Two | x | todo | — |
+| ID | Step | Done when | Depends |
+|---|---|---|---|
+| S001 | One | x | — |
+| S002 | Two | x | — |
 
 ## Part C — Step details
 
@@ -40,18 +64,23 @@ Template:
 ### S0xx — <title>
 {FENCE}
 
-| Step | Title | File |
-|---|---|---|
-| S001 | One | [S001.md](plan/steps/S000-S019/S001.md) |
-
 ## Part D — Open questions
 
 ## Part E — Changelog
 
 The change log ended with S100.
-"""
 
-STEP = "### S001 — One\n\nBody.\n\n"
+"""
+PLAN = PLAN_BEFORE_F + part_f(block(S001_ROW))
+
+
+def in_part_e(text):
+    """The right plan with ``text`` at the end of Part E, before Part F."""
+    return PLAN.replace("## Part F", text + "\n## Part F")
+
+
+STATUS = "**Status:** done · **Started:** 2026-09-27 · **Finished:** 2026-09-28"
+STEP = f"### S001 — One\n{STATUS}\nBody.\n\n"
 ENTRY = "- **#140, 2026-10-08:** a pull request's entry.\n"
 HEADER = "| Item | Raised in | Status | Home |\n|---|---|---|---|\n"
 OPEN_ROW = "| An open item | S010 | open | S030 |\n"
@@ -108,16 +137,9 @@ class PlanFiles(PlanCase):
         (self.repo / "docs/meridian-plan.md").unlink()
         self.assertEqual(self.found(), [])
 
-    def test_missing_files_are_findings_only_for_what_the_plan_promises(self):
-        (self.repo / "docs/plan/steps/S000-S019/S001.md").unlink()
-        found = self.found()
-        # The index row and the done step in Part B each name the lost file.
-        self.assertEqual(len(found), 2, found)
-        self.assertTrue(all("S001" in x for x in found), found)
-
     def test_a_plan_that_promises_no_file_needs_no_folder(self):
-        bare = "## Part B — x\n\n## Part C — x\n\n## Part D — x\n\n## Part E — x\n"
-        self.write("docs/meridian-plan.md", bare)
+        bare = "## Part B — x\n\n## Part C — x\n\n## Part D — x\n\n## Part E — x\n\n"
+        self.write("docs/meridian-plan.md", bare + part_f(block()))
         (self.repo / "docs/plan/steps/S000-S019/S001.md").unlink()
         self.assertEqual(self.found(), [])
 
@@ -127,7 +149,8 @@ class PlanFiles(PlanCase):
         with contextlib.redirect_stdout(out):
             self.assertEqual(self.mod.main(), 0)
         self.assertIn(
-            "plan files: step folders and backlog agree with the plan", out.getvalue()
+            "plan files: step folders, statuses and backlog agree with the plan",
+            out.getvalue(),
         )
 
 
@@ -150,11 +173,15 @@ class StepFolders(PlanCase):
     def test_a_flat_step_file_says_where_it_goes(self):
         (self.repo / "docs/plan/steps/S000-S019/S001.md").unlink()
         self.write("docs/plan/steps/S001.md", STEP)
+        found = self.found()
+        # A flat file is not in a range folder, so the block lacks it (stale).
+        self.assertEqual(len(found), 2, found)
         self.assertEqual(
-            self.one(),
+            found[0],
             "docs/plan/steps/S001.md: a step file sits in its folder of 20; "
             "move it to docs/plan/steps/S000-S019/S001.md",
         )
+        self.assertIn("make plan-progress", found[1])
 
     def test_a_file_in_the_wrong_folder_names_the_right_one(self):
         (self.repo / "docs/plan/steps/S000-S019/S001.md").unlink()
@@ -197,65 +224,14 @@ class StepFolders(PlanCase):
         found = self.found()
         self.assertTrue(any("S003 has no row in Part B" in x for x in found), found)
 
-    def test_a_file_the_index_does_not_list_is_reported(self):
-        self.write("docs/plan/steps/S000-S019/S002.md", "### S002 — Two\n")
-        self.assertIn("S002 is not in Part C's index", self.one())
-
-    def test_an_index_row_without_a_file_is_reported(self):
-        (self.repo / "docs/plan/steps/S000-S019/S001.md").unlink()
-        self.assertIn("lists S001, which has no file", self.found()[0])
-
-    def test_a_step_listed_twice_in_the_index_is_reported(self):
-        row_ = "| S001 | One | [S001.md](plan/steps/S000-S019/S001.md) |\n"
-        self.write("docs/meridian-plan.md", PLAN.replace(row_, row_ + row_))
-        self.assertIn("lists S001 twice", self.one())
-
-    def test_an_index_row_with_the_flat_path_names_the_path_it_must_be(self):
-        self.write(
-            "docs/meridian-plan.md",
-            PLAN.replace("plan/steps/S000-S019/S001.md", "plan/steps/S001.md"),
-        )
-        found = self.one()
-        self.assertIn("S001", found)
-        self.assertIn("plan/steps/S000-S019/S001.md", found)
-
-    def test_an_index_row_with_another_folder_is_reported(self):
-        self.write(
-            "docs/meridian-plan.md",
-            PLAN.replace("S000-S019/S001.md", "S020-S039/S001.md"),
-        )
-        self.assertIn("plan/steps/S000-S019/S001.md", self.one())
-
-    def test_an_index_row_with_the_wrong_link_text_is_reported(self):
-        plan = PLAN.replace("[S001.md]", "[wrong.md]")
-        self.write("docs/meridian-plan.md", plan)
-        self.assertIn("it must be [S001.md](plan/steps/S000-S019/S001.md)", self.one())
-
-    def test_an_index_row_that_names_another_steps_file_is_reported(self):
-        plan = PLAN.replace(
-            "[S001.md](plan/steps/S000-S019/S001.md)",
-            "[S002.md](plan/steps/S000-S019/S002.md)",
-        )
-        self.write("docs/meridian-plan.md", plan)
-        self.assertTrue(any("S001" in x and "S002.md" in x for x in self.found()))
-
     def test_a_file_whose_first_line_is_another_steps_heading_is_reported(self):
-        self.write("docs/plan/steps/S000-S019/S001.md", "### S002 — Two\n\nBody.\n")
+        step = STEP.replace("### S001 — One", "### S002 — Two")
+        self.write("docs/plan/steps/S000-S019/S001.md", step)
         self.assertIn("first line must be the heading '### S001", self.one())
 
     def test_a_file_that_opens_with_a_blank_line_is_reported(self):
         self.write("docs/plan/steps/S000-S019/S001.md", "\n" + STEP)
         self.assertIn("first line must be the heading", self.one())
-
-    def test_a_done_step_without_a_file_is_reported(self):
-        plan = PLAN.replace("| S002 | Two | x | todo |", "| S002 | Two | x | done |")
-        self.write("docs/meridian-plan.md", plan)
-        self.assertIn("S002 as 'done', and S002 has no file", self.one())
-
-    def test_a_doing_step_with_a_note_after_the_word_needs_its_file_too(self):
-        plan = PLAN.replace("| todo |", "| doing: the first half |")
-        self.write("docs/meridian-plan.md", plan)
-        self.assertIn("'doing: the first half'", self.one())
 
     def test_a_step_section_left_in_part_c_is_reported(self):
         plan = PLAN.replace(
@@ -486,7 +462,7 @@ class ChangeLogGone(PlanCase):
         self.assertIn(self.REMEDY, self.one())
 
     def test_an_entry_left_in_part_e_is_reported_with_the_same_remedy(self):
-        self.write("docs/meridian-plan.md", PLAN + "\n" + ENTRY)
+        self.write("docs/meridian-plan.md", in_part_e(ENTRY))
         found = self.one()
         self.assertIn("Part E of the plan holds an entry", found)
         self.assertIn(self.REMEDY, found)
@@ -513,6 +489,7 @@ class PartHeadings(PlanCase):
             ("C", "## Part C — Step details"),
             ("D", "## Part D — Open questions"),
             ("E", "## Part E — Changelog"),
+            ("F", "## Part F — Where the steps stand"),
         ):
             with self.subTest(part=letter):
                 self.write(
@@ -543,7 +520,7 @@ class PartHeadings(PlanCase):
         for label in ("v0.99", "PLAN-VERSION", "#145", "#XXXX", "v0.NN"):
             with self.subTest(label=label):
                 entry = f"- **{label}, 2026-10-09:** left behind.\n"
-                self.write("docs/meridian-plan.md", PLAN + entry)
+                self.write("docs/meridian-plan.md", in_part_e(entry))
                 found = self.found()
                 self.assertEqual(len(found), 1, found)
                 self.assertIn("Part E of the plan holds an entry", found[0])
@@ -791,6 +768,14 @@ class TheRealRepository(unittest.TestCase):
     def test_make_docs_runs_the_check(self):
         makefile = (HERE.parent / "Makefile").read_text()
         self.assertIn("python3 scripts/check_plan_files.py", makefile)
+
+    def test_make_plan_progress_writes_the_block(self):
+        lines = (HERE.parent / "Makefile").read_text().split("\n")
+        at = lines.index("plan-progress:")
+        self.assertEqual(lines[at + 1], "\tpython3 scripts/check_plan_files.py --write")
+        self.assertTrue(lines[at - 1].startswith("## plan-progress "))
+        phony = next(x for x in lines if x.startswith(".PHONY:"))
+        self.assertIn("plan-progress", phony.split())
 
 
 if __name__ == "__main__":

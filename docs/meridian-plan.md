@@ -946,4 +946,98 @@ exercised, with service level objectives nobody has measured (S024), and no
 service runs in Azure yet.
 
 <!-- plan-progress: begin (written by "make plan-progress", never by hand) -->
+
+### Finished steps
+
+| Finished | Step | Title | File |
+|---|---|---|---|
+| 2026-09-29 | S000 | Plan, harness and architecture bootstrap | [S000.md](plan/steps/S000-S019/S000.md) |
+| 2026-09-29 | S001 | Commit and publish | [S001.md](plan/steps/S000-S019/S001.md) |
+| 2026-09-29 | S002 | Python workspace and CI gates | [S002.md](plan/steps/S000-S019/S002.md) |
+| 2026-09-29 | S003 | Synthetic data and golden set | [S003.md](plan/steps/S000-S019/S003.md) |
+| 2026-09-29 | S004 | Security and quality registers | [S004.md](plan/steps/S000-S019/S004.md) |
+| 2026-09-30 | S005 | Agent framework spike | [S005.md](plan/steps/S000-S019/S005.md) |
+| 2026-09-30 | S006 | Local platform on kind | [S006.md](plan/steps/S000-S019/S006.md) |
+| 2026-09-30 | S007 | Azure foundation | [S007.md](plan/steps/S000-S019/S007.md) |
+| 2026-09-30 | S008 | Platform registry | [S008.md](plan/steps/S000-S019/S008.md) |
+| 2026-09-30 | S009 | Walking skeleton | [S009.md](plan/steps/S000-S019/S009.md) |
+| 2026-09-30 | S040 | Harness refresh | [S040.md](plan/steps/S040-S059/S040.md) |
+| 2026-10-01 | S010 | Gateway routing | [S010.md](plan/steps/S000-S019/S010.md) |
+| 2026-10-01 | S011 | Gateway budgets and cost | [S011.md](plan/steps/S000-S019/S011.md) |
+| 2026-10-01 | S013 | Policy and claims MCP servers | [S013.md](plan/steps/S000-S019/S013.md) |
+| 2026-10-01 | S041 | Walking skeleton on kind | [S041.md](plan/steps/S040-S059/S041.md) |
+| 2026-10-01 | S042 | Gateway resilience | [S042.md](plan/steps/S040-S059/S042.md) |
+| 2026-10-02 | S012 | Knowledge and retrieval | [S012.md](plan/steps/S000-S019/S012.md) |
+| 2026-10-02 | S014 | Triage graph | [S014.md](plan/steps/S000-S019/S014.md) |
+| 2026-10-02 | S044 | Tool servers on kind | [S044.md](plan/steps/S040-S059/S044.md) |
+| 2026-10-02 | S045 | Gateway embeddings | [S045.md](plan/steps/S040-S059/S045.md) |
+| 2026-10-02 | S046 | Knowledge MCP server | [S046.md](plan/steps/S040-S059/S046.md) |
+| 2026-10-03 | S015 | Human approval | [S015.md](plan/steps/S000-S019/S015.md) |
+| 2026-10-03 | S016 | Adjuster UI | [S016.md](plan/steps/S000-S019/S016.md) |
+| 2026-10-03 | S017 | Evaluation harness | [S017.md](plan/steps/S000-S019/S017.md) |
+| 2026-10-03 | S043 | Gateway cost panel | [S043.md](plan/steps/S040-S059/S043.md) |
+| 2026-10-03 | S047 | Guardrails | [S047.md](plan/steps/S040-S059/S047.md) |
+| 2026-10-03 | S048 | Claim lifecycle, the rest | [S048.md](plan/steps/S040-S059/S048.md) |
+| 2026-10-03 | S049 | Claimant pages | [S049.md](plan/steps/S040-S059/S049.md) |
+| 2026-10-03 | S051 | Structured outputs | [S051.md](plan/steps/S040-S059/S051.md) |
+| 2026-10-03 | S053 | The claimant's word checked | [S053.md](plan/steps/S040-S059/S053.md) |
+| 2026-10-03 | S054 | Parallel tests | [S054.md](plan/steps/S040-S059/S054.md) |
+| 2026-10-04 | S018 | M1 exit | [S018.md](plan/steps/S000-S019/S018.md) |
+| 2026-10-04 | S019 | Hardened Helm charts | [S019.md](plan/steps/S000-S019/S019.md) |
+| 2026-10-04 | S024 | Operations baseline | [S024.md](plan/steps/S020-S039/S024.md) |
+| 2026-10-04 | S032 | Injection evaluation suite | [S032.md](plan/steps/S020-S039/S032.md) |
+| 2026-10-04 | S039 | Workload scaffold | [S039.md](plan/steps/S020-S039/S039.md) |
+| 2026-10-04 | S050 | Live evaluation | [S050.md](plan/steps/S040-S059/S050.md) |
+| 2026-10-04 | S052 | Scheduled sweep | [S052.md](plan/steps/S040-S059/S052.md) |
+| 2026-10-04 | S055 | Service-to-service identity | [S055.md](plan/steps/S040-S059/S055.md) |
+| 2026-10-04 | S057 | Test and tooling hygiene | [S057.md](plan/steps/S040-S059/S057.md) |
+| 2026-10-04 | S058 | Gateway loose ends | [S058.md](plan/steps/S040-S059/S058.md) |
+| 2026-10-05 | S056 | Certificate lifecycle | [S056.md](plan/steps/S040-S059/S056.md) |
+| 2026-10-05 | S059 | Runtime and tool server loose ends | [S059.md](plan/steps/S040-S059/S059.md) |
+| 2026-10-05 | S060 | Claims pages and API loose ends | [S060.md](plan/steps/S060-S079/S060.md) |
+| 2026-10-05 | S061 | Scaffold, registry and evaluation plumbing | [S061.md](plan/steps/S060-S079/S061.md) |
+| 2026-10-06 | S025 | AWS mapping | [S025.md](plan/steps/S020-S039/S025.md) |
+| 2026-10-06 | S031 | Supervisor and workers | [S031.md](plan/steps/S020-S039/S031.md) |
+| 2026-10-06 | S034 | Governance documents | [S034.md](plan/steps/S020-S039/S034.md) |
+| 2026-10-06 | S037 | Second-framework workload | [S037.md](plan/steps/S020-S039/S037.md) |
+| 2026-10-06 | S038 | GraphRAG spike | [S038.md](plan/steps/S020-S039/S038.md) |
+| 2026-10-06 | S062 | Smoke and deploy loose ends | [S062.md](plan/steps/S060-S079/S062.md) |
+| 2026-10-06 | S063 | The cluster outside `meridian` | [S063.md](plan/steps/S060-S079/S063.md) |
+| 2026-10-06 | S064 | Metrics and logs | [S064.md](plan/steps/S060-S079/S064.md) |
+| 2026-10-06 | S065 | Database and migrations | [S065.md](plan/steps/S060-S079/S065.md) |
+| 2026-10-06 | S066 | Gateway ledger upkeep | [S066.md](plan/steps/S060-S079/S066.md) |
+| 2026-10-06 | S067 | Triage rules and screening | [S067.md](plan/steps/S060-S079/S067.md) |
+| 2026-10-06 | S075 | Harness, guard and Renovate | [S075.md](plan/steps/S060-S079/S075.md) |
+| 2026-10-06 | S076 | CLI, scaffold and loader small ends | [S076.md](plan/steps/S060-S079/S076.md) |
+| 2026-10-06 | S077 | GCP mapping | [S077.md](plan/steps/S060-S079/S077.md) |
+| 2026-10-07 | S068 | Database upkeep and retention | [S068.md](plan/steps/S060-S079/S068.md) |
+| 2026-10-07 | S078 | GCP Terraform, a scaffold | [S078.md](plan/steps/S060-S079/S078.md) |
+| 2026-10-07 | S089 | Import layering page; Mermaid rendered in CI | [S089.md](plan/steps/S080-S099/S089.md) |
+| 2026-10-07 | S090 | Component view of the Agent Runtime | [S090.md](plan/steps/S080-S099/S090.md) |
+| 2026-10-08 | S091 | Data ownership views | [S091.md](plan/steps/S080-S099/S091.md) |
+| 2026-10-08 | S092 | Mermaid and PDF render under rootless Docker | [S092.md](plan/steps/S080-S099/S092.md) |
+| 2026-10-08 | S096 | The PDF: no row lost, and a brief edition | [S096.md](plan/steps/S080-S099/S096.md) |
+| 2026-10-08 | S097 | The plan in files | [S097.md](plan/steps/S080-S099/S097.md) |
+| 2026-10-08 | S099 | A dispatcher and workers: the test lock and the two briefs | [S099.md](plan/steps/S080-S099/S099.md) |
+| 2026-10-08 | S100 | The plan's layout: step folders, the backlog in files, the change log ended | [S100.md](plan/steps/S100-S119/S100.md) |
+
+### In flight
+
+| Started | Step | Title | Status | File |
+|---|---|---|---|---|
+| 2026-10-06 | S036 | AWS Terraform | doing | [S036.md](plan/steps/S020-S039/S036.md) |
+| 2026-10-06 | S069 | Runtime and gateway edges | doing | [S069.md](plan/steps/S060-S079/S069.md) |
+| 2026-10-06 | S073 | Renewals, upgrades and what smoke cannot see | doing | [S073.md](plan/steps/S060-S079/S073.md) |
+| 2026-10-06 | S074 | Test suite and file sizes | doing | [S074.md](plan/steps/S060-S079/S074.md) |
+| 2026-10-06 | S079 | Self-managed Kubernetes: applied once on AWS, a scaffold on Google Cloud | doing | [S079.md](plan/steps/S060-S079/S079.md) |
+| 2026-10-07 | S020 | Azure platform | doing | [S020.md](plan/steps/S020-S039/S020.md) |
+| 2026-10-07 | S070 | Claims intake and what the adjuster is told | doing | [S070.md](plan/steps/S060-S079/S070.md) |
+| 2026-10-07 | S071 | Measurements that need a live model | doing | [S071.md](plan/steps/S060-S079/S071.md) |
+| 2026-10-07 | S072 | The cluster outside `meridian`, second round | doing | [S072.md](plan/steps/S060-S079/S072.md) |
+| 2026-10-07 | S080 | File uploads for a claim, before sign-in | doing | [S080.md](plan/steps/S080-S099/S080.md) |
+| 2026-10-07 | S081 | The decision record for the move toward services | doing | [S081.md](plan/steps/S080-S099/S081.md) |
+| 2026-10-07 | S082 | Code in the wrong place moves; import contracts per service | doing | [S082.md](plan/steps/S080-S099/S082.md) |
+| 2026-10-08 | S101 | The plan shows no status: the finished steps and those in flight are its last part | doing | [S101.md](plan/steps/S100-S119/S101.md) |
+| — | S095 | Retention and erasure of uploaded files | todo | [S095.md](plan/steps/S080-S099/S095.md) |
+
 <!-- plan-progress: end -->
