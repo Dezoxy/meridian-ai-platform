@@ -11,11 +11,16 @@ from pathlib import Path
 
 import pytest
 from demoseedsupport import (
+    CLAIMS,
+    IDS,
+    MARKER,
     SEED_SH,
+    claim_lines,
     post_ids,
     posts_of,
     requires_tools,
     run_seed,
+    summary,
 )
 from kindsupport import KIND_DIR, REPO_ROOT
 from test_kind_kubectl_bounds import raw_calls
@@ -45,12 +50,103 @@ def test_the_edge_that_does_not_answer_stops_the_run_before_the_first_post(
 
 
 @requires_tools
-def test_a_post_curl_cannot_make_stops_the_run_non_zero(tmp_path: Path) -> None:
+def test_a_post_curl_cannot_make_stops_the_run_non_zero_after_the_summary(
+    tmp_path: Path,
+) -> None:
+    # curl exits 7 on the second claim of three: a refusal that names the claim
+    # and its place, the summary with claim 1 counted, no third post.
     done, calls = run_seed(tmp_path, count="3", posts={"CLM-0002": ("curlfail", "")})
 
     assert done.returncode != 0
-    assert "could not reach" in done.stderr
     assert post_ids(calls) == ["CLM-0001", "CLM-0002"]
+    assert "could not reach the Claims API at claim 2 of 3" in done.stderr
+    assert "CLM-0002" in done.stderr
+    assert "make deploy" not in done.stderr  # only the first claim says that
+    assert claim_lines(done) == [["CLM-0001", "posted", "awaiting_adjuster"]]
+    assert summary(done) == {"referred to an adjuster": 1}
+    assert MARKER not in done.stdout + done.stderr
+
+
+@requires_tools
+def test_a_first_post_curl_cannot_make_asks_whether_make_deploy_is_done(
+    tmp_path: Path,
+) -> None:
+    done, calls = run_seed(tmp_path, count="3", posts={"CLM-0001": ("curlfail", "")})
+
+    assert done.returncode != 0
+    assert post_ids(calls) == ["CLM-0001"]
+    assert "could not reach the Claims API at claim 1 of 3" in done.stderr
+    assert "make deploy" in done.stderr
+    assert claim_lines(done) == []
+    assert "Look at the claims" in done.stdout  # the summary is printed anyway
+
+
+@requires_tools
+def test_a_post_that_timed_out_is_settled_from_the_route_when_the_claim_is_stored(
+    tmp_path: Path,
+) -> None:
+    done, calls = run_seed(
+        tmp_path,
+        count="3",
+        posts={"CLM-0002": ("curltimeout", "")},
+        readings={"CLM-0002": ["approved"]},
+    )
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert post_ids(calls) == IDS[:3]
+    assert claim_lines(done) == [
+        ["CLM-0001", "posted", "awaiting_adjuster"],
+        ["CLM-0002", "posted", "approved"],
+        ["CLM-0003", "posted", "awaiting_adjuster"],
+    ]
+    assert summary(done) == {"referred to an adjuster": 2, "approved": 1}
+
+
+@requires_tools
+def test_a_post_that_timed_out_for_a_claim_the_route_does_not_know_is_a_refusal(
+    tmp_path: Path,
+) -> None:
+    # The route answers 404 for CLM-0002: the post never stored it.
+    done, calls = run_seed(tmp_path, count="3", posts={"CLM-0002": ("curltimeout", "")})
+
+    assert done.returncode != 0
+    assert post_ids(calls) == ["CLM-0001", "CLM-0002"]  # never the third
+    assert "CLM-0002" in done.stderr
+    assert "timed out after 60s" in done.stderr
+    assert "not stored" in done.stderr
+    assert claim_lines(done) == [["CLM-0001", "posted", "awaiting_adjuster"]]
+    assert summary(done) == {"referred to an adjuster": 1}
+
+
+@requires_tools
+def test_a_claim_of_the_file_with_no_usable_id_ends_the_run_after_the_summary(
+    tmp_path: Path,
+) -> None:
+    nameless = [CLAIMS[0], {"description": MARKER}, CLAIMS[2]]
+    done, calls = run_seed(tmp_path, count="3", claims=nameless)
+
+    assert done.returncode != 0
+    assert post_ids(calls) == ["CLM-0001"]
+    assert "claim 2 of" in done.stderr
+    assert claim_lines(done) == [["CLM-0001", "posted", "awaiting_adjuster"]]
+    assert summary(done) == {"referred to an adjuster": 1}
+    assert MARKER not in done.stdout + done.stderr
+
+
+@requires_tools
+@pytest.mark.parametrize("status", [409, 418, 503])
+def test_an_answer_the_script_does_not_know_prints_a_fixed_text_not_its_sentence(
+    tmp_path: Path, status: int
+) -> None:
+    unknown = json.dumps({"detail": f"{MARKER} says no"})
+    done, _ = run_seed(tmp_path, count="3", posts={"CLM-0002": (status, unknown)})
+
+    assert done.returncode != 0
+    assert MARKER not in done.stdout
+    assert MARKER not in done.stderr
+    assert f"CLM-0002: HTTP {status} (an answer this script does not know)" in (
+        done.stderr
+    )
 
 
 @requires_tools
@@ -197,6 +293,14 @@ def test_the_script_knows_the_47_claims_and_the_first_40_are_the_golden_set() ->
     assert ids[:40] == [f"CLM-{number:04d}" for number in range(1, 41)]
 
 
+def test_the_default_pause_is_10_seconds_in_the_script_and_in_the_makefile() -> None:
+    (script_default,) = re.findall(r"^readonly DEFAULT_PACE=(\d+)$", SEED_SH, re.M)
+    (make_default,) = re.findall(r"^PACE_SECONDS\s+\?= (\d+)$", MAKEFILE, re.M)
+
+    assert script_default == make_default == "10"
+    assert re.search(r"^readonly MAX_PACE=60$", SEED_SH, re.MULTILINE)
+
+
 def test_the_script_is_executable_and_runs_no_kubectl_or_helm_of_its_own() -> None:
     assert (KIND_DIR / "demo-seed.sh").stat().st_mode & 0o111
     assert [name for name, _ in raw_calls() if name == "demo-seed.sh"] == []
@@ -232,7 +336,7 @@ def test_the_makefile_has_the_target_with_its_defaults_and_its_help_line() -> No
         r"^## demo-seed {7}\S", MAKEFILE, re.MULTILINE
     )  # make help's column
     assert re.search(r"^COUNT\s+\?= 40$", MAKEFILE, re.MULTILINE)
-    assert re.search(r"^PACE_SECONDS\s+\?= 2$", MAKEFILE, re.MULTILINE)
+    assert re.search(r"^PACE_SECONDS\s+\?= 10$", MAKEFILE, re.MULTILINE)
     # No dependency: it does not deploy, build or touch the cluster first.
     assert "\ndemo-seed:\n\t" in MAKEFILE
     recipe = MAKEFILE.split("\ndemo-seed:\n", 1)[1].split("\n\n", 1)[0]

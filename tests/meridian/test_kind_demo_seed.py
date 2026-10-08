@@ -102,7 +102,18 @@ def test_an_empty_count_and_pace_mean_the_defaults_as_when_make_passes_them(
 
     assert done.returncode == 0, done.stdout + done.stderr
     assert len(post_ids(calls)) == 40
-    assert [call for call in calls if call[0] == "SLEEP"] == [["SLEEP", "2"]] * 39
+    assert [call for call in calls if call[0] == "SLEEP"] == [["SLEEP", "10"]] * 39
+
+
+@requires_tools
+def test_a_run_with_no_pace_sleeps_10_seconds_between_two_triaged_claims(
+    tmp_path: Path,
+) -> None:
+    done, calls = run_seed(tmp_path, count="3", pace=None)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert [call for call in calls if call[0] == "SLEEP"] == [["SLEEP", "10"]] * 2
+    assert "10s apart" in done.stdout
 
 
 @requires_tools
@@ -377,6 +388,11 @@ def test_a_failed_triage_is_counted_and_shown_and_the_run_and_status_go_on(
     # It says what to do about it, and does not when nothing failed.
     assert "triaged again when this is run again" in done.stdout
     assert "PACE_SECONDS" in done.stdout
+    # It names both windows of the gateway's tenant and the default pause.
+    assert "tenant-request-rate (10 requests in 10 seconds)" in done.stdout
+    assert "tenant-token-rate (10,000 tokens a minute)" in done.stdout
+    assert "default pause of 10 seconds" in done.stdout
+    assert MARKER not in done.stdout
     clean, _ = run_seed(tmp_path / "clean", count="2")
     assert "triaged again" not in clean.stdout
 
@@ -393,10 +409,13 @@ def test_a_post_the_edge_answered_for_a_claim_that_is_not_stored_is_a_refusal(
     assert done.returncode == 1
     assert post_ids(calls) == ["CLM-0001", "CLM-0002"]
     # The post's own sentence is the one printed, not the route's "no such claim".
+    # The post's own answer is the one named (an answer the script does not
+    # know, so not its sentence), not the route's "no such claim".
     assert (
-        "CLM-0002: HTTP 503 the upstream is unavailable, and the claim is not stored"
-        in done.stderr
+        "CLM-0002: HTTP 503 (an answer this script does not know), "
+        "and the claim is not stored" in done.stderr
     )
+    assert "upstream is unavailable" not in done.stderr
     assert "no such claim" not in done.stderr
     assert summary(done)["referred to an adjuster"] == 1  # what happened so far
 
@@ -410,7 +429,8 @@ def test_a_refusal_for_another_reason_stops_the_run_with_a_non_zero_status(
 
     assert done.returncode == 1
     assert post_ids(calls) == IDS[:3]
-    assert "CLM-0003: HTTP 409 something else is wrong" in done.stderr
+    assert "CLM-0003: HTTP 409 (an answer this script does not know)" in done.stderr
+    assert "something else is wrong" not in done.stderr
     assert summary(done)["referred to an adjuster"] == 2
 
 

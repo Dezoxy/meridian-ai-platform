@@ -4,9 +4,13 @@
 # replay mode on kind: its answers are simulated, no model is called, so it costs
 # nothing, and a claim that needs the model's answer is referred to a person.
 #   COUNT=40          how many claims of data/synthetic/claims.json, in the file's
-#                     order, from 1 to 47 (the first 40 are the golden set; 47 adds
-#                     the seven after them). Anything else stops with a usage line.
-#   PACE_SECONDS=2    the pause after a claim that was triaged, from 0 to 60.
+#                     order, from 1 to 47 (all 47 are golden claims; the seven after
+#                     the first 40 were added later). Anything else stops with a
+#                     usage line.
+#   PACE_SECONDS=10   the pause after a claim that was triaged, from 0 to 60. The
+#                     tenant's gateway windows are 10 requests in 10 seconds and
+#                     10,000 tokens a minute, and a triage that asks the model
+#                     reserves about 1,300: 10 keeps a run under both.
 #   TAKE_CLUSTER=1    as for `make deploy`: go on although another checkout holds
 #                     the cluster. This script only reads who holds it.
 #   MEMINFO_FILE      the file the free memory is read from (default /proc/meminfo;
@@ -30,10 +34,17 @@
 # wait for traces in Tempo (demo.sh does). It prints each claim's ID, what
 # happened and its state, then the counts by state and where to look: never a
 # claimant's name, a policy holder, a description or any other field.
-# Exit status: non-zero when the edge cannot be reached, a post is refused for any
-# reason but the 409s above (the run stops there), or no claim could be posted
-# (every claim answered 409 with other content, or none was reached). A second run
-# that skips every claim exits 0.
+# A post that curl could not finish in 60 seconds (its exit status 28) may have
+# stored the claim: it is read from the route like a 5xx, and refused only when the
+# route has no such claim. Any other curl failure, and a claim of the file with no
+# claim ID, end the run there with a refusal and the summary of what had happened.
+# An answer's sentence is printed only when it is one of the four 409 sentences
+# above; any other is printed as a fixed text, with its HTTP status.
+# Exit status: non-zero when the edge cannot be reached (at the start, or in the
+# middle of the run), a post is refused for any reason but the 409s above (the run
+# stops there, after the summary), or no claim could be posted (every claim
+# answered 409 with other content, or none was reached). A second run that skips
+# every claim exits 0.
 set -euo pipefail
 
 # shellcheck source=common.sh
@@ -52,10 +63,11 @@ readonly DIFFERENT_SUBMISSION="the claim exists with a different submission"
 readonly TRIAGE_CAP="the claim has been triaged five times; an adjuster decides it"
 readonly MAX_CLAIMS=47
 readonly DEFAULT_COUNT=40
-readonly DEFAULT_PACE=2
+readonly DEFAULT_PACE=10
 readonly MAX_PACE=60
 readonly EDGE_TIMEOUT=60
 readonly POST_TIMEOUT=60
+readonly CURL_TIMEOUT_STATUS=28 # curl's exit status for a -m timeout
 readonly READ_TIMEOUT=15
 # How long a claim may stay submitted or triaging before it is counted as not
 # settled: the Claims API's lease on a triage, which another request may take over
@@ -150,7 +162,7 @@ post_json() {
     curl -q --noproxy '*' -sS -m "${POST_TIMEOUT}" -o "${response}" -w '%{http_code}' \
       -H 'Content-Type: application/json' \
       -H "traceparent: 00-${trace}-${parent}-01" \
-      --data-binary @- "${url}"
+      --data-binary @- "${url}" 2>/dev/null
 }
 
 # answer_state: the state in ${response} into ${state}, or empty when there is none
@@ -165,6 +177,17 @@ answer_state() {
 # that quotes what was sent, and is never printed).
 answer_detail() {
   detail="$(clean "$(jq -r '.detail | strings' "${response}" 2>/dev/null || true)" | cut -c 1-200)"
+}
+
+# known_sentence TEXT: TEXT when it is one of the Claims API's four 409 sentences,
+# and otherwise a fixed text: a refusal prints no sentence the script does not know.
+known_sentence() {
+  case "$1" in
+    "${ALREADY_TRIAGED}" | "${BEING_TRIAGED}" | "${DIFFERENT_SUBMISSION}" | "${TRIAGE_CAP}")
+      printf '%s' "$1"
+      ;;
+    *) printf '%s' "(an answer this script does not know)" ;;
+  esac
 }
 
 in_progress() { [[ "$1" == submitted || "$1" == triaging ]]; }
@@ -266,32 +289,41 @@ handle_conflict() {
     "${BEING_TRIAGED}")
       settle_claim "${claim_id}" || result=$?
       ((result != 2)) || {
-        refuse "${claim_id}: HTTP 409 ${detail}, and the claim is not there to read"
+        refuse "${claim_id}: HTTP 409 $(known_sentence "${detail}"), and the claim is not there to read"
         return 1
       }
       finish_claim waited "${result}"
       ;;
     *)
-      refuse "${claim_id}: HTTP 409 ${detail:-(no sentence)}"
+      refuse "${claim_id}: HTTP 409 $(known_sentence "${detail}")"
       return 1
       ;;
   esac
 }
 
 # handle_stored: the claim is stored and its triage ran (a 201) or failed after
-# the claim was stored (a 5xx): its state is the answer's, or the route's when
-# the answer settled nothing. 1 when the route says there is no such claim, which
-# makes the post a plain refusal (a 503 of the edge, say).
+# the claim was stored (a 5xx), or the post timed out (${status} is "timeout"; the
+# claim may be stored): its state is the answer's, or the route's when the answer
+# settled nothing. 1 when the route says there is no such claim, which makes the
+# post a plain refusal (a 503 of the edge, say).
 handle_stored() {
-  local result=0 post_detail
-  if [[ "${status}" == 201 ]]; then answer_state; else state=""; fi
-  # The post's sentence, kept before the route's answers take ${response}.
-  answer_detail
-  post_detail="${detail}"
+  local result=0 post_detail=""
+  state=""
+  if [[ "${status}" == 201 ]]; then answer_state; fi
+  # The post's sentence, kept before the route's answers take ${response}. A post
+  # that timed out has no answer to read.
+  if [[ "${status}" != timeout ]]; then
+    answer_detail
+    post_detail="$(known_sentence "${detail}")"
+  fi
   if [[ -z "${state}" ]] || in_progress "${state}"; then
     settle_claim "${claim_id}" || result=$?
     if ((result == 2)); then
-      refuse "${claim_id}: HTTP ${status} ${post_detail:-(no sentence)}, and the claim is not stored"
+      if [[ "${status}" == timeout ]]; then
+        refuse "${claim_id}: the post timed out after ${POST_TIMEOUT}s, and the claim is not stored"
+      else
+        refuse "${claim_id}: HTTP ${status} ${post_detail}, and the claim is not stored"
+      fi
       return 1
     fi
   fi
@@ -300,15 +332,23 @@ handle_stored() {
 
 # post_claim CLAIM_JSON: one claim, to the end of its line. 1 stops the run.
 post_claim() {
-  local trace_id
+  local trace_id curl_status=0
   trace_id="$(openssl rand -hex 16)"
   paced=no
-  if ! status="$(post_json "${CLAIMS_URL}" "$1" "${trace_id}")"; then
-    die "could not reach ${CLAIMS_URL} (is 'make deploy' done?)"
-  fi
+  status="$(post_json "${CLAIMS_URL}" "$1" "${trace_id}")" || curl_status=$?
   status="$(clean "${status}")"
+  if ((curl_status == CURL_TIMEOUT_STATUS)); then
+    # The claim may be stored and its triage running: read it like a 5xx.
+    status=timeout
+  elif ((curl_status != 0)); then
+    # curl's own sentence can hold the URL and is not printed; its status is.
+    local advice=""
+    ((index > 1)) || advice=" (is 'make deploy' done?)"
+    refuse "could not reach the Claims API at claim ${index} of ${COUNT} (${claim_id}; curl exit status ${curl_status})${advice}"
+    return 1
+  fi
   case "${status}" in
-    201 | 500 | 502 | 503 | 504)
+    201 | 500 | 502 | 503 | 504 | timeout)
       handle_stored || return 1
       paced=yes
       ;;
@@ -318,7 +358,7 @@ post_claim() {
       ;;
     *)
       answer_detail
-      refuse "${claim_id}: HTTP ${status} ${detail:-(no sentence)}"
+      refuse "${claim_id}: HTTP ${status} $(known_sentence "${detail}")"
       return 1
       ;;
   esac
@@ -350,7 +390,9 @@ print_summary() {
     printf '  not settled: still submitted or triaging after %ss\n' "${SETTLE_TIMEOUT}"
   fi
   if ((n_failed > 0)); then
-    printf 'A claim whose triage failed is triaged again when this is run again. A call the gateway refuses for its tenant'\''s request rate is one cause (docs/demo.md): a larger PACE_SECONDS spaces the claims further apart.\n'
+    printf 'A claim whose triage failed is triaged again when this is run again.\n'
+    printf 'The gateway refuses a call over a window of the tenant: tenant-request-rate (10 requests in 10 seconds) or tenant-token-rate (10,000 tokens a minute) (docs/demo.md).\n'
+    printf 'The default pause of 10 seconds keeps a run under both; a larger PACE_SECONDS spaces the claims further apart.\n'
   fi
   printf 'Look at the claims: %s (the adjuster'\''s queue: the claims that wait for an adjuster and those whose triage failed)\n' "${ADJUSTER_URL}"
   printf '                    %s (the claimant'\''s page: look a claim up by its ID)\n' "${CLAIMANT_URL}"
@@ -364,7 +406,10 @@ index=0
 while IFS= read -r claim <&3; do
   index=$((index + 1))
   claim_id="$(clean "$(jq -r '.claim_id' <<<"${claim}")")"
-  [[ "${claim_id}" =~ ${CLAIM_ID_PATTERN} ]] || die "claim ${index} of ${CLAIMS_FILE} has no claim ID of the form CLM-0000"
+  if ! [[ "${claim_id}" =~ ${CLAIM_ID_PATTERN} ]]; then
+    refuse "claim ${index} of ${CLAIMS_FILE} has no claim ID of the form CLM-0000"
+    break
+  fi
   post_claim "${claim}" || break
   if [[ "${paced}" == yes ]] && ((index < COUNT && PACE_SECONDS > 0)); then
     sleep "${PACE_SECONDS}"

@@ -96,7 +96,8 @@ case "${url}" in
     override="${STUB_DIR}/post-${id}"
     if [[ -f "${override}" ]]; then
       status="$(head -n 1 "${override}")"
-      [[ "${status}" != curlfail ]] || exit 28
+      [[ "${status}" != curlfail ]] || exit 7
+      [[ "${status}" != curltimeout ]] || exit 28
       tail -n +2 "${override}" >"${out}"
       printf '%s' "${status}"
       exit 0
@@ -187,7 +188,8 @@ def run_seed(
     ``awaiting_adjuster``); ``readings`` the states the JSON route answers to
     its successive reads (the last one repeats; default the post's state);
     ``posts`` a fixed answer, a status and a body, for the claim's every post
-    (the status ``curlfail`` makes curl itself fail). Run twice on one
+    (the status ``curlfail`` makes curl itself fail with its exit status 7, and
+    ``curltimeout`` with its exit status 28, the timeout). Run twice on one
     ``tmp_path`` the stand-ins remember which claims were posted, as the Claims
     API would. Returns the process and every recorded call, each as its words.
     """

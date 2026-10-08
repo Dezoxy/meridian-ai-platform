@@ -116,10 +116,12 @@ TRIVY_IMAGE         := ghcr.io/aquasecurity/trivy:0.75.0@sha256:af6acf9a6b85dfe3
 # approve, reject or request_documents (the script refuses anything else).
 DECISION            ?= approve
 # How many claims `make demo-seed` posts (the first of data/synthetic/claims.json,
-# 1 to 47; the first 40 are the golden set) and the seconds it waits after each
-# claim it triaged (0 to 60). The script refuses anything else.
+# 1 to 47; all are golden claims, the last seven added later) and the seconds it waits after each
+# claim it triaged (0 to 60; 10 keeps a run under the gateway's tenant windows of
+# 10 requests in 10 seconds and 10,000 tokens a minute). The script refuses
+# anything else.
 COUNT               ?= 40
-PACE_SECONDS        ?= 2
+PACE_SECONDS        ?= 10
 # The evaluation of the claims workload (S017, S050): the baseline committed in
 # Git, the report a run writes (gitignored) and the one test that writes it. It
 # replays a real model's recorded answers through the Model Gateway (CI and
@@ -353,7 +355,7 @@ images:
 demo: deploy
 	DECISION="$(DECISION)" infra/kind/demo.sh
 
-## demo-seed       post the first COUNT (default 40, at most 47) synthetic claims through the edge, one at a time, so the adjuster's and the claimant's pages show content; kind only, synthetic data only, the gateway's replay mode is simulated and calls no model so it costs nothing; safe to run twice (a failed triage is tried again); decides nothing; needs make deploy and 2,500 MB of free memory, and refuses while a test database runs (make demo-seed COUNT=47 adds the seven claims after the golden set)
+## demo-seed       post the first COUNT (default 40, at most 47) synthetic claims through the edge, one at a time, so the adjuster's and the claimant's pages show content; kind only, synthetic data only, the gateway's replay mode is simulated and calls no model so it costs nothing; safe to run twice (a failed triage is tried again); decides nothing; needs make deploy and 2,500 MB of free memory, and refuses while a test database runs (make demo-seed COUNT=47 adds the seven claims after the first forty); PACE_SECONDS (default 10) is the pause between two claims
 demo-seed:
 	COUNT="$(COUNT)" PACE_SECONDS="$(PACE_SECONDS)" infra/kind/demo-seed.sh
 
