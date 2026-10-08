@@ -221,11 +221,14 @@ evidence here. Read the process on the node instead, twice, 30 seconds apart:
 the `TIME` column of `otelcol-contrib` in `docker top` of the node's container,
 and the pod's control group on the node, `io.stat` (`rbytes`) and `memory.stat`
 (`workingset_refault_file`, `file_mapped`). A calm agent's CPU time moves by
-under a second in 30 and has no refaults; the spin moves it by a core's worth
-and refaults hundreds of thousands of pages a second with `file_mapped` near
-nothing. The cause found in a rig is the pod's memory limit being too close to
-what the process needs (the binary's pages and the heap), not a file; the limit
-is 384Mi since S073 and the CPU limit 500m only caps the fault. Do not delete the
+under a second in 30, reads nothing and refaults a few dozen pages a second at
+most (0 to 43 on kind at 384Mi, run LR1 of 2026-10-08); the spin moves it by a
+core's worth and refaults hundreds of thousands of pages a second with
+`file_mapped` near nothing. The pod's memory is no signal: the healthy agent
+reads 383 of 384 MiB, the page cache filling to the limit. The cause found in a
+rig is the pod's memory limit being too close to what the process needs (the
+binary's pages and the heap), not a file; the limit is 384Mi since S073 and the
+CPU limit 500m only caps the fault. Do not delete the
 cluster to clear it: the database there holds the only copy of the audit log.
 Pause or restart the DaemonSet and read
 [the kind README](../../../infra/kind/README.md) ("Its resources, and the spin").

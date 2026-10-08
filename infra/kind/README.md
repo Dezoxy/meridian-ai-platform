@@ -2111,8 +2111,11 @@ cluster**, measure the agent's process on the node, not Prometheus's series
 time twice, 30 s apart (`docker top` on the node's container, the `TIME`
 column of `otelcol-contrib`), and the control group's `io.stat` (`rbytes`) and
 `memory.stat` (`workingset_refault_file`, `file_mapped`) for the pod. A
-healthy agent shows a CPU time that moves by under a second in 30 and no
-refaults; the spin shows a core and hundreds of thousands of refaults a second.
+healthy agent shows a CPU time that moves by under a second in 30, no reads and
+a few dozen refaults a second at most (0 to 43 on kind at 384 MiB, run LR1 of
+2026-10-08); the spin shows a core and hundreds of thousands of refaults a
+second. The pod's memory is no signal: the healthy agent reads 383 of 384 MiB,
+the page cache filling to the limit.
 
 Pod Security: `logging` is labelled `privileged` for `warn` and `audit`, as the
 other namespaces are labelled and never enforced. `baseline` forbids a hostPath
