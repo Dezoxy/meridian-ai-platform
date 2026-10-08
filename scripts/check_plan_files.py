@@ -13,12 +13,18 @@ change-log entry is a file, ``docs/plan/changelog/``. This is the part of
   file; ``pr-XXXX-<step>.md`` with the label ``#XXXX`` stands in until the pull
   request has a number: it passes on a machine and fails under CI
   (``GITHUB_ACTIONS=true``), so the rename cannot be forgotten;
-- Part C of the plan holds no step section and Part E no entry, so that nobody
-  appends to the old place.
+- the plan has its Part B, C, D and E headings (a renamed one would switch a
+  check off), holds no step section (a heading ``S0NN`` with a dash, at level two
+  to four) and, in Part E, no entry of any label, so that nobody appends to the
+  old place;
+- the plan, a step file and a change-log file hold no conflict marker, which
+  ``plan_port.py`` leaves for a person to resolve;
+- an odd file (not UTF-8, a directory, a broken link) is a finding, not a
+  traceback.
 
 The line-width and link rules need nothing here: they read every Markdown file
-under ``docs/``, the new folders included. A missing plan or a missing
-``docs/plan/`` is skipped, as with the other checks.
+under ``docs/``, the new folders included. A missing plan is skipped, as with the
+other checks.
 
 Run from anywhere: python3 scripts/check_plan_files.py
 """
@@ -36,6 +42,9 @@ import plan_split as split
 
 REPO = Path(__file__).resolve().parents[1]
 
+# A step is S and three digits, as in Part B. The day a step S1000 exists, or a
+# pull request 10000, this check says so for the file: widen STEP_FILE and the
+# `\d{4}` of CHANGELOG_FILE (and the padding rule in plan_split.py) then.
 STEP_FILE = re.compile(r"^S\d{3}\.md$")
 INDEX_ROW = re.compile(
     r"^\| (S\d{3}) \| .* \| \[(S\d{3})\.md\]\((plan/steps/S\d{3}\.md)\) \|$"
@@ -43,7 +52,12 @@ INDEX_ROW = re.compile(
 CHANGELOG_FILE = re.compile(
     r"^(?:v0\.(?P<v>\d{2,})|pr-(?P<pr>\d{4})|pr-XXXX-(?P<step>[a-z0-9][a-z0-9-]*))\.md$"
 )
-ANY_ENTRY = re.compile(r"^- \*\*(?:v0\.\d+|#\d+|#XXXX), ")
+# Any list item that opens like an entry, whatever its label: v0.NN, #N,
+# PLAN-VERSION, #XXXX.
+ANY_ENTRY = re.compile(r"^- \*\*[^,*\n]+, \d{4}-\d{2}-\d{2}:\*\*")
+# A step heading left in the old place: level two to four, a dash of any kind.
+OLD_SECTION = re.compile(r"^#{2,4} S\d{3}\s+[—–-]\s")
+CONFLICT = re.compile(r"^(?:<{7}|>{7})(?: |$)")
 OPEN_STATUS = ("done", "doing")
 
 
@@ -51,15 +65,69 @@ def relative(root: Path, path: Path) -> str:
     return path.relative_to(root).as_posix()
 
 
-def regions(text: str) -> dict[str, str]:
-    """Part B, Part C and Part E of the plan, each from its heading."""
-    parts = split.heading_offsets(text)
-    ends = {"B": parts.get("C"), "C": parts.get("D"), "E": len(text)}
-    return {k: text[parts[k] : ends[k]] for k in "BCE" if k in parts and ends[k]}
+def read_file(root: Path, path: Path, found: list[str]) -> str | None:
+    """A regular UTF-8 file's text, or None with a finding saying why not."""
+    name = relative(root, path)
+    if not path.is_file():
+        found.append(f"{name}: not a regular file (a directory or a broken link)")
+        return None
+    try:
+        return path.read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        found.append(f"{name}: cannot be read as UTF-8 text ({type(error).__name__})")
+        return None
+
+
+def listing(folder: Path, found: list[str], root: Path) -> list[Path]:
+    if not folder.exists() and not folder.is_symlink():
+        return []
+    try:
+        return sorted(folder.iterdir())
+    except OSError as error:
+        found.append(f"{relative(root, folder)}: cannot be listed ({error.strerror})")
+        return []
+
+
+def regions(text: str, found: list[str]) -> dict[str, str]:
+    """Part B, Part C and Part E of the plan, each from its heading.
+
+    A missing heading is a finding: the checks that read the part would
+    otherwise pass on nothing.
+    """
+    try:
+        parts = split.heading_offsets(text)
+    except split.SplitError as error:
+        found.append(f"the plan: {error}")
+        return {}
+    missing = [k for k in "BCDE" if k not in parts]
+    for letter in missing:
+        found.append(f"the plan has no '## Part {letter} — ' heading")
+    if missing:
+        return {}
+    if not parts["B"] < parts["C"] < parts["D"] < parts["E"]:
+        found.append("the plan's Parts B, C, D and E are not in that order")
+        return {}
+    ends = {"B": parts["C"], "C": parts["D"], "E": len(text)}
+    return {k: text[parts[k] : ends[k]] for k in "BCE"}
 
 
 def unfenced(text: str) -> list[str]:
     return [line.text for line in split.scan(text) if not line.fenced]
+
+
+def conflict_markers(name: str, text: str) -> list[str]:
+    """One finding for a file with a conflict marker line (or a ======= between)."""
+    hit, inside = [], False
+    for number, line in enumerate(text.split("\n"), 1):
+        if CONFLICT.match(line):
+            hit.append(number)
+            inside = line.startswith("<")
+        elif inside and line == "=======":
+            hit.append(number)
+    if not hit:
+        return []
+    where = ", ".join(str(n) for n in hit[:5]) + (" …" if len(hit) > 5 else "")
+    return [f"{name}: conflict marker at line {where}; resolve the merge"]
 
 
 def step_rows(part_b: str) -> dict[str, str | None]:
@@ -75,10 +143,8 @@ def step_rows(part_b: str) -> dict[str, str | None]:
     return rows
 
 
-def check_steps(root: Path, plan: dict[str, str]) -> list[str]:
-    found: list[str] = []
+def check_steps(root: Path, plan: dict[str, str], found: list[str]) -> None:
     folder = root / split.STEPS
-    files = sorted(folder.iterdir()) if folder.is_dir() else []
     rows = step_rows(plan.get("B", ""))
     index: dict[str, str] = {}
     for line in unfenced(plan.get("C", "")):
@@ -91,15 +157,18 @@ def check_steps(root: Path, plan: dict[str, str]) -> list[str]:
             found.append(f"the plan's index lists {row[1]} twice")
         index[row[1]] = row[3]
     on_disk = set()
-    for path in files:
+    for path in listing(folder, found, root):
         name = relative(root, path)
         if not STEP_FILE.match(path.name):
             found.append(f"{name}: only S0NN.md files belong in {split.STEPS}/")
             continue
         step = path.stem
         on_disk.add(step)
-        first = path.read_bytes().decode("utf-8").split("\n", 1)[0]
-        heading = split.SECTION_HEADING.match(first)
+        text = read_file(root, path, found)
+        if text is None:
+            continue
+        found.extend(conflict_markers(name, text))
+        heading = split.SECTION_HEADING.match(text.split("\n", 1)[0])
         if not heading or heading[1] != step:
             found.append(f"{name}: the first line must be the heading '### {step} — …'")
         if step not in rows:
@@ -113,13 +182,21 @@ def check_steps(root: Path, plan: dict[str, str]) -> list[str]:
     for step, status in sorted(rows.items()):
         if status and status.startswith(OPEN_STATUS) and step not in on_disk:
             found.append(f"Part B has {step} as '{status}', and {step} has no file")
-    for line in unfenced(plan.get("C", "")):
-        if split.SECTION_HEADING.match(line):
+
+
+def check_old_places(text: str, plan: dict[str, str], found: list[str]) -> None:
+    for line in unfenced(text):
+        if OLD_SECTION.match(line):
             found.append(
-                f"Part C of the plan holds a step section ('{line[:40]}'): it "
-                f"belongs in {split.STEPS}/, one file a step"
+                f"the plan holds a step section ('{line[:40]}'): it belongs in "
+                f"{split.STEPS}/, one file a step"
             )
-    return found
+    for line in unfenced(plan.get("E", "")):
+        if ANY_ENTRY.match(line):
+            found.append(
+                f"Part E of the plan holds an entry ('{line[:40]}'): it belongs in "
+                f"{split.CHANGELOG}/, one file an entry"
+            )
 
 
 def label_of(first_line: str) -> str | None:
@@ -127,15 +204,10 @@ def label_of(first_line: str) -> str | None:
     return match[1] if match else None
 
 
-def check_changelog(
-    root: Path, plan: dict[str, str], ci: bool
-) -> tuple[list[str], list[str]]:
-    found: list[str] = []
+def check_changelog(root: Path, ci: bool, found: list[str]) -> list[str]:
     notes: list[str] = []
-    folder = root / split.CHANGELOG
-    files = sorted(folder.iterdir()) if folder.is_dir() else []
     seen: dict[str, str] = {}
-    for path in files:
+    for path in listing(root / split.CHANGELOG, found, root):
         name = relative(root, path)
         parts = CHANGELOG_FILE.match(path.name)
         if not parts:
@@ -144,7 +216,10 @@ def check_changelog(
                 f"pr-XXXX-<step>.md"
             )
             continue
-        text = path.read_bytes().decode("utf-8")
+        text = read_file(root, path, found)
+        if text is None:
+            continue
+        found.extend(conflict_markers(name, text))
         label = label_of(text.split("\n", 1)[0])
         if label is None:
             found.append(f"{name}: the first line must start '- **<label>, <date>:**'")
@@ -167,23 +242,25 @@ def check_changelog(
         if label in seen:
             found.append(f"{name}: label {label} is also the label of {seen[label]}")
         seen[label] = name
-    for line in unfenced(plan.get("E", "")):
-        if ANY_ENTRY.match(line):
-            found.append(
-                f"Part E of the plan holds an entry ('{line[:40]}'): it belongs in "
-                f"{split.CHANGELOG}/, one file an entry"
-            )
-    return found, notes
+    return notes
 
 
 def problems(root: Path, ci: bool = False) -> tuple[list[str], list[str]]:
     """What is wrong, and what is only noted, in the plan and its folders."""
     plan_path = root / split.PLAN
-    if not plan_path.exists():
+    if not plan_path.exists() and not plan_path.is_symlink():
         return [], []
-    plan = regions(plan_path.read_bytes().decode("utf-8"))
-    changelog, notes = check_changelog(root, plan, ci)
-    return check_steps(root, plan) + changelog, notes
+    found: list[str] = []
+    text = read_file(root, plan_path, found)
+    plan: dict[str, str] = {}
+    if text is not None:
+        found.extend(conflict_markers(split.PLAN, text))
+        plan = regions(text, found)
+        if plan:
+            check_old_places(text, plan, found)
+    check_steps(root, plan, found)
+    notes = check_changelog(root, ci, found)
+    return found, notes
 
 
 def main() -> int:

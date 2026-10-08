@@ -108,8 +108,9 @@ class SplitCase(unittest.TestCase):
             status = self.mod.main([*args, "--root", str(self.tree)])
         return status, out.getvalue(), err.getvalue()
 
-    def split(self):
-        status, out, err = self.run_cli(str(self.old))
+    def split(self, overwrite=False):
+        args = [str(self.old), *(["--overwrite"] if overwrite else [])]
+        status, out, err = self.run_cli(*args)
         self.assertEqual(status, 0, err)
         return out
 
@@ -184,14 +185,14 @@ class Split(SplitCase):
         keep = self.tree / "docs/plan/steps/notes.txt"
         keep.parent.mkdir(parents=True)
         keep.write_text("mine")
-        self.split()
+        self.split(overwrite=True)
         self.assertEqual(keep.read_text(), "mine")
 
     def test_a_step_file_already_there_joins_the_index_after_the_old_ones(self):
         extra = self.tree / "docs/plan/steps/S097.md"
         extra.parent.mkdir(parents=True)
         extra.write_text("### S097 — The move itself\n\nText.\n")
-        self.split()
+        self.split(overwrite=True)
         row = "| S097 | The move itself | [S097.md](plan/steps/S097.md) |"
         self.assertIn(row, self.plan())
         self.assertEqual(extra.read_text(), "### S097 — The move itself\n\nText.\n")
@@ -199,8 +200,29 @@ class Split(SplitCase):
     def test_a_second_run_gives_the_same_tree(self):
         self.split()
         first = self.plan()
-        self.split()
+        self.split(overwrite=True)
         self.assertEqual(self.plan(), first)
+
+    def test_a_tree_that_has_step_files_is_refused_without_overwrite(self):
+        self.split()
+        path = self.tree / "docs/plan/steps/S001.md"
+        path.write_text("### S001 — One\n\nEdited by hand.\n")
+        status, _, err = self.run_cli(str(self.old))
+        self.assertEqual(status, 2)
+        self.assertIn("--overwrite", err)
+        self.assertEqual(path.read_text(), "### S001 — One\n\nEdited by hand.\n")
+
+    def test_overwrite_writes_over_the_edited_step_files(self):
+        self.split()
+        path = self.tree / "docs/plan/steps/S001.md"
+        path.write_text("### S001 — One\n\nEdited by hand.\n")
+        self.split(overwrite=True)
+        self.assertNotIn("Edited by hand", path.read_text())
+
+    def test_the_padded_minor_is_in_part_e_sentence(self):
+        self.old.write_bytes(OLD_PLAN.replace("v0.10,", "v0.3,").encode())
+        self.split()
+        self.assertIn("`v0.01.md` to `v0.03.md`", self.plan())
 
     def test_two_sections_of_one_step_are_refused(self):
         bad = OLD_PLAN.replace("### S001 — One", "### S002 — Two again")

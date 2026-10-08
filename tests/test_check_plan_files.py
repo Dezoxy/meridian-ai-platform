@@ -181,7 +181,7 @@ class StepFiles(PlanCase):
             "## Part D", "### S002 — Two\n\nBody that belongs in a file.\n\n## Part D"
         )
         self.write("docs/meridian-plan.md", plan)
-        self.assertIn("Part C of the plan holds a step section", self.one())
+        self.assertIn("the plan holds a step section", self.one())
 
     def test_the_templates_heading_in_a_fence_is_not_a_section(self):
         self.assertEqual(self.found(), [])
@@ -282,6 +282,170 @@ class Placeholder(PlanCase):
                     self.assertIn("[plan-files]", err.getvalue())
                 else:
                     self.assertIn("[note]", out.getvalue())
+
+
+class PartHeadings(PlanCase):
+    """M3: a heading that cannot be found must not switch its check off."""
+
+    def test_a_missing_heading_is_a_finding_for_each_part(self):
+        for letter, head in (
+            ("B", "## Part B — Roadmap and step list"),
+            ("C", "## Part C — Step details"),
+            ("D", "## Part D — Open questions"),
+            ("E", "## Part E — Changelog"),
+        ):
+            with self.subTest(part=letter):
+                self.write(
+                    "docs/meridian-plan.md", PLAN.replace(head, head.replace("—", "-"))
+                )
+                found = self.found()
+                self.assertTrue(
+                    any(f"no '## Part {letter} — ' heading" in x for x in found), found
+                )
+
+    def test_an_entry_under_a_hyphenated_part_e_heading_is_not_missed(self):
+        plan = PLAN.replace("## Part E — Changelog", "## Part E - Changelog")
+        self.write("docs/meridian-plan.md", plan + NEW_ENTRY)
+        self.assertTrue(any("Part E" in x for x in self.found()))
+
+    def test_a_doubled_heading_is_a_finding_not_a_traceback(self):
+        self.write("docs/meridian-plan.md", PLAN + "\n## Part E — Changelog\n")
+        self.assertIn("Part E has two headings", self.found()[0])
+
+    def test_parts_out_of_order_are_a_finding(self):
+        plan = PLAN.replace("## Part D — Open questions", "## Part X")
+        plan = plan.replace("## Part E — Changelog", "## Part D — Open questions")
+        plan = plan.replace("## Part X", "## Part E — Changelog")
+        self.write("docs/meridian-plan.md", plan)
+        self.assertIn("not in that order", self.found()[0])
+
+    def test_an_entry_of_any_label_left_in_part_e_is_reported(self):
+        for label in ("v0.99", "PLAN-VERSION", "#145", "#XXXX", "v0.NN"):
+            with self.subTest(label=label):
+                entry = f"- **{label}, 2026-10-09:** left behind.\n"
+                self.write("docs/meridian-plan.md", PLAN + entry)
+                found = self.found()
+                self.assertEqual(len(found), 1, found)
+                self.assertIn("Part E of the plan holds an entry", found[0])
+
+    def test_a_step_heading_in_any_old_form_is_reported(self):
+        forms = (
+            "### S002 — Two",
+            "### S002 - Two",
+            "### S002 – Two",
+            "## S002 — Two",
+            "#### S002 — Two",
+        )
+        for heading in forms:
+            for where in ("## Part D", "## Part E"):
+                with self.subTest(heading=heading, where=where):
+                    plan = PLAN.replace(where, f"{heading}\n\nBody.\n\n{where}")
+                    if where == "## Part E":
+                        plan = PLAN.replace(
+                            "## Part E — Changelog",
+                            f"## Part E — Changelog\n\n{heading}\n",
+                        )
+                    self.write("docs/meridian-plan.md", plan)
+                    found = self.found()
+                    self.assertTrue(
+                        any("the plan holds a step section" in x for x in found), found
+                    )
+
+    def test_a_heading_of_level_five_or_in_a_fence_is_not_a_section(self):
+        fenced = f"{FENCE}text\n### S002 — Two\n{FENCE}\n"
+        self.write(
+            "docs/meridian-plan.md",
+            PLAN.replace("## Part D", f"##### S002 — Two\n\n{fenced}\n## Part D"),
+        )
+        self.assertEqual(self.found(), [])
+
+
+class OddFiles(PlanCase):
+    """M4: an odd file is a finding, never a traceback."""
+
+    def test_a_step_file_that_is_not_utf8(self):
+        self.write("docs/plan/steps/S001.md", "")
+        (self.repo / "docs/plan/steps/S001.md").write_bytes(b"### S001 \xff\xfe\n")
+        self.assertIn("cannot be read as UTF-8", self.one())
+
+    def test_a_directory_with_a_steps_name(self):
+        (self.repo / "docs/plan/steps/S001.md").unlink()
+        (self.repo / "docs/plan/steps/S001.md").mkdir()
+        found = self.found()
+        self.assertTrue(any("not a regular file" in x for x in found), found)
+
+    def test_a_broken_link_with_a_steps_name(self):
+        (self.repo / "docs/plan/steps/S001.md").unlink()
+        (self.repo / "docs/plan/steps/S001.md").symlink_to(self.repo / "nowhere")
+        found = self.found()
+        self.assertTrue(any("not a regular file" in x for x in found), found)
+
+    def test_a_directory_with_an_entrys_name(self):
+        (self.repo / "docs/plan/changelog/pr-0145.md").mkdir()
+        self.assertIn("pr-0145.md: not a regular file", self.one())
+
+    def test_a_broken_link_with_an_entrys_name(self):
+        (self.repo / "docs/plan/changelog/pr-0145.md").symlink_to(self.repo / "nowhere")
+        self.assertIn("pr-0145.md: not a regular file", self.one())
+
+    def test_a_change_log_file_that_is_not_utf8(self):
+        (self.repo / "docs/plan/changelog/pr-0140.md").write_bytes(b"- **#140, \xff")
+        self.assertIn("cannot be read as UTF-8", self.one())
+
+    def test_a_plan_that_is_not_utf8(self):
+        (self.repo / "docs/meridian-plan.md").write_bytes(PLAN.encode() + b"\xff\xfe")
+        found = self.found()
+        self.assertTrue(
+            any("meridian-plan.md: cannot be read" in x for x in found), found
+        )
+
+    def test_the_command_exits_one_on_them(self):
+        (self.repo / "docs/meridian-plan.md").write_bytes(b"\xff")
+        self.mod.REPO = self.repo
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            self.assertEqual(self.mod.main(), 1)
+        self.assertIn("[plan-files]", err.getvalue())
+
+
+class ConflictMarkers(PlanCase):
+    """M5: plan_port.py leaves markers for a person; nothing may commit them."""
+
+    CONFLICT = "<<<<<<< main\nours\n=======\ntheirs\n>>>>>>> branch\n"
+
+    def test_a_conflict_in_the_plan_a_step_file_and_an_entry(self):
+        cases = (
+            ("docs/meridian-plan.md", PLAN, "\n" + self.CONFLICT),
+            ("docs/plan/steps/S001.md", STEP, self.CONFLICT),
+            ("docs/plan/changelog/pr-0140.md", NEW_ENTRY, self.CONFLICT),
+        )
+        for name, right, conflict in cases:
+            with self.subTest(file=name):
+                self.write(name, right + conflict)
+                found = [x for x in self.found() if "conflict marker" in x]
+                self.assertEqual(len(found), 1, found)
+                self.assertIn(name, found[0])
+                self.write(name, right)
+
+    def test_each_marker_alone_is_enough(self):
+        for line in ("<<<<<<< main", ">>>>>>> branch", "<<<<<<<"):
+            with self.subTest(line=line):
+                self.write("docs/plan/steps/S001.md", STEP + line + "\n")
+                self.assertIn("conflict marker at line 5", self.one())
+
+    def test_the_equals_line_between_the_markers_is_counted(self):
+        self.write(
+            "docs/plan/steps/S001.md", STEP + "<<<<<<< main\n=======\n>>>>>>> branch\n"
+        )
+        self.assertIn("line 5, 6, 7", self.one())
+
+    def test_a_bare_equals_line_outside_a_conflict_is_a_heading_underline(self):
+        self.write("docs/plan/steps/S001.md", STEP + "Title\n=======\n")
+        self.assertEqual(self.found(), [])
+
+    def test_six_markers_or_a_marker_in_the_middle_of_a_line_are_not_markers(self):
+        self.write("docs/plan/steps/S001.md", STEP + "<<<<<< six\nx <<<<<<< y\n")
+        self.assertEqual(self.found(), [])
 
 
 class OtherChecksReadTheFolders(unittest.TestCase):

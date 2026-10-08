@@ -60,6 +60,9 @@ CHANGELOG = "docs/plan/changelog"
 FENCE_OPEN = re.compile(r"^\s*(?P<marker>`{3,}|~{3,})(?P<info>.*)$")
 FENCE_CLOSE = re.compile(r"^\s*(?P<marker>`{3,}|~{3,})\s*$")
 PART_HEADING = re.compile(r"^## Part ([A-Z]) — ")
+# A step is S and three digits, as in Part B. At a step S1000 (or a pull request
+# 10000) this and the file-name rules in check_plan_files.py must be widened;
+# until then a fourth digit is a finding there, not a silent miss.
 SECTION_HEADING = re.compile(r"^### (S\d{3}) — (\S.*)$")
 # The first line of a change-log entry: the label is v0.N (the plan's old
 # version) or #N (a pull request; #XXXX until it has one), then the date.
@@ -222,7 +225,7 @@ def new_part_e(old: OldPlan) -> str:
         "## Part E — Changelog\n\n"
         "Each entry is a file of its own in `docs/plan/changelog/`, the list\n"
         "item as it was written. The entries up to the plan's version\n"
-        f"0.{newest} are named for it (`v0.01.md` to `v0.{newest}.md`, the minor\n"
+        f"0.{newest} are named for it (`v0.01.md` to `v0.{newest:02d}.md`, the minor\n"
         "padded to two digits so that they sort). The plan has no version of\n"
         "its own any more: an entry is named for the number of the pull\n"
         "request that carries it, `pr-NNNN.md` with four digits, and its first\n"
@@ -534,6 +537,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fixed", action="store_true", help="--check after the links")
     parser.add_argument("--fix-links", action="store_true")
     parser.add_argument("--words", action="store_true")
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help=f"split into a tree that already has {STEPS}/ (edited step files are lost)",
+    )
     parser.add_argument("--root", type=Path, default=REPO, help="the tree to write")
     args = parser.parse_args(argv)
     try:
@@ -545,6 +553,11 @@ def main(argv: list[str] | None = None) -> int:
             return apply_words(args.root)
         if not args.old:
             parser.error("name the old plan, or one of --check, --fix-links, --words")
+        if (args.root / STEPS).exists() and not args.overwrite:
+            raise SplitError(
+                f"{STEPS}/ exists: a split writes over every step file it makes, "
+                f"edited ones included. Pass --overwrite if that is meant"
+            )
         steps, entries = split(read_text(Path(args.old)), args.root)
         print(f"wrote {steps} step files, {entries} entry files and the plan")
         return 0

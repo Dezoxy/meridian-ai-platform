@@ -26,12 +26,19 @@ It reads the three versions from git's index (base, the branch's, main's) and:
   in Part C's index for each step the branch added.
 
 It never deletes a file, never runs ``git add`` or commit, and prints what it
-did. A change to a change-log entry that was already there is reported, not
-ported. ``--base``, ``--ours`` and ``--theirs`` name files instead of the
-index, for a rehearsal.
+did. What it does not carry over it says, each on a line with ``NOT ported``,
+and counts in the last line (and exits 1): a change to an entry that was already
+there, to Part C's or Part E's introduction, and a section or an entry the
+branch deleted. ``--base``, ``--ours`` and ``--theirs`` name files instead of
+the index, for a rehearsal.
 
-Python 3 standard library and the ``git`` program. Run from the repository root
-or name it with ``--root``.
+It runs once per merge. It refuses to run again when the plan in the tree holds
+no conflict marker any more (the first run, or you, already resolved it) or when
+a ``pr-XXXX-*.md`` stand-in already exists, and says how to start over.
+
+Python 3 standard library and the ``git`` program. Run it inside the repository
+(the root is the one ``git rev-parse --show-toplevel`` names) or name the root
+with ``--root``.
 """
 
 from __future__ import annotations
@@ -47,13 +54,49 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import plan_split as split
 
-REPO = Path(__file__).resolve().parents[1]
 MARKER_C = "<<<plan-port: Part C>>>\n"
 MARKER_E = "<<<plan-port: Part E>>>\n"
+CONFLICT_OPEN = re.compile(r"^<{7} ", re.MULTILINE)
+START_OVER = (
+    "To start over: 'git checkout -m -- docs/meridian-plan.md' brings the "
+    "conflict back, 'git checkout -- docs/plan/steps' restores main's step "
+    "files, then delete what git status lists as new under docs/plan/ (the "
+    "step files this run wrote and every pr-XXXX stand-in) and run it once more."
+)
 
 
 class PortError(Exception):
     """The three versions cannot be ported."""
+
+
+def toplevel() -> Path:
+    """The repository of the current directory, not of this script's checkout."""
+    done = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"], capture_output=True, check=False
+    )
+    if done.returncode != 0:
+        raise PortError("not inside a git work tree: run it there, or pass --root")
+    return Path(done.stdout.decode("utf-8").strip())
+
+
+def refuse_a_second_run(root: Path, from_index: bool) -> None:
+    """H1: a second run would nest markers, add a second stand-in and wipe a
+    resolution; it is refused, with the way to start over."""
+    stand_ins = sorted((root / split.CHANGELOG).glob("pr-XXXX-*.md"))
+    if stand_ins:
+        names = ", ".join(p.name for p in stand_ins)
+        raise PortError(
+            f"a stand-in is already in {split.CHANGELOG}/ ({names}): this merge "
+            f"was ported already. {START_OVER}"
+        )
+    plan = root / split.PLAN
+    if from_index and not (
+        plan.is_file() and CONFLICT_OPEN.search(split.read_text(plan))
+    ):
+        raise PortError(
+            f"{split.PLAN} holds no conflict marker: it was ported or resolved "
+            f"already, and running again would write over that. {START_OVER}"
+        )
 
 
 def from_index(root: Path, stage: int) -> str:
@@ -188,21 +231,16 @@ def port_sections(root, base, ours, report):
 
     new, changed = added_or_changed(base.sections, ours.sections, lambda s: s.id)
     by_id = {s.id: s for s in base.sections}
-    rows, conflicts = [], 0
+    ported, conflicts = [], 0
     for section in [*new, *changed]:
         path = root / split.STEPS / f"{section.id}.md"
         theirs_text = split.read_text(path) if path.exists() else None
         ours_text = fixed(section)
         label = f"{section.id}.md"
+        ported.append(section)
         if theirs_text is None:
             split.write_text(path, ours_text)
             report.append(f"{label}: written whole (main has no file for it)")
-            if section.id not in by_id:
-                title = section.title.replace("|", "\\|")
-                rows.append(
-                    f"| {section.id} | {title} | "
-                    f"[{section.id}.md](plan/steps/{section.id}.md) |"
-                )
             continue
         base_text = fixed(by_id[section.id]) if section.id in by_id else ""
         merged, count = merge_file(
@@ -212,10 +250,33 @@ def port_sections(root, base, ours, report):
         conflicts += count
         how = "new on both sides" if section.id not in by_id else "three-way merge"
         report.append(f"{label}: {how}, {count} conflict(s)")
-    return rows, conflicts
+    return ported, conflicts
 
 
-def port_entries(root, base_text, ours_text, report):
+def index_rows(theirs_c: str, ported) -> list[str]:
+    """A row for each ported step that main's index does not list yet."""
+    listed = {
+        m[1]
+        for line in theirs_c.split("\n")
+        if (m := re.match(r"^\| (S\d{3}) \| .* \| \[S\d{3}\.md\]\(plan/steps/", line))
+    }
+    return [
+        f"| {s.id} | {s.title.replace('|', chr(92) + '|')} | "
+        f"[{s.id}.md](plan/steps/{s.id}.md) |"
+        for s in ported
+        if s.id not in listed
+    ]
+
+
+def e_intro(plan_text: str) -> str:
+    """Part E's text before its first entry (an old-layout plan)."""
+    start = split.heading_offsets(plan_text)["E"]
+    entries = entries_of(plan_text)
+    end = plan_text.index(entries[0].text, start) if entries else len(plan_text)
+    return plan_text[start:end]
+
+
+def port_entries(root, base_text, ours_text, report, skipped):
     base, ours = entries_of(base_text), entries_of(ours_text)
     new, changed = added_or_changed(base, ours, lambda e: e.label)
     for entry in new:
@@ -226,14 +287,44 @@ def port_entries(root, base_text, ours_text, report):
             f"{path.name}: the branch's entry {entry.label}, relabelled #XXXX"
         )
     for entry in changed:
-        report.append(
+        skipped.append(
             f"entry {entry.label} was changed by the branch: NOT ported, edit "
             f"{split.CHANGELOG}/ by hand"
         )
+    kept = {e.label for e in ours}
+    for entry in base:
+        if entry.label not in kept:
+            skipped.append(
+                f"entry {entry.label} was deleted by the branch: NOT ported, "
+                f"delete its file in {split.CHANGELOG}/ by hand if that is meant"
+            )
     return len(new)
 
 
+def not_ported(base, ours, base_text, ours_text, skipped):
+    """M1 and M2: edits to the introductions and deleted sections."""
+    if not same_text(base.c_intro, ours.c_intro):
+        skipped.append(
+            "Part C's introduction was edited by the branch: NOT ported, carry "
+            "the edit into the plan's Part C by hand"
+        )
+    if not same_text(e_intro(base_text), e_intro(ours_text)):
+        skipped.append(
+            "Part E's introduction was edited by the branch: NOT ported, carry "
+            "the edit into the plan's Part E by hand"
+        )
+    kept = {s.id for s in ours.sections}
+    for section in base.sections:
+        if section.id not in kept:
+            skipped.append(
+                f"{section.id} was deleted by the branch: NOT ported, delete "
+                f"{split.STEPS}/{section.id}.md and its index row by hand if "
+                f"that is meant"
+            )
+
+
 def port(root: Path, base_text: str, ours_text: str, theirs_text: str) -> int:
+    # Everything that can refuse comes before anything is written (L4).
     try:
         base = split.parse_old(base_text, with_entries=False)
         ours = split.parse_old(ours_text, with_entries=False)
@@ -241,11 +332,16 @@ def port(root: Path, base_text: str, ours_text: str, theirs_text: str) -> int:
         raise PortError(
             f"the base and the branch must have the old layout ({error})"
         ) from error
-    if "## Part C" not in theirs_text or MARKER_C in theirs_text:
-        raise PortError("main's plan has no Part C")
-    report: list[str] = []
-    rows, conflicts = port_sections(root, base, ours, report)
-    count = port_entries(root, base_text, ours_text, report)
+    try:
+        parts = split.heading_offsets(theirs_text)
+    except split.SplitError as error:
+        raise PortError(f"main's plan: {error}") from error
+    missing = [k for k in "CDE" if k not in parts]
+    if missing or MARKER_C in theirs_text or MARKER_E in theirs_text:
+        raise PortError(
+            "main's plan is not in the new layout: no heading for Part "
+            + ", ".join(missing or ["C"])
+        )
     base_skel, _, _ = skeleton(base_text, True)
     ours_skel, _, _ = skeleton(ours_text, True)
     theirs_skel, theirs_c, theirs_e = skeleton(theirs_text, False)
@@ -255,41 +351,52 @@ def port(root: Path, base_text: str, ours_text: str, theirs_text: str) -> int:
     for marker in (MARKER_C, MARKER_E):
         if merged.count(marker) != 1:
             raise PortError("the merge of the plan's top lost a Part boundary")
+    report: list[str] = []
+    skipped: list[str] = []
+    not_ported(base, ours, base_text, ours_text, skipped)
+    ported, conflicts = port_sections(root, base, ours, report)
+    count = port_entries(root, base_text, ours_text, report, skipped)
+    rows = index_rows(theirs_c, ported)
     merged = merged.replace(MARKER_C, add_index_rows(theirs_c, rows))
     merged = merged.replace(MARKER_E, theirs_e)
     split.write_text(root / split.PLAN, merged)
+    files = len(report)
     report.append(
         f"{split.PLAN}: main's, with the branch's top, Part A, Part B and "
         f"Part D merged, {plan_conflicts} conflict(s); {len(rows)} index row(s) added"
     )
-    for line in report:
+    for line in [*report, *skipped]:
         print(line)
     total = conflicts + plan_conflicts
     print(
-        f"ported: {len(report) - 1} file(s), {count} entry stand-in(s), "
-        f"{total} conflict(s) to resolve"
+        f"ported: {files + 1} file(s), {count} entry stand-in(s), "
+        f"{total} conflict(s) to resolve, {len(skipped)} NOT ported"
     )
     if count:
         print(
             "rename each pr-XXXX-<step>.md to pr-NNNN.md and its label #XXXX to "
             "#NNNN once the pull request exists"
         )
-    return 1 if total else 0
+    return 1 if total or skipped else 0
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--root", type=Path, default=REPO, help="the working tree")
+    parser.add_argument("--root", type=Path, help="the working tree (default: git's)")
     parser.add_argument("--base", type=Path, help="the merge base's plan")
     parser.add_argument("--ours", type=Path, help="the branch's plan")
     parser.add_argument("--theirs", type=Path, help="main's plan")
     args = parser.parse_args(argv)
     try:
+        root = args.root or toplevel()
+        given = (args.base, args.ours, args.theirs)
+        from_index_stages = not any(given)
         texts = [
-            split.read_text(given) if given else from_index(args.root, stage)
-            for stage, given in ((1, args.base), (2, args.ours), (3, args.theirs))
+            split.read_text(path) if path else from_index(root, stage)
+            for stage, path in zip((1, 2, 3), given, strict=True)
         ]
-        return port(args.root, *texts)
+        refuse_a_second_run(root, from_index_stages)
+        return port(root, *texts)
     except PortError as error:
         print(f"plan_port: {error}", file=sys.stderr)
         return 2
