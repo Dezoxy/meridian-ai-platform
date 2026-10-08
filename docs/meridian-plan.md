@@ -1020,6 +1020,7 @@ service runs in Azure yet.
 | 2026-10-08 | S097 | The plan in files | [S097.md](plan/steps/S080-S099/S097.md) |
 | 2026-10-08 | S099 | A dispatcher and workers: the test lock and the two briefs | [S099.md](plan/steps/S080-S099/S099.md) |
 | 2026-10-08 | S100 | The plan's layout: step folders, the backlog in files, the change log ended | [S100.md](plan/steps/S100-S119/S100.md) |
+| 2026-10-08 | S101 | The plan shows no status: the finished steps and those in flight are its last part | [S101.md](plan/steps/S100-S119/S101.md) |
 
 ### In flight
 
@@ -1037,7 +1038,6 @@ service runs in Azure yet.
 | 2026-10-07 | S080 | File uploads for a claim, before sign-in | doing | [S080.md](plan/steps/S080-S099/S080.md) |
 | 2026-10-07 | S081 | The decision record for the move toward services | doing | [S081.md](plan/steps/S080-S099/S081.md) |
 | 2026-10-07 | S082 | Code in the wrong place moves; import contracts per service | doing | [S082.md](plan/steps/S080-S099/S082.md) |
-| 2026-10-08 | S101 | The plan shows no status: the finished steps and those in flight are its last part | doing | [S101.md](plan/steps/S100-S119/S101.md) |
 | — | S095 | Retention and erasure of uploaded files | todo | [S095.md](plan/steps/S080-S099/S095.md) |
 
 <!-- plan-progress: end -->

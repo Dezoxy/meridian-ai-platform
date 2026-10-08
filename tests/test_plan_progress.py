@@ -11,6 +11,7 @@ Run: python3 -m unittest discover -s tests
 import contextlib
 import io
 import os
+import shutil
 import sys
 import unittest
 from pathlib import Path
@@ -29,6 +30,7 @@ from test_check_plan_files import (  # noqa: E402
     STEP,
     PlanCase,
     block,
+    in_part_e,
     part_f,
 )
 
@@ -195,6 +197,17 @@ class PartB(PlanCase):
         self.assertFalse(hasattr(self.mod, "OPEN_STATUS"))
         self.assertTrue(hasattr(self.mod, "step_path"))
 
+    def test_a_step_row_inside_a_fence_is_not_a_row(self):
+        row = "| S002 | Two | x | — |\n"
+        flight = flight_row("S002", "Two", "2026-09-27", "doing")
+        plan = plan_with(finished=S001_ROW, flight=flight)
+        self.write(PLAN_PATH, plan.replace(row, f"{FENCE}text\n{row}{FENCE}\n"))
+        self.write(
+            "docs/plan/steps/S000-S019/S002.md",
+            step_text(status("doing", finished="—"), "Two", "S002"),
+        )
+        self.assertIn("S002 has no row in Part B", self.one())
+
 
 class PartF(PlanCase):
     def test_a_plan_without_part_f_is_a_finding(self):
@@ -237,6 +250,10 @@ class PartF(PlanCase):
 
     def test_an_entry_in_part_f_is_not_part_es_finding(self):
         self.write(PLAN_PATH, PLAN + "\n" + ENTRY)
+        self.assertEqual(self.found(), [])
+
+    def test_marker_lines_in_part_e_are_not_part_fs(self):
+        self.write(PLAN_PATH, in_part_e(f"{BEGIN}\n{END}\n"))
         self.assertEqual(self.found(), [])
 
 
@@ -311,8 +328,10 @@ class Block(PlanCase):
         self.write(PLAN_PATH, right)
         self.assertEqual(self.found(), [])
         # The same block with two rows swapped is stale: the order is checked.
-        swapped = flight.replace("Step 7", "@").replace("Step 6", "Step 7")
-        swapped = swapped.replace("@", "Step 6")
+        seven = flight_row("S007", "Step 7", "2026-09-30", "doing")
+        six = flight_row("S006", "Step 6", "2026-10-01", "doing")
+        swapped = flight.replace(seven + six, six + seven)
+        self.assertNotEqual(swapped, flight)
         self.write(PLAN_PATH, base.replace(block(S001_ROW), block(finished, swapped)))
         self.assertIn("make plan-progress", self.one())
 
@@ -408,6 +427,29 @@ class Write(PlanCase):
         self.assertEqual(code, 0)
         self.assertIn("1 in flight", out)
         self.assertEqual(len(self.found()), 1)
+
+    def test_step_files_that_cannot_be_listed_write_nothing(self):
+        # A folder that cannot be read must not read as "no step": the block
+        # would be rewritten without its rows.
+        folder = self.repo / "docs/plan/steps"
+        shutil.rmtree(folder)
+        folder.write_text("not a folder\n", encoding="utf-8")
+        code, out, err = self.run_main("--write")
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("docs/plan/steps: cannot be listed", err)
+        self.assertEqual(self.plan_bytes(), PLAN.encode())
+        self.assertIn("cannot be listed", self.one())
+
+    def test_a_plan_that_cannot_be_written_is_a_finding_not_a_traceback(self):
+        if os.geteuid() == 0:
+            self.skipTest("root writes a read-only file")
+        self.stale()
+        path = self.repo / PLAN_PATH
+        path.chmod(0o444)
+        code, out, err = self.run_main("--write")
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn(f"{PLAN_PATH}: cannot be written", err)
+        self.assertEqual(self.plan_bytes(), PLAN.encode())
 
     def test_a_missing_plan_exits_one(self):
         (self.repo / PLAN_PATH).unlink()

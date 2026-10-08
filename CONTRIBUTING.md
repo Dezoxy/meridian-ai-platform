@@ -74,6 +74,7 @@ names the README to read for each.
 
    ```bash
    make docs                          # always
+   make plan-progress                 # a step file's status line changed
    make test && make lint             # always for code or scripts
    uv run pytest tests/meridian/<area> -n 4   # the folders you changed
    make check                         # the model or a decision record (Docker)

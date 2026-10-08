@@ -195,7 +195,8 @@ def listing(folder: Path, found: Findings, root: Path) -> list[Path]:
     try:
         return sorted(folder.iterdir())
     except OSError as error:
-        found.append(f"{relative(root, folder)}: cannot be listed ({error.strerror})")
+        # Blocking: step files nobody could list must not read as "no step".
+        found.block(f"{relative(root, folder)}: cannot be listed ({error.strerror})")
         return []
 
 
@@ -580,7 +581,11 @@ def write_progress(root: Path) -> int:
     begin, end = result.span
     text = "\n".join([*lines[: begin + 1], *build_block(result.steps), *lines[end:]])
     if text != result.text:
-        (root / PLAN).write_bytes(text.encode("utf-8"))
+        try:
+            (root / PLAN).write_bytes(text.encode("utf-8"))
+        except OSError as error:
+            report([f"{PLAN}: cannot be written ({error.strerror})"])
+            return 1
     finished = sum(1 for s in result.steps if s.word == "done")
     flying = len(result.steps) - finished
     print(f"plan progress: {finished} finished, {flying} in flight")
