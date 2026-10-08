@@ -79,9 +79,12 @@ to go on.
 ## This repository
 
 - The protocol is Part A of `docs/meridian-plan.md` ("A dispatcher and
-  workers", the contract's form, "Before pushing"); your step's file is
-  `docs/plan/steps/S0NN.md`, and its change-log entry is
-  `docs/plan/changelog/pr-NNNN.md`, named when the pull request exists.
+  workers", the contract's form, "Before pushing", "The pull request's
+  description"); your step's file sits in the folder of its twenty
+  numbers, `docs/plan/steps/S100-S119/S100.md`. There is no change log:
+  the pull request's description is the record. A follow-up is a row of
+  `docs/plan/backlog.md`, and a row you close moves to
+  `docs/plan/backlog-closed.md`.
 - The card says "cluster" or "no cluster". With "cluster" the kind cluster is
   yours: check its holder first (`make cluster-holder`), run its commands from
   the checkout the row names, and say when you delete or recreate it. With "no

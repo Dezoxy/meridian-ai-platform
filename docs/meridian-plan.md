@@ -49,14 +49,17 @@
   level objectives nobody has measured (S024), and no service runs in
   Azure yet.
 > **How to use this file:** this is the single living plan. Every step in
-  Part B has an ID (`S001`…). When a step starts, add
-  `docs/plan/steps/S0xx.md` (Part C) from the template, flip its status,
-  and fill it in as you go.
+  Part B has an ID (`S001`…). When a step starts, add its file under
+  `docs/plan/steps/`, in the folder of its twenty numbers (Part C), from
+  the template, flip its status, and fill it in as you go.
   Nothing gets deleted; superseded decisions are struck through with a note.
+  The one exception is the change log, which ended on 2026-10-08 and
+  whose files left the tree by the owner's decision (Part E).
 > **Architecture:** requirements, decisions, views and security live in
   [architecture/](architecture/README.md). This plan owns the step list, the
   session protocol, open questions, the step files in `docs/plan/steps/`
-  and its own changelog, one file an entry, in `docs/plan/changelog/`.
+  and the follow-up backlog in `docs/plan/backlog.md` and
+  `docs/plan/backlog-closed.md`.
 > **Private context:** job targeting and owner notes live in the gitignored
   `.context/` folder. Never copy them into tracked files; this repository is
   public.
@@ -79,8 +82,10 @@ context blurs what a step was for.
    them; search for the symbol, then read the lines.
 2. **One step, one branch.** Branch `sNNN-short-name` off `main`; never stack
    branches. If a step will not fit one session, split it here first.
-3. **Open the step.** Add its file `docs/plan/steps/S0NN.md` from Part C's
-   template and a row to Part C's index, and set the status to `doing`.
+3. **Open the step.** Add its file from Part C's template, in the folder
+   of its twenty numbers (`docs/plan/steps/S100-S119/S100.md`), and a row
+   to Part C's index, and set the status to `doing`. Take the step's open
+   rows of `docs/plan/backlog.md` into its "done when".
 4. **Plan, delegate, verify.** The main session (Opus) writes a short contract
    with paths, names and what not to touch (the form is below), delegates
    implementation to the `implementer` subagent (Sonnet at high effort), and
@@ -128,8 +133,8 @@ context blurs what a step was for.
    changed, `make mermaid` when views or Mermaid blocks changed, and the
    step's own "done when" criterion.
 6. **Close.** Fill in the work log and verification, set `done`, commit, go
-   through "Before pushing" below, open the PR, add its
-   change-log entry ("Numbers are taken late", below), merge it with
+   through "Before pushing" below, open the PR with a description that
+   is the record ("The pull request's description", below), merge it with
    `gh pr merge --squash` as soon as every required check is green, and
    confirm the content landed on `main`. The session merges every pull
    request this way, by hand: `--auto` was set on pull requests 84 and 85
@@ -144,11 +149,18 @@ context blurs what a step was for.
    into the step's section and the session takes what does not depend on
    it (the owner, 2026-10-05: "dont stop, at a promt or for a question,
    just put it away, note it and go on"). A follow-up that no step's "done when"
-   covers goes into Part B's follow-up backlog, not only into the step's
+   covers goes into the follow-up backlog, a row at the end of the table
+   in `docs/plan/backlog.md`, not only into the step's
    own section, and it names the step that will take it: one that exists,
    or a new row in "Backlog steps" added in the same pull request. A row
    is not left with the home `none` (the owner, 2026-10-06: every item
    belongs to a step, so that the step list is the whole of what is left).
+   A row the step closes is not edited where it stands: it moves, whole,
+   to the end of the table in `docs/plan/backlog-closed.md`, with a
+   status that starts `closed by` and the step; a row closed in part
+   stays and says what is left. `make docs` refuses a closed row in the
+   first file, a row that is not closed in the second and an open row
+   that names no step.
 7. **Checkpoint.** At every close, and before a long stretch of work,
    nothing that matters is left in the conversation alone: the step's
    record is in its step file, every open branch is pushed, the contracts that
@@ -231,6 +243,33 @@ Worktree and branch. Do not commit, push, switch branches or stash.
   failed `make docs` before a push.
 - Read every source file a subagent changed. A green suite does not show a
   value that was hard-coded to match the one fixture.
+
+**The pull request's description (S100).** It is the step's record
+outside its own file. The repository squashes with the pull request's
+title and description, so the description becomes the commit's message
+on `main`, and `git log` is the change log. The plan had a change log of
+its own until 2026-10-08, one entry a pull request; the owner asked "the
+changelog makes sense here or the github owned prs enough?" and chose
+"Stop and delete the old" (Part E). So no entry file is written, and the
+description holds what the entry held:
+
+- **The title** says what is true after the merge, as one sentence, and
+  starts with the step (`S100: …`), or with `docs:` for a pull request
+  of documents alone.
+- **What:** the step and what changed, by area, in words a reader of
+  `git log` follows without the diff.
+- **Decisions:** each decision that was the owner's, in the owner's
+  words and with its date; each the session took alone, with the
+  alternative it rejected.
+- **Evidence:** each gate that ran, what it printed and its exit status;
+  what was not run, and why. "Tests pass" is not evidence.
+- **Left open:** what the step did not do, and the row of
+  `docs/plan/backlog.md` that carries each.
+
+The description is written before the merge and read once more against
+the branch right before it: `gh pr merge --squash` copies what stands
+there, and a commit pushed after the description was written may have
+made a sentence of it false.
 
 **A dispatcher and workers (the owner, 2026-10-08; S099).** Three days of
 five steps side by side in ONE session had used 86 % of the account's
@@ -370,12 +409,9 @@ sessions; the brief of each step, or of each session, says:
   taken after merging `main` into the step's branch, right before the pull
   request. A branch whose migration number is not final is not deployed to
   the cluster: the runner records a migration by name and hash. The plan
-  has no version of its own any more: a change-log entry is a file named
-  for the number of its pull request, `docs/plan/changelog/pr-NNNN.md`,
-  with the label `#NNNN` on its first line, and is added once the pull
-  request exists. Until then the file is `pr-XXXX-<step>.md` with the
-  label `#XXXX`, which `make docs` accepts on the machine and CI refuses:
-  rename it for the number, push, and the checks run again.
+  has no version and no change log of its own (S100): the pull request's
+  description is the record ("The pull request's description", above),
+  so nothing in the tree waits for the pull request's number.
 - **Who finishes later, merges first.** That session runs
   `git merge origin/main` (no rebase and no force-push on a branch with a
   pull request), runs the gates again, then opens its pull request. After
@@ -695,6 +731,7 @@ both readings the same hour ("yes both are right, go on").
 | S096 | The PDF: no row lost, and a brief edition | The architecture PDF loses no text where a table row is taller than a page, and a second, brief edition exists to hand to someone who will not read a register. Built as (2026-10-08; the owner's "do it" and "Records (Recommended)"): a table with a cell of more than 300 characters prints as records, one block of paragraphs per row, and any other wide table gets its column widths from its text (`scripts/pdf_tables.py`); `make pdf-brief` writes the brief, without the documents `docs/architecture/pdf-brief.txt` lists (the threat model and the Azure platform register), with the decisions as an index and a first page that says what it leaves out; the workflow builds both and attaches both to the release. Measured on the virtual machine: the full edition from 377 pages to 274 and from 117 pages with text past the bottom margin to none; the brief is 34 pages. The code is development-base's (its pull request 54), copied. Landscape pages for the threat model, the session's first proposal, were built and saved nothing (379 pages). Implemented; no release was published | done | S092 |
 | S097 | The plan in files | Each step's section and each change-log entry is a file of its own under `docs/plan/`, moved byte for byte and proved so by `scripts/plan_split.py --check`; a new entry is named for its pull request's number and the plan has no version of its own; `make docs` checks the files against Part B and refuses a section or an entry in the old place; `scripts/plan_port.py` carries a branch's edits of the old layout over. Part B's tables are not moved and still collide by rows (the owner, 2026-10-08: "Change log and step sections") | doing | — |
 | S099 | A dispatcher and workers: the test lock and the two briefs | Steps run in worker sessions, one step and one worktree each, handed out by a dispatcher session (the owner, 2026-10-08: "yes and you will be the orchestrator this way"); `make pytest`, `make pytest-db` and `make alerts` take one lock for the machine (`scripts/machine_lock.sh`), so a second session's run waits for the first and says who holds it, and one that waited too long runs nothing; the two roles are skills (`plan-dispatcher`, `plan-worker`) that name no path of the machine; Part A's "A dispatcher and workers" replaces "One step at a time, again"; the same goes into the development base in a pull request there | done | — |
+| S100 | The plan's layout: step folders, the backlog in files, the change log ended | The step files sit in folders of twenty step numbers under `docs/plan/steps/` (the owner, 2026-10-08: "range the step for at 20, okay"), moved with `git mv`; the follow-up backlog is out of the plan file, its open rows in `docs/plan/backlog.md` and its closed rows in `docs/plan/backlog-closed.md` ("do the backlog seperation"), every row in exactly one of the two, byte for byte, proved by count and by digest; the change log ends and its 105 files leave the tree ("Stop and delete the old"), and Part A says what a pull request's description must hold instead; `make docs` checks the folders, holds each backlog row to its file by its status and refuses a change-log folder, with no import of a migration script (`plan_split.py` and `plan_port.py` are removed); every link resolves; the development base follows in a pull request there | doing | — |
 
 ### Toward services: a database each and six images
 
@@ -792,11 +829,17 @@ each row to its file by its status.
 
 ## Part C — Step details
 
-Each step has a file of its own, `docs/plan/steps/S0NN.md`, and its
-`### S0NN — <title>` heading is the file's first line. A step that
-starts gets a file from the template below and a row in the index
-after it. Nothing in this part holds a step's section: `make docs`
-refuses one. Template:
+Each step has a file of its own, and its `### S0NN — <title>` heading
+is the file's first line. The files sit in folders of twenty step
+numbers under `docs/plan/steps/` (S100; the owner, 2026-10-08: "we
+have too much file in the plan folder in one folder", and "range the
+step for at 20, okay"): a folder is named for the first and the last
+number it may hold, `S000-S019`, `S020-S039` and so on, so S100's file
+is `docs/plan/steps/S100-S119/S100.md`, and a folder is made when its
+first step starts. A step that starts gets a file from the template
+below and a row in the index after it. Nothing in this part holds a
+step's section, and no step file lies outside its folder: `make docs`
+refuses both and says where the file belongs. Template:
 
 ```text
 ### S0xx — <title>
@@ -810,7 +853,7 @@ it changed nothing; or that it was not consulted.
 **Work log:** what was actually done, commands, links to PRs.
 **Result / verification:** how we proved it is done.
 **Follow-ups:** new steps or issues this created; those no step covers
-also go into Part B's follow-up backlog.
+also go into the follow-up backlog, `docs/plan/backlog.md`.
 ```
 
 | Step | Title | File |
@@ -896,6 +939,7 @@ also go into Part B's follow-up backlog.
 | S097 | The plan in files | [S097.md](plan/steps/S080-S099/S097.md) |
 | S096 | The PDF: no row lost, and a brief edition | [S096.md](plan/steps/S080-S099/S096.md) |
 | S099 | A dispatcher and workers: the test lock and the two briefs | [S099.md](plan/steps/S080-S099/S099.md) |
+| S100 | The plan's layout: step folders, the backlog in files, the change log ended | [S100.md](plan/steps/S100-S119/S100.md) |
 
 ## Part D — Open questions
 
@@ -912,13 +956,20 @@ also go into Part B's follow-up backlog.
 
 ## Part E — Changelog
 
-Each entry is a file of its own in `docs/plan/changelog/`, the list
-item as it was written. The entries up to the plan's version
-0.98 are named for it (`v0.01.md` to `v0.98.md`, the minor
-padded to two digits so that they sort). The plan has no version of
-its own any more: an entry is named for the number of the pull
-request that carries it, `pr-NNNN.md` with four digits, and its first
-line starts `- **#NNNN, YYYY-MM-DD:**`. It is added once the pull
-request exists, so that a number is never guessed. The newest
-entries are the highest `pr-` numbers. `make docs` refuses an entry
-in this file.
+The plan's change log ended on 2026-10-08 (S100). It was one entry a
+pull request: in this part until S097, then a file an entry under
+`docs/plan/changelog/`, 98 named for the plan's version (`v0.01.md` to
+`v0.98.md`) and 7 for a pull request (`pr-0137.md`, and `pr-0144.md` to
+`pr-0149.md`). The owner asked "the changelog makes sense here or the
+github owned prs enough?", was offered "Stop, keep the old
+(Recommended)", "Keep as it is" and "Stop and delete the old", and
+answered "Stop and delete the old".
+
+So the 105 files left the tree, and they are in git's history up to the
+commit `093fd8b`: `git ls-tree --name-only 093fd8b docs/plan/changelog/`
+lists them and `git show 093fd8b:docs/plan/changelog/v0.57.md` prints
+one. A step file that names an entry ("v0.57", "the change-log entry")
+means those files. From S100's pull request on, the record of a change
+is its pull request's description, which the squash commit carries into
+`git log` (Part A, "The pull request's description"). `make docs`
+refuses an entry in this part and a `docs/plan/changelog` folder.
