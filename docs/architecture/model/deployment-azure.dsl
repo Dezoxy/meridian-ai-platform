@@ -45,7 +45,7 @@ azure = deploymentEnvironment "AzureDesigned" {
             platformDbInstance = containerInstance meridian.platformDb "" "Designed"
         }
 
-        secrets = deploymentNode "Secret store" "The foundation's vault, applied on 2026-09-30 and not made by the platform module: it holds no secret that a service reads yet. The module would write the database administrator's password into it, and a private endpoint for the cluster's path to it is written as Terraform and never applied. Public network access stays on, and a firewall is an undecided change to the foundation. The gateway's read of it is designed. Designed." "Azure Key Vault" "Designed" {
+        secrets = deploymentNode "Secret store" "The foundation's vault, applied on 2026-09-30 and not made by the platform module: it holds no secret that a service reads yet. The module would write the database administrator's password into it, and a private endpoint for the cluster's path to it is written as Terraform and never applied. Public network access stays on, behind a firewall that admits the operator's address only, written as code in the foundation (S020, F1) and not applied. The gateway's read of it is designed. Designed." "Azure Key Vault" "Designed" {
             keyVaultInstance = containerInstance meridian.keyVault "" "Designed"
         }
 

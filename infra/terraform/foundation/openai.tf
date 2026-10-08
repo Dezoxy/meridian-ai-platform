@@ -20,7 +20,7 @@ resource "azurerm_cognitive_account" "openai" {
   # 2026-10-08, not applied. The provider requires custom_subdomain_name above
   # with this block. bypass is "None" for the reason the vault's is: the
   # trusted-service list is not needed. The portal's playground is a caller from
-  # another address too, and is refused.
+  # another address too, and is refused (per Microsoft's page, not seen).
   network_acls {
     default_action = "Deny"
     bypass         = "None"

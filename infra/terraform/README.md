@@ -96,8 +96,11 @@ The owner decided on 2026-10-08 that the vault and the model accounts refuse
 every address but the operator's. In code, the vault and every Azure OpenAI
 account have `default_action = "Deny"`, the addresses of the variable
 `operator_addresses` as their IP rules, and `bypass = "None"`. The public
-endpoint stays on, behind that firewall: with public network access off, the
-service ignores the address rules. `bypass` is `None` because the trusted
+endpoint stays on, behind that firewall: for the vault, Microsoft's template
+reference says that with public network access off the service does not honour
+the address rules (per Microsoft's page, not seen); no page was found that says
+the same of a model account, and the account's endpoint stays on for the same
+reason. `bypass` is `None` because the trusted
 service list includes services that run customers' workloads and nothing here
 needs it; if a later step does, it changes with a dated note in
 `foundation/key_vault.tf`. The cluster's own path is the platform module's
@@ -108,21 +111,53 @@ of the foundation.
 public IPv4 addresses, each written bare, with no prefix length: the model
 account refuses `/31` and `/32`, so one form serves both resources. The
 variable refuses the whole network, private, loopback, link-local, shared and
-multicast ranges, each with a message of its own that does not print the value.
-It has no default and no example file, and no address is written anywhere in
-this repository. The owner gives it in their own shell, as a JSON list of
-strings in the environment variable `TF_VAR_operator_addresses`, before
-`make azure-plan`; Terraform refuses to plan without it. `foundation.sh` runs
-Terraform in the environment it was given (its `tf` function; no `env -i`, no
-`unset`), so the variable reaches the tool unchanged. The wrapper detects no
-address, asks no outside service for one and neither prints nor writes it. The
-state holds the addresses in plain text, as the platform module's state holds
-its own: a sensitive variable hides a value from the display only.
+multicast ranges and three special-purpose ranges that no operator can use
+(192.0.0.0/24, 192.88.99.0/24 and 198.18.0.0/15; the three documentation
+ranges of RFC 5737 stay accepted, because the tests use them), each rule with a
+message of its own that does not print the value. It has no default and no
+example file, and no address is written in the files the test scans (the two
+Terraform READMEs and the `.tf` files of the foundation and the platform
+module, and any example or `.tfvars` file under `infra/terraform/`; the other
+documents and the Makefile are not scanned). The owner gives it in their own
+shell, as a JSON list of strings in the environment variable
+`TF_VAR_operator_addresses`, before `make azure-plan`; Terraform refuses to
+plan without it. **Not in a `.tfvars` file:** with a sensitive variable in a
+`.tfvars` file, a validation error still prints the file's source line, and the
+address with it (seen in the console by the infrastructure review), and a
+direct Terraform call is not masked by the wrapper; the environment variable
+printed nothing in any case tried. `foundation.sh` runs Terraform in the
+environment it was given (its `tf` function; no `env -i`, no `unset`), so the
+variable reaches the tool unchanged. The wrapper detects no address, asks no
+outside service for one and neither prints nor writes it. Terraform does write
+it, in two places. The state holds the addresses in plain text, as the platform
+module's state holds its own: a sensitive variable hides a value from the
+display only. The saved plan `foundation/foundation.tfplan` holds the
+variable's value as well (a saved plan stores the root variables, read from
+Terraform's design and not seen); the wrapper writes it with mode 600, git
+ignores it, `make azure-apply` removes it, and a plan that is never applied
+leaves it on the disk until the owner removes it.
 
 **Which address.** The address allowed must be the address the platform module
 is applied from: that module writes the database administrator's password into
 this vault, and the vault refuses any other address. Either order of the two
 applies works, as long as the address is allowed when the secret is written.
+The address to give is the one Azure sees from the operator's machine, which
+may not be the one the machine has: behind a VPN, a proxy or a shared egress
+(carrier-grade NAT) it is the exit's address, and the rule then admits every
+other user of that exit. The platform module's `api_server_authorized_ip_ranges`
+is a separate input, with its own validation, and must be kept in step with
+this one by hand.
+
+**After the secret is written, the address must not change until the platform
+environment is removed.** The secret resource's read and delete are data-plane
+calls, so if the operator's address changes after the platform module's apply,
+that module's plan, refresh and removal fail (`-refresh=false` does not help,
+because the delete is refused too), and a removal blocked this way leaves the
+cluster running and billing. The order out: correct `operator_addresses`, apply
+the foundation (the management plane takes it from any address, per Microsoft's
+page, not seen), and then remove the platform environment. This is read from
+the provider's source at tag `v5.8.0` (`key_vault_secret_resource.go`: the read
+and the delete call the vault's data plane), not seen.
 
 **A foundation apply that succeeds does not prove the address is right.** The
 vault resource's refresh reads the vault's data plane (the certificate
@@ -142,11 +177,15 @@ a refusal. `make azure-smoke` calls each model account from the operator's
 machine, which proves the accounts' rule; it reads nothing from the vault.
 
 **A wrong address** is corrected through the management plane from any
-address. Azure applies a vault's firewall to its data plane only, and
-the portal, the Azure CLI and Terraform change the rule through the Azure
-Resource Manager endpoint, so the owner is not locked out of correcting it. In
-the meantime the portal opens the vault but does not list its secrets, and the
-model playground is refused, from every address but the operator's.
+address. Microsoft's pages say that a vault's firewall applies to its data
+plane only, that the portal, the Azure CLI and Terraform change the rule
+through the Azure Resource Manager endpoint, and that a model account's
+firewall can still be configured from them (per Microsoft's pages, not seen),
+so the owner is not locked out of correcting it. In the meantime the portal
+opens the vault but does not list its secrets, and the model playground is
+refused, from every address but the operator's (also per Microsoft's pages,
+not seen). No page was found for how long a rule takes to take effect, so a 403
+just after an apply may be that and not a wrong address.
 
 **A second account** (a line added to `openai_locations`) has no path from the
 cluster under `Deny` until an endpoint for it is added: the platform module

@@ -70,7 +70,10 @@ tf_init() {
 cmd_plan() {
   tf_init
   log "terraform plan"
-  umask 077 # the plan file embeds resource IDs, like local.env
+  # The plan file embeds resource IDs, like local.env, and the value of
+  # operator_addresses (a saved plan stores the root variables). Mode 600,
+  # gitignored, removed by apply; a plan that is never applied leaves it.
+  umask 077
   # Through redact, with pipefail keeping terraform's exit status.
   tf plan -input=false -out="${PLAN_FILE}" 2>&1 | redact
   log "review the plan above (accounts, deployments, budget, vault), then: make azure-apply"

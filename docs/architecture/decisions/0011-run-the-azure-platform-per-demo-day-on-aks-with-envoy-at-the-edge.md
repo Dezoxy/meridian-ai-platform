@@ -333,8 +333,11 @@ Negative / accepted trade-offs:
   the vault receives the administrator's password: T-104. The owner's firewall
   decision is open and comes before any apply. (Amended on 2026-10-08: the
   owner decided it, "Deny, allow operator (Recommended)": default deny, the
-  operator's address allowed, private endpoints for the cluster; it is
-  designed, not written, and applies at the next apply the owner runs.)
+  operator's address allowed, private endpoints for the cluster; it applies
+  at the next apply the owner runs.) (Note, 2026-10-08, after the first
+  amendment: the firewall is written as code in the foundation (S020, F1),
+  not applied; until the owner applies it the foundation's vault and account
+  admit every address.)
 - The state holds the operator's address and may hold the workspace's shared
   keys: T-103.
 - The audit log is destroyed with the environment, with no export: T-105.

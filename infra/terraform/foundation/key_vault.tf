@@ -18,7 +18,8 @@ resource "azurerm_key_vault" "foundation" {
   # module, infra/terraform/azure/endpoints.tf).
   #
   # public_network_access_enabled stays true: set to false, the service ignores
-  # the address rules and admits only private endpoints.
+  # the address rules and admits only private endpoints (per Microsoft's
+  # template reference for vaults, not seen).
   #
   # bypass is "None": the trusted-service list holds services that run
   # customers' workloads, and nothing here needs it. If a later step does, it

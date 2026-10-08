@@ -65,6 +65,9 @@ REFUSED_RANGES = [
         "127.0.0.0/8",
         "169.254.0.0/16",
         "100.64.0.0/10",
+        "192.0.0.0/24",
+        "192.88.99.0/24",
+        "198.18.0.0/15",
         "224.0.0.0/3",
     )
 ]
@@ -187,6 +190,28 @@ def test_every_account_denies_by_default_inside_the_for_each_resource() -> None:
     assert not has_attribute(acls, "virtual_network_rules")
 
 
+def test_every_vault_and_account_resource_of_the_foundation_denies_by_default() -> None:
+    # Not only the two named above: a second vault or account, in any file of
+    # the foundation, with no network_acls block or a default other than Deny.
+    seen = []
+    for path in sorted(FOUNDATION_DIR.glob("*.tf")):
+        resources = top_level_blocks(file_text(path.name, FOUNDATION_DIR), "resource")
+        for address, body in resources.items():
+            if not address.startswith(
+                ("azurerm_key_vault.", "azurerm_cognitive_account.")
+            ):
+                continue
+            seen.append(address)
+            blocks = nested_blocks(body, "network_acls")
+            assert len(blocks) == 1, address
+            assert attribute(blocks[0], "default_action") == '"Deny"', address
+
+    assert sorted(seen) == [
+        "azurerm_cognitive_account.openai",
+        "azurerm_key_vault.foundation",
+    ]
+
+
 def test_the_account_keeps_what_the_acls_block_needs() -> None:
     body = own_text(account())
 
@@ -257,7 +282,16 @@ def test_only_the_two_firewalls_and_the_variables_own_checks_use_the_addresses()
         listed("100.63.255.255"),
         listed("100.128.0.1"),
         listed("223.255.255.255"),
-        listed("1.0.0.1"),
+        listed("203.0.113.254"),
+        # The edges of the three special-purpose ranges, accepted side, and the
+        # documentation ranges, which stay accepted (the tests use them).
+        listed("192.0.1.1"),
+        listed("192.88.98.255"),
+        listed("192.88.100.1"),
+        listed("198.17.255.255"),
+        listed("198.20.0.1"),
+        listed("192.0.2.1"),
+        listed("198.51.100.1"),
         # A set holds an address once: a repeated entry is one entry.
         listed(OPERATOR, OPERATOR),
     ],
@@ -347,6 +381,12 @@ def test_an_entry_that_is_not_a_bare_dotted_quad_is_refused_by_the_shape(
         "169.254.255.255",
         "100.64.0.0",
         "100.127.255.255",
+        "192.0.0.0",
+        "192.0.0.255",
+        "192.88.99.0",
+        "192.88.99.255",
+        "198.18.0.0",
+        "198.19.255.255",
         "224.0.0.0",
         "239.255.255.255",
         "240.0.0.1",
@@ -419,7 +459,9 @@ def address_is_allowed(text: str) -> bool:
     try:
         address = ipaddress.ip_address(text)
     except ValueError:
-        return True  # not an address (an octet past 255, a leading zero)
+        # An octet past 255 or a leading zero: a version number, or an address
+        # written to slip past a scan. Either way it is not allowed here.
+        return False
     return any(address in net for net in DOCUMENTATION + REFUSED_RANGES)
 
 
@@ -433,7 +475,9 @@ def scanned_files() -> list[Path]:
     examples = [
         path
         for path in sorted(TERRAFORM_DIR.rglob("*"))
-        if path.is_file() and (path.name.endswith(".example") or ".tfvars" in path.name)
+        if path.is_file()
+        and ".terraform" not in path.parts
+        and (path.name.endswith(".example") or ".tfvars" in path.name)
     ]
     return documents + examples
 
@@ -445,7 +489,12 @@ def test_the_predicate_lets_the_named_ranges_through_and_stops_an_operators_own(
         assert address_is_allowed(text), text
     for text in ("224.0.0.0", "100.64.0.1", "172.31.0.1", "192.168.1.1"):
         assert address_is_allowed(text), text
+    for text in ("192.0.0.1", "198.19.255.255", "192.88.99.1"):
+        assert address_is_allowed(text), text
     for text in ("8.8.8.8", "1.2.3.4", "203.0.114.1", "198.51.101.1", "172.32.0.1"):
+        assert not address_is_allowed(text), text
+    # A leading zero or an octet past 255 is not "not an address": it fails.
+    for text in ("08.8.8.8", "010.1.1.1", "203.0.113.256", "2.06.85.068"):
         assert not address_is_allowed(text), text
 
 
@@ -664,3 +713,57 @@ def test_endpoints_header_and_the_modules_readme_agree_with_the_firewall() -> No
     assert "not applied" in header
     assert "designed, not written" not in readme
     assert "written as code" in readme
+
+
+def test_the_readme_says_a_changed_address_blocks_a_removal_and_the_way_out() -> None:
+    text = foundation_readme()
+    removal = " ".join(raw_text("README.md", TERRAFORM_DIR / "azure").split())
+
+    assert "must not change until the platform environment is removed" in text
+    assert "read and delete are data-plane calls" in text
+    assert "correct `operator_addresses`, apply the foundation" in text
+    assert "not seen" in text
+    assert "If the operator's address changes after the secret is written" in removal
+    assert "correct the foundation's `operator_addresses`" in removal
+    assert "`key_vault_secret_resource.go`), not seen" in removal
+
+
+def test_the_readme_says_not_a_tfvars_file_and_that_the_plan_file_holds_it() -> None:
+    text = foundation_readme()
+
+    assert "Not in a `.tfvars` file" in text
+    assert "prints the file's source line" in text
+    assert "foundation.tfplan" in text
+    assert "a plan that is never applied leaves it" in text
+    assert "mode 600" in text
+
+
+def test_foundation_sh_says_at_the_plan_that_the_plan_file_holds_the_value() -> None:
+    comments = squeezed(
+        "\n".join(
+            line
+            for line in raw_text("foundation.sh", TERRAFORM_DIR).splitlines()
+            if line.lstrip().startswith("#")
+        )
+    )
+
+    assert "the value of operator_addresses" in comments
+    assert "a plan that is never applied leaves it" in comments
+
+
+def test_the_readme_says_how_to_find_the_address_and_what_to_keep_in_step() -> None:
+    text = foundation_readme()
+
+    assert "the one Azure sees from the operator's machine" in text
+    assert "admits every other user of that exit" in text
+    assert "api_server_authorized_ip_ranges" in text
+    assert "kept in step" in text
+
+
+def test_the_readme_marks_the_claims_that_rest_on_microsofts_pages() -> None:
+    text = foundation_readme()
+
+    assert text.count("per Microsoft's page") >= 3
+    assert "no page was found that says the same of a model account" in text
+    assert "no address is written anywhere in this repository" not in text
+    assert "the other documents and the Makefile are not scanned" in text

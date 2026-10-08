@@ -621,6 +621,16 @@ what to do:
   on, which is the designed outcome. **Do not delete the subnet or the group by
   hand.** The security-group association on that subnet is removed by
   Terraform first, and no page read says a group changes the delete.
+- **If the operator's address changes after the secret is written, a removal
+  fails** once the foundation's firewall is applied (written as code, not
+  applied): the secret's read and delete are data-plane calls, so this module's
+  plan, refresh and removal are refused, and `-refresh=false` does not help.
+  The order out: correct the foundation's `operator_addresses`, apply the
+  foundation (the management plane takes it from any address, per Microsoft's
+  page, not seen), then remove this module's environment. Read from the
+  provider's source at tag `v5.8.0` (`key_vault_secret_resource.go`), not seen;
+  the foundation's README, "The firewall on the vault and the accounts", has
+  the rest.
 - **A removal must be driven by Terraform.** The vault's diagnostic setting is
   an object on a foundation resource, and the role assignments on the
   foundation's account and secret are objects on foundation resources: an
@@ -690,7 +700,8 @@ What is true after everything above, and is not fixed here.
   identity carries the OpenAI User role, so its holder bypasses the Model
   Gateway's guardrails.
 - **`NxDomainRedirect` fails open on a missing record**, and the vault and the
-  account are public by D11.
+  account have a public endpoint (the owner's decision of 2026-10-08 keeps it,
+  behind the foundation's firewall: written as code, not applied).
 - **Account and tenant.** The environment is built in the trial's Entra tenant
   (the owner's decision of 2026-10-07; a trial cannot create another, and
   moving later means recreating the foundation). The module reads the tenant

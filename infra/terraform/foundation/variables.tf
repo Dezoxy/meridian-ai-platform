@@ -46,7 +46,7 @@ variable "openai_locations" {
 # both. No default and no example in the repository: the owner gives it in their
 # own shell as TF_VAR_operator_addresses (infra/terraform/README.md).
 variable "operator_addresses" {
-  description = "One to five public IPv4 addresses, each written bare (no prefix length), that may reach the foundation's Key Vault and Azure OpenAI accounts. No default: a wrong or open value would lock the operator out or expose both."
+  description = "One to five public IPv4 addresses, each written bare (no prefix length), that may reach the foundation's Key Vault and Azure OpenAI accounts. The three RFC 5737 documentation ranges are accepted, though none can be an operator's address, because the tests use them. No default: a wrong or open value would lock the operator out or expose both."
   type        = set(string)
   sensitive   = true
 
@@ -68,10 +68,10 @@ variable "operator_addresses" {
   validation {
     condition = alltrue([
       for entry in var.operator_addresses : (
-        !can(regex("^(0|10|127)\\.|^100\\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\\.|^169\\.254\\.|^172\\.(1[6-9]|2[0-9]|3[01])\\.|^192\\.168\\.|^(22[4-9]|2[3-5][0-9])\\.", entry))
+        !can(regex("^(0|10|127)\\.|^100\\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\\.|^169\\.254\\.|^172\\.(1[6-9]|2[0-9]|3[01])\\.|^192\\.168\\.|^192\\.0\\.0\\.|^192\\.88\\.99\\.|^198\\.1[89]\\.|^(22[4-9]|2[3-5][0-9])\\.", entry))
       )
     ])
-    error_message = "No entry of operator_addresses may be a this-network, private, loopback, link-local, shared (carrier-grade NAT) or multicast and reserved address (0.0.0.0, 10/8, 172.16/12, 192.168/16, 127/8, 169.254/16, 100.64/10, 224.0.0.0 upward). The services refuse them in an IP rule or they cannot be the operator's address."
+    error_message = "No entry of operator_addresses may be a this-network, private, loopback, link-local, shared (carrier-grade NAT) or multicast and reserved address (0.0.0.0, 10/8, 172.16/12, 192.168/16, 127/8, 169.254/16, 100.64/10, 224.0.0.0 upward), nor one of the special-purpose ranges 192.0.0.0/24, 192.88.99.0/24 and 198.18.0.0/15. The services refuse most of them in an IP rule, and none can be the operator's address."
   }
 }
 
