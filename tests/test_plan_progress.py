@@ -158,6 +158,26 @@ class StatusLine(PlanCase):
         found = self.found()
         self.assertTrue(any("S003 has no row in Part B" in x for x in found), found)
 
+    def test_a_row_in_a_table_of_another_part_is_not_a_row_of_part_b(self):
+        table = "\n| ID | Step |\n|---|---|\n| S003 | Three |\n"
+        self.write(
+            "docs/plan/steps/S000-S019/S003.md",
+            step_text(status("todo", "—", "—"), "Three", "S003"),
+        )
+        for head in (
+            "## Part C — Step details\n",
+            "## Part D — Open questions\n",
+            "## Part E — Changelog\n",
+            "## Part F — Where the steps stand\n",
+        ):
+            with self.subTest(part=head[:9]):
+                self.assertIn(head, PLAN)
+                self.write(PLAN_PATH, PLAN.replace(head, head + table))
+                found = self.found()
+                self.assertTrue(
+                    any("S003 has no row in Part B" in x for x in found), found
+                )
+
 
 class PartB(PlanCase):
     HEADER = "| ID | Step | Done when | Depends |"
@@ -171,6 +191,19 @@ class PartB(PlanCase):
         second = "| ID | Step | Status |\n|---|---|---|\n| S002 | Two | todo |\n"
         self.write(PLAN_PATH, plan.replace("## Part C", second + "\n## Part C"))
         self.assertEqual(len(self.found()), 2, self.found())
+
+    def test_a_status_column_in_a_table_of_another_part_is_not_part_bs(self):
+        table = "\n| ID | Step | Status |\n|---|---|---|\n"
+        # Not Part F: its generated table of steps in flight has a Status column.
+        for head in (
+            "## Part C — Step details\n",
+            "## Part D — Open questions\n",
+            "## Part E — Changelog\n",
+        ):
+            with self.subTest(part=head[:9]):
+                self.assertIn(head, PLAN)
+                self.write(PLAN_PATH, PLAN.replace(head, head + table))
+                self.assertEqual(self.found(), [])
 
     def test_the_header_in_a_fence_is_not_a_table(self):
         fenced = f"{FENCE}text\n| ID | Step | Status | Depends |\n{FENCE}\n"

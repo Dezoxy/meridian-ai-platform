@@ -752,6 +752,12 @@ class OtherChecksReadTheFolders(unittest.TestCase):
         self.write("docs/plan/backlog-closed.md", BACKLOG_CLOSED)
         self.assertEqual(self.run_check(self.check.check_docs_index), [])
 
+    def test_a_folder_named_plan_elsewhere_under_docs_still_needs_its_link(self):
+        self.write("docs/architecture/plan/notes.md", "Notes.\n")
+        found = self.run_check(self.check.check_docs_index)
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("docs/architecture/plan/notes.md", found[0])
+
     def test_another_document_still_needs_its_link(self):
         self.write("docs/notes.md", "Notes.\n")
         self.write(self.STEP_PATH, "### S001 — One\n")
