@@ -30,6 +30,7 @@ workspace "Meridian AI Platform" "Architecture model for the Meridian AI Platfor
         // After the deployment files, so that no existing element's
         // number moves in an export.
         !include model/components.dsl
+        !include model/data.dsl
     }
 
     views {

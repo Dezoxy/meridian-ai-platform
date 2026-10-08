@@ -61,6 +61,11 @@ styles {
     element "Vault" {
         shape Folder
     }
+    // A service's grant on a schema that is another service's: drawn thicker,
+    // so the reads and writes ADR 10 means to cut stand out.
+    relationship "Crosses a schema" {
+        thickness 5
+    }
     // Not built yet: constraint C-07's "designed". Dotted and faded, so a
     // roadmap never reads as deployed capability. Always the last tag.
     element "Designed" {
