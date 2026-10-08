@@ -987,6 +987,7 @@ not here.
 | 2026-10-08 | S099 | A dispatcher and workers: the test lock and the two briefs | [S099.md](plan/steps/S080-S099/S099.md) |
 | 2026-10-08 | S100 | The plan's layout: step folders, the backlog in files, the change log ended | [S100.md](plan/steps/S100-S119/S100.md) |
 | 2026-10-08 | S101 | The plan shows no status: the finished steps and those in flight are its last part | [S101.md](plan/steps/S100-S119/S101.md) |
+| 2026-10-08 | S102 | The plan reads as a plan, and a gate keeps it so | [S102.md](plan/steps/S100-S119/S102.md) |
 
 ### In flight
 
@@ -1004,7 +1005,6 @@ not here.
 | 2026-10-07 | S072 | The cluster outside `meridian`, second round | doing | [S072.md](plan/steps/S060-S079/S072.md) |
 | 2026-10-07 | S080 | File uploads for a claim, before sign-in | doing | [S080.md](plan/steps/S080-S099/S080.md) |
 | 2026-10-07 | S082 | Code in the wrong place moves; import contracts per service | doing | [S082.md](plan/steps/S080-S099/S082.md) |
-| 2026-10-08 | S102 | The plan reads as a plan, and a gate keeps it so | doing | [S102.md](plan/steps/S100-S119/S102.md) |
 
 ### Not started
 
