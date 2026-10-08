@@ -763,8 +763,9 @@ which another branch adds.
   the cluster lane's. S085 adds migrations and S087 replaces the migration
   tree: the database lane's. S084 may add or change a tool's contract and then
   moves an evaluation fingerprint. S083 and S084 may run side by side.
-- **The owner's two answers of the sixth round** are in Part D's 7 (the audit
-  outbox, for S085) and 8 (a fresh baseline per database, for S087). What they
+- **The owner's two answers of the sixth round** are questions 7 (the audit
+  outbox, for S085) and 8 (a fresh baseline per database, for S087) of
+  [plan/questions-closed.md](plan/questions-closed.md). What they
   leave open is the steps' own design: the gateway's audit row, how the
   adjuster's page reads the central trail, and where the archive lives.
 
@@ -856,16 +857,14 @@ also go into the follow-up backlog, `docs/plan/backlog.md`.
 
 ## Part D — Open questions
 
+Open questions only. One that is answered moves, whole, to
+[plan/questions-closed.md](plan/questions-closed.md) and keeps its
+number; a new one takes the next number that neither table holds.
+
 | # | Question | Needed by | Default if unanswered |
 |---|---|---|---|
 | 1 | How many hours per week, and when do interviews start? | S002 | Plan in two-week increments; cut M3 before M2 |
-| 2 | Terraform state: HCP Terraform, as in the homelab, or an Azure Storage account? **Answered 2026-09-30: Azure Storage** in Sweden Central with Entra ID authentication (S007) | S007 | ~~HCP Terraform, for consistency with the homelab~~ |
-| 3 | A claim whose documents miss the deadline is closed as rejected without a human. Keep that, or route it to the adjuster? **Answered 2026-10-03: route it to an adjuster**, with the reason that its documents are overdue; no claim is rejected without a person | ~~S015~~ ~~S048~~ S052 (moved with the deadline, 2026-10-03) | ~~Keep, recorded as a procedural closure in C-02~~ |
-| 4 | Licence: keep all rights reserved, or publish under MIT or Apache-2.0? **Answered 2026-09-29: Apache-2.0**, copyright Dezoxy; `NOTICE` credits the MIT-licensed ECC material | Before anyone asks to reuse the code | ~~All rights reserved~~ |
-| 5 | Should Meridian live in a dedicated work tenant instead of the trial account's default directory? It decides where S021's sign-in, roles and app registrations are created, and moving later means recreating the foundation. **Answered 2026-10-07: stay in the trial's tenant** (the owner first said "Move now"; a trial cannot create a tenant, and after the facts: "Stay in the trial's tenant after all"; S020, ADR 11) | S021, and the upgrade to pay-as-you-go by about 2026-10-30, which is already an account change | ~~Stay in the trial account's tenant; decide at the upgrade~~ |
 | 6 | Should a session be stopped from editing the command guard's own files? The permission rules allow Edit and Write on `.claude/hooks/guard-bash.sh` and `.claude/settings.json`, so a session can weaken the guard that reads its commands (N4 of the third security review). Two ways: deny Edit and Write on `.claude/hooks/**` and `.claude/settings*.json`, or ask before each. The session recommends asking: a deny would also stop a session from fixing the guard when a review finds a hole, as S075 did after each of its three reviews, while an ask puts the edit in front of the owner | S075's pull request, if the owner wants it built there; no step needs it | Neither is built: the guard stays a guard for habits, and the gap is listed in the runbook and in the hook's header |
-| 7 | Should the audit trail become an outbox when the services get a database each? An audit table in each service's database, written in the same transaction as the business write (so "no action without its row" holds for every service that has a database), and a relay that copies the rows into a central audit database, which owns retention and serves the adjuster's trail. **Answered 2026-10-07 (the sixth round, about 15:30 UTC): "Outbox per service (Recommended)"**, the session's recommendation, chosen as written ([ADR 10](architecture/decisions/0010-split-the-platform-into-services-with-a-database-each-and-their-own-releases.md), point 5). The alternatives not taken: one shared audit database (the audit row can no longer commit with the business write: the guarantee weakens or every write becomes a two-step exchange) and audit through the log pipeline (the trail the adjuster reads would rest on a log store). Its costs: a relay to run, a trail that lags by the relay's lag and stops growing if the relay dies, and a sixth database on the server. The Model Gateway already writes its audit row on a separate connection, so under the outbox it either keeps that or joins its ledger's transaction, which S085's design says: the one part of the question the answer does not settle | S085's design | ~~The outbox, as ADR 10 recommends, with the gateway's choice settled in S085's design and shown to the owner~~ |
-| 8 | Should each of the five databases start from a baseline with no replay of the 31 migration files, the old files and their 59 test files archived outside the package's path? **Answered 2026-10-07 (the sixth round, about 15:30 UTC): "Fresh baseline per database (Recommended)"**, the session's recommendation, chosen as written (ADR 10, point 6). Honest only while no environment holds data: the kind cluster is disposable and the Azure database has never been created. A split with data would need expand, copy, switch and contract instead, and a replay would mean rewriting 13 files that mix schemas, which an applied file's rule forbids. The cost: a large deletion from the tree and a change in the plan's count of migrations | S087's design | ~~Baselines with no replay, as ADR 10 recommends, asked again at S087 if any environment then holds data~~ |
 
 ## Part E — Changelog
 
