@@ -172,6 +172,10 @@ mermaid-views:
 ## mermaid-render  render every Mermaid block in the Markdown; fails on a syntax error
 mermaid-render:
 	python3 scripts/mermaid_blocks.py extract
+	@# The script passes on a folder with no diagram, which is right for a
+	@# repository without Mermaid. This one holds several, so none extracted
+	@# means the extractor is broken, and that must not pass as a render.
+	@ls $(GENERATED)/mermaid-render/*.mmd >/dev/null 2>&1 || { echo "mermaid-render: no Mermaid block was extracted into $(GENERATED)/mermaid-render" >&2; exit 1; }
 	MERMAID_IMAGE=$(MERMAID_IMAGE) scripts/render-mermaid.sh $(GENERATED)/mermaid-render
 
 ## mermaid         mermaid-views, then mermaid-render
