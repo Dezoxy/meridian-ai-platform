@@ -18,6 +18,7 @@ Run: python3 -m unittest discover -s tests
 import os
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
@@ -55,15 +56,26 @@ class MachineLock(unittest.TestCase):
                 process.wait()
 
     def start(self, label: str, command: str, **env: str) -> subprocess.Popen[str]:
+        return self.run_as(
+            label,
+            ["/bin/sh", "-c", f'MACHINE_LOCK_LABEL={label} . "{SCRIPT}" && {command}'],
+            **env,
+        )
+
+    def run_as(
+        self, label: str, arguments: list[str], **env: str
+    ) -> subprocess.Popen[str]:
+        # The caller's own settings for the lock are not the test's.
+        outer = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("MERIDIAN_LOCK_WAIT", "MACHINE_LOCK_LABEL", "MAKEFLAGS")
+        }
         with (self.work / f"{label}.err").open("w", encoding="utf-8") as errors:
             process = subprocess.Popen(
-                [
-                    "/bin/sh",
-                    "-c",
-                    f'MACHINE_LOCK_LABEL={label} . "{SCRIPT}" && {command}',
-                ],
+                arguments,
                 cwd=self.work,
-                env={**os.environ, "MERIDIAN_LOCK_DIR": str(self.locks), **env},
+                env={**outer, "MERIDIAN_LOCK_DIR": str(self.locks), **env},
                 stdout=subprocess.DEVNULL,
                 stderr=errors,
                 text=True,
@@ -165,6 +177,86 @@ class MachineLock(unittest.TestCase):
                 self.assertFalse((self.work / "bad-ran").exists())
                 self.assertIn("MERIDIAN_LOCK_WAIT", self.said(label))
 
+    def test_a_recipe_that_gave_up_waiting_removes_nothing_and_runs_no_trap(
+        self,
+    ) -> None:
+        # The shape of `make pytest-db`: `set -e`, the lock, the removal of the
+        # containers of its name, the exit trap that removes them again. A run
+        # that gave up must reach neither: both would end the holder's database.
+        self.start("first", HOLD)
+        self.wait_for("the first run to start", (self.work / "started").exists)
+
+        late = self.run_as(
+            "late",
+            [
+                "/bin/sh",
+                "-c",
+                f'set -e; MACHINE_LOCK_LABEL=late . "{SCRIPT}"; touch removed; '
+                "trap 'touch trap-ran' EXIT; touch late-ran",
+            ],
+            MERIDIAN_LOCK_WAIT="0",
+        )
+
+        self.assertEqual(late.wait(DEADLINE_SECONDS), 75)
+        for left in ("removed", "trap-ran", "late-ran"):
+            self.assertFalse((self.work / left).exists(), left)
+
+    def test_a_process_the_run_left_behind_still_holds_the_lock(self) -> None:
+        # The shell that took the lock is gone and a process it started is
+        # not: that is still load on the machine, and the lock says so.
+        gone = self.start("gone", f"{{ {HOLD}; }} &")
+        self.assertEqual(gone.wait(DEADLINE_SECONDS), 0)
+        self.wait_for("the child to start", (self.work / "started").exists)
+
+        refused = self.start("refused", "touch refused-ran", MERIDIAN_LOCK_WAIT="0")
+        self.assertEqual(refused.wait(DEADLINE_SECONDS), 75)
+        self.assertFalse((self.work / "refused-ran").exists())
+
+        (self.work / "release").touch()
+        after = self.start("after", "touch after-ran")
+        self.assertEqual(after.wait(DEADLINE_SECONDS), 0)
+        self.assertTrue((self.work / "after-ran").exists())
+
+    @unittest.skipUnless(shutil.which("make"), "needs make")
+    def test_a_sigterm_to_make_ends_the_run_and_frees_the_lock(self) -> None:
+        # The idiom of the `pytest` and `alerts` recipes. Without `exec`
+        # make's shell dies at the signal and the run lives on, holding the
+        # lock, which is what `timeout 600 make pytest` would leave behind.
+        (self.work / "Makefile").write_text(
+            f'MACHINE_LOCK = MACHINE_LOCK_LABEL=$@ . "{SCRIPT}"\n'
+            "held:\n"
+            "\t$(MACHINE_LOCK) && exec /bin/sh -c "
+            "'touch started; while :; do sleep 0.05; done'\n",
+            encoding="utf-8",
+        )
+        make = self.run_as("make", ["make", "held"])
+        self.wait_for("the run to start", (self.work / "started").exists)
+
+        make.send_signal(signal.SIGTERM)
+        self.assertNotEqual(make.wait(DEADLINE_SECONDS), 0)
+
+        # The run's last `sleep` may outlive it by its 0.05 s: wait, not 0.
+        after = self.start("after", "touch after-ran", MERIDIAN_LOCK_WAIT="5")
+        self.assertEqual(after.wait(DEADLINE_SECONDS), 0)
+        self.assertTrue((self.work / "after-ran").exists())
+
+    def test_a_lock_file_that_cannot_be_opened_runs_nothing(self) -> None:
+        (self.work / "locks").write_text("a file where the folder should be")
+
+        for shell in ("/bin/sh", shutil.which("bash")):
+            if shell is None:
+                continue
+            with self.subTest(shell=shell):
+                label = Path(shell).name
+                run = self.run_as(
+                    label,
+                    [shell, "-c", f'MACHINE_LOCK_LABEL=x . "{SCRIPT}" && touch ran'],
+                )
+
+                self.assertNotEqual(run.wait(DEADLINE_SECONDS), 0)
+                self.assertFalse((self.work / "ran").exists())
+                self.assertNotIn("still held", self.said(label))
+
     def test_the_holder_not_yet_written_is_said_so(self) -> None:
         # The first run has the lock and has not written its record yet: a
         # stand-in holds the lock file itself and writes none.
@@ -222,10 +314,11 @@ class TheMakefile(unittest.TestCase):
             MAKEFILE,
         )
 
-    def test_pytest_takes_the_lock_in_front_of_its_run(self) -> None:
+    def test_pytest_takes_the_lock_and_then_becomes_its_run(self) -> None:
+        # `exec`: make's shell is the run, so a signal to make reaches it.
         self.assertEqual(
             recipe("pytest").strip(),
-            "$(MACHINE_LOCK) && uv run pytest -n $(PYTEST_WORKERS) "
+            "$(MACHINE_LOCK) && exec uv run pytest -n $(PYTEST_WORKERS) "
             "$(PYTEST_COVERAGE_ARGS) $(PYTEST_ARGS)",
         )
 
@@ -249,7 +342,9 @@ class TheMakefile(unittest.TestCase):
 
         self.assertEqual(len(starts), 2)
         for line in starts:
-            self.assertTrue(line.startswith("$(MACHINE_LOCK) && docker run "), line)
+            self.assertTrue(
+                line.startswith("$(MACHINE_LOCK) && exec docker run "), line
+            )
 
     def test_no_other_recipe_takes_it_so_no_run_waits_on_itself(self) -> None:
         # `make eval` and `make eval-baseline` reach the database through

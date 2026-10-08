@@ -84,7 +84,10 @@ PYTEST_WORKERS      ?= 10
 # of `make pytest`, `make pytest-db` and each container of `make alerts`, and
 # nowhere else: `make eval` and `make eval-baseline` reach it through
 # `$(MAKE) pytest-db`, and a second lock around them would wait on that one.
-# Not `:=`: the target's name is read where the recipe runs.
+# Not `:=`: the target's name is read where the recipe runs. `exec` behind it
+# where the recipe is one command: make's shell then IS the run, so a
+# SIGTERM to make ends the run and frees the lock, as it did before the
+# line had a `&&` and make started a shell for it.
 MACHINE_LOCK = MACHINE_LOCK_LABEL=$@ . scripts/machine_lock.sh
 # promtool for `make alerts` (S024): the one of the Prometheus that the
 # kube-prometheus-stack chart in infra/kind/pins.env runs (chart 91.8.2 runs
@@ -226,7 +229,7 @@ lint:
 
 ## pytest          tests under tests/meridian and tests/synthetic, including the import-contract detection test, run in parallel (PYTEST_WORKERS, default 10; 0 runs them in one process; with COVERAGE=1 a run of a part of the suite fails the coverage floor); takes the machine's test lock, so it waits for another session's run
 pytest:
-	$(MACHINE_LOCK) && uv run pytest -n $(PYTEST_WORKERS) $(PYTEST_COVERAGE_ARGS) $(PYTEST_ARGS)
+	$(MACHINE_LOCK) && exec uv run pytest -n $(PYTEST_WORKERS) $(PYTEST_COVERAGE_ARGS) $(PYTEST_ARGS)
 
 ## coverage-floor  combine the shards' coverage data (COVERAGE_SHARDS_DIR/*.coverage) and fail under the floor of pyproject.toml's [tool.coverage.report], the one place it is written; the shards run with COVERAGE=1 COVERAGE_SHARD=1 and apply none
 coverage-floor:
@@ -237,8 +240,8 @@ coverage-floor:
 alerts:
 	uv run python scripts/alert_rules.py extract .alerts
 	uv run python scripts/cost_dashboard_gap.py write .alerts
-	$(MACHINE_LOCK) && docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /bin/promtool -v "$(CURDIR)/.alerts:/rules:ro" -w /rules $(PROMTOOL_IMAGE) check rules --lint=all --lint-fatal meridian.rules.yaml
-	$(MACHINE_LOCK) && docker run --rm --network none --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges --entrypoint /bin/promtool -v "$(CURDIR)/.alerts:/rules:ro" -w /rules $(PROMTOOL_IMAGE) test rules meridian.test.yaml gateway-cost.test.yaml
+	$(MACHINE_LOCK) && exec docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /bin/promtool -v "$(CURDIR)/.alerts:/rules:ro" -w /rules $(PROMTOOL_IMAGE) check rules --lint=all --lint-fatal meridian.rules.yaml
+	$(MACHINE_LOCK) && exec docker run --rm --network none --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges --entrypoint /bin/promtool -v "$(CURDIR)/.alerts:/rules:ro" -w /rules $(PROMTOOL_IMAGE) test rules meridian.test.yaml gateway-cost.test.yaml
 
 ## pytest-db       pytest in parallel (PYTEST_WORKERS, default 10; 0 runs them in one process) with a throwaway PostgreSQL 17 on 127.0.0.1:55432 and a throwaway Redis 8 on 127.0.0.1:26379, neither persisted (needs Docker; takes the machine's test lock, so a second run waits for the first and both may keep the default container names and ports); the database and Redis tests run instead of skipping; with COVERAGE=1 a run of a part of the suite fails the coverage floor
 pytest-db:

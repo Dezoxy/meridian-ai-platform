@@ -42,8 +42,12 @@ else
       ;;
   esac
   machine_lock_dir="${MERIDIAN_LOCK_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/meridian-locks}"
-  mkdir -p "$machine_lock_dir"
-  exec 9>>"$machine_lock_dir/tests.lock"
+  # dash leaves at a redirection that fails on exec; bash goes on, and flock
+  # on a descriptor that is not open would read as a lock that is held.
+  if ! mkdir -p "$machine_lock_dir" || ! exec 9>>"$machine_lock_dir/tests.lock"; then
+    echo "machine lock: cannot open $machine_lock_dir/tests.lock; nothing was run" >&2
+    exit 73
+  fi
   if ! flock -n 9; then
     # The holder writes its record after it has the lock, so a run that asks
     # in between finds the last holder's line or none.

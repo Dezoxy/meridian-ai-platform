@@ -448,7 +448,7 @@ def test_the_tests_step_prints_its_slowest_tests() -> None:
     # Since S099 the recipe's shell takes the machine's test lock first
     # (tests/test_machine_lock.py); the run behind it is what it was.
     assert re.search(
-        r"^pytest:\n\t\$\(MACHINE_LOCK\) && uv run pytest -n \$\(PYTEST_WORKERS\)"
+        r"^pytest:\n\t\$\(MACHINE_LOCK\) && exec uv run pytest -n \$\(PYTEST_WORKERS\)"
         r" \$\(PYTEST_COVERAGE_ARGS\) \$\(PYTEST_ARGS\)$",
         MAKEFILE,
         re.MULTILINE,
