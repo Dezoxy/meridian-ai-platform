@@ -4,8 +4,10 @@ The questions of the plan's Part D that have an answer, as history. Part D
 of [the plan](../meridian-plan.md) holds only the open ones. A question that
 is answered moves here, whole, to the end of the table, and keeps its
 number: a number is never used twice, so "Part D question 3" in a step file
-or a decision record of its day finds its row here. `make docs` refuses an
-answered question in Part D and an open one in this file.
+or a decision record of its day finds its row here. The answer is written
+into the Question cell as `**Answered <date>: …**`; that mark is what
+`make docs` reads, and it refuses a row that carries it in Part D and a row
+without it in this file.
 
 | # | Question | Needed by | Default if unanswered |
 |---|---|---|---|

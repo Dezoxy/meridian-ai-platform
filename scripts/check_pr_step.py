@@ -44,7 +44,16 @@ def changed_files(base: str) -> list[str]:
     """The files the pull request adds, modifies or renames; raises OSError or
     CalledProcessError when git cannot say."""
     done = subprocess.run(
-        ["git", "diff", "--name-only", "--diff-filter=AMR", base, "HEAD"],
+        # --end-of-options: a base that starts with a dash is a revision, not a flag.
+        [
+            "git",
+            "diff",
+            "--name-only",
+            "--diff-filter=AMR",
+            "--end-of-options",
+            base,
+            "HEAD",
+        ],
         capture_output=True,
         text=True,
         check=True,

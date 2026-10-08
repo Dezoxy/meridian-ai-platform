@@ -48,8 +48,11 @@ STATUS_REMEDY = (
 
 UNESCAPED_PIPE = re.compile(r"(?<!\\)\|")
 SEPARATOR = re.compile(r"^\|\s*:?-{3,}")
-STEP_CELL = re.compile(r"^S\d{3}$")
-QUESTION_ROW = re.compile(r"^\| (\d+) \|")
+STEP_CELL = re.compile(r"^S[0-9]{3}$")
+# A first cell that names a step or a number and is not the bare form: bold, a
+# link, lower case, a trailing colon. Its row would otherwise leave the rules.
+LOOSE_STEP = re.compile(r"(?<![A-Za-z0-9])[Ss][0-9]{3}(?![0-9])")
+LOOSE_NUMBER = re.compile(r"^[^A-Za-z0-9]*[0-9]+[^A-Za-z0-9]*$")
 DATE = re.compile(r"20\d\d-\d\d-\d\d")
 OWNER = re.compile(r"owner", re.IGNORECASE)
 QUOTE = re.compile(r'"[^"]+"')
@@ -58,7 +61,10 @@ BUILD_LABEL = re.compile(
     r"|\bImplemented\b|\bimplemented and tested\b"
     r"|`(?:todo|doing|done|blocked|dropped)`"
 )
-ANSWERED = re.compile(r"\banswered\b", re.IGNORECASE)
+# The mark of an answered question, as every closed row carries it in its
+# Question cell: ``**Answered 2026-10-07: …**``. The word alone is ordinary text.
+ANSWERED = re.compile(r"\*\*Answered\b")
+STRUCK_TEXT = re.compile(r"~~|<del>|<s>")
 STATUS_HEADING = re.compile(r"^#{1,6}\s+where the project stands\s*#*\s*$", re.I)
 
 
@@ -88,6 +94,49 @@ def step_table_rows(lines: list[str]) -> list[tuple[str, str]]:
     return rows
 
 
+def shape_findings(part_b: list[str], part_d: list[str]) -> list[str]:
+    """Table lines the row readers would pass over: an indented one in Part B or
+    Part D, a step table's row whose first cell is not the bare step ID, and a
+    question whose first cell is not the bare number."""
+    found = []
+    inside = False
+    for part, lines in (("B", part_b), ("D", part_d)):
+        for line in lines:
+            if line != line.lstrip() and line.lstrip().startswith("|"):
+                found.append(
+                    f"the plan's Part {part}: a table line is indented "
+                    f"('{line.strip()[:40]}'); it is not read as a row: start it "
+                    f"at the margin"
+                )
+    for line in part_b:
+        if not line.startswith("|"):
+            inside = False
+            continue
+        cells = cells_of(line)
+        if cells == STEP_COLUMNS:
+            inside = True
+        elif inside and not STEP_CELL.match(cells[0]) and LOOSE_STEP.search(cells[0]):
+            found.append(
+                f"the plan's Part B: a step row's first cell is '{cells[0][:40]}'; "
+                f"it is the bare step ID (S and three digits), or the row is held "
+                f"to no rule"
+            )
+    for line in part_d:
+        if not line.startswith("|"):
+            continue
+        cell = cells_of(line)[0]
+        if not is_number(cell) and LOOSE_NUMBER.match(cell):
+            found.append(
+                f"Part D: a question's first cell is '{cell[:40]}'; it is the bare "
+                f"number, or the row is held to no rule"
+            )
+    return found
+
+
+def is_number(cell: str) -> bool:
+    return cell.isascii() and cell.isdecimal()
+
+
 def header_findings(lines: list[str]) -> list[str]:
     """A table of Part B headed ``ID`` with other columns than the four: its rows
     would not be read as step rows. (A Status column has its own finding.)"""
@@ -112,8 +161,8 @@ def row_faults(line: str) -> list[str]:
         faults.append(f"is {len(line)} characters, over ROW_MAX ({ROW_MAX})")
     if match := DATE.search(line):
         faults.append(f"holds a date ('{match[0]}')")
-    if "~~" in line:
-        faults.append("holds struck-through text ('~~')")
+    if match := STRUCK_TEXT.search(line):
+        faults.append(f"holds struck-through text ('{match[0]}')")
     if OWNER.search(line) and QUOTE.search(line):
         faults.append("quotes the owner")
     if match := BUILD_LABEL.search(line):
@@ -155,21 +204,26 @@ def status_findings(lines: list[str]) -> list[str]:
 
 
 def question_rows(lines: list[str]) -> list[tuple[str, str]]:
-    """The (number, line) of each question row among the unfenced lines of Part D."""
-    return [(m[1], line) for line in lines if (m := QUESTION_ROW.match(line))]
+    """The (number, line) of each question row among the unfenced lines of Part D:
+    a table line whose first cell is a number."""
+    return [
+        (cell, line)
+        for line in lines
+        if line.startswith("|") and is_number(cell := cells_of(line)[0])
+    ]
 
 
 def question_findings(rows: list[tuple[str, str]]) -> list[str]:
     found = []
     for number, line in rows:
-        if ANSWERED.search(line) or "~~" in line:
+        if ANSWERED.search(line) or STRUCK_TEXT.search(line):
             found.append(
-                f"Part D: question {number} is answered or struck through; move it, "
+                f"Part D: question {number[:20]} is answered or struck through; move it, "
                 f"whole, to the end of {CLOSED_FILE}"
             )
         if len(line) > QUESTION_ROW_MAX:
             found.append(
-                f"Part D: question {number} is {len(line)} characters, over "
+                f"Part D: question {number[:20]} is {len(line)} characters, over "
                 f"QUESTION_ROW_MAX ({QUESTION_ROW_MAX}); a question is a sentence or "
                 f"two: put the rest into the step's file"
             )
@@ -201,7 +255,7 @@ def closed_findings(lines: list[str], unclosed: bool) -> tuple[list[str], list[s
         if not line.startswith("|") or SEPARATOR.match(line):
             continue
         cell = cells_of(line)[0]
-        if not cell.isdecimal():
+        if not is_number(cell):
             found.append(
                 f"{CLOSED_FILE}: a row whose first cell is not a number ('{cell[:40]}')"
             )
@@ -209,7 +263,8 @@ def closed_findings(lines: list[str], unclosed: bool) -> tuple[list[str], list[s
         numbers.append(cell)
         if not ANSWERED.search(line):
             found.append(
-                f"{CLOSED_FILE}: question {cell} is not answered; an open question "
+                f"{CLOSED_FILE}: question {cell[:20]} is not answered (its Question "
+                f"cell holds no '**Answered <date>: …**'); an open question "
                 f"belongs in Part D of the plan"
             )
     return found, numbers
@@ -217,11 +272,11 @@ def closed_findings(lines: list[str], unclosed: bool) -> tuple[list[str], list[s
 
 def number_findings(open_numbers: list[str], closed_numbers: list[str]) -> list[str]:
     """A question number is in exactly one row of the two tables."""
-    every = open_numbers + closed_numbers
+    every = [n.lstrip("0") or "0" for n in open_numbers + closed_numbers]
     return [
-        f"question {number} must be in exactly one row of Part D and {CLOSED_FILE}, "
-        f"not {every.count(number)}"
-        for number in sorted(set(every), key=int)
+        f"question {number[:20]} must be in exactly one row of Part D and "
+        f"{CLOSED_FILE}, not {every.count(number)}"
+        for number in sorted(set(every), key=lambda n: (len(n), n))
         if every.count(number) > 1
     ]
 
@@ -266,6 +321,7 @@ def plan_findings(
     steps = step_table_rows(part_b)
     questions = question_rows(part_d)
     found = header_findings(part_b)
+    found.extend(shape_findings(part_b, part_d))
     found.extend(row_findings(steps))
     found.extend(status_findings(lines))
     found.extend(question_findings(questions))

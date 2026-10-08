@@ -203,8 +203,48 @@ class FailClosed(PrStep):
         code, out = self.run_script("docs: x", cwd=bare)
         self.assertEqual(code, 0, out)
 
+    def test_the_folder_is_the_range_of_twenty_the_step_is_in(self):
+        for step, folder in (
+            ("S119", "S100-S119"),
+            ("S120", "S120-S139"),
+            ("S035", "S020-S039"),
+        ):
+            with self.subTest(step=step):
+                path = f"docs/plan/steps/{folder}/{step}.md"
+                self.tmp.cleanup()
+                self.repo.mkdir()
+                self.after({path: "new\n"})
+                code, out = self.run_script(f"{step}: x")
+                self.assertEqual(code, 0, out)
+                self.assertIn(path, out)
+
+    def test_a_file_of_the_steps_name_elsewhere_does_not_count(self):
+        self.after({"docs/other/S102.md": "x\n", "S102.md": "x\n"})
+        code, out = self.run_script("S102: x")
+        self.assertEqual(code, 1, out)
+
+    def test_git_that_cannot_be_run_is_exit_two_not_a_pass(self):
+        self.after({STEP_FILE: "changed\n"})
+        env = self.env("S102: x")
+        env["PATH"] = ""
+        done = subprocess.run(
+            [sys.executable, str(SCRIPT)],
+            cwd=self.repo,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("git could not be run", done.stdout)
+
 
 class Base(PrStep):
+    def test_a_base_that_looks_like_an_option_is_not_an_option(self):
+        self.after({STEP_FILE: "changed\n"})
+        code, out = self.run_script("S102: x", base="--output=leak.txt")
+        self.assertEqual(code, 2, out)
+        self.assertFalse((self.repo / "leak.txt").exists())
+
     def test_pr_base_is_used_in_place_of_the_first_parent(self):
         first = self.init()
         self.write(STEP_FILE, "changed\n")
@@ -257,3 +297,32 @@ class UntrustedTitle(PrStep):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Workflow(unittest.TestCase):
+    """The one workflow step that runs the script (the infrastructure review)."""
+
+    TEXT = (SCRIPT.parent.parent / ".github/workflows/docs.yml").read_text()
+
+    def test_the_title_reaches_the_script_through_the_environment_only(self):
+        self.assertIn(
+            "        env:\n"
+            "          PR_TITLE: ${{ github.event.pull_request.title }}\n"
+            "        run: python3 scripts/check_pr_step.py\n",
+            self.TEXT,
+        )
+
+    def test_no_run_line_or_block_holds_an_expression(self):
+        inside = None
+        for number, line in enumerate(self.TEXT.split("\n"), 1):
+            indent = len(line) - len(line.lstrip())
+            if line.strip().startswith(("run:", "- run:")):
+                inside = indent
+            elif inside is not None and line.strip() and indent <= inside:
+                inside = None
+            if inside is not None:
+                self.assertNotIn("${{", line, f"docs.yml:{number}")
+
+    def test_the_checkout_is_two_deep_and_the_trigger_is_not_the_target_form(self):
+        self.assertIn("fetch-depth: 2", self.TEXT)
+        self.assertNotIn("pull_request_target", self.TEXT)

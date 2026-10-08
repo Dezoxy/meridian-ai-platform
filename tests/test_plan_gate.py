@@ -262,8 +262,8 @@ class OpenQuestions(PlanCase):
         self.put(question(1), question(6))
         self.assertEqual(self.found(), [])
 
-    def test_an_answered_question_is_one_finding_whatever_the_case(self):
-        for word in ("answered", "Answered", "**Answered 2026-09-30:**"):
+    def test_an_answered_question_is_one_finding(self):
+        for word in ("**Answered 2026-09-30:**", "**Answered 2026-10-07 (late): x**"):
             with self.subTest(word=word):
                 self.put(question(1), question(2, f"Q? {word} yes"))
                 found = self.one()
@@ -277,7 +277,7 @@ class OpenQuestions(PlanCase):
         self.assertIn("questions-closed.md", found)
 
     def test_a_question_that_is_both_answered_and_struck_is_one_finding(self):
-        self.put(question(2, "Q? answered", default="~~old~~"))
+        self.put(question(2, "Q? **Answered 2026-01-02:** a", default="~~old~~"))
         self.one()
 
     def test_the_question_limit_is_exact_and_the_count_is_said(self):
@@ -295,23 +295,29 @@ class OpenQuestions(PlanCase):
         self.assertIn("QUESTION_ROW_MAX", found)
 
     def test_a_row_in_a_fence_the_header_or_another_part_is_not_a_question(self):
-        self.put(f"{FENCE}text\n" + question(4, "answered") + f"{FENCE}\n")
+        self.put(
+            f"{FENCE}text\n" + question(4, "**Answered 2026-01-02:** a") + f"{FENCE}\n"
+        )
         self.assertEqual(self.found(), [])
-        plan = PLAN.replace("Template:", question(5, "answered") + "\nTemplate:")
+        plan = PLAN.replace(
+            "Template:", question(5, "**Answered 2026-01-02:** a") + "\nTemplate:"
+        )
         self.write(PLAN_PATH, plan)
         self.assertEqual(self.found(), [])
 
 
 class AnsweredQuestions(PlanCase):
     HEAD = "# Answered questions\n\nProse.\n\n" + QUESTION_HEADER
-    DONE = question(2, "Q? Answered 2026-09-30: yes")
+    DONE = question(2, "Q? **Answered 2026-09-30:** yes")
 
     def closed(self, text):
         self.write(CLOSED_PATH, text)
 
     def test_a_missing_file_is_skipped_and_a_right_one_passes(self):
         self.assertEqual(self.found(), [])
-        self.closed(self.HEAD + self.DONE + question(3, "Q? answered"))
+        self.closed(
+            self.HEAD + self.DONE + question(3, "Q? **Answered 2026-01-02:** a")
+        )
         self.assertEqual(self.found(), [])
 
     def test_a_file_without_the_header_or_with_it_twice_is_one_finding(self):
@@ -330,7 +336,11 @@ class AnsweredQuestions(PlanCase):
         self.assertIn("Part D", found)
 
     def test_a_row_without_a_number_is_one_finding(self):
-        self.closed(self.HEAD + self.DONE + "| x | Q? answered | S002 | none |\n")
+        self.closed(
+            self.HEAD
+            + self.DONE
+            + "| x | Q? **Answered 2026-01-02:** a | S002 | none |\n"
+        )
         found = self.one()
         self.assertIn(CLOSED_PATH, found)
         self.assertIn("number", found)
@@ -415,6 +425,85 @@ class FixedText(PlanCase):
         found = self.found()
         self.assertEqual(len(found), 1, found)
         self.assertIsNone(FIGURE.search(found[0]))
+
+
+class AfterTheReview(PlanCase):
+    """What the Python review found (S102): each was an escape or a false alarm."""
+
+    def questions(self, *rows):
+        table = QUESTION_HEADER + "".join(rows)
+        self.write(PLAN_PATH, PLAN.replace(D_HEAD, D_HEAD + table + "\n"))
+
+    def closed(self, *rows):
+        self.write(CLOSED_PATH, "# Answered\n\n" + QUESTION_HEADER + "".join(rows))
+
+    def in_table(self, line):
+        self.write(PLAN_PATH, PLAN.replace(GOOD, GOOD + line + "\n"))
+
+    def test_the_word_answered_in_a_question_does_not_close_it(self):
+        self.questions(
+            question(40, "Is x needed?", default="Assume yes if not answered by then"),
+            question(41, "Was the last one Answered?"),
+        )
+        self.assertEqual(self.found(), [])
+
+    def test_a_closed_row_needs_the_marker_not_the_word(self):
+        self.closed(question(2, "Q? It was answered somewhere"))
+        self.assertIn("question 2 is not answered", self.one())
+
+    def test_a_status_line_above_part_b_is_one_finding(self):
+        self.write(PLAN_PATH, PLAN.replace("## Part B", "**Status:** x\n\n## Part B"))
+        self.assertIn("**Status:**", self.one())
+
+    def test_a_number_of_two_digits_twice_is_one_finding(self):
+        self.questions(question(1), question(10))
+        self.assertEqual(self.found(), [])
+        self.questions(question(10), question(10))
+        self.assertIn("question 10", self.one())
+
+    def test_a_number_with_a_leading_zero_is_the_same_number(self):
+        self.questions(question(7))
+        self.closed(question("07", "Q? **Answered 2026-01-02:** a"))
+        self.assertIn("question 7", self.one())
+
+    def test_a_number_of_five_thousand_digits_is_no_traceback(self):
+        self.questions(question("9" * 5000))
+        self.assertTrue(all("QUESTION_ROW_MAX" in x for x in self.found()))
+
+    def test_a_question_number_without_spaces_is_a_question(self):
+        self.questions("|7| Q? **Answered 2026-01-02:** a | S002 | none |\n")
+        self.assertIn("question 7", self.one())
+
+    def test_a_question_number_dressed_up_is_one_finding(self):
+        for cell in ("**7**", "`7`", "7."):
+            with self.subTest(cell=cell):
+                self.questions(f"| {cell} | Q? | S002 | none |\n")
+                self.assertIn("bare number", self.one())
+
+    def test_a_step_cell_dressed_up_is_one_finding(self):
+        for cell in ("**S003**", "s003", "[S003](x.md)", "S003:"):
+            with self.subTest(cell=cell):
+                self.in_table(f"| {cell} | Three | on 2026-10-08 | — |")
+                self.assertIn("bare step ID", self.one())
+
+    def test_an_indented_table_line_is_one_finding(self):
+        self.in_table("  | S003 | Three | on 2026-10-08 | — |")
+        self.assertIn("indented", self.one())
+        self.questions("  | 3 | Q? **Answered 2026-01-02:** a | S002 | none |\n")
+        self.assertIn("indented", self.one())
+
+    def test_struck_through_text_in_html_is_one_finding(self):
+        for text in ("<del>old</del> new", "<s>old</s> new"):
+            with self.subTest(text=text):
+                self.write(PLAN_PATH, PLAN.replace(GOOD, row_line(text) + "\n"))
+                self.assertIn("struck-through", self.one())
+
+    def test_the_closed_files_header_is_read_by_all_four_cells(self):
+        self.closed()
+        self.assertEqual(self.found(), [])
+        head = "| # | Query | Needed by | Default if unanswered |\n|---|---|---|---|\n"
+        self.write(CLOSED_PATH, "# Answered\n\n" + head)
+        self.assertIn("exactly once, not 0 times", self.one())
 
 
 class TheRealPlan(unittest.TestCase):
