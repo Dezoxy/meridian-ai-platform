@@ -2620,7 +2620,9 @@ not seen on a cluster, except the skip of a claim that is already there.
   case the run stops there and still prints the summary of what had happened.
   A post that `curl` gave up on after 60 seconds may have stored the claim: it
   is read from the route, and is a refusal only when the route has no such
-  claim. A second run that skips every claim exits 0.
+  claim; an API that hangs and never answers makes each claim take up to 180
+  seconds and count as not settled, and that run exits 0 (the summary's "not
+  settled" row is what says so). A second run that skips every claim exits 0.
 - **How long.** A triage takes under a second, so a run is its pauses: 363 s
   on kind on 2026-10-08 for 40 claims of which 36 were new (26 referred to an
   adjuster, 5 approved, 5 awaiting documents, 4 skipped; none failed). A
