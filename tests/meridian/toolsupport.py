@@ -32,6 +32,9 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 from psycopg.types.json import Jsonb
 from servicesupport import AUDIT_COLUMNS, REGISTRY_DIR, REPO_ROOT, claim_with_id
 
+from meridian.platform.claims_mcp.app import (
+    create_app as create_claims_app,
+)
 from meridian.platform.common.db import connect
 from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.platform.knowledge_mcp.app import create_app as create_knowledge_app
@@ -44,9 +47,6 @@ from meridian.platform.toolserver.wire import (
     META_IDEMPOTENCY_KEY,
     META_RUN,
     META_WORKER,
-)
-from meridian.workloads.claims_triage.mcp_server.app import (
-    create_app as create_claims_app,
 )
 
 GATEWAY_URL = "http://gateway.invalid"

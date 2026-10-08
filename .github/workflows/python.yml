@@ -1,15 +1,48 @@
 name: Python / Lint and test
 
 # The Python gates: ruff (lint and format check), the import-linter contracts
-# that keep the agent framework out of platform packages (ADR 2), and pytest,
-# which includes a test that plants a deliberate violation and expects the
-# contracts to catch it. Runs on every pull request and on main. Read-only.
-# The job name is meant to be a required status check in the protect-main
-# ruleset; rename the job and the ruleset entry in the same change.
+# that keep the agent framework out of platform packages (ADR 2), pytest, which
+# includes a test that plants a deliberate violation and expects the contracts
+# to catch it, and the evaluation gate. Runs on every pull request and on main.
+# Read-only.
 #
-# There are deliberately no path filters. A required check that a path filter
-# skips never reports, and GitHub then blocks every pull request that touches
-# no Python, such as a documentation-only change, waiting for it.
+# The required status check is the job NAME `python`, in the protect-main
+# ruleset next to `docs consistency`, `architecture model`, `derived diagrams`
+# and `secret scan`. No check is renamed: `python` is the last job, and the
+# other jobs below are not required by themselves.
+#
+# There are deliberately no workflow-level path filters and no job that decides
+# whether another runs. A required check that a path filter skips never reports,
+# and GitHub then blocks every pull request that touches no Python, such as a
+# documentation-only change; so every pull request runs every job, and `python`
+# always reports.
+#
+# What runs (S074), side by side, then the last job:
+#
+#   static      Lint, the chart, the alert rules, the registry.
+#   tests       the suite in TEST_SHARD_COUNT shards, each with the service
+#               containers.
+#   evaluation  the evaluation gate.
+#   python      always, last. Succeeds only when static, tests and evaluation
+#               all succeeded (scripts/ci_python_verdict.py, one row of its
+#               table), when the shards left their files, and on the combined
+#               coverage of the shards (the floor is pyproject.toml's, applied
+#               once).
+#
+# Failing closed. `python` fails when a job failed, was cancelled or was
+# skipped, when the shards' files are not exactly a coverage file and a report
+# for each shard, and when the combined line coverage of src/meridian is under
+# the floor. The reports are the proof that the shards are the whole suite: each
+# shard writes the number of tests it collected, the number it kept and a digest
+# of the full list of test ids (tests/conftest.py), and `python` refuses unless
+# every digest and every total is the same and the kept counts add up to the
+# total. A shard that collects nothing fails (pytest's exit status 5), and a
+# wrong shard selection is a usage error (exit status 4).
+#
+# The number of shards is TEST_SHARD_COUNT below and the matrix of `tests` is a
+# list written out, [1, 2, 3, 4], that no job computes. Raising the count is two
+# edits in this file, the variable and the list, and
+# tests/meridian/test_ci_workflow_jobs.py fails on one without the other.
 on:
   pull_request:
   push:
@@ -22,24 +55,76 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # The number of shards the suite is split into (S074): a test belongs to the
+  # shard its node id hashes to (tests/conftest.py). tests/meridian/
+  # test_ci_workflow_jobs.py holds that the matrix below is exactly 1 to this
+  # number and that nothing else in this file repeats it.
+  TEST_SHARD_COUNT: "4"
+  # The version of Terraform the jobs below install (S079). The tests of three
+  # modules' variable validations run `terraform console`; this is the version
+  # the modules require (`~> 1.16` in each versions.tf) and the one the
+  # development machine runs, and tests/meridian/test_ci_config.py checks the
+  # first. Renovate's reader takes the comment's line.
+  # renovate: datasource=github-releases depName=hashicorp/terraform extractVersion=^v(?<version>.+)$
+  TERRAFORM_VERSION: "1.16.5"
+
 jobs:
-  python:
-    name: python
+  static:
+    name: static
     runs-on: ubuntu-26.04
-    # The tests run in parallel (make pytest, four workers) with line coverage
-    # on (S074). Measured: the 47 successful runs of 2026-10-04 (S057) took 4 min
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # setup-uv has published no floating major tag since v8, so the pin is a
+      # full version. Renovate's actions group bumps it. Its cache (on for this
+      # runner by default, keyed on the hash of uv.lock and pyproject.toml) keeps
+      # the installed environment between runs.
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      # --locked fails when uv.lock is out of date with pyproject.toml.
+      - name: Install the locked environment
+        run: uv sync --locked
+      - name: Lint, format check and import contracts
+        run: make lint
+      # `make helm-lint` lints the chart. The version is the one
+      # infra/kind/README.md documents (tests/meridian/test_helm_chart.py
+      # compares them); the tests job installs the same one for the chart tests.
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          version: v4.3.0
+      - name: Lint the Helm chart
+        run: make helm-lint
+      # promtool, from the Makefile's pinned image, checks the alert rules and
+      # runs their unit tests (S024); the runner has Docker.
+      - name: Check the alert rules
+        run: make alerts
+      - name: Registry validation
+        run: make registry
+
+  tests:
+    name: tests (shard ${{ matrix.shard }})
+    runs-on: ubuntu-26.04
+    # The tests ran as one job (make pytest, four workers) with line coverage on
+    # (S074). Measured: the 47 successful runs of 2026-10-04 (S057) took 4 min
     # 59 s to 7 min 30 s. On 2026-10-07, with the suite at 20,000 tests and
     # before coverage, the whole job of five pull requests took 12 min 13 s, 13
     # min 36 s, 14 min 29 s, 10 min 1 s and 10 min 13 s. Coverage through the
     # interpreter's monitoring costs 2.0 % of the suite's time on the
     # development machine (252.52 s without, 257.63 s with; not measured on the
-    # hosted runner), which makes the slowest 14 min 29 s about 14 min 47 s.
-    # The limit is twice the slowest: it ends a job that hangs and is no
-    # budget, so a run that comes near it is a finding, and a test that hangs
-    # is stopped sooner by its own limit (pyproject.toml). The suite grew from
-    # 4 min 50 s to this in three days; measure again before the median passes
-    # 15 minutes.
+    # hosted runner), which makes the slowest 14 min 29 s about 14 min 47 s. The
+    # limit was twice the slowest, 30 minutes. In four shards (pull request 139,
+    # 2026-10-08) a shard's tests took 3 min 52 s to 4 min 50 s and a job 4 min
+    # 26 s to 5 min 26 s, a quarter of that. The limit is unchanged: it ends a
+    # job that hangs and is no budget, so a run that comes near it is a finding,
+    # and a test that hangs is stopped sooner by its own limit (pyproject.toml).
+    # Measure again before the slowest shard passes 15 minutes.
     timeout-minutes: 30
+    strategy:
+      # Every shard reports, so a failed one does not hide what the others show.
+      fail-fast: false
+      matrix:
+        # 1 to TEST_SHARD_COUNT, written out (see the header).
+        shard: [1, 2, 3, 4]
     env:
       # The database tests (S009) run against the service container below;
       # MERIDIAN_REQUIRE_DB makes a missing database a failure, not a skip.
@@ -48,13 +133,6 @@ jobs:
       # The gateway's shared rate windows (S066) run against the Redis service
       # container below; MERIDIAN_REQUIRE_DB makes a missing Redis a failure too.
       MERIDIAN_TEST_REDIS_URL: redis://127.0.0.1:6379/0
-      # The version of Terraform the step below installs (S079). The tests of
-      # three modules' variable validations run `terraform console`; this is the
-      # version the modules require (`~> 1.16` in each versions.tf) and the one
-      # the development machine runs, and tests/meridian/test_ci_config.py checks
-      # the first. Renovate's reader takes the comment's line.
-      # renovate: datasource=github-releases depName=hashicorp/terraform extractVersion=^v(?<version>.+)$
-      TERRAFORM_VERSION: "1.16.5"
     services:
       postgres:
         # Throwaway and unreachable from outside the job, so trust auth keeps
@@ -90,26 +168,14 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      # setup-uv has published no floating major tag since v8, so the pin is a
-      # full version. Renovate's actions group bumps it.
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-      # --locked fails when uv.lock is out of date with pyproject.toml.
       - name: Install the locked environment
         run: uv sync --locked
-      - name: Lint, format check and import contracts
-        run: make lint
-      # The chart tests render the chart and fail without helm (never skip), and
-      # `make helm-lint` lints it. The version is the one infra/kind/README.md
-      # documents (tests/meridian/test_helm_chart.py compares them).
+      # The chart tests render the chart and fail without helm (never skip). The
+      # version is the one infra/kind/README.md documents.
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: v4.3.0
-      - name: Lint the Helm chart
-        run: make helm-lint
-      # promtool, from the Makefile's pinned image, checks the alert rules and
-      # runs their unit tests (S024); the runner has Docker.
-      - name: Check the alert rules
-        run: make alerts
       # The variable validations of the three Terraform modules run `terraform
       # console` on scratch copies of their files: no provider is downloaded, no
       # credential or cloud login exists, and no `init` runs. The marker of those
@@ -123,26 +189,146 @@ jobs:
       - name: Tests
         run: make pytest
         env:
+          # This shard and the count (tests/conftest.py): the tests whose node
+          # id hashes to MERIDIAN_TEST_SHARD out of MERIDIAN_TEST_SHARDS. A
+          # shard that keeps nothing ends with pytest's exit status 5, which
+          # make hands on and this step does not swallow.
+          MERIDIAN_TEST_SHARD: ${{ matrix.shard }}
+          MERIDIAN_TEST_SHARDS: ${{ env.TEST_SHARD_COUNT }}
+          # Where the shard writes what it collected and kept and the digest of
+          # the full list of test ids; `python` compares the four (the header).
+          # Set here and not on the job, so the evaluation job never sees it.
+          MERIDIAN_TEST_SHARD_REPORT: ${{ github.workspace }}/shard-${{ matrix.shard }}.report.json
           # The Makefile's default is the development machine's (10); this
           # runner has four cores.
           PYTEST_WORKERS: "4"
           # make hands this to pytest, which then prints the slowest tests: what
           # one test adds to the job can be read from any run (S057).
           PYTEST_ARGS: --durations=25
-          # The suite fails under the line coverage of src/meridian that
-          # pyproject.toml's [tool.coverage.report] fail_under holds (S074); the
-          # Makefile adds pytest-cov's switches for 1 and for nothing else.
+          # Line coverage on, with no floor in a shard: a shard runs a part of
+          # the suite and a part is under the floor. The `python` job combines
+          # the shards' files and applies pyproject.toml's floor once (S074).
           COVERAGE: "1"
+          COVERAGE_SHARD: "1"
+          COVERAGE_FILE: ${{ github.workspace }}/shard-${{ matrix.shard }}.coverage
+      # Neither file is hidden, which upload-artifact would leave out, and both
+      # are named for their shard; a shard that wrote neither fails here, and
+      # `python` checks that each shard's artifact holds both.
+      - name: Keep the shard's coverage data and report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-shard-${{ matrix.shard }}
+          path: |
+            shard-${{ matrix.shard }}.coverage
+            shard-${{ matrix.shard }}.report.json
+          if-no-files-found: error
+          retention-days: 7
+          # A re-run of the same commit meets the artifact of its earlier
+          # attempt: it replaces its own files, which are the same commit's,
+          # instead of failing on the name.
+          overwrite: true
+
+  evaluation:
+    name: evaluation
+    # The reports are written by two tests, so they need the database and the
+    # Redis the tests job has.
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    env:
+      MERIDIAN_TEST_DATABASE_URL: postgresql://postgres@127.0.0.1:5432/postgres
+      MERIDIAN_REQUIRE_DB: "1"
+      MERIDIAN_TEST_REDIS_URL: redis://127.0.0.1:6379/0
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.7-pg17-trixie@sha256:7a7e9f22015b67edb4bef5c59daeebcd7e74bfa570df6ce60ae01237c8648a84
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -h 127.0.0.1"
+          --health-start-period 5s
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:8.10.2-alpine@sha256:3811787313eba226a2ef38658c6ccb91cd5e110edc89c37767de373120a0e5a0
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-start-period 2s
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - name: Install the locked environment
+        run: uv sync --locked
+      # The two tests that write the reports, alone and in one process, as `make
+      # eval` runs them; the Makefile holds their names, the one place they are
+      # written. Replays a recording: nothing is spent.
+      - name: Evaluation reports
+        run: make eval-tests
+        env:
           # The recorded evaluation test writes its report here (S017, S050).
           MERIDIAN_EVAL_REPORT: ${{ runner.temp }}/claims-triage-report.json
           # The injection stack test writes its report here (S032).
           MERIDIAN_EVAL_INJECTION_REPORT: ${{ runner.temp }}/claims-triage-injection-report.json
-      # The test compares the report too; this runs the same comparison as the
-      # command a reader runs (meridian eval compare) on the file the test wrote.
+      # `make eval-compare` fails on a report that is missing, so a job whose
+      # tests wrote none cannot pass. It runs the same comparison as the command
+      # a reader runs (meridian eval compare) on the files the tests wrote.
       - name: Evaluation gate
         run: >-
           make eval-compare
           EVAL_REPORT="$RUNNER_TEMP/claims-triage-report.json"
           EVAL_INJECTION_REPORT="$RUNNER_TEMP/claims-triage-injection-report.json"
-      - name: Registry validation
-        run: make registry
+
+  python:
+    # The required status check (the name is in the protect-main ruleset).
+    name: python
+    needs: [static, tests, evaluation]
+    # Runs whatever the other jobs did, so that a failed, cancelled or skipped
+    # job is judged here and never leaves this check unreported or green.
+    if: always()
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # The one row of the table that succeeds, in a script with unit tests
+      # (tests/test_ci_python_verdict.py): exit status 1 for every other
+      # combination of the three results. No step below depends on an output of
+      # this one: they all run, and a failed step fails the job.
+      - name: Judge the jobs' results
+        run: >-
+          python3 scripts/ci_python_verdict.py jobs
+          --static "$STATIC"
+          --tests "$TESTS"
+          --evaluation "$EVALUATION"
+        env:
+          STATIC: ${{ needs.static.result }}
+          TESTS: ${{ needs.tests.result }}
+          EVALUATION: ${{ needs.evaluation.result }}
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - name: Install the locked environment
+        run: uv sync --locked
+      - name: Download the shards' coverage data and reports
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: coverage-shard-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/coverage-shards
+      # Exactly a coverage file and a report for each shard, and the reports
+      # agree (the header): fewer, none, or a different suite fails. Prints the
+      # total and the four kept counts.
+      - name: Every shard left its files, and together they are the whole suite
+        run: python3 scripts/ci_python_verdict.py coverage-files "$COVERAGE_SHARDS_DIR" --shards "$TEST_SHARD_COUNT"
+        env:
+          COVERAGE_SHARDS_DIR: ${{ runner.temp }}/coverage-shards
+      # Combines the files and prints the report; the floor is pyproject.toml's
+      # [tool.coverage.report] fail_under, and coverage report exits 2 under it.
+      - name: Coverage of the whole suite
+        run: make coverage-floor COVERAGE_SHARDS_DIR="$COVERAGE_SHARDS_DIR"
+        env:
+          COVERAGE_SHARDS_DIR: ${{ runner.temp }}/coverage-shards

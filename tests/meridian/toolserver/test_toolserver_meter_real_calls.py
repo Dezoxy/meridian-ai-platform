@@ -35,6 +35,9 @@ from toolsupport import (
     worker_holding,
 )
 
+from meridian.platform.claims_mcp.app import (
+    create_app as create_claims_app,
+)
 from meridian.platform.common import metrics as common_metrics
 from meridian.platform.toolserver.handlers import (
     Refused,
@@ -43,9 +46,6 @@ from meridian.platform.toolserver.handlers import (
     ToolHandler,
 )
 from meridian.platform.toolserver.meters import CALLS, UNLISTED
-from meridian.workloads.claims_triage.mcp_server.app import (
-    create_app as create_claims_app,
-)
 
 NOTE = {"claim_id": CLAIM, "note": "Phone call with the claimant."}
 

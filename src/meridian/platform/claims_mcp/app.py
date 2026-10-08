@@ -7,12 +7,12 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
 from starlette.applications import Starlette
 
+from meridian.platform.claims_mcp import SERVICE_NAME
+from meridian.platform.claims_mcp.tools import HANDLERS
 from meridian.platform.common.logformat import configure_logging
 from meridian.platform.common.logredaction import install_log_redaction
 from meridian.platform.toolserver.server import ToolApp, create_tool_app
 from meridian.platform.toolserver.settings import ToolServerSettings
-from meridian.workloads.claims_triage.mcp_server import SERVICE_NAME
-from meridian.workloads.claims_triage.mcp_server.tools import HANDLERS
 
 
 def create_app(

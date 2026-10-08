@@ -36,6 +36,12 @@ from toolsupport import (
     settings_for,
 )
 
+from meridian.platform.claims_mcp.app import (
+    create_app as create_claims_app,
+)
+from meridian.platform.claims_mcp.app import (
+    create_app_from_env as create_claims_app_from_env,
+)
 from meridian.platform.common.env import SettingsError
 from meridian.platform.common.telemetry import make_tracer_provider
 from meridian.platform.common.tls import CERT_FILE_ENV
@@ -46,12 +52,6 @@ from meridian.platform.toolserver.wire import (
     META_IDEMPOTENCY_KEY,
     META_RUN,
     META_WORKER,
-)
-from meridian.workloads.claims_triage.mcp_server.app import (
-    create_app as create_claims_app,
-)
-from meridian.workloads.claims_triage.mcp_server.app import (
-    create_app_from_env as create_claims_app_from_env,
 )
 
 HTTP_MISDIRECTED = 421
