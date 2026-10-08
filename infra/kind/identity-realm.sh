@@ -26,7 +26,7 @@
 #   WEB_ORIGIN    the pages' origin: scheme, host and port, no path
 #
 # The realm `meridian-staff` (S021 is the staff half; the claimants' realm is
-# step S089's: a second realm is one more spec function and one more call of
+# step S093's: a second realm is one more spec function and one more call of
 # write_realm below, and its secrets join the same file under their own prefix):
 #   - four realm roles: platform-admin, agent-developer, adjuster, auditor, and
 #     a test user per role (test-<role>) holding only that role
@@ -201,7 +201,7 @@ require_untracked() {
 # alone. Keycloak makes a random id for a user the import does not name, and the
 # id is the token's `sub`: a Keycloak that starts again on an empty database (the
 # Deployment has no volume) would give the same person a new subject at every
-# start, and a subject kept in a row (S021's actor, S089's owner) would stop
+# start, and a subject kept in a row (S021's actor, S093's owner) would stop
 # matching. A name-derived id is no secret and the same at every run.
 stable_id() {
   local hex
