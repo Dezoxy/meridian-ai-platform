@@ -1015,6 +1015,7 @@ service runs in Azure yet.
 | 2026-10-06 | S077 | GCP mapping | [S077.md](plan/steps/S060-S079/S077.md) |
 | 2026-10-07 | S068 | Database upkeep and retention | [S068.md](plan/steps/S060-S079/S068.md) |
 | 2026-10-07 | S078 | GCP Terraform, a scaffold | [S078.md](plan/steps/S060-S079/S078.md) |
+| 2026-10-07 | S081 | The decision record for the move toward services | [S081.md](plan/steps/S080-S099/S081.md) |
 | 2026-10-07 | S089 | Import layering page; Mermaid rendered in CI | [S089.md](plan/steps/S080-S099/S089.md) |
 | 2026-10-07 | S090 | Component view of the Agent Runtime | [S090.md](plan/steps/S080-S099/S090.md) |
 | 2026-10-08 | S091 | Data ownership views | [S091.md](plan/steps/S080-S099/S091.md) |
@@ -1041,7 +1042,6 @@ service runs in Azure yet.
 | 2026-10-07 | S071 | Measurements that need a live model | doing | [S071.md](plan/steps/S060-S079/S071.md) |
 | 2026-10-07 | S072 | The cluster outside `meridian`, second round | doing | [S072.md](plan/steps/S060-S079/S072.md) |
 | 2026-10-07 | S080 | File uploads for a claim, before sign-in | doing | [S080.md](plan/steps/S080-S099/S080.md) |
-| 2026-10-07 | S081 | The decision record for the move toward services | doing | [S081.md](plan/steps/S080-S099/S081.md) |
 | 2026-10-07 | S082 | Code in the wrong place moves; import contracts per service | doing | [S082.md](plan/steps/S080-S099/S082.md) |
 | — | S095 | Retention and erasure of uploaded files | todo | [S095.md](plan/steps/S080-S099/S095.md) |
 
