@@ -313,8 +313,10 @@ def test_the_shards_test_step_is_make_pytest_and_make_does_not_hide_its_status()
 
     assert shard_step()["run"] == "make pytest"
     # pytest exits 5 for a run that collected nothing, and the recipe's only
-    # command is pytest: no `-` prefix, no `|| true`, no pipe.
-    assert recipe.startswith("uv run pytest")
+    # command is pytest: no `-` prefix, no `|| true`, no pipe. In front of it
+    # since S099, the machine's test lock, joined by `&& exec`: the status is
+    # the lock's own failure or pytest's, and make's shell becomes the run.
+    assert recipe.startswith("$(MACHINE_LOCK) && exec uv run pytest")
     assert "||" not in recipe
     assert "|" not in recipe
     assert "-uv" not in recipe
