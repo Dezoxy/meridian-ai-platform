@@ -85,6 +85,12 @@ to go on.
   the pull request's description is the record. A follow-up is a row of
   `docs/plan/backlog.md`, and a row you close moves to
   `docs/plan/backlog-closed.md`.
+- Your step's row in Part B is one plan sentence and holds no history
+  (Part A, "What the plan holds"): what you decide, build and leave open
+  goes into the step's file, and `make docs` refuses a row with a date,
+  struck-through text, a quote of the owner or a word on what is built.
+  CI refuses a pull request titled for your step (`S100: …`) that leaves
+  the step's file unchanged.
 - The card says "cluster" or "no cluster". With "cluster" the kind cluster is
   yours: check its holder first (`make cluster-holder`), run its commands from
   the checkout the row names, and say when you delete or recreate it. With "no

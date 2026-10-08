@@ -5,7 +5,8 @@ LLM agents, with a claims-triage reference workload for a fictional insurer.
 Built and operated by one person as a portfolio project, designed as if a
 platform team had to keep it alive.
 
-**Status on 2026-10-04: milestone M1 is complete, on a laptop.** The
+**Status: milestone M1 is complete (since 2026-10-04, on a laptop), and M2
+is under way.** The
 [fifteen-minute demo](docs/demo.md) runs from a fresh clone with `make`.
 The architecture model, the
 decisions, the engineering harness, a local platform on kind, the Azure
@@ -140,8 +141,9 @@ graph LR
 | M3 Reliability and operations | Load test, game day and incident record, restore drill, provider swap, read-only console; the triage as a supervisor and workers is built (S031, ADR 5; in tests, not run on a cluster since) | SLO thresholds measured; the incident record comes from a real timeline |
 | M4 Optional | AWS mapping with a Terraform module that is checked and then applied once in a real account (S025 and S036, the owner's decision of 2026-10-06; the mapping, the Azure platform document it maps from and a deployment view of AWS in the model are written, all designed; the module is written, as code checked without an account and never applied (S036's first half), and its one apply is designed: asked at the paid stop of S079, where it may be answered no; for Google Cloud, S077 and S078, the module is checked and never applied, the owner's decision of the same day: its mapping and its deployment view are written, designed, and its module is written too (S078), as code checked by `terraform validate` and an offline scan and never planned or applied, with no command that does either; a cluster whose control plane is not managed, to be applied once on AWS and a scaffold on Google Cloud, is S079: both modules are written, as code tested with stand-ins and never applied, and the AWS one's apply is designed, asked at the same paid stop), or a second-framework workload (built, S037: in tests, and seen on kind once under replay on 2026-10-06), or a GraphRAG spike (built, S038: its answer was no), or a workload scaffold command (built, S039) | One item was the limit; the owner lifted it for each of the four on 2026-10-06 and added Google Cloud beside AWS |
 
-The step-by-step version, with dependencies, demo checkpoints and status, is
-the [plan](docs/meridian-plan.md).
+The step-by-step version, with dependencies and demo checkpoints, is the
+[plan](docs/meridian-plan.md); its last part lists the steps by status, and
+this page is the one place that says what exists today.
 
 ## Layout
 
@@ -191,7 +193,7 @@ Terraform exists under `infra/terraform/azure/` (written, never applied).
 
 ```bash
 make docs     # documentation gate: twins, mirrors, links, indexes, ADRs, IDs
-make plan-progress  # rewrite the plan's finished and in-flight tables from the step files
+make plan-progress  # rewrite the plan's last part (finished, in flight, not started) from the step files
 make secret-scan  # scan the commits a push would add for secrets, as CI's secret scan does (needs gitleaks)
 make check    # Structurizr validate + inspect with the pinned image (Docker)
 make view     # browse the model at http://localhost:8080/workspace/1

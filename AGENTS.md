@@ -41,6 +41,14 @@ lists the finished steps and those in flight, written from the files by
   request's description is the record, the squash commit carries it, and
   the plan's Part A says what it must hold. A backlog row that closes moves
   from `docs/plan/backlog.md` to `docs/plan/backlog-closed.md`.
+- The plan holds the plan and no history (S102; its Part A, "What the plan
+  holds"). A step's row is one plan sentence of at most 500 characters: no
+  date, no struck-through text, no quote of the owner, no word on what is
+  built so far. A decision that changes a step rewrites its row, and the
+  reason, the date and the owner's words go into the step's file. An
+  answered question moves from Part D to `docs/plan/questions-closed.md`.
+  `make docs` refuses the rest, and CI refuses a pull request titled
+  `S0NN:` that leaves that step's file unchanged.
 - Private context (job targeting, owner notes) is in the gitignored
   `.context/` folder. Read it only when a step needs it; never copy it into
   tracked files.

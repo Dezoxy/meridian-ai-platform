@@ -7,8 +7,11 @@ Part A, "The pull request's description"). -->
 ## What
 
 <!-- The step in docs/meridian-plan.md, e.g. S002, and what changed, by
-area. Update the step's file under docs/plan/steps/ in this PR; when its
-status line changes, run make plan-progress. -->
+area. Update the step's file under docs/plan/steps/ in this PR (CI fails
+a pull request titled "S0NN:" that leaves that file unchanged); when its
+status line changes, run make plan-progress. The step's row in the plan
+stays one plan sentence: decisions, dates and what was built go into the
+step's file. -->
 
 ## Decisions
 
