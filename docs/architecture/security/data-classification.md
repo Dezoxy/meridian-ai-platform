@@ -50,6 +50,14 @@ which for this project is always in the EU.
 
 ### Inventory
 
+Where each kind of data is stored is the table below. Which service may
+reach which schema of the database is two views of the model, read from the
+migrations' grants (S091):
+
+![Data ownership view: each service, the schema that is its own and the grants that cross into another service's schema](embed:DataOwnership)
+
+![Audit trail view: the services that insert audit events and what reads the trail](embed:AuditTrail)
+
 | Data | Class | Stored in | Notes |
 |---|---|---|---|
 | Claims | `personal` | Platform Database, claims schema | Synthetic in every environment of this project; entered through `POST /claims` or the claimant's form (S049), whose banner asks for fictional data (T-04). The claimant's status page shows the claim's ID, state and documents, never the name, email or description (T-65) |
