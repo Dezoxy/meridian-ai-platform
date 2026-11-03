@@ -5,7 +5,7 @@ description = "Throwaway spike: one claim flow with an approval pause in Microso
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "agent-framework-core==1.19.0",
-    "langgraph==1.2.12",
+    "langgraph==1.2.14",
     "langgraph-checkpoint-sqlite==3.1.1",
 ]
 
